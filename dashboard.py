@@ -6,6 +6,7 @@ Uses rich.live.Live with screen=True for full-screen refresh.
 
 from __future__ import annotations
 
+import os
 import sys
 import termios
 import threading
@@ -43,6 +44,7 @@ class Dashboard:
         self.initial_task_count: int = 0
         self.active_agents: list[dict] = []  # [{task_id, start_time, log_file, status}]
         self._overlay_text: str | None = None  # When set, render overlay instead of main dashboard
+        self._overlay_mode: str | None = None  # 'log' = auto-refresh from RALPH_LOG_PATH
         self.budget_usd: float = 0.0  # 0 = unlimited
         self.session_cost_usd: float = 0.0
 
@@ -94,6 +96,10 @@ class Dashboard:
 
     def _render(self) -> Group:  # noqa: C901 — intentionally monolithic render
         """Build the full dashboard as a single Rich ``Group`` renderable."""
+        if self._overlay_mode == "log" and self._overlay_text is not None:
+            self._refresh_log_overlay()
+        elif self._overlay_text is None:
+            self._overlay_mode = None
         if self._overlay_text is not None:
             try:
                 content = Text.from_markup(self._overlay_text)
@@ -330,22 +336,31 @@ class Dashboard:
         self.update()
 
     def _show_log(self) -> None:
-        """Hotkey l: show last 30 lines of ralph.log."""
+        """Hotkey l: toggle live ralph.log overlay (auto-refresh from RALPH_LOG_PATH)."""
+        if self._overlay_mode == "log":
+            self._overlay_mode = None
+            self._overlay_text = None
+            self.update()
+            return
         if self._overlay_text is not None:
             self._overlay_text = None
             self.update()
             return
-        import os
+        self._overlay_mode = "log"
+        self._refresh_log_overlay()
+        self.update()
+
+    def _refresh_log_overlay(self) -> None:
+        """Re-read ralph.log and rebuild overlay text. Called each render tick in log mode."""
         log_path = Path(os.environ.get("RALPH_LOG_PATH", "ralph.log"))
         if not log_path.exists():
             self._overlay_text = f"[dim]No log file found ({log_path})[/]"
-            self.update()
             return
         raw_lines = log_path.read_text(errors="replace").splitlines()[-30:]
-        # Escape [ ] so Rich doesn't parse timestamps like [01:03:39] as markup
         escaped = "\n".join(line.replace("[", "\\[") for line in raw_lines)
-        self._overlay_text = "[bold]Log: ralph.log[/] [dim](last 30 lines)[/]\n\n" + escaped
-        self.update()
+        self._overlay_text = (
+            f"[bold]Log: {log_path.name}[/] [dim](live, last 30 lines — press l to close)[/]\n\n" + escaped
+        )
 
     def _show_all_tasks(self) -> None:
         """Hotkey t: show all tasks with status icons."""
@@ -875,7 +890,7 @@ class Dashboard:
             f"    Output:    {fmt_tokens(self.totals.output_tokens)}",
             f"    Cache-R:   {fmt_tokens(self.totals.cache_read_tokens)}",
             f"    Cache-W:   {fmt_tokens(self.totals.cache_create_tokens)}",
-            f"    [yellow]Cost: ${self.totals.cost_usd:.4f}[/]",
+            f"    [yellow]Cost: ${self.totals.cost_usd:.2f}[/]",
         ]
         if self.budget_usd > 0:
             pct = self.session_cost_usd / self.budget_usd * 100
