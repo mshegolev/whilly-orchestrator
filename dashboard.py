@@ -44,7 +44,9 @@ class Dashboard:
         self.initial_task_count: int = 0
         self.active_agents: list[dict] = []  # [{task_id, start_time, log_file, status}]
         self._overlay_text: str | None = None  # When set, render overlay instead of main dashboard
-        self._overlay_mode: str | None = None  # 'log' = auto-refresh from RALPH_LOG_PATH
+        self._overlay_mode: str | None = None  # 'log' | 'task_log' | 'detail' — determines refresh behavior
+        self._detail_task_id: str | None = None  # Task shown in 'd' detail overlay
+        self._log_task_id: str | None = None  # Task whose per-agent log is shown in 'task_log' mode
         self.budget_usd: float = 0.0  # 0 = unlimited
         self.session_cost_usd: float = 0.0
 
@@ -96,10 +98,12 @@ class Dashboard:
 
     def _render(self) -> Group:  # noqa: C901 — intentionally monolithic render
         """Build the full dashboard as a single Rich ``Group`` renderable."""
-        if self._overlay_mode == "log" and self._overlay_text is not None:
+        if self._overlay_mode in ("log", "task_log") and self._overlay_text is not None:
             self._refresh_log_overlay()
         elif self._overlay_text is None:
             self._overlay_mode = None
+            self._log_task_id = None
+            self._detail_task_id = None
         if self._overlay_text is not None:
             try:
                 content = Text.from_markup(self._overlay_text)
@@ -307,6 +311,8 @@ class Dashboard:
         """Hotkey d: show task detail for first in-progress or first pending task."""
         if self._overlay_text is not None:
             self._overlay_text = None
+            self._overlay_mode = None
+            self._detail_task_id = None
             self.update()
             return
         self.tm.reload()
@@ -315,6 +321,8 @@ class Dashboard:
             target = next((t for t in self.tm.tasks if t.status == "pending"), None)
         if not target:
             return
+        self._detail_task_id = target.id
+        self._overlay_mode = "detail"
         lines = [
             f"[bold]{target.id}[/]  [{target.status}]  priority={target.priority}  phase={target.phase}",
             f"category: {target.category}",
@@ -336,30 +344,57 @@ class Dashboard:
         self.update()
 
     def _show_log(self) -> None:
-        """Hotkey l: toggle live ralph.log overlay (auto-refresh from RALPH_LOG_PATH)."""
-        if self._overlay_mode == "log":
+        """Hotkey l: toggle live log overlay.
+
+        - If task detail (`d`) is open — switch to that task's agent log.
+        - Otherwise — show main ralph.log (RALPH_LOG_PATH).
+        - Second press closes overlay.
+        """
+        if self._overlay_mode in ("log", "task_log"):
             self._overlay_mode = None
             self._overlay_text = None
+            self._log_task_id = None
+            self.update()
+            return
+        # Switch from detail → per-task log
+        if self._overlay_mode == "detail" and self._detail_task_id:
+            self._log_task_id = self._detail_task_id
+            self._overlay_mode = "task_log"
+            self._refresh_log_overlay()
             self.update()
             return
         if self._overlay_text is not None:
             self._overlay_text = None
+            self._overlay_mode = None
             self.update()
             return
         self._overlay_mode = "log"
         self._refresh_log_overlay()
         self.update()
 
+    def _resolve_task_log_path(self, task_id: str) -> Path:
+        """Prefer active agent's log_file (precise), fallback to ralph_logs/{task_id}.log."""
+        for ag in self.active_agents:
+            if ag.get("task_id") == task_id and ag.get("log_file"):
+                return Path(ag["log_file"])
+        log_dir = Path(os.environ.get("RALPH_LOG_DIR", "ralph_logs"))
+        return log_dir / f"{task_id}.log"
+
     def _refresh_log_overlay(self) -> None:
-        """Re-read ralph.log and rebuild overlay text. Called each render tick in log mode."""
-        log_path = Path(os.environ.get("RALPH_LOG_PATH", "ralph.log"))
+        """Re-read current log file and rebuild overlay text. Called each render tick."""
+        if self._overlay_mode == "task_log" and self._log_task_id:
+            log_path = self._resolve_task_log_path(self._log_task_id)
+            title = f"Log: {self._log_task_id} ({log_path.name})"
+        else:
+            log_path = Path(os.environ.get("RALPH_LOG_PATH", "ralph.log"))
+            title = f"Log: {log_path.name}"
         if not log_path.exists():
             self._overlay_text = f"[dim]No log file found ({log_path})[/]"
             return
         raw_lines = log_path.read_text(errors="replace").splitlines()[-30:]
         escaped = "\n".join(line.replace("[", "\\[") for line in raw_lines)
         self._overlay_text = (
-            f"[bold]Log: {log_path.name}[/] [dim](live, last 30 lines — press l to close)[/]\n\n" + escaped
+            f"[bold]{title}[/] [dim](live, last 30 lines — press l to close)[/]\n\n" + escaped
         )
 
     def _show_all_tasks(self) -> None:
