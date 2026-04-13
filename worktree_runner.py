@@ -248,10 +248,11 @@ def workspace_path(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE) -> Pa
 
 
 def find_existing_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE) -> Path | None:
-    """Проверить что worktree с таким slug уже зарегистрирован в git.
+    """Проверить что worktree с таким slug уже зарегистрирован в git и физически существует.
 
-    Ищет по ``git worktree list`` — активно зарегистрированный worktree,
-    не просто директорию. Возвращает путь существующего или None.
+    Если worktree числится в ``git worktree list``, но директория удалена
+    (stale) — делаем ``git worktree prune`` и возвращаем None, чтобы вызвавший
+    мог пересоздать workspace с нуля.
     """
     target = workspace_path(slug, base_dir).resolve()
     try:
@@ -269,7 +270,12 @@ def find_existing_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BA
             continue
         path = Path(line[len("worktree "):].strip()).resolve()
         if path == target or str(path).endswith(f"/{slug}"):
-            return path
+            if path.exists():
+                return path
+            # Stale worktree entry — директория удалена руками/cleanup'ом.
+            log.warning("Stale worktree registration for %s (path %s missing), pruning", slug, path)
+            subprocess.run(["git", "worktree", "prune"], capture_output=True, timeout=10)
+            return None
     return None
 
 
