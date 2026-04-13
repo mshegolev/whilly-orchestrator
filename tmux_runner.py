@@ -1,4 +1,5 @@
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -66,18 +67,20 @@ def launch_agent(
 
     cd_prefix = f'cd "{cwd}" && ' if cwd else ""
 
-    # Source user's shell profile to inherit PATH, auth tokens, etc.
+    # Use CLAUDE_BIN if set (bypasses shell function resolution, e.g. corporate proxy wrappers).
+    # Otherwise rely on interactive zsh which sources ~/.zshrc and exposes `claude` function/alias.
+    claude_cmd = os.environ.get("CLAUDE_BIN") or "claude"
     wrapper = (
-        f'source ~/.zshrc 2>/dev/null || source ~/.bashrc 2>/dev/null || true; '
         f"{cd_prefix}"
-        f"claude --permission-mode acceptEdits --output-format json "
+        f'{claude_cmd} --permission-mode acceptEdits --output-format json '
         f'--model "{model}" -p "$(cat {prompt_file})" '
         f'> "{log_file}" 2>&1; '
         f'echo "EXIT_CODE=$?" >> "{log_file}"'
     )
 
+    # zsh -ic sources ~/.zshrc so user-defined functions (e.g. claudeproxy wrappers) resolve.
     subprocess.run(
-        [TMUX, "new-session", "-d", "-s", session_name, "bash", "-lc", wrapper],
+        [TMUX, "new-session", "-d", "-s", session_name, "zsh", "-ic", wrapper],
         check=True,
     )
 

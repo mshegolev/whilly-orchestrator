@@ -57,11 +57,17 @@ def _parse_claude_output(raw: str) -> tuple[str, AgentUsage]:
     return result_text, usage
 
 
+def _claude_bin() -> str:
+    """Resolve claude CLI path. CLAUDE_BIN env overrides (for corporate proxy setups)."""
+    import os as _os
+    return _os.environ.get("CLAUDE_BIN") or "claude"
+
+
 def run_agent(prompt: str, model: str = "claude-opus-4-6[1m]", timeout: int | None = None) -> AgentResult:
     """Run claude CLI and parse JSON result."""
     start = time.monotonic()
     cmd = [
-        "claude",
+        _claude_bin(),
         "--permission-mode",
         "acceptEdits",
         "--output-format",
@@ -103,7 +109,7 @@ def run_agent_async(
         cwd: Working directory (e.g., git worktree path for isolation).
     """
     cmd = [
-        "claude",
+        _claude_bin(),
         "--permission-mode",
         "acceptEdits",
         "--output-format",
