@@ -335,9 +335,10 @@ class Dashboard:
             self._overlay_text = None
             self.update()
             return
-        log_path = Path("ralph.log")
+        import os
+        log_path = Path(os.environ.get("RALPH_LOG_PATH", "ralph.log"))
         if not log_path.exists():
-            self._overlay_text = "[dim]No log file found (ralph.log)[/]"
+            self._overlay_text = f"[dim]No log file found ({log_path})[/]"
             self.update()
             return
         raw_lines = log_path.read_text(errors="replace").splitlines()[-30:]
