@@ -15,14 +15,16 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger("ralph.worktree")
 
 _WORKTREE_BASE = ".ralph_worktrees"
+_PLAN_WORKSPACE_BASE = ".ralph_workspaces"
 
 
 @dataclass
@@ -200,3 +202,145 @@ class WorktreeManager:
         except Exception:
             # Fallback: just delete the directory
             shutil.rmtree(path, ignore_errors=True)
+
+
+# ─── Plan-level workspace ──────────────────────────────────────────────────
+#
+# Изолирует ВЕСЬ план в отдельный git worktree, чтобы несколько агентов могли
+# работать в одной репе параллельно без шансов затереть друг другу файлы.
+# В отличие от WorktreeManager (per-task), здесь — один workspace на весь план.
+
+
+@dataclass
+class PlanWorkspace:
+    """Worktree для целого плана (не per-task)."""
+
+    slug: str
+    branch: str
+    path: Path
+    reused: bool = False
+
+
+def plan_slug(plan_data: dict, plan_file: Path) -> str:
+    """Вывести безопасный slug из плана.
+
+    Приоритет: plan["project"] → имя файла без расширения.
+    Транслитерирует кириллицу, оставляет [a-z0-9-], обрезает до 48 символов.
+    """
+    source = str(plan_data.get("project") or "").strip() or plan_file.stem
+    source = source.lower()
+    source = re.sub(r"(^prd[-_])|([-_]?tasks?$)", "", source)
+    translit = str.maketrans({
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+        "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+        "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    })
+    source = source.translate(translit)
+    source = re.sub(r"[^a-z0-9]+", "-", source).strip("-")
+    return source[:48] or "plan"
+
+
+def workspace_path(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE) -> Path:
+    """Каноничный путь workspace для slug."""
+    return Path(base_dir) / slug
+
+
+def find_existing_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE) -> Path | None:
+    """Проверить что worktree с таким slug уже зарегистрирован в git.
+
+    Ищет по ``git worktree list`` — активно зарегистрированный worktree,
+    не просто директорию. Возвращает путь существующего или None.
+    """
+    target = workspace_path(slug, base_dir).resolve()
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = Path(line[len("worktree "):].strip()).resolve()
+        if path == target or str(path).endswith(f"/{slug}"):
+            return path
+    return None
+
+
+def create_plan_workspace(
+    slug: str,
+    base_dir: str | Path = _PLAN_WORKSPACE_BASE,
+    base_branch: str = "HEAD",
+    allow_reuse: bool = True,
+) -> PlanWorkspace:
+    """Создать или переиспользовать plan-level worktree.
+
+    Args:
+        slug: Имя workspace (из plan_slug()).
+        base_dir: Корень для всех workspaces (``.ralph_workspaces``).
+        base_branch: От какой ветки создавать (default — текущий HEAD).
+        allow_reuse: Если True и workspace уже есть — вернуть как reused.
+            Если False — поднять RuntimeError (защита от коллизии агентов).
+
+    Returns:
+        PlanWorkspace с reused=True если подхватили существующий.
+
+    Raises:
+        RuntimeError: workspace уже существует и allow_reuse=False.
+    """
+    branch = f"ralph/workspace/{slug}"
+    wt_path = workspace_path(slug, base_dir)
+
+    existing = find_existing_workspace(slug, base_dir)
+    if existing is not None:
+        if not allow_reuse:
+            raise RuntimeError(
+                f"Workspace '{slug}' уже существует: {existing}. "
+                f"Возможно другой агент уже работает. "
+                f"Запусти с allow_reuse=True или выбери другой slug."
+            )
+        log.info("Reusing existing workspace: %s", existing)
+        return PlanWorkspace(slug=slug, branch=branch, path=existing, reused=True)
+
+    Path(base_dir).mkdir(parents=True, exist_ok=True)
+
+    branch_check = subprocess.run(
+        ["git", "rev-parse", "--verify", branch],
+        capture_output=True, timeout=5,
+    )
+    if branch_check.returncode != 0:
+        create_cmd = ["git", "worktree", "add", "-b", branch, str(wt_path), base_branch]
+    else:
+        create_cmd = ["git", "worktree", "add", str(wt_path), branch]
+
+    result = subprocess.run(create_cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(f"git worktree add failed: {result.stderr.strip()}")
+
+    log.info("Создан workspace '%s' на ветке %s: %s", slug, branch, wt_path)
+    return PlanWorkspace(slug=slug, branch=branch, path=wt_path, reused=False)
+
+
+def remove_plan_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE,
+                          delete_branch: bool = False) -> bool:
+    """Удалить plan workspace (worktree + опционально ветку).
+
+    Returns:
+        True если удалили, False если его не было.
+    """
+    existing = find_existing_workspace(slug, base_dir)
+    if existing is None:
+        return False
+    subprocess.run(["git", "worktree", "remove", "--force", str(existing)],
+                   capture_output=True, timeout=30)
+    if delete_branch:
+        subprocess.run(["git", "branch", "-D", f"ralph/workspace/{slug}"],
+                       capture_output=True, timeout=10)
+    log.info("Удалён workspace: %s", existing)
+    return True

@@ -26,7 +26,8 @@ class RalphConfig:
     HEADLESS: bool = False
     TIMEOUT: int = 0
     STATE_FILE: str = ".ralph_state.json"
-    WORKTREE: bool = False  # RALPH_WORKTREE=1 — git worktree isolation for parallel agents
+    WORKTREE: bool = False  # RALPH_WORKTREE=1 — per-task git worktree (parallel agents)
+    USE_WORKSPACE: bool = True  # RALPH_USE_WORKSPACE=0 — отключить plan-level workspace
 
     @classmethod
     def from_env(cls) -> RalphConfig:
