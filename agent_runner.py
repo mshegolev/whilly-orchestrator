@@ -118,6 +118,11 @@ def run_agent_async(
 ) -> subprocess.Popen:
     """Start claude CLI in background. Returns Popen object.
 
+    Writes a preamble block (timestamp, pid, cwd, model, cmd) into log_file BEFORE
+    spawning the subprocess, so 'tail -f log_file' or dashboard hotkey `l` shows
+    something immediately. Claude CLI itself only writes its big JSON at the end
+    of the run (--output-format json), which is why logs appear empty otherwise.
+
     Args:
         cwd: Working directory (e.g., git worktree path for isolation).
     """
@@ -131,10 +136,31 @@ def run_agent_async(
         "-p",
         prompt,
     ]
-    stdout_target = open(log_file, "w") if log_file else subprocess.PIPE  # noqa: SIM115
-    return subprocess.Popen(
+
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        stdout_target = open(log_file, "w")  # noqa: SIM115
+        preamble = (
+            f"# ralph agent preamble\n"
+            f"# timestamp : {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"# model     : {model}\n"
+            f"# cwd       : {cwd or 'inherited'}\n"
+            f"# cmd       : {' '.join(cmd[:2])} ... -p <prompt {len(prompt)} chars>\n"
+            f"# note      : claude --output-format json пишет результат в КОНЦЕ,\n"
+            f"#             до этого файл выглядит пустым. Ждём завершения.\n"
+            f"# ---\n"
+        )
+        stdout_target.write(preamble)
+        stdout_target.flush()
+    else:
+        stdout_target = subprocess.PIPE
+
+    proc = subprocess.Popen(
         cmd, stdout=stdout_target, stderr=subprocess.STDOUT, cwd=str(cwd) if cwd else None
     )
+    # Don't rewrite log_file here — subprocess already owns the fd, truncating from
+    # outside would corrupt interleaving. PID visible via ps/ralph_events.jsonl.
+    return proc
 
 
 def collect_result(proc: subprocess.Popen, log_file: Path | None = None, start_time: float = 0) -> AgentResult:
