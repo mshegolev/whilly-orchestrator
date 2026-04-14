@@ -376,23 +376,51 @@ class Dashboard:
         self.update()
 
     def _resolve_task_log_path(self, task_id: str) -> Path:
-        """Prefer active agent's log_file (precise), fallback to ralph_logs/{task_id}.log."""
+        """Find per-task agent log. Tries multiple locations and returns the first that exists."""
+        # 1) Precise path from active agent registration (absolute, set when subprocess spawned)
         for ag in self.active_agents:
             if ag.get("task_id") == task_id and ag.get("log_file"):
-                return Path(ag["log_file"])
-        log_dir = Path(os.environ.get("RALPH_LOG_DIR", "ralph_logs"))
-        return log_dir / f"{task_id}.log"
+                p = Path(ag["log_file"])
+                if p.exists():
+                    return p
+        # 2) Standard locations to search (newest match wins)
+        candidates: list[Path] = []
+        env_log_dir = os.environ.get("RALPH_LOG_DIR")
+        if env_log_dir:
+            candidates.append(Path(env_log_dir).expanduser().resolve() / f"{task_id}.log")
+        candidates.append(Path("ralph_logs").resolve() / f"{task_id}.log")
+        # Workspace-aware: if cwd is a workspace, also check parent .ralph_workspaces siblings
+        cwd = Path.cwd()
+        if ".ralph_workspaces" in cwd.parts:
+            candidates.append(cwd / "ralph_logs" / f"{task_id}.log")
+        # Original repo (one level up from workspace)
+        candidates.append(Path.cwd().parent / "ralph_logs" / f"{task_id}.log")
+        existing = [c for c in candidates if c.exists()]
+        if existing:
+            # newest by mtime
+            return max(existing, key=lambda p: p.stat().st_mtime)
+        # No file found yet — return the most likely path so user sees where we looked
+        return candidates[0] if candidates else Path(f"ralph_logs/{task_id}.log")
 
     def _refresh_log_overlay(self) -> None:
         """Re-read current log file and rebuild overlay text. Called each render tick."""
         if self._overlay_mode == "task_log" and self._log_task_id:
             log_path = self._resolve_task_log_path(self._log_task_id)
             title = f"Log: {self._log_task_id} ({log_path.name})"
+            label = self._log_task_id
         else:
             log_path = Path(os.environ.get("RALPH_LOG_PATH", "ralph.log"))
             title = f"Log: {log_path.name}"
+            label = log_path.name
         if not log_path.exists():
-            self._overlay_text = f"[dim]No log file found ({log_path})[/]"
+            # Show absolute path + cwd hint so user can debug missing log
+            self._overlay_text = (
+                f"[bold]Log: {label}[/]\n\n"
+                f"[red]Файл не найден[/]\n"
+                f"[dim]Искал: {log_path.resolve()}[/]\n"
+                f"[dim]CWD:    {Path.cwd()}[/]\n"
+                f"[dim]RALPH_LOG_DIR: {os.environ.get('RALPH_LOG_DIR', '<unset>')}[/]\n"
+            )
             return
         raw_lines = log_path.read_text(errors="replace").splitlines()[-30:]
         escaped = "\n".join(line.replace("[", "\\[") for line in raw_lines)
