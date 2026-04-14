@@ -122,10 +122,11 @@ class Dashboard:
         from ralph import __version__
 
         sha = os.environ.get("RALPH_GIT_SHA") or "?"
+        iter_str = f"iter {self.iteration}" if self.max_iterations == 0 else f"iter {self.iteration}/{self.max_iterations}"
         header = Text()
         header.append(
             f"  RALPH v{__version__} @ {sha}  \u25c6  {self._elapsed()}  \u25c6  {self.agent_name.upper()}"
-            f"  \u25c6  iter {self.iteration}/{self.max_iterations}",
+            f"  \u25c6  {iter_str}",
             style="bold white on blue",
         )
         parts.append(header)
