@@ -63,13 +63,26 @@ def _claude_bin() -> str:
     return _os.environ.get("CLAUDE_BIN") or "claude"
 
 
+def _claude_permission_args() -> list[str]:
+    """Build permission-related CLI args.
+
+    By default uses --dangerously-skip-permissions so Bash/test commands run in
+    fully autonomous mode (no TTY prompts). This mirrors what claudeproxy did before.
+    Set RALPH_CLAUDE_SAFE=1 to revert to --permission-mode acceptEdits (manual approve
+    needed for Bash — only useful with attached TTY).
+    """
+    import os as _os
+    if _os.environ.get("RALPH_CLAUDE_SAFE") in ("1", "true", "yes"):
+        return ["--permission-mode", "acceptEdits"]
+    return ["--dangerously-skip-permissions"]
+
+
 def run_agent(prompt: str, model: str = "claude-opus-4-6[1m]", timeout: int | None = None) -> AgentResult:
     """Run claude CLI and parse JSON result."""
     start = time.monotonic()
     cmd = [
         _claude_bin(),
-        "--permission-mode",
-        "acceptEdits",
+        *_claude_permission_args(),
         "--output-format",
         "json",
         "--model",
@@ -110,8 +123,7 @@ def run_agent_async(
     """
     cmd = [
         _claude_bin(),
-        "--permission-mode",
-        "acceptEdits",
+        *_claude_permission_args(),
         "--output-format",
         "json",
         "--model",

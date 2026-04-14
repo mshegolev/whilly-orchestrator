@@ -70,9 +70,16 @@ def launch_agent(
     # Use CLAUDE_BIN if set (bypasses shell function resolution, e.g. corporate proxy wrappers).
     # Otherwise rely on interactive zsh which sources ~/.zshrc and exposes `claude` function/alias.
     claude_cmd = os.environ.get("CLAUDE_BIN") or "claude"
+    # Default: --dangerously-skip-permissions (autonomous, no Bash approval prompts).
+    # RALPH_CLAUDE_SAFE=1 → revert to --permission-mode acceptEdits (manual approve).
+    perm_args = (
+        "--permission-mode acceptEdits"
+        if os.environ.get("RALPH_CLAUDE_SAFE") in ("1", "true", "yes")
+        else "--dangerously-skip-permissions"
+    )
     wrapper = (
         f"{cd_prefix}"
-        f'{claude_cmd} --permission-mode acceptEdits --output-format json '
+        f'{claude_cmd} {perm_args} --output-format json '
         f'--model "{model}" -p "$(cat {prompt_file})" '
         f'> "{log_file}" 2>&1; '
         f'echo "EXIT_CODE=$?" >> "{log_file}"'
