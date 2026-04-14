@@ -77,11 +77,24 @@ def launch_agent(
         if os.environ.get("RALPH_CLAUDE_SAFE") in ("1", "true", "yes")
         else "--dangerously-skip-permissions"
     )
+    # Preamble: пишем сразу чтобы tail -f / TUI сразу видели активность,
+    # т.к. claude --output-format json пишет результат только в конце.
+    preamble_cmd = (
+        f'printf "# ralph agent preamble\\n'
+        f'# timestamp : $(date \'+%Y-%m-%d %H:%M:%S\')\\n'
+        f'# session   : {session_name}\\n'
+        f'# task_id   : {task_id}\\n'
+        f'# model     : {model}\\n'
+        f'# cwd       : {cwd or "inherited"}\\n'
+        f'# note      : claude пишет результат в КОНЦЕ работы\\n'
+        f'# ---\\n" > "{log_file}"; '
+    )
     wrapper = (
         f"{cd_prefix}"
+        f"{preamble_cmd}"
         f'{claude_cmd} {perm_args} --output-format json '
         f'--model "{model}" -p "$(cat {prompt_file})" '
-        f'> "{log_file}" 2>&1; '
+        f'>> "{log_file}" 2>&1; '
         f'echo "EXIT_CODE=$?" >> "{log_file}"'
     )
 
