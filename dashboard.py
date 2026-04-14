@@ -66,6 +66,7 @@ class Dashboard:
         self.keyboard.register("g", self._generate_plan)
         self.keyboard.register("c", self._challenge_plan)
         self.keyboard.register("n", self._new_idea)
+        self.keyboard.register("r", self._reset_task)
         self.keyboard.register("h", self._show_help)
         self.keyboard.register("?", self._show_help)
         self.keyboard.start()
@@ -112,7 +113,7 @@ class Dashboard:
             return Group(
                 content,
                 Text(""),
-                Text.from_markup("[dim]Press any key to dismiss  \u2502  q=quit  d=detail  l=log  t=tasks  s=stats  h=help[/]"),
+                Text.from_markup("[dim]Press any key to dismiss  \u2502  q=quit  d=detail  l=log  t=tasks  s=stats  r=reset  h=help[/]"),
             )
 
         self.tm.reload()
@@ -419,6 +420,97 @@ class Dashboard:
             lines.append(f" {ic} {t.id:<12} {t.status:<12} {t.priority:<8} {t.category:<12} {t.description[:50]}")
         self._overlay_text = "\n".join(lines)
         self.update()
+
+    def _reset_task(self) -> None:
+        """Hotkey r: reset failed/in_progress task to pending. Prompts for TASK ID."""
+        # If overlay or input mode is active — dismiss / ignore
+        if getattr(self, "_input_mode", False):
+            return
+        if self._overlay_text is not None:
+            self._overlay_text = None
+            self._overlay_mode = None
+            self.update()
+            return
+
+        self.tm.reload()
+        failed = [t for t in self.tm.tasks if t.status in ("failed", "in_progress")]
+        self._reset_input_buffer = ""
+        self._reset_failed_list = [t.id for t in failed]
+        self._input_mode = True
+        self._update_reset_overlay()
+        self.keyboard.enter_input_mode(self._on_reset_input_char)
+
+    def _update_reset_overlay(self) -> None:
+        cursor = "\u2588"
+        buf = self._reset_input_buffer.replace("[", "\\[")
+        failed_lines = ""
+        if self._reset_failed_list:
+            failed_lines = "[bold]Кандидаты (failed/in_progress):[/]\n"
+            for tid in self._reset_failed_list[:15]:
+                failed_lines += f"  [yellow]{tid}[/]\n"
+            if len(self._reset_failed_list) > 15:
+                failed_lines += f"  [dim]... +{len(self._reset_failed_list) - 15} ещё[/]\n"
+            failed_lines += "\n"
+        else:
+            failed_lines = "[dim]Нет failed/in_progress задач\u2014 reset нечего.[/]\n\n"
+        self._overlay_text = (
+            "[bold cyan]Reset task \u2192 pending[/]\n\n"
+            f"{failed_lines}"
+            "[bold]Введи TASK ID (Enter \u2014 reset, Esc \u2014 отмена):[/]\n\n"
+            f"  [bold white on blue] > {buf}{cursor} [/]\n\n"
+            "[dim]Подсказки:[/]\n"
+            "  [dim]\u2022 'all' \u2014 reset всех failed разом[/]\n"
+            "  [dim]\u2022 точное совпадение ID (case-insensitive)[/]\n"
+        )
+        self.update()
+
+    def _on_reset_input_char(self, ch: str) -> None:
+        """Handle char in reset input mode."""
+        if ch in ("\n", "\r"):
+            tid = self._reset_input_buffer.strip()
+            self._input_mode = False
+            self.keyboard.exit_input_mode()
+            if not tid:
+                self._overlay_text = None
+                self.update()
+                return
+            self.tm.reload()
+            reset_count = 0
+            if tid.lower() == "all":
+                for t in self.tm.tasks:
+                    if t.status == "failed":
+                        t.status = "pending"
+                        reset_count += 1
+                msg = f"[green]Reset {reset_count} failed → pending[/]"
+            else:
+                target = next((t for t in self.tm.tasks if t.id.lower() == tid.lower()), None)
+                if target is None:
+                    self._overlay_text = f"[red]Задача '{tid}' не найдена[/]\n\n[dim]Нажми любую клавишу[/]"
+                    self.update()
+                    return
+                old_status = target.status
+                target.status = "pending"
+                reset_count = 1
+                msg = f"[green]{target.id}: {old_status} → pending[/]"
+            if reset_count:
+                self.tm.save()
+            self._overlay_text = msg + "\n\n[dim]Нажми любую клавишу[/]"
+            self.update()
+            return
+        if ch == "\x1b":
+            self._input_mode = False
+            self.keyboard.exit_input_mode()
+            self._overlay_text = None
+            self.update()
+            return
+        if ch in ("\x7f", "\b"):
+            if self._reset_input_buffer:
+                self._reset_input_buffer = self._reset_input_buffer[:-1]
+                self._update_reset_overlay()
+            return
+        if ch.isprintable():
+            self._reset_input_buffer += ch
+            self._update_reset_overlay()
 
     def _new_idea(self) -> None:
         """Hotkey n: launch PRD wizard for a new idea with inline text input."""
@@ -976,6 +1068,7 @@ class Dashboard:
             "  [bold cyan]t[/]  Tasks      \u2014 все задачи со статусами\n"
             "  [bold cyan]s[/]  Stats      \u2014 токены, стоимость, время, бюджет\n"
             "  [bold cyan]n[/]  New Idea   \u2014 PRD Wizard: идея \u2192 PRD \u2192 tasks (фоновый)\n"
+            "  [bold cyan]r[/]  Reset      \u2014 сбросить failed/in_progress задачу в pending (или 'all')\n"
             "  [bold cyan]g[/]  ТРИЗ       \u2014 анализ плана по ТРИЗ (противоречия, ИКР)\n"
             "  [bold cyan]c[/]  Challenge  \u2014 Devil's Advocate (over-eng, risks, scope)\n"
             "  [bold cyan]p[/]  PRD info   \u2014 как создавать PRD и планы\n"
