@@ -53,7 +53,9 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or s
 2. Run Ralph:
 
    ```bash
-   python ralph.py --tasks tasks.log --parallel 2
+   ralph --tasks tasks.log --parallel 2
+   # or without install:
+   python -m ralph --tasks tasks.log --parallel 2
    ```
 
 3. Watch the dashboard. Press `q` to quit, `p` to pause, `r` to reset a failed task.
@@ -77,7 +79,7 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or s
 
 ## Configuration
 
-Pass flags to `ralph.py` or set environment variables:
+Pass flags to `ralph` or set environment variables:
 
 - `CLAUDE_BIN` — path to Claude CLI binary
 - `--model` — Claude model id (default: `claude-opus-4-6[1m]`)

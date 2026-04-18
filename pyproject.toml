@@ -37,6 +37,9 @@ Repository = "https://github.com/mshegolev/ralph-orchestrator"
 Issues = "https://github.com/mshegolev/ralph-orchestrator/issues"
 Documentation = "https://github.com/mshegolev/ralph-orchestrator/blob/main/docs/Ralph-Usage.md"
 
+[project.scripts]
+ralph = "ralph.cli:main"
+
 [tool.setuptools]
 packages = ["ralph"]
 

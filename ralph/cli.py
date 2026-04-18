@@ -2,10 +2,10 @@
 """Ralph task orchestrator — Python rewrite of ralph.sh.
 
 Usage:
-    ./ralph.py                          Use tasks.json or interactive menu
-    ./ralph.py plan1.json plan2.json    Run specific plan files
-    ./ralph.py --all                    Run all discovered plans
-    ./ralph.py -h, --help               Show help
+    ralph                          Use tasks.json or interactive menu
+    ralph plan1.json plan2.json    Run specific plan files
+    ralph --all                    Run all discovered plans
+    ralph -h, --help               Show help
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def _get_version_info() -> tuple[str, str, str]:
     """Return (version, short_sha, dirty_flag). Reads git info from the ralph source repo.
 
     Resolved via git-dir of this file's parent — works even when ralph runs inside a
-    worktree (where CWD is different from the repo with ralph.py).
+    worktree (where CWD is different from the repo with ralph).
     """
     from ralph import __version__
 
@@ -254,7 +254,7 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
     if choice in ("q", ""):
         sys.exit(0)
     if choice == "n":
-        _ansi(f"{CY}Запусти: {R}python3 ralph.py --prd-wizard")
+        _ansi(f"{CY}Запусти: {R}ralph --prd-wizard")
         sys.exit(0)
     if choice == "a":
         if not plans:
@@ -270,7 +270,7 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
             idx = int(choice[1:]) - 1
             if 0 <= idx < len(unlinked_prds):
                 prd = unlinked_prds[idx]
-                _ansi(f"{CY}Сгенерируй план из PRD: {R}python3 ralph.py --plan {prd}")
+                _ansi(f"{CY}Сгенерируй план из PRD: {R}ralph --plan {prd}")
                 sys.exit(0)
         except ValueError:
             pass
@@ -1270,27 +1270,27 @@ def _run_claude_merge(workspace, tm) -> None:
 
 
 HELP_TEXT = """\
-Usage: ralph.py [OPTIONS] [PLAN_FILE...]
+Usage: ralph [OPTIONS] [PLAN_FILE...]
 
-  ralph.py                          Use tasks.json or interactive menu
-  ralph.py plan1.json plan2.json    Run specific plan files
-  ralph.py --all                    Run all discovered plans
-  ralph.py --headless               CI mode: no TUI, JSON stdout, exit codes
-  ralph.py --timeout 3600           Max wall time in seconds (0=unlimited)
-  ralph.py --resume                 Resume from saved state after crash
-  ralph.py --reset PLAN_FILE        Reset all tasks to pending
-  ralph.py --init "description"     Generate PRD from project description
-  ralph.py --plan PRD.md            Generate tasks.json from PRD file
-  ralph.py --init "desc" --plan     Generate PRD + tasks.json in one step
-  ralph.py --init "desc" --plan --go  PRD + tasks + auto-execute
-  ralph.py --prd-wizard [slug]      Interactive PRD wizard — launches claude CLI
+  ralph                          Use tasks.json or interactive menu
+  ralph plan1.json plan2.json    Run specific plan files
+  ralph --all                    Run all discovered plans
+  ralph --headless               CI mode: no TUI, JSON stdout, exit codes
+  ralph --timeout 3600           Max wall time in seconds (0=unlimited)
+  ralph --resume                 Resume from saved state after crash
+  ralph --reset PLAN_FILE        Reset all tasks to pending
+  ralph --init "description"     Generate PRD from project description
+  ralph --plan PRD.md            Generate tasks.json from PRD file
+  ralph --init "desc" --plan     Generate PRD + tasks.json in one step
+  ralph --init "desc" --plan --go  PRD + tasks + auto-execute
+  ralph --prd-wizard [slug]      Interactive PRD wizard — launches claude CLI
                                     preloaded with PRD master prompt. Диалог
                                     прямо в текущем терминале (без tmux).
-  ralph.py --no-worktree            Отключить изоляцию плана в отдельном git
+  ralph --no-worktree            Отключить изоляцию плана в отдельном git
                                     worktree (по умолчанию план исполняется в
                                     .ralph_workspaces/{slug}/ чтобы не мешать
                                     параллельным агентам в основной репе).
-  ralph.py -h, --help               Show this help
+  ralph -h, --help               Show this help
 
 Exit codes (headless mode):
   0  All tasks done successfully
@@ -1349,7 +1349,7 @@ def main(argv: list[str] | None = None) -> int:
     if "--reset" in args:
         rest = [a for a in args if a != "--reset"]
         if not rest:
-            _ansi(f"{RD}Usage: ralph.py --reset PLAN_FILE{R}")
+            _ansi(f"{RD}Usage: ralph --reset PLAN_FILE{R}")
             return 1
         for f in rest:
             p = Path(f)
@@ -1379,7 +1379,7 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--init")
         if idx + 1 >= len(args):
-            _ansi(f"{RD}Usage: ralph.py --init \"project description\"{R}")
+            _ansi(f"{RD}Usage: ralph --init \"project description\"{R}")
             return 1
         description = args[idx + 1]
         also_plan = "--plan" in args
@@ -1422,7 +1422,7 @@ def main(argv: list[str] | None = None) -> int:
 
         rest = [a for a in args if a != "--plan"]
         if not rest:
-            _ansi(f"{RD}Usage: ralph.py --plan PRD.md{R}")
+            _ansi(f"{RD}Usage: ralph --plan PRD.md{R}")
             return 1
         config = RalphConfig.from_env()
         for prd_file in rest:
