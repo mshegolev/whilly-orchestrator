@@ -5,15 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ralph-orchestrator"
 version = "3.0.0"
-description = "Ralph Wiggum task orchestrator — continuous AI agent loops with dashboard, decomposer, TRIZ analyzer and PRD wizard"
+description = "Ralph Wiggum technique — continuous AI agent loops with Rich TUI dashboard, task decomposer, TRIZ analyzer and PRD wizard"
 readme = "README.md"
 requires-python = ">=3.10"
-authors = [{ name = "Mikhail Shchegolev", email = "mvschegole@mts.ru" }]
-license = { text = "Proprietary" }
-keywords = ["ralph", "llm", "orchestrator", "agent-loop", "qa"]
+authors = [{ name = "Mikhail Shchegolev", email = "mshegolev@gmail.com" }]
+license = { text = "MIT" }
+keywords = ["ralph", "ralph-wiggum", "llm", "orchestrator", "agent-loop", "claude", "ai-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -31,12 +32,17 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://gitlab.services.mts.ru/einvy/autotests/qa_assistant"
-Documentation = "https://gitlab.services.mts.ru/einvy/autotests/qa_assistant/-/blob/master/docs/Ralph-Usage.md"
+Homepage = "https://github.com/mshegolev/ralph-orchestrator"
+Repository = "https://github.com/mshegolev/ralph-orchestrator"
+Issues = "https://github.com/mshegolev/ralph-orchestrator/issues"
+Documentation = "https://github.com/mshegolev/ralph-orchestrator/blob/main/docs/Ralph-Usage.md"
 
 [tool.setuptools]
 packages = ["ralph"]
-package-dir = { "ralph" = "." }
 
 [tool.setuptools.package-data]
 ralph = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

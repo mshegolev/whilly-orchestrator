@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Ralph runtime artifacts
+ralph.log
+ralph_tasks.log
+ralph_*_tasks.log
+ralph_logs/
+.ralph_workspaces/
+ralph_events.jsonl
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# PRD wizard state
+.ralph_prd_state.json
