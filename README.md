@@ -1,4 +1,4 @@
-# Ralph Orchestrator
+# Whilly Orchestrator
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -9,7 +9,7 @@ Python implementation of the **Ralph Wiggum technique** — continuous AI agent 
 
 ## What it does
 
-Ralph runs a loop: pick a pending task → hand it to an LLM agent → verify result → commit → next. It keeps running until the task board is empty, a budget is exhausted, or you stop it. Parallel mode dispatches multiple agents in tmux panes or git worktrees.
+Whilly runs a loop: pick a pending task → hand it to an LLM agent → verify result → commit → next. It keeps running until the task board is empty, a budget is exhausted, or you stop it. Parallel mode dispatches multiple agents in tmux panes or git worktrees.
 
 Originally described in [Ghuntley's post on the Ralph Wiggum technique](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. This is a batteries-included orchestrator with a dashboard and task lifecycle around that loop.
 
@@ -27,14 +27,14 @@ Originally described in [Ghuntley's post on the Ralph Wiggum technique](https://
 ## Install
 
 ```bash
-pip install ralph-orchestrator
+pip install whilly-orchestrator
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/mshegolev/ralph-orchestrator
-cd ralph-orchestrator
+git clone https://github.com/mshegolev/whilly-orchestrator
+cd whilly-orchestrator
 pip install -e .
 ```
 
@@ -50,12 +50,12 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or s
    TASK-003 Update README with the new endpoint
    ```
 
-2. Run Ralph:
+2. Run Whilly:
 
    ```bash
-   ralph --tasks tasks.log --parallel 2
+   whilly --tasks tasks.log --parallel 2
    # or without install:
-   python -m ralph --tasks tasks.log --parallel 2
+   python -m whilly --tasks tasks.log --parallel 2
    ```
 
 3. Watch the dashboard. Press `q` to quit, `p` to pause, `r` to reset a failed task.
@@ -79,7 +79,7 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or s
 
 ## Configuration
 
-Pass flags to `ralph` or set environment variables:
+Pass flags to `whilly` or set environment variables:
 
 - `CLAUDE_BIN` — path to Claude CLI binary
 - `--model` — Claude model id (default: `claude-opus-4-6[1m]`)
@@ -88,26 +88,30 @@ Pass flags to `ralph` or set environment variables:
 - `--tasks <file>` — task list file
 - `--worktree` — use git worktrees instead of tmux
 
-See `docs/Ralph-Usage.md` for the full CLI reference.
+See `docs/Whilly-Usage.md` for the full CLI reference.
 
 ## Documentation
 
-- [Ralph-Usage.md](docs/Ralph-Usage.md) — CLI reference and flag catalog
-- [Ralph-Interfaces-and-Tasks.md](docs/Ralph-Interfaces-and-Tasks.md) — task file format, state store schema, agent output contract
+- [Whilly-Usage.md](docs/Whilly-Usage.md) — CLI reference and flag catalog
+- [Whilly-Interfaces-and-Tasks.md](docs/Whilly-Interfaces-and-Tasks.md) — task file format, state store schema, agent output contract
 
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest
-ruff check ralph/ tests/
-ruff format ralph/ tests/
+ruff check whilly/ tests/
+ruff format whilly/ tests/
 ```
 
 ## Credits
 
 - Technique attribution: [Ghuntley — the Ralph Wiggum technique](https://ghuntley.com/ralph/)
-- Named after the Simpsons character whose "I'm helping!" captures the spirit of an agent that keeps going no matter what
+- Spirit of the technique — a Simpsons character whose "I'm helping!" captures the essence of an agent that just keeps going, no matter what
+
+## Related work
+
+- [`ralph-orchestrator`](https://pypi.org/project/ralph-orchestrator/) by [@mikeyobrien](https://github.com/mikeyobrien/ralph-orchestrator) — another implementation of the same technique. Whilly differentiates with a Rich TUI dashboard, TRIZ analyzer, PRD wizard, and tmux/git-worktree parallel execution.
 
 ## License
 
