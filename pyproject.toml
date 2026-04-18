@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ralph-orchestrator"
+name = "whilly-orchestrator"
 version = "3.0.0"
 description = "Ralph Wiggum technique — continuous AI agent loops with Rich TUI dashboard, task decomposer, TRIZ analyzer and PRD wizard"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Mikhail Shchegolev", email = "mshegolev@gmail.com" }]
 license = { text = "MIT" }
-keywords = ["ralph", "ralph-wiggum", "llm", "orchestrator", "agent-loop", "claude", "ai-agents"]
+keywords = ["whilly", "whilly-wiggum", "llm", "orchestrator", "agent-loop", "claude", "ai-agents"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -32,19 +32,19 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mshegolev/ralph-orchestrator"
-Repository = "https://github.com/mshegolev/ralph-orchestrator"
-Issues = "https://github.com/mshegolev/ralph-orchestrator/issues"
-Documentation = "https://github.com/mshegolev/ralph-orchestrator/blob/main/docs/Ralph-Usage.md"
+Homepage = "https://github.com/mshegolev/whilly-orchestrator"
+Repository = "https://github.com/mshegolev/whilly-orchestrator"
+Issues = "https://github.com/mshegolev/whilly-orchestrator/issues"
+Documentation = "https://github.com/mshegolev/whilly-orchestrator/blob/main/docs/Whilly-Usage.md"
 
 [project.scripts]
-ralph = "ralph.cli:main"
+whilly = "whilly.cli:main"
 
 [tool.setuptools]
-packages = ["ralph"]
+packages = ["whilly"]
 
 [tool.setuptools.package-data]
-ralph = ["py.typed"]
+whilly = ["py.typed"]
 
 [tool.ruff]
 line-length = 120
