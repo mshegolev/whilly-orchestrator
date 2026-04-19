@@ -1,10 +1,7 @@
 """Tests for whilly.dashboard module (R2-009)."""
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 from whilly.dashboard import Dashboard, KeyboardHandler
-from whilly.reporter import CostTotals
 from whilly.task_manager import TaskManager
 
 

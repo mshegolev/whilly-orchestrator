@@ -21,13 +21,17 @@ env/
 .DS_Store
 *.swp
 
-# Ralph runtime artifacts
+# Whilly runtime artifacts
+whilly.log
+whilly_tasks.log
+whilly_*_tasks.log
+whilly_logs/
+.whilly_workspaces/
+.whilly_worktrees/
+.whilly_state.json
+whilly_events.jsonl
 ralph.log
-ralph_tasks.log
-ralph_*_tasks.log
-ralph_logs/
-.ralph_workspaces/
-ralph_events.jsonl
+progress.txt
 
 # Tests
 .pytest_cache/
@@ -37,4 +41,4 @@ htmlcov/
 .ruff_cache/
 
 # PRD wizard state
-.ralph_prd_state.json
+.whilly_prd_state.json

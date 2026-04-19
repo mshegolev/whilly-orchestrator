@@ -45,9 +45,7 @@ def tmux_available() -> bool:
     return TMUX is not None
 
 
-def launch_agent(
-    task_id: str, prompt: str, model: str, log_dir: Path, cwd: Path | None = None
-) -> TmuxAgent:
+def launch_agent(task_id: str, prompt: str, model: str, log_dir: Path, cwd: Path | None = None) -> TmuxAgent:
     """Launch claude agent in a new tmux session.
 
     Args:
@@ -92,7 +90,7 @@ def launch_agent(
     wrapper = (
         f"{cd_prefix}"
         f"{preamble_cmd}"
-        f'{claude_cmd} {perm_args} --output-format json '
+        f"{claude_cmd} {perm_args} --output-format json "
         f'--model "{model}" -p "$(cat {prompt_file})" '
         f'>> "{log_file}" 2>&1; '
         f'echo "EXIT_CODE=$?" >> "{log_file}"'

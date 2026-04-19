@@ -2,8 +2,11 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
 
 Python implementation of the **Ralph Wiggum technique** — continuous AI agent loops for autonomous software development. Drive a coding agent (Claude CLI) around a task board until the work is done, with a Rich TUI dashboard, task decomposition, TRIZ analysis and PRD generation.
+
+🇷🇺 [Краткое описание на русском](README-RU.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
 
 > "I'm helping!" — Ralph Wiggum
 
@@ -15,7 +18,7 @@ Originally described in [Ghuntley's post on the Ralph Wiggum technique](https://
 
 ## Features
 
-- **Continuous agent loop** — pull tasks from a simple `tasks.log` file, run Claude CLI on each, retry on transient errors
+- **Continuous agent loop** — pull tasks from a JSON plan, run Claude CLI on each, retry on transient errors
 - **Rich TUI dashboard** — live progress, token usage, cost totals, per-task status; hotkeys for pause/reset/skip
 - **Parallel execution** — tmux panes or git worktrees, up to N concurrent agents with budget/deadlock guards
 - **Task decomposer** — LLM-based breakdown of oversized tasks into subtasks
@@ -38,27 +41,56 @@ cd whilly-orchestrator
 pip install -e .
 ```
 
-Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or set `CLAUDE_BIN`).
+Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or set `CLAUDE_BIN`).
 
 ## Quick start
 
-1. Create a `tasks.log` with one task per line:
+1. Create `tasks.json` describing the work:
 
-   ```
-   TASK-001 Add a /health endpoint returning {"status":"ok"}
-   TASK-002 Write a pytest covering the new endpoint
-   TASK-003 Update README with the new endpoint
+   ```json
+   {
+     "project": "health-endpoint",
+     "tasks": [
+       {
+         "id": "TASK-001",
+         "phase": "Phase 1",
+         "category": "functional",
+         "priority": "high",
+         "description": "Add a /health endpoint returning {\"status\":\"ok\"}",
+         "status": "pending",
+         "dependencies": [],
+         "key_files": ["app/server.py"],
+         "acceptance_criteria": ["GET /health returns 200 with {\"status\":\"ok\"}"],
+         "test_steps": ["curl -s localhost:8000/health"]
+       },
+       {
+         "id": "TASK-002",
+         "phase": "Phase 1",
+         "category": "test",
+         "priority": "high",
+         "description": "Write a pytest covering the new endpoint",
+         "status": "pending",
+         "dependencies": ["TASK-001"],
+         "key_files": ["tests/test_health.py"],
+         "acceptance_criteria": ["pytest tests/test_health.py passes"],
+         "test_steps": ["pytest -q tests/test_health.py"]
+       }
+     ]
+   }
    ```
 
-2. Run Whilly:
+2. Run Whilly (2 concurrent agents, $5 budget cap):
 
    ```bash
-   whilly --tasks tasks.log --parallel 2
-   # or without install:
-   python -m whilly --tasks tasks.log --parallel 2
+   WHILLY_MAX_PARALLEL=2 WHILLY_BUDGET_USD=5 whilly tasks.json
+   # straight from a checkout, no install:
+   ./whilly.py tasks.json
+   # or as a module:
+   python -m whilly tasks.json
+   # or just `whilly` with no args for the interactive plan-picker
    ```
 
-3. Watch the dashboard. Press `q` to quit, `p` to pause, `r` to reset a failed task.
+3. Watch the dashboard. Press `q` to quit, `d` for task detail, `l` for the live log of a running agent, `t` for the task overview.
 
 ## Modules
 
@@ -79,14 +111,25 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or s
 
 ## Configuration
 
-Pass flags to `whilly` or set environment variables:
+Configuration is done via environment variables (prefix `WHILLY_`). A few CLI flags exist for one-shot overrides — see `whilly --help`.
 
-- `CLAUDE_BIN` — path to Claude CLI binary
-- `--model` — Claude model id (default: `claude-opus-4-6[1m]`)
-- `--parallel N` — concurrent agents (default 1)
-- `--budget-usd` — hard cap on spend
-- `--tasks <file>` — task list file
-- `--worktree` — use git worktrees instead of tmux
+| Variable | Default | Purpose |
+|---|---|---|
+| `WHILLY_MODEL` | `claude-opus-4-6[1m]` | Claude model id |
+| `WHILLY_MAX_PARALLEL` | `3` | Concurrent agents (1 = sequential) |
+| `WHILLY_MAX_ITERATIONS` | `0` | Max work cycles per plan (0 = unlimited) |
+| `WHILLY_BUDGET_USD` | `0` | Hard cost cap; 80% triggers warning, 100% stops the run |
+| `WHILLY_TIMEOUT` | `0` | Wall-clock cap in seconds (0 = unlimited) |
+| `WHILLY_USE_TMUX` | `1` | Use tmux panes for parallel agents |
+| `WHILLY_WORKTREE` | `0` | Per-task git worktree isolation (needs `MAX_PARALLEL>1`) |
+| `WHILLY_LOG_DIR` | `whilly_logs` | Per-task log directory |
+| `WHILLY_STATE_FILE` | `.whilly_state.json` | Crash-recovery state file (`--resume` reads it) |
+| `WHILLY_HEADLESS` | auto | CI mode — JSON on stdout, exit codes |
+| `CLAUDE_BIN` | `claude` | Path to Claude CLI binary |
+
+Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`.
+
+Exit codes in headless mode: `0` success, `1` some tasks failed, `2` budget exceeded, `3` timeout.
 
 See `docs/Whilly-Usage.md` for the full CLI reference.
 
@@ -94,6 +137,27 @@ See `docs/Whilly-Usage.md` for the full CLI reference.
 
 - [Whilly-Usage.md](docs/Whilly-Usage.md) — CLI reference and flag catalog
 - [Whilly-Interfaces-and-Tasks.md](docs/Whilly-Interfaces-and-Tasks.md) — task file format, state store schema, agent output contract
+- [docs/workshop/INDEX.md](docs/workshop/INDEX.md) — Workshop kit (HackSprint1)
+
+## Workshop kit
+
+Whilly ships with a **HackSprint1 workshop kit** — a 90-minute hands-on tutorial that takes you from `pip install` to a running self-hosting bootstrap demo. Two tracks:
+
+- **Track A (`tasks.json`)** — works without GitHub auth, 30 min.
+- **Track B (GitHub Issues)** — full e2e with PR creation, 60 min.
+
+Includes BRD, PRD, 12 ADRs, sample plans, and a roadmap. See [docs/workshop/INDEX.md](docs/workshop/INDEX.md) for the full guide. RU/EN bilingual.
+
+## Troubleshooting / FAQ
+
+| Issue | Fix |
+|---|---|
+| `gh auth status` returns 401 ("token invalid") | `unset GITHUB_TOKEN` (env-based token overrides keyring auth), then `gh auth login` if needed. |
+| `claude: command not found` | Install Claude CLI from [docs.claude.com](https://docs.claude.com/en/docs/claude-code) or set `CLAUDE_BIN` to its path. |
+| Dashboard rendering broken on narrow terminal (<100 cols) | `WHILLY_HEADLESS=1 whilly tasks.json` — disables TUI, streams JSON events on stdout. |
+| Budget hits 0 unexpectedly | Set or raise `WHILLY_BUDGET_USD` (default unlimited; 0 also means unlimited). |
+| `tmux ls` shows no sessions after dispatch | Either tmux isn't installed, or `WHILLY_USE_TMUX=0` — whilly silently falls back to subprocess mode. |
+| Agent loops forever without marking done | Ensure prompt ends with the `<promise>COMPLETE</promise>` marker contract — `agent_runner.is_complete` checks that string. |
 
 ## Development
 
