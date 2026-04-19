@@ -517,8 +517,7 @@ def main() -> int:
     event("e2e.start", repo=REPO, label=LABEL, dry_run=DRY_RUN, auto_merge=ALLOW_AUTO_MERGE)
 
     if not os.environ.get("ANTHROPIC_API_KEY") and AGENT_BACKEND == "claude" and not DRY_RUN:
-        log("ERROR: ANTHROPIC_API_KEY not set")
-        return 0
+        log("WARN: ANTHROPIC_API_KEY env not set — relying on Claude CLI keyring auth")
 
     # ── 1) Fetch ──────────────────────────────────────────────────────────────
     section("1/8 fetch GitHub issues")
@@ -556,11 +555,14 @@ def main() -> int:
     section("3/8 prepare branch")
     branch = f"whilly/{task.id}"
     if not DRY_RUN:
-        # Start from current main.
-        _git("checkout", "main", cwd=Path.cwd())
-        _git("pull", "--ff-only", "origin", "main", cwd=Path.cwd())
-        # If the branch already exists locally, reuse.
-        ck = _git("checkout", "-B", branch, "main", cwd=Path.cwd())
+        # Refresh origin/main; create/reset branch off the remote tip.
+        # This works whether or not a local `main` exists (clones with
+        # --branch <other> don't materialise local main).
+        fetch_proc = _git("fetch", "origin", "main", cwd=Path.cwd())
+        if fetch_proc.returncode != 0:
+            log(f"git fetch failed: {fetch_proc.stderr}")
+            return 0
+        ck = _git("checkout", "-B", branch, "origin/main", cwd=Path.cwd())
         if ck.returncode != 0:
             log(f"git checkout failed: {ck.stderr}")
             return 0
