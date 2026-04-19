@@ -113,6 +113,14 @@ ruff format whilly/ tests/
 
 - [`ralph-orchestrator`](https://pypi.org/project/ralph-orchestrator/) by [@mikeyobrien](https://github.com/mikeyobrien/ralph-orchestrator) — another implementation of the same technique. Whilly differentiates with a Rich TUI dashboard, TRIZ analyzer, PRD wizard, and tmux/git-worktree parallel execution.
 
+## Workshop kit
+
+Ready to run a team hackathon with Whilly? The **HackSprint1** workshop kit
+has everything you need — facilitator guides, gap-pack exercises, and
+decision-gate templates.
+
+👉 [docs/workshop/INDEX.md](docs/workshop/INDEX.md)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

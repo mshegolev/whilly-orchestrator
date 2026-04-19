@@ -1,0 +1,14 @@
+## GH-6: Add Workshop section pointer to README
+
+**Status:** COMPLETE
+**Date:** 2026-04-20
+
+### What was done:
+- Added a "## Workshop kit" section to README.md (7 lines, under the 8-line limit)
+- Section contains a relative link to docs/workshop/INDEX.md
+- Section mentions HackSprint1 by name
+- All acceptance criteria verified:
+  - grep -q '## Workshop kit' README.md ✓
+  - grep -q 'docs/workshop/INDEX.md' README.md ✓
+  - grep -q 'HackSprint1' README.md ✓
+- Tests pass (pytest), lint errors are pre-existing and unrelated to this change
