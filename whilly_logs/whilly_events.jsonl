@@ -1,0 +1,12 @@
+{"ts": "2026-04-19T21:51:34.833444+00:00", "event": "e2e.start", "repo": "mshegolev/whilly-orchestrator", "label": "whilly:ready", "dry_run": false, "auto_merge": true}
+{"ts": "2026-04-19T21:51:47.442829+00:00", "event": "decision_gate", "task_id": "GH-6", "decision": "proceed", "reason": "Simple README update with clear acceptance criteria. All requirements well-defined: heading, link to docs/workshop/INDEX.md, HackSprint1 mention, max 8 lines.", "cost_usd": 0.020949950000000002}
+{"ts": "2026-04-19T21:51:48.728980+00:00", "event": "main.start", "task_id": "GH-6", "budget": 5.0}
+{"ts": "2026-04-19T21:51:53.888892+00:00", "event": "plan_start", "plan": "/private/tmp/whilly_e2e_run/whilly_e2e_tasks.json", "project": "github-mshegolev-whilly-orchestrator", "tasks": 1}
+{"ts": "2026-04-19T22:00:18.930217+00:00", "event": "plan_done", "iterations": 3, "done": 0, "total": 1, "cost_usd": 0.0}
+{"ts": "2026-04-19T22:00:18.990887+00:00", "event": "main.done", "task_id": "GH-6", "ok": true, "exit_code": 0}
+{"ts": "2026-04-19T22:12:43.524132+00:00", "event": "e2e.resume", "branch": "whilly/GH-6", "task_id": "GH-6"}
+{"ts": "2026-04-19T22:12:48.789896+00:00", "event": "pr.opened", "task_id": "GH-6", "pr_url": "https://github.com/mshegolev/whilly-orchestrator/pull/13", "pr_number": "13", "branch": "whilly/GH-6"}
+{"ts": "2026-04-19T22:12:50.032394+00:00", "event": "review.start", "iteration": 1, "diff_chars": 1439}
+{"ts": "2026-04-19T22:13:04.728072+00:00", "event": "review.done", "iteration": 1, "cost_usd": 0.09025825, "running_total": 0.09025825}
+{"ts": "2026-04-19T22:13:06.389968+00:00", "event": "fix.start", "iteration": 1, "comment_count": 1}
+{"ts": "2026-04-19T22:13:37.114720+00:00", "event": "fix.done", "iteration": 1, "cost_usd": 0.2019485, "is_complete": true, "running_total": 0.29220675}

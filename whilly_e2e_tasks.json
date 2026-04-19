@@ -1,0 +1,35 @@
+{
+  "project": "github-mshegolev-whilly-orchestrator",
+  "tasks": [
+    {
+      "id": "GH-6",
+      "phase": "GH-Issues",
+      "category": "github-issue",
+      "priority": "high",
+      "description": "[workshop] Add a Workshop section pointer to README\n\nAdd a short Workshop section to README.md that links to docs/workshop/INDEX.md so workshop participants find the kit immediately.\n\n**Files:** README.md\n\n## Acceptance\n- README.md has a '## Workshop kit' heading (one per file)\n- Section is at most 8 lines\n- Contains a relative link to docs/workshop/INDEX.md\n- Mentions HackSprint1 by name\n\n## Test\n- grep -q '## Workshop kit' README.md\n- grep -q 'docs/workshop/INDEX.md' README.md\n- grep -q 'HackSprint1' README.md",
+      "status": "done",
+      "dependencies": [],
+      "key_files": [
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "README.md has a '## Workshop kit' heading (one per file)",
+        "Section is at most 8 lines",
+        "Contains a relative link to docs/workshop/INDEX.md",
+        "Mentions HackSprint1 by name"
+      ],
+      "test_steps": [
+        "grep -q '## Workshop kit' README.md",
+        "grep -q 'docs/workshop/INDEX.md' README.md",
+        "grep -q 'HackSprint1' README.md"
+      ],
+      "prd_requirement": "https://github.com/mshegolev/whilly-orchestrator/issues/6"
+    }
+  ],
+  "source": {
+    "type": "github_issues",
+    "repo": "mshegolev/whilly-orchestrator",
+    "label": "whilly:ready",
+    "fetched_at": "2026-04-19T21:51:36.218408+00:00"
+  }
+}

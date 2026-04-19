@@ -1,0 +1,8 @@
+[04:51:48] whilly: whilly start: v3.0.0 @ ff394cf (dirty)
+[04:51:53] whilly: Report: .planning/reports/whilly_whilly_e2e_tasks_20260420_045153.json
+[04:51:53] whilly: Iter 1 start (sequential)
+[04:59:41] whilly: Iter 2 start (sequential)
+[04:59:59] whilly: Iter 3 start (sequential)
+[05:00:18] whilly: Stopped: max iterations (3)
+[05:00:18] whilly: Plan /private/tmp/whilly_e2e_run/whilly_e2e_tasks.json finished: 0/1 done in 8m25s, $0.0000
+[05:00:18] whilly: Summary: .planning/reports/whilly_summary_20260420_050018.md

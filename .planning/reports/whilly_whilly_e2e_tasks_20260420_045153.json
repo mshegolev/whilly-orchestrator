@@ -1,0 +1,66 @@
+{
+  "plan_file": "/private/tmp/whilly_e2e_run/whilly_e2e_tasks.json",
+  "project": "github-mshegolev-whilly-orchestrator",
+  "agent": "claude-1m",
+  "started_at": "2026-04-19T21:51:53.890385+00:00",
+  "finished_at": "2026-04-19T22:00:18.929124+00:00",
+  "iterations": [
+    {
+      "iteration": 1,
+      "duration_s": 466.8564419589966,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_create_tokens": 0,
+      "cost_usd": 0.0,
+      "num_turns": 0,
+      "tasks_before": 1,
+      "tasks_after": 1,
+      "task_completed": true,
+      "agent_exit": 0,
+      "task_ids": []
+    },
+    {
+      "iteration": 2,
+      "duration_s": 17.060288958004094,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_create_tokens": 0,
+      "cost_usd": 0.0,
+      "num_turns": 0,
+      "tasks_before": 1,
+      "tasks_after": 1,
+      "task_completed": true,
+      "agent_exit": 0,
+      "task_ids": []
+    },
+    {
+      "iteration": 3,
+      "duration_s": 18.077063083008397,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_create_tokens": 0,
+      "cost_usd": 0.0,
+      "num_turns": 0,
+      "tasks_before": 1,
+      "tasks_after": 1,
+      "task_completed": true,
+      "agent_exit": 0,
+      "task_ids": []
+    }
+  ],
+  "totals": {
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cache_read_tokens": 0,
+    "cache_create_tokens": 0,
+    "cost_usd": 0.0,
+    "iterations": 3,
+    "duration_s": 505.03616591601167,
+    "tasks_initial": 1,
+    "tasks_final": 1,
+    "tasks_done": 0
+  }
+}
