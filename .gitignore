@@ -38,3 +38,12 @@ htmlcov/
 
 # PRD wizard state
 .ralph_prd_state.json
+
+# Whilly runtime artifacts
+whilly.log
+whilly_logs/
+whilly_e2e_tasks.json
+.whilly_workspaces/
+
+# Planning reports (build artifacts)
+.planning/reports/
