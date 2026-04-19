@@ -9,7 +9,6 @@ Covers:
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
@@ -19,30 +18,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from whilly import cli as whilly_main
+from whilly.config import WhillyConfig
+from whilly.dashboard import NullDashboard
+
 _requires_claude = pytest.mark.skipif(
     shutil.which("claude") is None,
     reason="requires 'claude' CLI in PATH (not available in CI runner)",
 )
-
-# Ensure project root on path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from whilly.config import WhillyConfig
-from whilly.dashboard import NullDashboard
-
-# ── Load whilly.py as 'whilly_main' to avoid shadowing by whilly/ package ───
-
-
-def _load_whilly_main():
-    """Import whilly.py script as 'whilly_main' module."""
-    whilly_py = Path(__file__).resolve().parent.parent / "whilly.py"
-    spec = importlib.util.spec_from_file_location("whilly_main", str(whilly_py))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-whilly_main = _load_whilly_main()
 
 
 # ── Fixtures ──────────────────────────────────────────────────
@@ -244,6 +227,7 @@ class TestRunPlanHeadless:
             patch.object(whilly_main, "Reporter") as MockReporter,
             patch.object(whilly_main, "needs_decompose", return_value=False),
             patch.object(whilly_main, "notify_plan_done"),
+            patch("whilly.cli.time.sleep"),
         ):
             mock_reporter = MagicMock()
             mock_reporter.totals = MagicMock()
@@ -275,6 +259,7 @@ class TestRunPlanHeadless:
             patch.object(whilly_main, "Reporter") as MockReporter,
             patch.object(whilly_main, "needs_decompose", return_value=False),
             patch.object(whilly_main, "notify_plan_done"),
+            patch("whilly.cli.time.sleep"),
         ):
             mock_reporter = MagicMock()
             mock_reporter.totals = MagicMock()
@@ -291,12 +276,15 @@ class TestRunPlanHeadless:
     @_requires_claude
     def test_exit_code_1_on_failures(self, failed_plan_file, tmp_path):
         """Exit code is 1 when some tasks failed."""
-        config = WhillyConfig(HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1)
+        config = WhillyConfig(
+            HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1, MAX_TASK_RETRIES=0
+        )
 
         with (
             patch.object(whilly_main, "Reporter") as MockReporter,
             patch.object(whilly_main, "needs_decompose", return_value=False),
             patch.object(whilly_main, "notify_plan_done"),
+            patch("whilly.cli.time.sleep"),
         ):
             mock_reporter = MagicMock()
             mock_reporter.totals = MagicMock()
