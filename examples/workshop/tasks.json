@@ -1,0 +1,124 @@
+{
+  "project": "workshop-track-a",
+  "prd_file": "docs/workshop/PRD-Whilly.md",
+  "created_at": "2026-04-20T00:00:00Z",
+  "agent_instructions": {
+    "before": [
+      "Прочитай tasks.json и progress.txt прежде чем начать.",
+      "Работай только над задачей с указанным id, ничего лишнего не трогай.",
+      "Для каждой задачи: реализуй -> запусти test_steps -> убедись что acceptance_criteria выполнены -> допиши <promise>COMPLETE</promise> в конец отчёта."
+    ],
+    "after": [
+      "Если test_steps не прошли, не помечай задачу done — попробуй исправить или явно скажи в чём проблема.",
+      "Никогда не пушь в main напрямую — здесь worktree, изменения сами поднимутся."
+    ]
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "phase": "Phase 1 — Hello",
+      "category": "doc",
+      "priority": "high",
+      "description": "Create file HELLO.md with exactly one line: 'Hello from Whilly!' (no trailing newline beyond the standard one).",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": ["HELLO.md"],
+      "acceptance_criteria": [
+        "HELLO.md exists at repo root",
+        "HELLO.md content is the single line 'Hello from Whilly!' with terminating newline"
+      ],
+      "test_steps": [
+        "test -s HELLO.md",
+        "head -1 HELLO.md | grep -q '^Hello from Whilly!$'"
+      ],
+      "prd_requirement": "Workshop Track A — Step A.2"
+    },
+    {
+      "id": "TASK-002",
+      "phase": "Phase 1 — Sandbox",
+      "category": "doc",
+      "priority": "medium",
+      "description": "Create README_WORKSHOP.md describing how to run this workshop tasks.json end-to-end. Include the whilly install command and the run command. Keep it under 30 lines.",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": ["README_WORKSHOP.md"],
+      "acceptance_criteria": [
+        "README_WORKSHOP.md exists",
+        "Contains pip install whilly-orchestrator",
+        "Contains the whilly run command",
+        "Length <= 30 lines"
+      ],
+      "test_steps": [
+        "test -s README_WORKSHOP.md",
+        "grep -q 'pip install whilly-orchestrator' README_WORKSHOP.md",
+        "grep -q 'whilly' README_WORKSHOP.md",
+        "test $(wc -l < README_WORKSHOP.md) -le 30"
+      ],
+      "prd_requirement": "Workshop Track A — Step A.4 (parallel run example)"
+    },
+    {
+      "id": "TASK-003",
+      "phase": "Phase 2 — Quality gates",
+      "category": "test",
+      "priority": "medium",
+      "description": "Create a tiny pytest tests/test_workshop_smoke.py that asserts 1 + 1 == 2 and that the file HELLO.md exists at repo root. This proves the workshop tasks.json executes through pytest.",
+      "status": "pending",
+      "dependencies": ["TASK-001"],
+      "key_files": ["tests/test_workshop_smoke.py"],
+      "acceptance_criteria": [
+        "tests/test_workshop_smoke.py exists",
+        "Contains test_arithmetic and test_hello_md_exists",
+        "pytest -q tests/test_workshop_smoke.py passes"
+      ],
+      "test_steps": [
+        "test -s tests/test_workshop_smoke.py",
+        "grep -q 'def test_arithmetic' tests/test_workshop_smoke.py",
+        "grep -q 'def test_hello_md_exists' tests/test_workshop_smoke.py",
+        "pytest -q tests/test_workshop_smoke.py"
+      ],
+      "prd_requirement": "Workshop Track A — quality gate optional block"
+    },
+    {
+      "id": "TASK-004",
+      "phase": "Phase 3 — Observability",
+      "category": "doc",
+      "priority": "low",
+      "description": "Create OBSERVABILITY.md with 5 bullet points on what to look at when whilly run finishes: whilly_events.jsonl, per-task logs, dashboard hotkeys, budget tracking, and tmux ls.",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": ["OBSERVABILITY.md"],
+      "acceptance_criteria": [
+        "OBSERVABILITY.md exists",
+        "Contains exactly 5 bullet points starting with '-' or '*'",
+        "Mentions whilly_events.jsonl",
+        "Mentions tmux"
+      ],
+      "test_steps": [
+        "test -s OBSERVABILITY.md",
+        "grep -q whilly_events.jsonl OBSERVABILITY.md",
+        "grep -q tmux OBSERVABILITY.md"
+      ],
+      "prd_requirement": "Workshop Track A — observability optional block"
+    },
+    {
+      "id": "TASK-005",
+      "phase": "Phase 3 — Observability",
+      "category": "test",
+      "priority": "low",
+      "description": "Add a tiny script scripts/show_costs.sh that prints the total cost from whilly_logs/whilly_events.jsonl using jq. The script must be idempotent and handle the 'no events file yet' case gracefully (print 0.0).",
+      "status": "pending",
+      "dependencies": ["TASK-004"],
+      "key_files": ["scripts/show_costs.sh"],
+      "acceptance_criteria": [
+        "scripts/show_costs.sh exists and is executable",
+        "Runs without error when no events file present (prints 0.0)",
+        "Uses jq to sum cost_usd from task.done events"
+      ],
+      "test_steps": [
+        "test -x scripts/show_costs.sh",
+        "bash -c 'rm -f /tmp/_whilly_events_test.jsonl; ./scripts/show_costs.sh /tmp/_whilly_events_test.jsonl' | grep -q '0'"
+      ],
+      "prd_requirement": "Workshop Track A — cost analysis optional block"
+    }
+  ]
+}
