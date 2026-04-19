@@ -1,0 +1,133 @@
+name: Whilly Bot
+
+# Self-hosting bootstrap demo: whilly picks open issues labelled
+# `whilly:ready` and opens PRs to fix them. Runs daily by cron, on
+# label change, or manually via workflow_dispatch.
+#
+# Required repository secrets:
+#   ANTHROPIC_API_KEY — used by Claude CLI inside whilly
+#
+# Built-in:
+#   GITHUB_TOKEN is auto-provided to the workflow with the permissions
+#   listed below; gh CLI uses it via GH_TOKEN env.
+#
+# Cost guardrails:
+#   - WHILLY_BUDGET_USD hard-stops the loop at 100% of the cap.
+#   - WHILLY_MAX_TASKS limits how many issues a single run touches.
+#   - Decision Gate auto-refuses descriptions <20 chars (no LLM call).
+#   - Concurrency lock prevents two bot runs in parallel.
+
+on:
+  schedule:
+    # Daily at 03:00 UTC. Adjust to your taste.
+    - cron: "0 3 * * *"
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      max_tasks:
+        description: "Max tasks per run"
+        type: string
+        default: "1"
+      budget_usd:
+        description: "Hard budget cap (USD) per run"
+        type: string
+        default: "0.5"
+      label:
+        description: "Issue label to pick from"
+        type: string
+        default: "whilly:ready"
+      dry_run:
+        description: "Dry run (skip agent + PR creation)"
+        type: boolean
+        default: false
+
+# Prevent two parallel runs (cost protection).
+concurrency:
+  group: whilly-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run whilly on labelled issues
+    runs-on: ubuntu-latest
+
+    # Gate: cron + manual dispatch always, label only when matching.
+    if: |
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'whilly:ready')
+
+    permissions:
+      contents: write          # push branches
+      pull-requests: write     # open PRs
+      issues: write            # label flip on Decision Gate refuse
+
+    timeout-minutes: 45        # belt + suspenders on top of WHILLY_TIMEOUT
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true   # needed for git push back
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "whilly-bot"
+          git config user.email "whilly-bot@users.noreply.github.com"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js (for Claude CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install whilly (editable)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Verify auth + tools
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          gh --version
+          claude --version || (echo "::warning::claude CLI not on PATH" && exit 1)
+          whilly --help | head -5
+          gh auth status
+          # Sanity: ANTHROPIC_API_KEY presence (don't print the value).
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY repo secret is missing — add it under Settings → Secrets → Actions"
+            exit 1
+          fi
+
+      - name: Run whilly CI bot
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WHILLY_REPO: ${{ github.repository }}
+          WHILLY_LABEL: ${{ github.event.inputs.label || 'whilly:ready' }}
+          WHILLY_BUDGET_USD: ${{ github.event.inputs.budget_usd || '0.5' }}
+          WHILLY_MAX_TASKS: ${{ github.event.inputs.max_tasks || '1' }}
+          WHILLY_DRY_RUN: ${{ github.event.inputs.dry_run && '1' || '' }}
+        run: python3 scripts/whilly_ci.py
+
+      - name: Upload whilly logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whilly-logs-${{ github.run_id }}
+          path: |
+            whilly_logs/
+            whilly_ci_tasks.json
+          if-no-files-found: ignore
+          retention-days: 14
