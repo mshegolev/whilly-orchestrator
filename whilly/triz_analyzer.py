@@ -21,8 +21,6 @@ import logging
 import subprocess
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 
 log = logging.getLogger("whilly.triz")
 
@@ -225,11 +223,7 @@ def challenge_plan(
     tasks_text = json.dumps(tasks, indent=2, ensure_ascii=False)
     prd_section = f"\nPRD:\n```\n{prd_content[:3000]}\n```\n" if prd_content else ""
 
-    prompt = (
-        f"{_CHALLENGE_PROMPT}\n\n"
-        f"Задачи ({len(tasks)} шт):\n```json\n{tasks_text}\n```\n"
-        f"{prd_section}"
-    )
+    prompt = f"{_CHALLENGE_PROMPT}\n\n" f"Задачи ({len(tasks)} шт):\n```json\n{tasks_text}\n```\n" f"{prd_section}"
 
     raw = _call_claude(prompt, model)
     data = _parse_json(raw)
@@ -389,6 +383,7 @@ def _parse_json(text: str) -> dict:
     except json.JSONDecodeError:
         try:
             import json_repair
+
             return json_repair.loads(text)
         except Exception:
             log.warning("Failed to parse TRIZ JSON response")

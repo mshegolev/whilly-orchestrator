@@ -89,16 +89,18 @@ class SessionHistory:
             try:
                 with open(f) as fh:
                     data = json.load(fh)
-                sessions.append({
-                    "session_id": data.get("session_id", f.stem),
-                    "plan": data.get("plan", ""),
-                    "done": data.get("done", 0),
-                    "total": data.get("total", 0),
-                    "failed": data.get("failed", 0),
-                    "cost_usd": data.get("cost_usd", 0),
-                    "elapsed_sec": data.get("elapsed_sec", 0),
-                    "timestamp": data.get("timestamp", ""),
-                })
+                sessions.append(
+                    {
+                        "session_id": data.get("session_id", f.stem),
+                        "plan": data.get("plan", ""),
+                        "done": data.get("done", 0),
+                        "total": data.get("total", 0),
+                        "failed": data.get("failed", 0),
+                        "cost_usd": data.get("cost_usd", 0),
+                        "elapsed_sec": data.get("elapsed_sec", 0),
+                        "timestamp": data.get("timestamp", ""),
+                    }
+                )
             except Exception:
                 continue
 

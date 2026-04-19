@@ -60,6 +60,7 @@ def _parse_claude_output(raw: str) -> tuple[str, AgentUsage]:
 def _claude_bin() -> str:
     """Resolve claude CLI path. CLAUDE_BIN env overrides (for corporate proxy setups)."""
     import os as _os
+
     return _os.environ.get("CLAUDE_BIN") or "claude"
 
 
@@ -72,6 +73,7 @@ def _claude_permission_args() -> list[str]:
     needed for Bash — only useful with attached TTY).
     """
     import os as _os
+
     if _os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes"):
         return ["--permission-mode", "acceptEdits"]
     return ["--dangerously-skip-permissions"]
@@ -155,9 +157,7 @@ def run_agent_async(
     else:
         stdout_target = subprocess.PIPE
 
-    proc = subprocess.Popen(
-        cmd, stdout=stdout_target, stderr=subprocess.STDOUT, cwd=str(cwd) if cwd else None
-    )
+    proc = subprocess.Popen(cmd, stdout=stdout_target, stderr=subprocess.STDOUT, cwd=str(cwd) if cwd else None)
     # Don't rewrite log_file here — subprocess already owns the fd, truncating from
     # outside would corrupt interleaving. PID visible via ps/whilly_events.jsonl.
     return proc

@@ -98,13 +98,20 @@ def _get_version_info() -> tuple[str, str, str]:
 
     repo_dir = Path(__file__).resolve().parent
     try:
-        sha = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=3,
-        ).stdout.strip() or "?"
+        sha = (
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).stdout.strip()
+            or "?"
+        )
         dirty = subprocess.run(
             ["git", "-C", str(repo_dir), "status", "--porcelain"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         ).stdout.strip()
         return __version__, sha, " (dirty)" if dirty else ""
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
@@ -366,10 +373,7 @@ def build_task_prompt(task: Task, tasks_file: str, worktree_path: Path | None = 
         f'- Если не можешь завершить — оставь статус "in_progress" и опиши проблему'
     )
     if worktree_path:
-        prompt += (
-            f"\nWORKTREE: Working in isolated worktree at {worktree_path}. "
-            f"Commit here, merge is automatic.\n"
-        )
+        prompt += f"\nWORKTREE: Working in isolated worktree at {worktree_path}. " f"Commit here, merge is automatic.\n"
     return prompt
 
 
@@ -587,7 +591,12 @@ def wait_and_collect_subprocess(
 
 
 def run_plan(
-    plan_file: str, config: WhillyConfig, agent_name: str, *, resume: bool = False, state_store: StateStore | None = None
+    plan_file: str,
+    config: WhillyConfig,
+    agent_name: str,
+    *,
+    resume: bool = False,
+    state_store: StateStore | None = None,
 ) -> Path | None:
     """Execute one plan file. Returns reporter JSON path or None."""
     import os
@@ -778,7 +787,9 @@ def run_plan(
                     t.status = "pending"
                     log.info(
                         "Auto-retry failed task %s (attempt %d/%d) → pending",
-                        t.id, count + 1, config.MAX_TASK_RETRIES,
+                        t.id,
+                        count + 1,
+                        config.MAX_TASK_RETRIES,
                     )
             if failed_tasks:
                 tm.save()
@@ -857,8 +868,7 @@ def run_plan(
                 task_ids = [t.id for t in batch]
 
                 dashboard.status_msg = (
-                    f"[bold cyan]Batch: {', '.join(task_ids)}[/]"
-                    f"  [dim]({len(batches)} batches queued)[/]"
+                    f"[bold cyan]Batch: {', '.join(task_ids)}[/]" f"  [dim]({len(batches)} batches queued)[/]"
                 )
                 dashboard.update()
                 log.info("Iter %d: batch [%s] (%d batches total)", iteration, ", ".join(task_ids), len(batches))
@@ -891,9 +901,7 @@ def run_plan(
                     agents = launch_batch_tmux(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
                     wait_and_collect_tmux(agents, tm, dashboard, reporter, iteration, log_dir=log_dir)
                 else:
-                    procs = launch_batch_subprocess(
-                        batch, plan_file, config, log_dir, worktree_paths=worktree_paths
-                    )
+                    procs = launch_batch_subprocess(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
                     wait_and_collect_subprocess(procs, tm, dashboard, reporter, iteration, log_dir=log_dir)
 
                 # Merge worktrees for completed tasks, cleanup all
@@ -970,14 +978,16 @@ def run_plan(
                 now = time.monotonic()
                 if now - last_progress_emit >= 10:
                     tm.reload()
-                    _emit_json({
-                        "event": "progress",
-                        "done": tm.done_count,
-                        "total": tm.total_count,
-                        "failed": sum(1 for t in tm.tasks if t.status == "failed"),
-                        "cost_usd": round(reporter.totals.cost_usd, 4),
-                        "elapsed_sec": round(now - plan_start, 1),
-                    })
+                    _emit_json(
+                        {
+                            "event": "progress",
+                            "done": tm.done_count,
+                            "total": tm.total_count,
+                            "failed": sum(1 for t in tm.tasks if t.status == "failed"),
+                            "cost_usd": round(reporter.totals.cost_usd, 4),
+                            "elapsed_sec": round(now - plan_start, 1),
+                        }
+                    )
                     last_progress_emit = now
 
             # ── F1: Cost Budget Guard ────────────────────────────────
@@ -992,9 +1002,7 @@ def run_plan(
                         f"[bold red]BUDGET EXCEEDED: ${session_cost_usd:.2f} / ${config.BUDGET_USD:.2f}[/]"
                     )
                     dashboard.update()
-                    log.warning(
-                        "Budget exceeded: $%.2f / $%.2f — stopping", session_cost_usd, config.BUDGET_USD
-                    )
+                    log.warning("Budget exceeded: $%.2f / $%.2f — stopping", session_cost_usd, config.BUDGET_USD)
                     notify_budget_exceeded()
                     kill_all_whilly_sessions()
                     budget_exceeded = True
@@ -1167,7 +1175,9 @@ def _maybe_merge_workspace(workspace, tm, config) -> None:
     mode = (os.environ.get("WHILLY_AUTO_MERGE") or "ask").lower()
     commits = subprocess.run(
         ["git", "-C", str(workspace.path), "log", "--oneline", f"origin/master..{workspace.branch}"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     ).stdout.strip()
     if not commits:
         _ansi(f"{D}Workspace {workspace.slug}: нет новых коммитов для merge{R}")
@@ -1219,7 +1229,9 @@ def _run_automated_merge(workspace, tm) -> None:
     _ansi(f"\n{CY}🚀 Push {workspace.branch}...{R}")
     push = subprocess.run(
         ["git", "-C", str(workspace.path), "push", "-u", "origin", workspace.branch],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if push.returncode != 0:
         _ansi(f"{RD}Push failed: {push.stderr.strip()}{R}")
@@ -1379,7 +1391,7 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--init")
         if idx + 1 >= len(args):
-            _ansi(f"{RD}Usage: whilly --init \"project description\"{R}")
+            _ansi(f'{RD}Usage: whilly --init "project description"{R}')
             return 1
         description = args[idx + 1]
         also_plan = "--plan" in args

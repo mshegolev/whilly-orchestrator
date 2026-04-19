@@ -30,9 +30,9 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 log = logging.getLogger("whilly.prd_wizard")
 
@@ -217,24 +217,32 @@ class PrdWizard:
 
         # Build claude command that runs interactively in tmux
         claude_cmd = (
-            f'claude --model {self._model} '
+            f"claude --model {self._model} "
             f'--system-prompt "$(cat /tmp/whilly_prd_prompt.md)" '
             f'-p "{_shell_escape(initial_msg)}" '
-            f'--no-max-turns'
+            f"--no-max-turns"
         )
 
         # Kill old session if exists
         subprocess.run(
             ["tmux", "kill-session", "-t", session_name],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
 
         # Create new tmux session with Claude running inside
         create_cmd = [
-            "tmux", "new-session", "-d",
-            "-s", session_name,
-            "-x", "120", "-y", "40",
-            "bash", "-c",
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            session_name,
+            "-x",
+            "120",
+            "-y",
+            "40",
+            "bash",
+            "-c",
             f'{claude_cmd}; echo ""; echo "PRD Wizard завершён. Окно закроется через 5 сек..."; sleep 5',
         ]
 
@@ -246,8 +254,7 @@ class PrdWizard:
 
         log.info("PRD Wizard tmux session started: %s", session_name)
         self._status(
-            f"PRD Wizard: Claude открыт в tmux '{session_name}'\n"
-            "Переключись: tmux attach -t whilly-prd-wizard"
+            f"PRD Wizard: Claude открыт в tmux '{session_name}'\n" "Переключись: tmux attach -t whilly-prd-wizard"
         )
 
         # Wait for tmux session to finish (polling)
@@ -255,7 +262,8 @@ class PrdWizard:
             time.sleep(3)
             check = subprocess.run(
                 ["tmux", "has-session", "-t", session_name],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             if check.returncode != 0:
                 # Session closed — Claude finished
@@ -278,7 +286,10 @@ class PrdWizard:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
                 env={**os.environ, "NO_COLOR": "1"},
             )
             if result.returncode != 0:
@@ -286,7 +297,7 @@ class PrdWizard:
             content = result.stdout.strip()
             for fence in ("```markdown", "```"):
                 if content.startswith(fence):
-                    content = content[len(fence):].strip()
+                    content = content[len(fence) :].strip()
             if content.endswith("```"):
                 content = content[:-3].strip()
             prd_path.write_text(content, encoding="utf-8")
@@ -349,9 +360,7 @@ def merge_tasks_into_plan(
         task["id"] = new_id
         task["status"] = "pending"
         # Remap dependencies
-        task["dependencies"] = [
-            d for d in task.get("dependencies", []) if d in existing_ids
-        ]
+        task["dependencies"] = [d for d in task.get("dependencies", []) if d in existing_ids]
         # Tag origin
         task["_origin"] = f"prd_wizard:{source_tasks_path.name}"
         target["tasks"].append(task)

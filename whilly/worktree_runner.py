@@ -230,13 +230,43 @@ def plan_slug(plan_data: dict, plan_file: Path) -> str:
     source = str(plan_data.get("project") or "").strip() or plan_file.stem
     source = source.lower()
     source = re.sub(r"(^prd[-_])|([-_]?tasks?$)", "", source)
-    translit = str.maketrans({
-        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
-        "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
-        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
-        "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
-        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
-    })
+    translit = str.maketrans(
+        {
+            "а": "a",
+            "б": "b",
+            "в": "v",
+            "г": "g",
+            "д": "d",
+            "е": "e",
+            "ё": "e",
+            "ж": "zh",
+            "з": "z",
+            "и": "i",
+            "й": "y",
+            "к": "k",
+            "л": "l",
+            "м": "m",
+            "н": "n",
+            "о": "o",
+            "п": "p",
+            "р": "r",
+            "с": "s",
+            "т": "t",
+            "у": "u",
+            "ф": "f",
+            "х": "h",
+            "ц": "ts",
+            "ч": "ch",
+            "ш": "sh",
+            "щ": "sch",
+            "ъ": "",
+            "ы": "y",
+            "ь": "",
+            "э": "e",
+            "ю": "yu",
+            "я": "ya",
+        }
+    )
     source = source.translate(translit)
     source = re.sub(r"[^a-z0-9]+", "-", source).strip("-")
     return source[:48] or "plan"
@@ -258,7 +288,9 @@ def find_existing_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BA
     try:
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except Exception:
         return None
@@ -268,7 +300,7 @@ def find_existing_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BA
     for line in result.stdout.splitlines():
         if not line.startswith("worktree "):
             continue
-        path = Path(line[len("worktree "):].strip()).resolve()
+        path = Path(line[len("worktree ") :].strip()).resolve()
         if path == target or str(path).endswith(f"/{slug}"):
             if path.exists():
                 return path
@@ -318,7 +350,8 @@ def create_plan_workspace(
 
     branch_check = subprocess.run(
         ["git", "rev-parse", "--verify", branch],
-        capture_output=True, timeout=5,
+        capture_output=True,
+        timeout=5,
     )
     if branch_check.returncode != 0:
         create_cmd = ["git", "worktree", "add", "-b", branch, str(wt_path), base_branch]
@@ -333,8 +366,7 @@ def create_plan_workspace(
     return PlanWorkspace(slug=slug, branch=branch, path=wt_path, reused=False)
 
 
-def remove_plan_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE,
-                          delete_branch: bool = False) -> bool:
+def remove_plan_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE, delete_branch: bool = False) -> bool:
     """Удалить plan workspace (worktree + опционально ветку).
 
     Returns:
@@ -343,10 +375,8 @@ def remove_plan_workspace(slug: str, base_dir: str | Path = _PLAN_WORKSPACE_BASE
     existing = find_existing_workspace(slug, base_dir)
     if existing is None:
         return False
-    subprocess.run(["git", "worktree", "remove", "--force", str(existing)],
-                   capture_output=True, timeout=30)
+    subprocess.run(["git", "worktree", "remove", "--force", str(existing)], capture_output=True, timeout=30)
     if delete_branch:
-        subprocess.run(["git", "branch", "-D", f"whilly/workspace/{slug}"],
-                       capture_output=True, timeout=10)
+        subprocess.run(["git", "branch", "-D", f"whilly/workspace/{slug}"], capture_output=True, timeout=10)
     log.info("Удалён workspace: %s", existing)
     return True

@@ -185,7 +185,7 @@ def generate_prd(
 
     # Strip markdown fences if present
     if content.startswith("```markdown"):
-        content = content[len("```markdown"):].strip()
+        content = content[len("```markdown") :].strip()
     if content.startswith("```"):
         content = content[3:].strip()
     if content.endswith("```"):
@@ -223,11 +223,7 @@ def generate_tasks(
     stem = prd_file.stem.lower().replace("prd-", "").replace("prd_", "")
     out_path = out_dir / f"{stem}_tasks.json"
 
-    prompt = (
-        f"{_TASKS_SYSTEM_PROMPT}\n\n"
-        f"PRD файл: {prd_file}\n\n"
-        f"Содержимое PRD:\n```\n{prd_content}\n```\n"
-    )
+    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\n" f"PRD файл: {prd_file}\n\n" f"Содержимое PRD:\n```\n{prd_content}\n```\n"
 
     log.info("Generating tasks from PRD: %s", prd_file.name)
     content = _call_claude(prompt, model)
@@ -238,7 +234,7 @@ def generate_tasks(
     # Strip markdown fences
     content = content.strip()
     if content.startswith("```json"):
-        content = content[len("```json"):].strip()
+        content = content[len("```json") :].strip()
     if content.startswith("```"):
         content = content[3:].strip()
     if content.endswith("```"):
@@ -251,6 +247,7 @@ def generate_tasks(
         # Try json-repair
         try:
             import json_repair
+
             data = json_repair.loads(content)
         except Exception:
             # Save raw and raise
@@ -291,14 +288,16 @@ def _call_claude(prompt: str, model: str) -> str:
     # "couldn't save — permissions blocked". Нам нужен чистый stdout.
     cmd = [
         "claude",
-        "--model", model,
-        "--disallowedTools", "Write,Edit,MultiEdit,NotebookEdit,Bash",
-        "-p", prompt,
+        "--model",
+        model,
+        "--disallowedTools",
+        "Write,Edit,MultiEdit,NotebookEdit,Bash",
+        "-p",
+        prompt,
     ]
 
     timeout = int(os.environ.get("WHILLY_CLAUDE_TIMEOUT", "1800"))
-    log.info("Calling Claude CLI (model=%s, prompt=%d chars, timeout=%ds)...",
-             model, len(prompt), timeout)
+    log.info("Calling Claude CLI (model=%s, prompt=%d chars, timeout=%ds)...", model, len(prompt), timeout)
     t0 = time.time()
 
     try:
@@ -320,8 +319,7 @@ def _call_claude(prompt: str, model: str) -> str:
     def heartbeat() -> None:
         while not stop_hb.wait(10):
             elapsed = time.time() - t0
-            log.info("  ⏳ claude работает... %.0fs / %ds (pid=%d)",
-                     elapsed, timeout, proc.pid)
+            log.info("  ⏳ claude работает... %.0fs / %ds (pid=%d)", elapsed, timeout, proc.pid)
             sys.stderr.flush()
 
     hb_thread = threading.Thread(target=heartbeat, daemon=True)
@@ -355,8 +353,13 @@ def _call_claude(prompt: str, model: str) -> str:
         stderr_thread.join(timeout=2)
 
     elapsed = time.time() - t0
-    log.info("Claude exit=%d in %.1fs (stdout=%d chars, stderr=%d lines)",
-             proc.returncode, elapsed, len(stdout), len(stderr_lines))
+    log.info(
+        "Claude exit=%d in %.1fs (stdout=%d chars, stderr=%d lines)",
+        proc.returncode,
+        elapsed,
+        len(stdout),
+        len(stderr_lines),
+    )
 
     if proc.returncode != 0:
         log.error("Claude CLI error exit=%d. Stderr tail:", proc.returncode)
