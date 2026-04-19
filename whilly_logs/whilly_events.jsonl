@@ -10,3 +10,7 @@
 {"ts": "2026-04-19T22:13:04.728072+00:00", "event": "review.done", "iteration": 1, "cost_usd": 0.09025825, "running_total": 0.09025825}
 {"ts": "2026-04-19T22:13:06.389968+00:00", "event": "fix.start", "iteration": 1, "comment_count": 1}
 {"ts": "2026-04-19T22:13:37.114720+00:00", "event": "fix.done", "iteration": 1, "cost_usd": 0.2019485, "is_complete": true, "running_total": 0.29220675}
+{"ts": "2026-04-19T22:13:42.693698+00:00", "event": "review.start", "iteration": 2, "diff_chars": 60016}
+{"ts": "2026-04-19T22:14:10.119814+00:00", "event": "review.done", "iteration": 2, "cost_usd": 0.22922075, "running_total": 0.5214275}
+{"ts": "2026-04-19T22:14:12.189605+00:00", "event": "fix.start", "iteration": 2, "comment_count": 5}
+{"ts": "2026-04-19T22:29:12.979466+00:00", "event": "fix.done", "iteration": 2, "cost_usd": 0.0, "is_complete": false, "running_total": 0.5214275}
