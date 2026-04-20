@@ -346,9 +346,11 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
         sys.exit(0)
     if choice == "g":
         from whilly.github_interactive import github_interactive_menu
+
         github_plan = github_interactive_menu()
         if github_plan:
             from pathlib import Path
+
             return [Path(github_plan)]
         return select_plan_interactive(discover_plans())
     if choice == "a":
