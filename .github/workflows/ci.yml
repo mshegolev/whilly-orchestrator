@@ -82,13 +82,9 @@ jobs:
             # Финальная проверка что все чисто после наших изменений
             if ruff check whilly/ tests/ && ruff format --check whilly/ tests/; then
               git add .
-              git commit -m "style: Auto-fix linting and formatting issues" -m "Automatically applied fixes via GitHub Actions:
-- ruff check --fix (linting auto-fixes)
-- ruff format (code formatting)
-
-This resolves CI failures without blocking development.
-
-Co-Authored-By: GitHub Action <action@github.com>"
+              git commit -m "style: Auto-fix linting and formatting issues" \
+                         -m "Automatically applied fixes via GitHub Actions" \
+                         -m "Co-Authored-By: GitHub Action <action@github.com>"
 
               # Пушим в текущую ветку
               if [ "${{ github.event_name }}" = "pull_request" ]; then
