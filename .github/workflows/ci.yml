@@ -10,6 +10,8 @@ jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,14 +88,27 @@ jobs:
                          -m "Automatically applied fixes via GitHub Actions" \
                          -m "Co-Authored-By: GitHub Action <action@github.com>"
 
-              # Пушим в текущую ветку
+              # Пушим в текущую ветку. На PR из форков или при отсутствии
+              # write-прав GITHUB_TOKEN push вернёт 403 — тогда печатаем diff
+              # и падаем с exit 1 (а не 128), чтобы автор применил фиксы сам.
               if [ "${{ github.event_name }}" = "pull_request" ]; then
-                git push origin HEAD:${{ github.head_ref }}
+                TARGET_REF="${{ github.head_ref }}"
               else
-                git push origin HEAD:${{ github.ref_name }}
+                TARGET_REF="${{ github.ref_name }}"
               fi
 
-              echo "✅ Auto-fixes pushed to branch"
+              if git push origin "HEAD:${TARGET_REF}"; then
+                echo "✅ Auto-fixes pushed to branch ${TARGET_REF}"
+              else
+                echo "⚠️  Cannot push auto-fix commit to ${TARGET_REF}"
+                echo "   (likely PR from fork or missing contents:write permission)"
+                echo ""
+                echo "📋 Apply this diff locally and push yourself:"
+                echo "─────────────────────────────────────────────"
+                git show --no-color HEAD
+                echo "─────────────────────────────────────────────"
+                exit 1
+              fi
             else
               echo "💥 Something went wrong - code still has issues after auto-fix"
               exit 1
