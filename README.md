@@ -177,6 +177,30 @@ The analyzer prints matched / missing / ambiguous columns and walks you through 
 
 See [ADR-014](docs/workshop/adr/ADR-014-workflow-sink-protocol.md) for the design rationale and extension guide.
 
+## Self-hosting pipelines
+
+Two e2e scripts ship for "whilly processes its own GitHub issues end-to-end", differing in how much *thinking* they do before coding. Pick by issue complexity:
+
+| Script | Stages | Use when |
+|---|---|---|
+| [`scripts/whilly_e2e_demo.py`](scripts/whilly_e2e_demo.py) | fetch → Decision Gate → execute → PR → review-fix loop | Issue is crisp, single-file, "just do it" scoped. Ralph-loop reference. |
+| [`scripts/whilly_e2e_triz_prd.py`](scripts/whilly_e2e_triz_prd.py) | fetch → Gate → **TRIZ challenge** → **PRD** → **tasks decomp** → execute → quality gate → PR | Issue deserves decomposition. "Whilly Wiggum" smarter-brother variant. |
+
+Both honour the workflow board integration (`WHILLY_PROJECT_URL=...` → cards move at every stage) and share the hard `WHILLY_BUDGET_USD` cap.
+
+Typical invocation for the TRIZ+PRD pipeline:
+
+```bash
+unset GITHUB_TOKEN
+WHILLY_REPO=mshegolev/whilly-orchestrator \
+WHILLY_LABEL=whilly:ready \
+WHILLY_BUDGET_USD=30 \
+WHILLY_PROJECT_URL=https://github.com/users/mshegolev/projects/4 \
+python scripts/whilly_e2e_triz_prd.py --limit 1
+```
+
+`--limit N` caps issues per run; `--dry-run` skips all LLM / PR / merge work for plan-only inspection; `--allow-auto-merge` is OFF by default — a pipeline that modifies whilly's own code always leaves PRs for human review. Details + design rationale in [ADR-015](docs/workshop/adr/ADR-015-e2e-triz-prd-pipeline.md).
+
 ## Troubleshooting / FAQ
 
 | Issue | Fix |
