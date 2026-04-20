@@ -826,7 +826,7 @@
       "category": "github-issue",
       "priority": "medium",
       "description": "[FR-7] Extend whilly/verifier.py for structured verdict\n\nRun verify cmds from profile, return pass/repair/escalate + failure taxonomy. P0, ~2h.",
-      "status": "in_progress",
+      "status": "done",
       "dependencies": [],
       "key_files": [],
       "acceptance_criteria": [],
@@ -839,7 +839,7 @@
       "category": "github-issue",
       "priority": "medium",
       "description": "[FR-7/NFR-6] Repo profile loader (YAML)\n\nParse repo_profiles/<repo>.yaml: setup, verify, repair_verify, allowed_paths, forbidden_paths. P0, ~1.5h.",
-      "status": "in_progress",
+      "status": "done",
       "dependencies": [],
       "key_files": [],
       "acceptance_criteria": [],
@@ -852,7 +852,7 @@
       "category": "github-issue",
       "priority": "medium",
       "description": "[FR-5] Module whilly/planner.py (per-task scoped plan)\n\nStructured plan: problem summary, target modules, files, validation, risks, stop conditions. P0, ~2h.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [],
       "key_files": [],
       "acceptance_criteria": [],
@@ -943,7 +943,7 @@
       "category": "github-issue",
       "priority": "medium",
       "description": "[FR-1] CLI flag --from-issue owner/repo#N\n\nWire `--from-issue` parsing in whilly/cli.py + __main__. Routes to intake_github. P0, ~1h.",
-      "status": "skipped",
+      "status": "pending",
       "dependencies": [],
       "key_files": [],
       "acceptance_criteria": [],
@@ -1274,51 +1274,12 @@
       "acceptance_criteria": [],
       "test_steps": [],
       "prd_requirement": "https://github.com/mshegolev/whilly-orchestrator/issues/136"
-    },
-    {
-      "id": "GH-164",
-      "phase": "GH-Issues",
-      "category": "github-issue",
-      "priority": "medium",
-      "description": "[FR-1] CLI flag --from-issue owner/repo#N\n\nWire `--from-issue` parsing in whilly/cli.py + __main__. Routes to intake_github. P0, ~1h.",
-      "status": "pending",
-      "dependencies": [],
-      "key_files": [],
-      "acceptance_criteria": [],
-      "test_steps": [],
-      "prd_requirement": "https://github.com/mshegolev/whilly-orchestrator/issues/164"
-    },
-    {
-      "id": "GH-162",
-      "phase": "GH-Issues",
-      "category": "github-issue",
-      "priority": "medium",
-      "description": "[feature]  добавь аудиооповещение таким образом чтобы говорилось название задачи которую сделали а не просто сделали\n\n## Problem\nкогда говорят хозяин я все сделал непонятно какую задачу он сделал. \n## Proposed solution\nхочу чтобы говорилась название задачу какую сделали, если завершили эпик или фичи то добавлять класификацию задачи",
-      "status": "pending",
-      "dependencies": [],
-      "key_files": [],
-      "acceptance_criteria": [],
-      "test_steps": [],
-      "prd_requirement": "https://github.com/mshegolev/whilly-orchestrator/issues/162"
-    },
-    {
-      "id": "GH-161",
-      "phase": "GH-Issues",
-      "category": "github-issue",
-      "priority": "medium",
-      "description": "[FR-1] CLI flag --from-issue owner/repo#N\n\nWire `--from-issue` parsing in whilly/cli.py + __main__. Routes to intake_github. P0, ~1h.",
-      "status": "pending",
-      "dependencies": [],
-      "key_files": [],
-      "acceptance_criteria": [],
-      "test_steps": [],
-      "prd_requirement": "https://github.com/mshegolev/whilly-orchestrator/issues/161"
     }
   ],
   "source": {
     "type": "github_issues",
     "repo": "mshegolev/whilly-orchestrator",
     "label": "whilly:ready",
-    "fetched_at": "2026-04-20T16:29:39.160201+00:00"
+    "fetched_at": "2026-04-20T15:42:29.233579+00:00"
   }
 }
