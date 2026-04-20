@@ -62,9 +62,9 @@ def _get_repo_issues(repo: str, label: str = "whilly:ready") -> list[dict]:
 def github_interactive_menu() -> Optional[str]:
     """Интерактивное меню для работы с GitHub."""
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("🐙 WHILLY — GitHub Integration")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Загружаем конфигурацию
     config = WhillyConfig.from_env()

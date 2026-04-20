@@ -6,7 +6,6 @@ This example shows how to use the new sync functionality programmatically.
 """
 
 from whilly.github_projects import GitHubProjectsConverter, SyncConfig
-from whilly.config import WhillyConfig
 import tempfile
 from pathlib import Path
 

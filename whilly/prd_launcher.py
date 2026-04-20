@@ -109,7 +109,7 @@ def _build_system_prompt(prd_path: Path) -> str:
         "**Первое сообщение пользователя — это его идея. НЕ РЕАЛИЗУЙ ЕЁ. Задай уточняющий вопрос.**\n\n"
         "---\n\n"
     )
-    tail = f"\n\n---\n\n" f"## Путь сохранения PRD\n\n" f"Используй ТОЛЬКО этот путь при Write: `{prd_path}`\n"
+    tail = f"\n\n---\n\n## Путь сохранения PRD\n\nИспользуй ТОЛЬКО этот путь при Write: `{prd_path}`\n"
     return head + base + tail
 
 
