@@ -16,13 +16,13 @@ def extract_done_from_progress(progress_file: Path) -> Set[str]:
         return set()
 
     done_tasks = set()
-    content = progress_file.read_text(encoding='utf-8')
+    content = progress_file.read_text(encoding="utf-8")
 
     # Парсим строки вида: [task-id] DONE — description
-    for line in content.split('\n'):
+    for line in content.split("\n"):
         line = line.strip()
-        if line.startswith('[') and '] DONE' in line:
-            match = re.match(r'\[([^\]]+)\] DONE', line)
+        if line.startswith("[") and "] DONE" in line:
+            match = re.match(r"\[([^\]]+)\] DONE", line)
             if match:
                 done_tasks.add(match.group(1))
 
@@ -42,7 +42,7 @@ def extract_done_from_logs(logs_dir: Path) -> Set[str]:
             continue
 
         try:
-            content = log_file.read_text(encoding='utf-8')
+            content = log_file.read_text(encoding="utf-8")
             if completion_marker in content:
                 # Извлекаем task_id из имени файла
                 task_id = log_file.stem
@@ -91,26 +91,26 @@ def sync_task_status(task_file: Path, workspace_dir: Path = None) -> Dict[str, s
         print(f"❌ Task file not found: {task_file}")
         return {}
 
-    with open(task_file, 'r', encoding='utf-8') as f:
+    with open(task_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     changes = {}
-    for task in data.get('tasks', []):
-        task_id = task.get('id')
-        current_status = task.get('status')
+    for task in data.get("tasks", []):
+        task_id = task.get("id")
+        current_status = task.get("status")
 
-        if task_id in all_done and current_status != 'done':
-            task['status'] = 'done'
+        if task_id in all_done and current_status != "done":
+            task["status"] = "done"
             changes[task_id] = f"{current_status} → done"
 
     if changes:
         # Создаем backup
-        backup_file = task_file.with_suffix('.json.backup')
+        backup_file = task_file.with_suffix(".json.backup")
         task_file.rename(backup_file)
         print(f"💾 Backup created: {backup_file}")
 
         # Записываем обновленный файл
-        with open(task_file, 'w', encoding='utf-8') as f:
+        with open(task_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
         print(f"✅ Updated {task_file}")
