@@ -232,9 +232,9 @@ class GitHubProjectsConverter:
                 "-f",
                 f"query={query}",
                 "-F",
-                f'owner={project_info["owner"]}',
+                f"owner={project_info['owner']}",
                 "-F",
-                f'number={project_info["project_number"]}',
+                f"number={project_info['project_number']}",
             ]
 
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)

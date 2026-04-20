@@ -254,7 +254,7 @@ class PrdWizard:
 
         log.info("PRD Wizard tmux session started: %s", session_name)
         self._status(
-            f"PRD Wizard: Claude открыт в tmux '{session_name}'\n" "Переключись: tmux attach -t whilly-prd-wizard"
+            f"PRD Wizard: Claude открыт в tmux '{session_name}'\nПереключись: tmux attach -t whilly-prd-wizard"
         )
 
         # Wait for tmux session to finish (polling)
