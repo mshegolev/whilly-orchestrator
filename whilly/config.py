@@ -26,7 +26,7 @@ class WhillyConfig:
     HEADLESS: bool = False
     TIMEOUT: int = 0
     STATE_FILE: str = ".whilly_state.json"
-    WORKTREE: bool = False  # WHILLY_WORKTREE=1 — per-task git worktree (parallel agents)
+    WORKTREE: bool = False  # WHILLY_WORKTREE=1 — per-task git worktree (только при MAX_PARALLEL > 1)
     USE_WORKSPACE: bool = True  # WHILLY_USE_WORKSPACE=0 — отключить plan-level workspace
 
     # Agent backend selection (OC-109) — drives whilly.agents.get_backend()
