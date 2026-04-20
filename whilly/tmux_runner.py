@@ -1,5 +1,4 @@
 import logging
-import os
 import shlex
 import shutil
 import subprocess
@@ -73,9 +72,9 @@ def launch_agent(
         raise RuntimeError("tmux is not installed or not in PATH")
 
     if backend is None:
-        from whilly.agents import get_backend
+        from whilly.agents import active_backend_from_env
 
-        backend = get_backend(os.environ.get("WHILLY_AGENT_BACKEND", "claude"))
+        backend = active_backend_from_env()
 
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{task_id}.log"
