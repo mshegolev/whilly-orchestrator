@@ -84,26 +84,34 @@ fi
 success "YAML syntax check passed"
 
 # 2. Проверка ruff для Python файлов
+# ВАЖНО: используем `python3 -m ruff`, а не `ruff` из PATH.
+# PATH-версия (например, из brew) часто отстаёт и форматирует иначе, чем CI,
+# в итоге локально hook зелёный, а в CI `ruff format --check` падает. CI ставит
+# ruff из pyproject.toml (`pip install -e '.[dev]'`), тот же venv используем здесь.
 echo -e "\n🐍 Checking Python code quality..."
 python_files=$(echo "$staged_files" | grep -E '\.py$' || true)
 
 if [ -n "$python_files" ]; then
-    if command -v ruff >/dev/null 2>&1; then
+    if python3 -m ruff --version >/dev/null 2>&1; then
+        ruff_version=$(python3 -m ruff --version 2>&1)
+        echo "  Using $ruff_version (via python3 -m ruff)"
+
         echo "  Running ruff check..."
-        if ! ruff check $python_files; then
-            error "Ruff linting failed. Run 'ruff check --fix' to auto-fix issues."
+        if ! python3 -m ruff check $python_files; then
+            error "Ruff linting failed. Run 'python3 -m ruff check --fix' to auto-fix issues."
             exit 1
         fi
 
         echo "  Running ruff format check..."
-        if ! ruff format --check $python_files; then
-            error "Code formatting issues found. Run 'ruff format' to fix them."
+        if ! python3 -m ruff format --check $python_files; then
+            error "Code formatting issues found. Run 'python3 -m ruff format' to fix them."
             exit 1
         fi
 
         success "Python code quality check passed"
     else
-        warn "ruff not found - skipping Python checks"
+        warn "ruff not installed in python3 — run: pip install -e '.[dev]'"
+        warn "Skipping Python checks (may diverge from CI)"
     fi
 else
     echo "  No Python files to check"
