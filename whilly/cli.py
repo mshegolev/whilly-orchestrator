@@ -1714,7 +1714,6 @@ def main(argv: list[str] | None = None) -> int:
             if "--go" in args:
                 # Auto-execute with self-healing
                 _ansi(f"{CY}Auto-executing with self-healing...{R}")
-                import os
                 script_path = Path(__file__).parent.parent / "scripts" / "whilly_with_healing.py"
                 os.execv(sys.executable, [sys.executable, str(script_path), tasks_path])
             else:
