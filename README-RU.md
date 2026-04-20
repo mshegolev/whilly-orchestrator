@@ -96,6 +96,23 @@ Whilly идёт с **workshop kit для HackSprint1** — hands-on на 90 ми
 | `WHILLY_USE_TMUX` | `1` | tmux для параллельных агентов |
 | `WHILLY_WORKTREE` | `0` | git worktree per task (нужен `MAX_PARALLEL>1`) |
 | `WHILLY_HEADLESS` | auto | CI mode — JSON на stdout |
+| `WHILLY_AGENT_BACKEND` | `claude` | активный backend (`claude` или `opencode`) |
+| `WHILLY_OPENCODE_BIN` | `opencode` | путь к OpenCode CLI |
+| `WHILLY_OPENCODE_SAFE` | `0` | `1` → не передавать `--dangerously-skip-permissions` в OpenCode |
+| `WHILLY_OPENCODE_SERVER_URL` | _(не задано)_ | URL удалённого OpenCode server'а |
+
+CLI-флаги: `--all`, `--headless`, `--resume`, `--reset PLAN.json`, `--init "desc"`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode}`.
+
+## Backends
+
+Whilly поддерживает два agent backend'а за единым `AgentBackend` Protocol'ом (`whilly/agents/`):
+
+| Backend | Выбор | Обёртка CLI | Заметки |
+|---|---|---|---|
+| **Claude** (по умолчанию) | `--agent claude` / `WHILLY_AGENT_BACKEND=claude` | `claude --output-format json -p "…"` | Нужен [Claude CLI](https://docs.claude.com/en/docs/claude-code). Путь через `CLAUDE_BIN`. |
+| **OpenCode** | `--agent opencode` / `WHILLY_AGENT_BACKEND=opencode` | `opencode run --format json --model <provider/id> "…"` | Нужен [sst/opencode](https://github.com/sst/opencode) в `PATH` (или `WHILLY_OPENCODE_BIN`). `WHILLY_OPENCODE_SAFE=1` — включить per-tool permission policy. |
+
+Модель автоматически нормализуется под backend (напр. `claude-opus-4-6` → `anthropic/claude-opus-4-6` для OpenCode). Сигнал завершения одинаковый (`<promise>COMPLETE</promise>`). Decision Gate, tmux-раннер и subprocess-fallback — все роутят через активный backend.
 
 ## Troubleshooting
 
