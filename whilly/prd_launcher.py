@@ -31,6 +31,43 @@ def _sanitize_slug(text: str) -> str:
     return text[:60] or "untitled"
 
 
+def _generate_short_slug(description: str) -> str:
+    """Generate a short slug (≤10 chars) from description by extracting key words."""
+    # Remove brackets, tags, and common words
+    cleaned = re.sub(r"[\[\](){}]", "", description.lower())
+    # Split into words and filter out common/stop words
+    stop_words = {"add", "remove", "fix", "update", "create", "implement", "the", "to", "a", "an", "and", "or", "in", "on", "at", "for", "with", "by"}
+    words = [w for w in re.findall(r"\b\w+\b", cleaned) if w not in stop_words and len(w) > 2]
+
+    if not words:
+        # Fallback to first few chars of original text
+        fallback = re.sub(r"[^a-z0-9]", "", description.lower())[:10]
+        return fallback or "task"
+
+    # Try to build a meaningful short slug
+    if len(words) == 1:
+        return words[0][:10]
+    elif len(words) == 2:
+        # Try to fit both words
+        first, second = words[0][:5], words[1][:5]
+        if len(first + second) <= 10:
+            return first + second
+        else:
+            return first[:6] + second[:4]
+    else:
+        # Use first letters of first 3-4 words or abbreviate
+        if any(len(w) >= 4 for w in words[:3]):
+            # Take first 3-4 chars from 2-3 most meaningful words
+            result = words[0][:4] + words[1][:3]
+            if len(result) < 10 and len(words) > 2:
+                result += words[2][:3]
+            return result[:10]
+        else:
+            # Create acronym from first letters
+            acronym = "".join(w[0] for w in words[:10])
+            return acronym[:10]
+
+
 def _build_system_prompt(prd_path: Path) -> str:
     """Load PRD master prompt with forceful override of default agentic behavior."""
     if not _SYSTEM_PROMPT_PATH.exists():
@@ -83,7 +120,14 @@ def run_prd_wizard(
         except (EOFError, KeyboardInterrupt):
             print("\nОтменено.", file=sys.stderr)
             return 1
-    slug = _sanitize_slug(slug)
+
+    # If slug looks like a description (>15 chars or contains spaces/brackets), generate a short one
+    if len(slug) > 15 or any(char in slug for char in " [](){}") or not re.match(r"^[a-z0-9_-]+$", slug.lower()):
+        original_input = slug
+        slug = _generate_short_slug(slug)
+        print(f"Автоматически сгенерирован короткий slug: '{slug}' (из '{original_input}')")
+    else:
+        slug = _sanitize_slug(slug)
     prd_path = (output_dir / f"PRD-{slug}.md").resolve()
 
     if prd_path.exists():
