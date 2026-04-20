@@ -21,14 +21,6 @@ env/
 .DS_Store
 *.swp
 
-# Ralph runtime artifacts
-ralph.log
-ralph_tasks.log
-ralph_*_tasks.log
-ralph_logs/
-.ralph_workspaces/
-ralph_events.jsonl
-
 # Whilly runtime artifacts
 whilly.log
 whilly_tasks.log
@@ -36,8 +28,9 @@ whilly_*_tasks.log
 whilly_logs/
 .whilly_workspaces/
 .whilly_worktrees/
-whilly_events.jsonl
 .whilly_state.json
+whilly_events.jsonl
+progress.txt
 .planning/reports/
 
 # Tests
@@ -50,3 +43,6 @@ htmlcov/
 # PRD wizard state
 .ralph_prd_state.json
 .whilly_prd_state.json
+
+# Workflow mapping is a *committed* artefact — do NOT ignore .whilly/.
+# (Listed here so nobody re-adds it by muscle memory.)

@@ -51,7 +51,7 @@ def build_orchestrator_prompt(ready_tasks: list, max_parallel: int) -> str:
         "Правила:\n"
         "- Задачи с общими key_files НЕЛЬЗЯ параллелить\n"
         "- При сомнениях — НЕ параллелить\n\n"
-        'Ответь ТОЛЬКО валидным JSON — массив массивов task ID:\n'
+        "Ответь ТОЛЬКО валидным JSON — массив массивов task ID:\n"
         '[["TASK-001", "TASK-003"], ["TASK-002"]]\n\n'
         "ВАЖНО: верни ТОЛЬКО JSON, без пояснений."
     )
@@ -155,9 +155,7 @@ def build_interface_agreement_prompt(module: str, task_ids: list[str], tasks_fil
     )
 
 
-def run_interface_agreement(
-    module: str, task_ids: list[str], tasks_file: str, agent_model: str, log_dir: Path
-) -> None:
+def run_interface_agreement(module: str, task_ids: list[str], tasks_file: str, agent_model: str, log_dir: Path) -> None:
     """Run LLM to define interface contract for shared module tasks."""
     log.info("Interface agreement: module=%s tasks=%s", module, task_ids)
     prompt = build_interface_agreement_prompt(module, task_ids, tasks_file)

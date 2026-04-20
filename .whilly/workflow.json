@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "board": {
+    "kind": "github_project",
+    "url": "https://github.com/users/mshegolev/projects/4"
+  },
+  "events": {
+    "ready": "Todo",
+    "picked_up": "In Progress",
+    "done": "Done",
+    "in_review": "In Review",
+    "refused": "Refused",
+    "failed": "Failed"
+  },
+  "aliases": {}
+}

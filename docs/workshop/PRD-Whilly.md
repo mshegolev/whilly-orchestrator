@@ -21,9 +21,9 @@ related:
 
 ## TL;DR
 
-**RU.** Whilly — Python пакет с CLI `whilly`, реализующий **continuous Ralph loop**. Источник задач (`tasks.json` или GitHub Issues) → batch planner → параллельные агенты в tmux/git worktree → JSONL events + Rich TUI → опциональный sink (PR / Slack). Текущий gap pack добавляет **GitHub Issues source**, **PR creation sink** и **Decision Gate**, чтобы поддержать workshop demo «whilly закрывает свои же issues».
+**RU.** Whilly — Python пакет с CLI `whilly`, реализующий **continuous Whilly Wiggum loop** (умный брат Ralph-loop'а: тот же агент-цикл, плюс TRIZ-анализатор, Decision Gate и PRD wizard). Источник задач (`tasks.json` или GitHub Issues) → batch planner → параллельные агенты в tmux/git worktree → JSONL events + Rich TUI → опциональный sink (PR / Slack). Текущий gap pack добавляет **GitHub Issues source**, **PR creation sink** и **Decision Gate**, чтобы поддержать workshop demo «whilly закрывает свои же issues».
 
-**EN.** Whilly is a Python package + `whilly` CLI implementing a **continuous Ralph loop**. Source of tasks (`tasks.json` or GitHub Issues) → batch planner → parallel agents in tmux/git worktrees → JSONL events + Rich TUI → optional sink (PR / Slack). The current gap pack adds **GitHub Issues source**, **PR creation sink**, and **Decision Gate** to enable the workshop self-hosting demo.
+**EN.** Whilly is a Python package + `whilly` CLI implementing a **continuous Whilly Wiggum loop** — the smarter-brother variant of Ralph's classic agent loop, with a TRIZ analyzer, Decision Gate, and PRD wizard layered on. Source of tasks (`tasks.json` or GitHub Issues) → batch planner → parallel agents in tmux/git worktrees → JSONL events + Rich TUI → optional sink (PR / Slack). The current gap pack adds **GitHub Issues source**, **PR creation sink**, and **Decision Gate** to enable the workshop self-hosting demo.
 
 ---
 

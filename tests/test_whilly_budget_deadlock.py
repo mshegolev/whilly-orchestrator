@@ -8,7 +8,6 @@ import pytest
 from whilly.config import WhillyConfig
 from whilly.dashboard import Dashboard
 from whilly.notifications import notify_budget_exceeded, notify_budget_warning, notify_deadlock
-from whilly.reporter import CostTotals
 from whilly.task_manager import VALID_STATUSES, TaskManager
 
 # ── Fixtures ─────────────────────────────────────────────────────

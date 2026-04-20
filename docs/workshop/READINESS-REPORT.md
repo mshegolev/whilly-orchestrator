@@ -11,7 +11,7 @@
 
 | Layer | Coverage | Verdict |
 |---|---|---|
-| Supervisor loop | ✅ 100% | Production-grade. Ralph loop, batching, deadlock guard, budget. |
+| Supervisor loop | ✅ 100% | Production-grade. Whilly loop (Ralph-loop + TRIZ/Decision Gate/PRD wizard), batching, deadlock guard, budget. |
 | Worker isolation | ✅ 100% | tmux + git worktree, per-task workspace. Beats both grkr (1 backend) and yolo (Go-only). |
 | Agent backend | ✅ Claude CLI | Single backend. Codex/Gemini = stretch. |
 | State + recovery | ✅ 100% | `.whilly_state.json` resume, atomic writes via TaskManager. |

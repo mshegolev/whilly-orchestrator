@@ -2,20 +2,23 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
 
-Python implementation of the **Ralph Wiggum technique** — continuous AI agent loops for autonomous software development. Drive a coding agent (Claude CLI) around a task board until the work is done, with a Rich TUI dashboard, task decomposition, TRIZ analysis and PRD generation.
+Python implementation of the **Whilly Wiggum loop** — Ralph Wiggum's smarter brother. Same family, same "I'm helping!" spirit, but with TRIZ contradiction analysis, a Decision Gate that refuses nonsense upfront, a PRD wizard, and a Rich TUI dashboard on top of the classic continuous agent loop.
 
-> "I'm helping!" — Ralph Wiggum
+🇷🇺 [Краткое описание на русском](README-RU.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
+
+> "I'm helping — and I've read TRIZ." — Whilly Wiggum
 
 ## What it does
 
 Whilly runs a loop: pick a pending task → hand it to an LLM agent → verify result → commit → next. It keeps running until the task board is empty, a budget is exhausted, or you stop it. Parallel mode dispatches multiple agents in tmux panes or git worktrees.
 
-Originally described in [Ghuntley's post on the Ralph Wiggum technique](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. This is a batteries-included orchestrator with a dashboard and task lifecycle around that loop.
+The base technique was first described in [Ghuntley's post on the Ralph Wiggum loop](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. Whilly is the brainier sibling: all of Ralph's "pick task → try → repeat" stamina, plus a TRIZ analyzer for surfacing contradictions, a Decision Gate for refusing garbage tasks, and a PRD wizard for understanding the problem before swinging at it.
 
 ## Features
 
-- **Continuous agent loop** — pull tasks from a simple `tasks.log` file, run Claude CLI on each, retry on transient errors
+- **Continuous agent loop** — pull tasks from a JSON plan, run Claude CLI on each, retry on transient errors
 - **Rich TUI dashboard** — live progress, token usage, cost totals, per-task status; hotkeys for pause/reset/skip
 - **Parallel execution** — tmux panes or git worktrees, up to N concurrent agents with budget/deadlock guards
 - **Task decomposer** — LLM-based breakdown of oversized tasks into subtasks
@@ -38,27 +41,56 @@ cd whilly-orchestrator
 pip install -e .
 ```
 
-Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or set `CLAUDE_BIN`).
+Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or set `CLAUDE_BIN`).
 
 ## Quick start
 
-1. Create a `tasks.log` with one task per line:
+1. Create `tasks.json` describing the work:
 
-   ```
-   TASK-001 Add a /health endpoint returning {"status":"ok"}
-   TASK-002 Write a pytest covering the new endpoint
-   TASK-003 Update README with the new endpoint
+   ```json
+   {
+     "project": "health-endpoint",
+     "tasks": [
+       {
+         "id": "TASK-001",
+         "phase": "Phase 1",
+         "category": "functional",
+         "priority": "high",
+         "description": "Add a /health endpoint returning {\"status\":\"ok\"}",
+         "status": "pending",
+         "dependencies": [],
+         "key_files": ["app/server.py"],
+         "acceptance_criteria": ["GET /health returns 200 with {\"status\":\"ok\"}"],
+         "test_steps": ["curl -s localhost:8000/health"]
+       },
+       {
+         "id": "TASK-002",
+         "phase": "Phase 1",
+         "category": "test",
+         "priority": "high",
+         "description": "Write a pytest covering the new endpoint",
+         "status": "pending",
+         "dependencies": ["TASK-001"],
+         "key_files": ["tests/test_health.py"],
+         "acceptance_criteria": ["pytest tests/test_health.py passes"],
+         "test_steps": ["pytest -q tests/test_health.py"]
+       }
+     ]
+   }
    ```
 
-2. Run Whilly:
+2. Run Whilly (2 concurrent agents, $5 budget cap):
 
    ```bash
-   whilly --tasks tasks.log --parallel 2
-   # or without install:
-   python -m whilly --tasks tasks.log --parallel 2
+   WHILLY_MAX_PARALLEL=2 WHILLY_BUDGET_USD=5 whilly tasks.json
+   # straight from a checkout, no install:
+   ./whilly.py tasks.json
+   # or as a module:
+   python -m whilly tasks.json
+   # or just `whilly` with no args for the interactive plan-picker
    ```
 
-3. Watch the dashboard. Press `q` to quit, `p` to pause, `r` to reset a failed task.
+3. Watch the dashboard. Press `q` to quit, `d` for task detail, `l` for the live log of a running agent, `t` for the task overview.
 
 ## Modules
 
@@ -79,14 +111,29 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on PATH (or s
 
 ## Configuration
 
-Pass flags to `whilly` or set environment variables:
+Configuration is done via environment variables (prefix `WHILLY_`). A few CLI flags exist for one-shot overrides — see `whilly --help`.
 
-- `CLAUDE_BIN` — path to Claude CLI binary
-- `--model` — Claude model id (default: `claude-opus-4-6[1m]`)
-- `--parallel N` — concurrent agents (default 1)
-- `--budget-usd` — hard cap on spend
-- `--tasks <file>` — task list file
-- `--worktree` — use git worktrees instead of tmux
+| Variable | Default | Purpose |
+|---|---|---|
+| `WHILLY_MODEL` | `claude-opus-4-6[1m]` | Claude model id |
+| `WHILLY_MAX_PARALLEL` | `3` | Concurrent agents (1 = sequential) |
+| `WHILLY_MAX_ITERATIONS` | `0` | Max work cycles per plan (0 = unlimited) |
+| `WHILLY_BUDGET_USD` | `0` | Hard cost cap; 80% triggers warning, 100% stops the run |
+| `WHILLY_TIMEOUT` | `0` | Wall-clock cap in seconds (0 = unlimited) |
+| `WHILLY_USE_TMUX` | `1` | Use tmux panes for parallel agents |
+| `WHILLY_WORKTREE` | `0` | Per-task git worktree isolation (needs `MAX_PARALLEL>1`) |
+| `WHILLY_LOG_DIR` | `whilly_logs` | Per-task log directory |
+| `WHILLY_STATE_FILE` | `.whilly_state.json` | Crash-recovery state file (`--resume` reads it) |
+| `WHILLY_HEADLESS` | auto | CI mode — JSON on stdout, exit codes |
+| `CLAUDE_BIN` | `claude` | Path to Claude CLI binary |
+| `WHILLY_AGENT_BACKEND` | `claude` | Active agent backend (`claude` or `opencode`) |
+| `WHILLY_OPENCODE_BIN` | `opencode` | Path to the OpenCode CLI binary |
+| `WHILLY_OPENCODE_SAFE` | `0` | `1` → drop `--dangerously-skip-permissions` for OpenCode |
+| `WHILLY_OPENCODE_SERVER_URL` | _(unset)_ | Optional remote OpenCode server URL |
+
+Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode}`.
+
+Exit codes in headless mode: `0` success, `1` some tasks failed, `2` budget exceeded, `3` timeout.
 
 See `docs/Whilly-Usage.md` for the full CLI reference.
 
@@ -94,6 +141,76 @@ See `docs/Whilly-Usage.md` for the full CLI reference.
 
 - [Whilly-Usage.md](docs/Whilly-Usage.md) — CLI reference and flag catalog
 - [Whilly-Interfaces-and-Tasks.md](docs/Whilly-Interfaces-and-Tasks.md) — task file format, state store schema, agent output contract
+- [docs/workshop/INDEX.md](docs/workshop/INDEX.md) — Workshop kit (HackSprint1)
+
+## Workshop kit
+
+Whilly ships with a **HackSprint1 workshop kit** — a 90-minute hands-on tutorial that takes you from `pip install` to a running self-hosting bootstrap demo. Two tracks:
+
+- **Track A (`tasks.json`)** — works without GitHub auth, 30 min.
+- **Track B (GitHub Issues)** — full e2e with PR creation, 60 min.
+
+Includes BRD, PRD, 12 ADRs, sample plans, and a roadmap. See [docs/workshop/INDEX.md](docs/workshop/INDEX.md) for the full guide. RU/EN bilingual.
+
+## Backends
+
+Whilly ships with pluggable agent backends behind a single `AgentBackend` Protocol (see `whilly/agents/`).
+
+| Backend | Select | CLI wrapped | Notes |
+|---|---|---|---|
+| **Claude** (default) | `--agent claude` / `WHILLY_AGENT_BACKEND=claude` | `claude --output-format json -p "…"` | Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code). Set `CLAUDE_BIN` to override path. |
+| **OpenCode** | `--agent opencode` / `WHILLY_AGENT_BACKEND=opencode` | `opencode run --format json --model <provider/id> "…"` | Requires [sst/opencode](https://github.com/sst/opencode) on `PATH` (or `WHILLY_OPENCODE_BIN`). Set `WHILLY_OPENCODE_SAFE=1` to respect its per-tool permission policy. |
+
+Model ids pass through normalization per backend — e.g. `claude-opus-4-6` automatically becomes `anthropic/claude-opus-4-6` for OpenCode. Completion is signalled identically (`<promise>COMPLETE</promise>`) so the main loop is backend-agnostic. Decision Gate, tmux runner, and the subprocess fallback all route through the active backend.
+
+## Workflow boards
+
+Whilly can sync a GitHub Projects v2 board as issues move through the pipeline (ready → picked_up → in_review → done / refused / failed). Board integration is Protocol-driven (`whilly/workflow/BoardSink`) — today one adapter ships (`GitHubProjectBoard` via `gh api graphql`); Jira/Linear/GitLab drop in as sibling implementations.
+
+Before first use, run the analyzer to map whilly's six lifecycle events to your board columns:
+
+```bash
+whilly --workflow-analyze https://github.com/users/<you>/projects/<N>
+```
+
+The analyzer prints matched / missing / ambiguous columns and walks you through `[A]dd / [M]ap / [S]kip` decisions. Output goes to `.whilly/workflow.json` — a committable artefact so teams share one contract. Extra flags: `--apply` (auto-add all missing columns, CI-friendly) and `--report` (dry-run, no writes).
+
+See [ADR-014](docs/workshop/adr/ADR-014-workflow-sink-protocol.md) for the design rationale and extension guide.
+
+## Self-hosting pipelines
+
+Two e2e scripts ship for "whilly processes its own GitHub issues end-to-end", differing in how much *thinking* they do before coding. Pick by issue complexity:
+
+| Script | Stages | Use when |
+|---|---|---|
+| [`scripts/whilly_e2e_demo.py`](scripts/whilly_e2e_demo.py) | fetch → Decision Gate → execute → PR → review-fix loop | Issue is crisp, single-file, "just do it" scoped. Ralph-loop reference. |
+| [`scripts/whilly_e2e_triz_prd.py`](scripts/whilly_e2e_triz_prd.py) | fetch → Gate → **TRIZ challenge** → **PRD** → **tasks decomp** → execute → quality gate → PR | Issue deserves decomposition. "Whilly Wiggum" smarter-brother variant. |
+
+Both honour the workflow board integration (`WHILLY_PROJECT_URL=...` → cards move at every stage) and share the hard `WHILLY_BUDGET_USD` cap.
+
+Typical invocation for the TRIZ+PRD pipeline:
+
+```bash
+unset GITHUB_TOKEN
+WHILLY_REPO=mshegolev/whilly-orchestrator \
+WHILLY_LABEL=whilly:ready \
+WHILLY_BUDGET_USD=30 \
+WHILLY_PROJECT_URL=https://github.com/users/mshegolev/projects/4 \
+python scripts/whilly_e2e_triz_prd.py --limit 1
+```
+
+`--limit N` caps issues per run; `--dry-run` skips all LLM / PR / merge work for plan-only inspection; `--allow-auto-merge` is OFF by default — a pipeline that modifies whilly's own code always leaves PRs for human review. Details + design rationale in [ADR-015](docs/workshop/adr/ADR-015-e2e-triz-prd-pipeline.md).
+
+## Troubleshooting / FAQ
+
+| Issue | Fix |
+|---|---|
+| `gh auth status` returns 401 ("token invalid") | `unset GITHUB_TOKEN` (env-based token overrides keyring auth), then `gh auth login` if needed. |
+| `claude: command not found` | Install Claude CLI from [docs.claude.com](https://docs.claude.com/en/docs/claude-code) or set `CLAUDE_BIN` to its path. |
+| Dashboard rendering broken on narrow terminal (<100 cols) | `WHILLY_HEADLESS=1 whilly tasks.json` — disables TUI, streams JSON events on stdout. |
+| Budget hits 0 unexpectedly | Set or raise `WHILLY_BUDGET_USD` (default unlimited; 0 also means unlimited). |
+| `tmux ls` shows no sessions after dispatch | Either tmux isn't installed, or `WHILLY_USE_TMUX=0` — whilly silently falls back to subprocess mode. |
+| Agent loops forever without marking done | Ensure prompt ends with the `<promise>COMPLETE</promise>` marker contract — `agent_runner.is_complete` checks that string. |
 
 ## Workshop kit
 
@@ -110,12 +227,12 @@ ruff format whilly/ tests/
 
 ## Credits
 
-- Technique attribution: [Ghuntley — the Ralph Wiggum technique](https://ghuntley.com/ralph/)
-- Spirit of the technique — a Simpsons character whose "I'm helping!" captures the essence of an agent that just keeps going, no matter what
+- Technique lineage: [Ghuntley's original Ralph Wiggum loop post](https://ghuntley.com/ralph/) — the pattern whilly descends from.
+- Spirit of the family — Ralph's "I'm helping!" captures the essence of an agent that just keeps going, no matter what. Whilly is his smarter brother: same stamina, plus TRIZ, Decision Gate, PRD wizard.
 
 ## Related work
 
-- [`ralph-orchestrator`](https://pypi.org/project/ralph-orchestrator/) by [@mikeyobrien](https://github.com/mikeyobrien/ralph-orchestrator) — another implementation of the same technique. Whilly differentiates with a Rich TUI dashboard, TRIZ analyzer, PRD wizard, and tmux/git-worktree parallel execution.
+- Earlier Ralph-loop implementations exist across the Claude Code community. Whilly sets itself apart with a Rich TUI dashboard, TRIZ analyzer, Decision Gate pre-flight, PRD wizard, and tmux/git-worktree parallel execution — the "smarter brother" kit on top of the base loop.
 
 ## License
 

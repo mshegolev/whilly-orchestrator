@@ -124,11 +124,7 @@ class TaskManager:
     def get_ready_tasks(self) -> list[Task]:
         """Get unblocked pending tasks sorted by (priority_order, phase)."""
         done_ids = {t.id for t in self.tasks if t.status == "done"}
-        ready = [
-            t
-            for t in self.tasks
-            if t.status == "pending" and all(dep in done_ids for dep in t.dependencies)
-        ]
+        ready = [t for t in self.tasks if t.status == "pending" and all(dep in done_ids for dep in t.dependencies)]
         ready.sort(key=lambda t: (PRIORITY_ORDER.get(t.priority, 99), t.phase))
         return ready
 
