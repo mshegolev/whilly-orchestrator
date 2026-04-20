@@ -53,7 +53,7 @@ def test_resource_monitor_custom_limits():
     assert monitor.limits.max_memory_percent == 85.0
 
 
-@patch('whilly.resource_monitor.psutil')
+@patch("whilly.resource_monitor.psutil")
 def test_get_system_usage_with_psutil(mock_psutil):
     """Test get_system_usage when psutil is available."""
     # Mock psutil functions
@@ -72,7 +72,7 @@ def test_get_system_usage_with_psutil(mock_psutil):
 
     # Mock process iteration
     mock_proc = Mock()
-    mock_proc.info = {'cmdline': ['python', '-m', 'whilly', '--tasks', 'test.json']}
+    mock_proc.info = {"cmdline": ["python", "-m", "whilly", "--tasks", "test.json"]}
     mock_psutil.process_iter.return_value = [mock_proc]
 
     monitor = ResourceMonitor()
@@ -93,7 +93,7 @@ def test_get_system_usage_with_psutil(mock_psutil):
 def test_get_system_usage_fallback():
     """Test get_system_usage fallback when psutil is not available."""
     # Temporarily disable psutil import
-    with patch('whilly.resource_monitor.psutil', None):
+    with patch("whilly.resource_monitor.psutil", None):
         monitor = ResourceMonitor()
         usage = monitor.get_system_usage()
 
@@ -106,12 +106,7 @@ def test_get_system_usage_fallback():
 def test_check_limits_no_violations():
     """Test check_limits with usage within limits."""
     monitor = ResourceMonitor()
-    usage = ResourceUsage(
-        cpu_percent=50.0,
-        memory_percent=60.0,
-        disk_free_gb=10.0,
-        active_processes=3
-    )
+    usage = ResourceUsage(cpu_percent=50.0, memory_percent=60.0, disk_free_gb=10.0, active_processes=3)
 
     violations = monitor.check_limits(usage)
     assert len(violations) == 0
@@ -124,27 +119,27 @@ def test_check_limits_with_violations():
         cpu_percent=85.0,  # > 80% limit
         memory_percent=80.0,  # > 75% limit
         disk_free_gb=2.0,  # < 5GB limit
-        active_processes=7  # > 5 limit
+        active_processes=7,  # > 5 limit
     )
 
     violations = monitor.check_limits(usage)
 
-    assert 'cpu' in violations
-    assert violations['cpu']['current'] == 85.0
-    assert violations['cpu']['limit'] == 80.0
-    assert violations['cpu']['severity'] == 'medium'
+    assert "cpu" in violations
+    assert violations["cpu"]["current"] == 85.0
+    assert violations["cpu"]["limit"] == 80.0
+    assert violations["cpu"]["severity"] == "medium"
 
-    assert 'memory' in violations
-    assert violations['memory']['current'] == 80.0
-    assert violations['memory']['limit'] == 75.0
+    assert "memory" in violations
+    assert violations["memory"]["current"] == 80.0
+    assert violations["memory"]["limit"] == 75.0
 
-    assert 'disk' in violations
-    assert violations['disk']['current'] == 2.0
-    assert violations['disk']['limit'] == 5.0
+    assert "disk" in violations
+    assert violations["disk"]["current"] == 2.0
+    assert violations["disk"]["limit"] == 5.0
 
-    assert 'processes' in violations
-    assert violations['processes']['current'] == 7
-    assert violations['processes']['limit'] == 5
+    assert "processes" in violations
+    assert violations["processes"]["current"] == 7
+    assert violations["processes"]["limit"] == 5
 
 
 def test_should_throttle():
@@ -156,7 +151,7 @@ def test_should_throttle():
         cpu_percent=50.0,
         memory_percent=60.0,
         disk_free_gb=10.0,  # Above minimum
-        active_processes=3   # Below limit
+        active_processes=3,  # Below limit
     )
     assert not monitor.should_throttle(usage_ok)
 
@@ -168,7 +163,7 @@ def test_should_throttle():
     usage_medium = ResourceUsage(
         cpu_percent=85.0,  # Medium severity
         memory_percent=80.0,  # Medium severity
-        active_processes=7  # Medium severity
+        active_processes=7,  # Medium severity
     )
     assert monitor.should_throttle(usage_medium)
 
@@ -181,28 +176,27 @@ def test_get_recommendation():
     assert "✅ All resource usage within limits" in monitor.get_recommendation({})
 
     # CPU violation
-    violations = {
-        'cpu': {'current': 85.0, 'limit': 80.0, 'severity': 'medium'}
-    }
+    violations = {"cpu": {"current": 85.0, "limit": 80.0, "severity": "medium"}}
     recommendation = monitor.get_recommendation(violations)
     assert "🔴 CPU usage too high" in recommendation
     assert "reducing WHILLY_MAX_PARALLEL" in recommendation
 
     # Memory violation
-    violations = {
-        'memory': {'current': 80.0, 'limit': 75.0, 'severity': 'medium'}
-    }
+    violations = {"memory": {"current": 80.0, "limit": 75.0, "severity": "medium"}}
     recommendation = monitor.get_recommendation(violations)
     assert "🔴 Memory usage too high" in recommendation
     assert "Close other applications" in recommendation
 
 
-@patch.dict('os.environ', {
-    'WHILLY_MAX_CPU_PERCENT': '90.0',
-    'WHILLY_MAX_MEMORY_PERCENT': '85.0',
-    'WHILLY_MIN_FREE_SPACE_GB': '10.0',
-    'WHILLY_LOG_DIR': 'custom_logs'
-})
+@patch.dict(
+    "os.environ",
+    {
+        "WHILLY_MAX_CPU_PERCENT": "90.0",
+        "WHILLY_MAX_MEMORY_PERCENT": "85.0",
+        "WHILLY_MIN_FREE_SPACE_GB": "10.0",
+        "WHILLY_LOG_DIR": "custom_logs",
+    },
+)
 def test_create_monitor_from_env():
     """Test creating monitor from environment variables."""
     monitor = create_monitor_from_env()
@@ -210,13 +204,14 @@ def test_create_monitor_from_env():
     assert monitor.limits.max_cpu_percent == 90.0
     assert monitor.limits.max_memory_percent == 85.0
     assert monitor.limits.min_free_space_gb == 10.0
-    assert monitor.log_dir == Path('custom_logs')
+    assert monitor.log_dir == Path("custom_logs")
 
 
 def test_get_monitor_singleton():
     """Test get_monitor returns singleton instance."""
     # Clear any existing monitor
     import whilly.resource_monitor
+
     whilly.resource_monitor._monitor = None
 
     monitor1 = get_monitor()
@@ -268,6 +263,7 @@ def test_cleanup_logs(tmp_path):
 
     # Make old log appear old by modifying its timestamp
     import os
+
     old_time = time.time() - (8 * 24 * 60 * 60)  # 8 days ago
     os.utime(old_log, (old_time, old_time))
 
