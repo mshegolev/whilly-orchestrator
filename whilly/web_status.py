@@ -96,9 +96,9 @@ class _StatusState:
         agents_html = ""
         if d.get("agents"):
             rows = "".join(
-                f"<tr><td>{a.get('task_id','?')}</td>"
-                f"<td class='status-running'>{a.get('status','running')}</td>"
-                f"<td>{a.get('elapsed_sec',0):.0f}s</td></tr>"
+                f"<tr><td>{a.get('task_id', '?')}</td>"
+                f"<td class='status-running'>{a.get('status', 'running')}</td>"
+                f"<td>{a.get('elapsed_sec', 0):.0f}s</td></tr>"
                 for a in d["agents"]
             )
             agents_html = (

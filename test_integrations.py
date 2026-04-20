@@ -2,14 +2,12 @@
 """Тест интеграций Whilly с внешними системами."""
 
 import sys
-import os
 
 # Добавляем путь к модулям Whilly
-sys.path.insert(0, '/opt/develop/whilly-orchestrator')
+sys.path.insert(0, "/opt/develop/whilly-orchestrator")
 
 from whilly.external_integrations import create_integration_manager, ExternalTaskRef
 from whilly.config import WhillyConfig
-from whilly.task_manager import Task
 
 
 def test_github_integration():
@@ -34,18 +32,17 @@ def test_github_integration():
             test_ref = ExternalTaskRef(
                 system="github",
                 task_id="1",  # Issue #1
-                url="https://github.com/mshegolev/whilly-orchestrator/issues/1"
+                url="https://github.com/mshegolev/whilly-orchestrator/issues/1",
             )
 
             print(f"  Тест: добавление комментария к Issue #{test_ref.task_id}")
             comment_success = github_integration.add_comment(
-                test_ref,
-                "🧪 **Test Comment from Whilly**\n\nTesting external integrations functionality!"
+                test_ref, "🧪 **Test Comment from Whilly**\n\nTesting external integrations functionality!"
             )
             print(f"  Добавление комментария: {'✅' if comment_success else '❌'}")
 
             # НЕ закрываем Issue в тесте, только показываем что можем
-            print(f"  Закрытие Issue: 🚫 пропущено в тесте (чтобы не закрывать реальные Issues)")
+            print("  Закрытие Issue: 🚫 пропущено в тесте (чтобы не закрывать реальные Issues)")
 
     else:
         print("  ❌ GitHub интеграция недоступна")
@@ -93,7 +90,7 @@ def test_task_ref_extraction():
         "description": "Test task with external references ABC-123",
         "github_issue": 1,
         "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/1",
-        "jira_key": "ABC-123"
+        "jira_key": "ABC-123",
     }
 
     # Извлекаем ссылки
