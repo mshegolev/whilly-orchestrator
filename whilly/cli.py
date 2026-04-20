@@ -24,7 +24,7 @@ from typing import List
 
 from whilly.agent_runner import collect_result, collect_result_from_file, is_api_error, is_auth_error, run_agent_async
 from whilly.resource_monitor import get_monitor
-from whilly.config import WhillyConfig
+from whilly.config import WhillyConfig, load_dotenv
 from whilly.dashboard import Dashboard, NullDashboard
 from whilly.external_integrations import create_integration_manager
 from whilly.decomposer import needs_decompose, run_decompose
@@ -1533,6 +1533,10 @@ def resolve_agent_name(config: WhillyConfig) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
 
+    # Load .env from cwd (if present) before anything reads WHILLY_* vars.
+    # Real shell env still wins — .env is a fallback for local convenience.
+    load_dotenv(Path.cwd() / ".env")
+
     _log_path = Path.cwd() / "whilly.log"
     os.environ["WHILLY_LOG_PATH"] = str(_log_path)
     logging.basicConfig(
@@ -1732,12 +1736,17 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--from-github")
         labels_arg = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
-        labels = labels_arg.split(",") if labels_arg else ["workshop", "whilly:ready"]
+        # "all" / "*" / "-" → fetch every open issue without label filter
+        if labels_arg and labels_arg.lower() in ("all", "*", "-"):
+            labels: list[str] | None = None
+        else:
+            labels = labels_arg.split(",") if labels_arg else ["workshop", "whilly:ready"]
 
         output_file = "tasks-from-github.json"
         prd_file = Path("docs/PRD-workshop.md") if Path("docs/PRD-workshop.md").exists() else None
 
-        _ansi(f"{CY}{B}Extracting GitHub Issues with labels: {', '.join(labels)}...{R}")
+        label_desc = ", ".join(labels) if labels else "all open issues (no label filter)"
+        _ansi(f"{CY}{B}Extracting GitHub Issues: {label_desc}...{R}")
         try:
             tasks_path = generate_tasks_from_github(output_path=output_file, filter_labels=labels, prd_file=prd_file)
             _ansi(f"{GR}Tasks generated: {tasks_path}{R}")
