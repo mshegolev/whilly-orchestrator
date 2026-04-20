@@ -298,13 +298,12 @@ class ResourceMonitor:
 
         if "processes" in violations:
             recommendations.append(
-                f"🔴 Too many processes ({violations['processes']['current']}). "
-                f"Wait for some processes to complete."
+                f"🔴 Too many processes ({violations['processes']['current']}). Wait for some processes to complete."
             )
 
         if "log_dir" in violations:
             recommendations.append(
-                f"⚠️ Log directory large ({violations['log_dir']['current']:.1f}GB). " f"Consider cleaning up old logs."
+                f"⚠️ Log directory large ({violations['log_dir']['current']:.1f}GB). Consider cleaning up old logs."
             )
 
         return " ".join(recommendations)

@@ -223,7 +223,7 @@ def generate_tasks(
     stem = prd_file.stem.lower().replace("prd-", "").replace("prd_", "")
     out_path = out_dir / f"{stem}_tasks.json"
 
-    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\n" f"PRD файл: {prd_file}\n\n" f"Содержимое PRD:\n```\n{prd_content}\n```\n"
+    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\nPRD файл: {prd_file}\n\nСодержимое PRD:\n```\n{prd_content}\n```\n"
 
     log.info("Generating tasks from PRD: %s", prd_file.name)
     content = _call_claude(prompt, model)

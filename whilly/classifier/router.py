@@ -231,8 +231,7 @@ def format_decision(d: RoutingDecision) -> str:
         lines.append(f"flags:          {', '.join(d.classification.flags)}")
     if d.target_parent is not None:
         lines.append(
-            f"target parent:  {d.target_parent.level.value} "
-            f"{d.target_parent.id!r} (score {d.parent_confidence:.2f})"
+            f"target parent:  {d.target_parent.level.value} {d.target_parent.id!r} (score {d.parent_confidence:.2f})"
         )
         lines.append(f"parent title:   {d.target_parent.title[:80]}")
     lines.append(f"applied:        {d.applied}")

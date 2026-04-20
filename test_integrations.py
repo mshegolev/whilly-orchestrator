@@ -2,14 +2,12 @@
 """Тест интеграций Whilly с внешними системами."""
 
 import sys
-import os
 
 # Добавляем путь к модулям Whilly
 sys.path.insert(0, "/opt/develop/whilly-orchestrator")
 
 from whilly.external_integrations import create_integration_manager, ExternalTaskRef
 from whilly.config import WhillyConfig
-from whilly.task_manager import Task
 
 
 def test_github_integration():
@@ -44,7 +42,7 @@ def test_github_integration():
             print(f"  Добавление комментария: {'✅' if comment_success else '❌'}")
 
             # НЕ закрываем Issue в тесте, только показываем что можем
-            print(f"  Закрытие Issue: 🚫 пропущено в тесте (чтобы не закрывать реальные Issues)")
+            print("  Закрытие Issue: 🚫 пропущено в тесте (чтобы не закрывать реальные Issues)")
 
     else:
         print("  ❌ GitHub интеграция недоступна")

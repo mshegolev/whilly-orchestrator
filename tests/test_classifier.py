@@ -201,7 +201,7 @@ class TestLLMMatcher:
     def test_unknown_id_filtered(self, monkeypatch):
         self._patch(
             monkeypatch,
-            '{"matches":[{"id":"id-42","score":0.9,"reasoning":"x"},' '{"id":"id-1","score":0.7,"reasoning":"y"}]}',
+            '{"matches":[{"id":"id-42","score":0.9,"reasoning":"x"},{"id":"id-1","score":0.7,"reasoning":"y"}]}',
         )
         items = _make_items("Real")
         matches = LLMParentMatcher().find_matches("t", "b", items)

@@ -105,13 +105,13 @@ def launch_agent(
     backend_name = getattr(backend, "name", "claude")
     preamble_cmd = (
         f'printf "# whilly agent preamble\\n'
-        f'# timestamp : $(date \'+%Y-%m-%d %H:%M:%S\')\\n'
-        f'# session   : {session_name}\\n'
-        f'# task_id   : {task_id}\\n'
-        f'# backend   : {backend_name}\\n'
-        f'# model     : {model}\\n'
-        f'# cwd       : {cwd or "inherited"}\\n'
-        f'# note      : агент пишет результат в КОНЦЕ работы\\n'
+        f"# timestamp : $(date '+%Y-%m-%d %H:%M:%S')\\n"
+        f"# session   : {session_name}\\n"
+        f"# task_id   : {task_id}\\n"
+        f"# backend   : {backend_name}\\n"
+        f"# model     : {model}\\n"
+        f"# cwd       : {cwd or 'inherited'}\\n"
+        f"# note      : агент пишет результат в КОНЦЕ работы\\n"
         f'# ---\\n" > "{log_file}"; '
     )
     wrapper = (
