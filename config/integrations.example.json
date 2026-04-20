@@ -1,0 +1,23 @@
+{
+  "_comment": "Пример конфигурации внешних интеграций для Whilly",
+  "enabled": true,
+  "github": {
+    "enabled": true,
+    "auto_close": true,
+    "add_comments": true,
+    "_note": "GitHub CLI должен быть авторизован (gh auth login)"
+  },
+  "jira": {
+    "enabled": false,
+    "server_url": "https://your-company.atlassian.net",
+    "username": "your.email@company.com",
+    "auto_close": true,
+    "add_comments": true,
+    "transition_to": "Done",
+    "_note": "Также требуются env переменные: JIRA_API_TOKEN"
+  },
+  "linear": {
+    "enabled": false,
+    "_note": "Linear интеграция - TODO в будущих версиях"
+  }
+}

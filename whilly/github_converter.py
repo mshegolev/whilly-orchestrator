@@ -46,7 +46,7 @@ class GitHubIssue:
 
 @dataclass
 class WhillyTask:
-    """Структура задачи Whilly."""
+    """Структура задачи Whilly - соответствует Task из task_manager."""
     id: str
     description: str
     phase: str = "implementation"
@@ -60,6 +60,8 @@ class WhillyTask:
     prd_requirement: str = ""
     github_issue: int | None = None
     github_url: str | None = None
+    jira_key: str | None = None
+    jira_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Конвертирует в dict для JSON."""

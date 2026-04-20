@@ -1,0 +1,165 @@
+{
+  "project": "workshop-self-writing-orchestrator",
+  "prd_file": "docs/PRD-workshop.md",
+  "created_at": "2026-04-20T18:19:41.279311",
+  "source": "github_issues",
+  "tasks": [
+    {
+      "id": "gh-7-x",
+      "description": "x",
+      "phase": "implementation",
+      "category": "feature",
+      "status": "pending",
+      "priority": "medium",
+      "key_files": [
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "Task completed successfully",
+        "Code passes linting",
+        "Tests pass"
+      ],
+      "test_steps": [
+        "Run `make lint` and verify no errors",
+        "Run `pytest` and verify all tests pass",
+        "Verify GitHub Issue #7 requirements are met"
+      ],
+      "prd_requirement": "GitHub Issue #7: x",
+      "github_issue": 7,
+      "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/7"
+    },
+    {
+      "id": "gh-5-pin-ruff-dev",
+      "description": "[workshop] Pin ruff dev dependency to >=0.6,<1.0",
+      "phase": "implementation",
+      "category": "feature",
+      "status": "pending",
+      "priority": "low",
+      "key_files": [
+        "pyproject.toml"
+      ],
+      "acceptance_criteria": [
+        "pyproject.toml [project.optional-dependencies] dev section has ruff constraint >=0.6,<1.0",
+        "ruff format --check whilly tests still passes",
+        "pytest still passes",
+        "grep -E 'ruff>=0\\\\.6' pyproject.toml",
+        "ruff format --check whilly tests"
+      ],
+      "test_steps": [
+        "Run `make lint` and verify no errors",
+        "Run `pytest` and verify all tests pass",
+        "Verify GitHub Issue #5 requirements are met"
+      ],
+      "prd_requirement": "GitHub Issue #5: [workshop] Pin ruff dev dependency to >=0.6,<1.0",
+      "github_issue": 5,
+      "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/5"
+    },
+    {
+      "id": "gh-4-add-scripts/show_costs.sh-helper",
+      "description": "[workshop] Add scripts/show_costs.sh helper",
+      "phase": "implementation",
+      "category": "feature",
+      "status": "pending",
+      "priority": "medium",
+      "key_files": [
+        "scripts/"
+      ],
+      "acceptance_criteria": [
+        "Script exists at scripts/show_costs.sh and is executable",
+        "Accepts an optional first arg (path to events.jsonl), defaults to whilly_logs/whilly_events.jsonl",
+        "Sums cost_usd across task.done events using jq",
+        "Handles missing file gracefully (prints 0.0 with no error)",
+        "test -x scripts/show_costs.sh",
+        "./scripts/show_costs.sh /tmp/no_such_file.jsonl 2>/dev/null | grep -E '^0(\\.0+)?$'"
+      ],
+      "test_steps": [
+        "Run `make lint` and verify no errors",
+        "Run `pytest` and verify all tests pass",
+        "Verify GitHub Issue #4 requirements are met"
+      ],
+      "prd_requirement": "GitHub Issue #4: [workshop] Add scripts/show_costs.sh helper",
+      "github_issue": 4,
+      "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/4"
+    },
+    {
+      "id": "gh-3-add-troubleshooting-section",
+      "description": "[workshop] Add TROUBLESHOOTING section to README",
+      "phase": "documentation",
+      "category": "documentation",
+      "status": "pending",
+      "priority": "medium",
+      "key_files": [
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "README.md has a '## Troubleshooting' (or '## Troubleshooting / FAQ') heading",
+        "Section lists at least 3 common issues with short fixes",
+        "Mentions GITHUB_TOKEN env conflict, claude CLI not on PATH, dashboard rendering on small terminals",
+        "grep -qi '## Troubleshooting' README.md",
+        "grep -q 'GITHUB_TOKEN' README.md",
+        "grep -q 'claude' README.md"
+      ],
+      "test_steps": [
+        "Run `make lint` and verify no errors",
+        "Run `pytest` and verify all tests pass",
+        "Verify GitHub Issue #3 requirements are met"
+      ],
+      "prd_requirement": "GitHub Issue #3: [workshop] Add TROUBLESHOOTING section to README",
+      "github_issue": 3,
+      "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/3"
+    },
+    {
+      "id": "gh-2-add-tests/__init__.py-marker",
+      "description": "[workshop] Add tests/__init__.py marker",
+      "phase": "setup",
+      "category": "feature",
+      "status": "pending",
+      "priority": "low",
+      "key_files": [
+        "tests/",
+        "pytest.ini"
+      ],
+      "acceptance_criteria": [
+        "tests/__init__.py exists",
+        "File is empty or contains only a single short comment",
+        "test -f tests/__init__.py",
+        "test $(wc -l < tests/__init__.py) -le 2"
+      ],
+      "test_steps": [
+        "Run `make lint` and verify no errors",
+        "Run `pytest` and verify all tests pass",
+        "Verify GitHub Issue #2 requirements are met"
+      ],
+      "prd_requirement": "GitHub Issue #2: [workshop] Add tests/__init__.py marker",
+      "github_issue": 2,
+      "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/2"
+    },
+    {
+      "id": "gh-1-add-contributing-badge",
+      "description": "[workshop] Add CONTRIBUTING badge to README",
+      "phase": "documentation",
+      "category": "documentation",
+      "status": "pending",
+      "priority": "low",
+      "key_files": [
+        "README.md",
+        "CONTRIBUTING.md"
+      ],
+      "acceptance_criteria": [
+        "README.md has a markdown badge linking to CONTRIBUTING.md",
+        "Badge is placed in the existing badge row (right after the License badge)",
+        "Badge text reads \"contributing\" or \"contributions welcome\"",
+        "grep -q '\\[!\\[' README.md",
+        "grep -q 'CONTRIBUTING' README.md"
+      ],
+      "test_steps": [
+        "Run `make lint` and verify no errors",
+        "Run `pytest` and verify all tests pass",
+        "Verify GitHub Issue #1 requirements are met"
+      ],
+      "prd_requirement": "GitHub Issue #1: [workshop] Add CONTRIBUTING badge to README",
+      "github_issue": 1,
+      "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/1"
+    }
+  ]
+}
