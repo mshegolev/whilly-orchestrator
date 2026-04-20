@@ -4,7 +4,6 @@ Self-healing wrapper for Whilly.
 Automatically detects, fixes, and restarts on code errors.
 """
 
-import os
 import subprocess
 import sys
 import time
@@ -14,7 +13,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from whilly.self_healing import enable_self_healing, SelfHealingHandler
+from whilly.self_healing import SelfHealingHandler, enable_self_healing  # noqa: E402 - import after path setup
 
 
 def run_whilly_with_healing(args: list[str], max_retries: int = 3) -> int:
@@ -25,7 +24,7 @@ def run_whilly_with_healing(args: list[str], max_retries: int = 3) -> int:
     print(f"   Args: {' '.join(args)}")
     print()
 
-    healer = SelfHealingHandler(project_root)
+    _healer = SelfHealingHandler(project_root)  # noqa: F841 - planned for future use
 
     for attempt in range(max_retries + 1):
         print(f"🚀 Attempt {attempt + 1}/{max_retries + 1}")
@@ -36,7 +35,7 @@ def run_whilly_with_healing(args: list[str], max_retries: int = 3) -> int:
                 [sys.executable, "-m", "whilly"] + args,
                 cwd=project_root,
                 capture_output=False,  # Let output go to terminal
-                text=True
+                text=True,
             )
 
             if result.returncode == 0:
@@ -59,7 +58,7 @@ def run_whilly_with_healing(args: list[str], max_retries: int = 3) -> int:
 
         # If we're not at the last attempt, wait and retry
         if attempt < max_retries:
-            retry_delay = min(30, 2 ** attempt)  # Exponential backoff, max 30s
+            retry_delay = min(30, 2**attempt)  # Exponential backoff, max 30s
             print(f"⏱️  Retrying in {retry_delay} seconds...")
             time.sleep(retry_delay)
 
