@@ -578,6 +578,7 @@ def wait_and_collect_subprocess(
     dashboard: Dashboard,
     reporter: Reporter,
     iteration: int,
+    config,
     max_consecutive_errors: int = 3,
     log_dir: Path | None = None,
 ) -> None:
@@ -962,7 +963,7 @@ def run_plan(
                     wait_and_collect_tmux(agents, tm, dashboard, reporter, iteration, log_dir=log_dir)
                 else:
                     procs = launch_batch_subprocess(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
-                    wait_and_collect_subprocess(procs, tm, dashboard, reporter, iteration, log_dir=log_dir)
+                    wait_and_collect_subprocess(procs, tm, dashboard, reporter, iteration, config, log_dir=log_dir)
 
                 # Merge worktrees for completed tasks, cleanup all
                 if wm and worktree_paths:
