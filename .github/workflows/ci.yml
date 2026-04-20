@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -19,18 +22,59 @@ jobs:
         run: pip install -e '.[dev]'
       - name: Ruff check
         run: ruff check whilly/ tests/
-      - name: Ruff format check
-        run: ruff format --check whilly/ tests/
+      - name: Ruff format check and auto-fix
+        run: |
+          # Проверяем форматирование
+          if ! ruff format --check whilly/ tests/; then
+            echo "❌ Formatting issues found. Auto-fixing..."
+
+            # Применяем форматирование
+            ruff format whilly/ tests/
+
+            # Настраиваем git для коммита
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action"
+
+            # Проверяем есть ли изменения
+            if git diff --quiet; then
+              echo "✅ No changes after formatting"
+            else
+              echo "📝 Committing formatting fixes..."
+              git add .
+              git commit -m "style: Auto-fix code formatting with ruff
+
+Automatically applied formatting fixes via GitHub Actions.
+This resolves CI formatting failures without blocking development.
+
+Co-Authored-By: GitHub Action <action@github.com>"
+
+              # Пушим в текущую ветку (работает для PR и прямых пушей)
+              if [ "${{ github.event_name }}" = "pull_request" ]; then
+                git push origin HEAD:${{ github.head_ref }}
+              else
+                git push origin HEAD:${{ github.ref_name }}
+              fi
+
+              echo "✅ Formatting fixes pushed to branch"
+            fi
+          else
+            echo "✅ Code is properly formatted"
+          fi
 
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # Запускаем тесты только после успешного линтинга
+    needs: lint
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Получаем последние изменения (включая auto-commit от lint job)
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -42,8 +86,13 @@ jobs:
   agent-backends:
     name: Agent backends (OC-119)
     runs-on: ubuntu-latest
+    # Запускаем после успешного линтинга
+    needs: lint
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Получаем последние изменения (включая auto-commit от lint job)
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
