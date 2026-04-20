@@ -64,6 +64,7 @@ class TestRebuild:
             "tasks": 0,
             "assignments": 0,
             "unparented": 0,
+            "inferred_epics": 0,
         }
 
     def test_reclassifies_by_classifier_not_input_level(self):
@@ -165,6 +166,7 @@ class TestRebuild:
             "tasks": 2,
             "assignments": 2,  # story→epic + task1→story
             "unparented": 1,  # task2 below threshold
+            "inferred_epics": 0,
         }
 
 
