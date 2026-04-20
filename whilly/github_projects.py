@@ -43,7 +43,7 @@ class GitHubProjectsConverter:
         try:
             result = subprocess.run(['gh', 'auth', 'status'],
                                   capture_output=True, text=True, check=True)
-            if 'Logged in to github.com' not in result.stderr:
+            if 'Logged in to github.com' not in result.stdout:
                 raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
         except subprocess.CalledProcessError:
             raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
@@ -290,11 +290,11 @@ class GitHubProjectsConverter:
         print(f"✅ Created {len(created_issues)} new issues")
 
         # Now use existing github_converter to create Whilly tasks
-        from whilly.github_converter import GitHubIssuesSource
+        from whilly.sources.github_issues import fetch_github_issues
 
         print(f"🔄 Generating Whilly tasks from issues with label: {label}")
-        source = GitHubIssuesSource()
-        source.generate_plan_from_labels([label], output_file)
+        repo_spec = f"{repo_owner}/{repo_name}"
+        plan_path, stats = fetch_github_issues(repo_spec, label=label, out_path=output_file)
 
         print(f"✅ Whilly tasks saved to: {output_file}")
         return output_file
