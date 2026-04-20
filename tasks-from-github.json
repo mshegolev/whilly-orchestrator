@@ -1,14 +1,17 @@
 {
   "project": "workshop-self-writing-orchestrator",
   "prd_file": "docs/PRD-workshop.md",
-  "created_at": "2026-04-20T17:49:16.284231",
+  "created_at": "2026-04-20T19:11:49.176235",
   "source": "github_issues",
   "tasks": [
     {
       "id": "gh-7-x",
-      "description": "x",
-      "status": "pending",
+      "phase": "implementation",
+      "category": "feature",
       "priority": "medium",
+      "description": "x",
+      "status": "done",
+      "dependencies": [],
       "key_files": [
         "README.md"
       ],
@@ -22,14 +25,18 @@
         "Run `pytest` and verify all tests pass",
         "Verify GitHub Issue #7 requirements are met"
       ],
+      "prd_requirement": "GitHub Issue #7: x",
       "github_issue": 7,
       "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/7"
     },
     {
       "id": "gh-5-pin-ruff-dev",
-      "description": "[workshop] Pin ruff dev dependency to >=0.6,<1.0",
-      "status": "pending",
+      "phase": "implementation",
+      "category": "feature",
       "priority": "low",
+      "description": "[workshop] Pin ruff dev dependency to >=0.6,<1.0",
+      "status": "done",
+      "dependencies": [],
       "key_files": [
         "pyproject.toml"
       ],
@@ -45,14 +52,18 @@
         "Run `pytest` and verify all tests pass",
         "Verify GitHub Issue #5 requirements are met"
       ],
+      "prd_requirement": "GitHub Issue #5: [workshop] Pin ruff dev dependency to >=0.6,<1.0",
       "github_issue": 5,
       "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/5"
     },
     {
       "id": "gh-4-add-scripts/show_costs.sh-helper",
-      "description": "[workshop] Add scripts/show_costs.sh helper",
-      "status": "pending",
+      "phase": "implementation",
+      "category": "feature",
       "priority": "medium",
+      "description": "[workshop] Add scripts/show_costs.sh helper",
+      "status": "done",
+      "dependencies": [],
       "key_files": [
         "scripts/"
       ],
@@ -69,14 +80,18 @@
         "Run `pytest` and verify all tests pass",
         "Verify GitHub Issue #4 requirements are met"
       ],
+      "prd_requirement": "GitHub Issue #4: [workshop] Add scripts/show_costs.sh helper",
       "github_issue": 4,
       "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/4"
     },
     {
       "id": "gh-3-add-troubleshooting-section",
-      "description": "[workshop] Add TROUBLESHOOTING section to README",
-      "status": "pending",
+      "phase": "documentation",
+      "category": "documentation",
       "priority": "medium",
+      "description": "[workshop] Add TROUBLESHOOTING section to README",
+      "status": "done",
+      "dependencies": [],
       "key_files": [
         "README.md"
       ],
@@ -93,14 +108,18 @@
         "Run `pytest` and verify all tests pass",
         "Verify GitHub Issue #3 requirements are met"
       ],
+      "prd_requirement": "GitHub Issue #3: [workshop] Add TROUBLESHOOTING section to README",
       "github_issue": 3,
       "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/3"
     },
     {
       "id": "gh-2-add-tests/__init__.py-marker",
-      "description": "[workshop] Add tests/__init__.py marker",
-      "status": "pending",
+      "phase": "setup",
+      "category": "feature",
       "priority": "low",
+      "description": "[workshop] Add tests/__init__.py marker",
+      "status": "done",
+      "dependencies": [],
       "key_files": [
         "tests/",
         "pytest.ini"
@@ -116,14 +135,18 @@
         "Run `pytest` and verify all tests pass",
         "Verify GitHub Issue #2 requirements are met"
       ],
+      "prd_requirement": "GitHub Issue #2: [workshop] Add tests/__init__.py marker",
       "github_issue": 2,
       "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/2"
     },
     {
       "id": "gh-1-add-contributing-badge",
-      "description": "[workshop] Add CONTRIBUTING badge to README",
-      "status": "pending",
+      "phase": "documentation",
+      "category": "documentation",
       "priority": "low",
+      "description": "[workshop] Add CONTRIBUTING badge to README",
+      "status": "done",
+      "dependencies": [],
       "key_files": [
         "README.md",
         "CONTRIBUTING.md"
@@ -140,6 +163,7 @@
         "Run `pytest` and verify all tests pass",
         "Verify GitHub Issue #1 requirements are met"
       ],
+      "prd_requirement": "GitHub Issue #1: [workshop] Add CONTRIBUTING badge to README",
       "github_issue": 1,
       "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/1"
     }
