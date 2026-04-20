@@ -98,10 +98,10 @@ so a syncer can plug in without any interface change.
 - +30% code up front vs. the tactical inline version.
 - `gh api graphql` only — a non-`gh` auth path would require a separate PR
   (e.g., token via `requests` for containerised environments).
-- `add_status` for GitHub is currently stubbed to raise `NotImplementedError`
-  because the v2 schema for programmatic column creation needs verification —
-  interactive "A" falls back to "map or skip" in that case. To be closed in
-  a follow-up before claiming full parity with "interactive add".
+- `add_status` requires write scope on the Projects v2 field — a read-only
+  token will surface `Must have write access` from the GraphQL layer. The
+  proposer catches the `RuntimeError` and falls back to "map existing" so
+  analyze-mode still works without write scope.
 
 ### Follow-ups
 - **ADR-015** — Event-driven `ProjectBoardSyncer` tailing `whilly_events.jsonl`.
@@ -109,8 +109,9 @@ so a syncer can plug in without any interface change.
   surface at ~1-2 adapter-weeks each.
 - **Multi-repo routing** — when a Project aggregates issues from several
   repos, whilly needs per-repo worktree dispatching.
-- **Close GitHub `add_status` NotImplemented** once the `updateProjectV2Field`
-  semantics are nailed down.
+- **Semantic colouring** — `add_status` accepts a colour argument today but
+  defaults everything to GRAY. Once the syncer lands, map event →
+  colour (e.g., `done`=GREEN, `failed`=RED) so the board reads at a glance.
 
 ## References
 
