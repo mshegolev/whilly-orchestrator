@@ -74,6 +74,7 @@ from whilly.prd_generator import generate_prd, generate_tasks  # noqa: E402
 from whilly.sources import fetch_github_issues  # noqa: E402
 from whilly.task_manager import TaskManager  # noqa: E402
 from whilly.triz_analyzer import challenge_plan  # noqa: E402
+from whilly.quality import run_detected as run_detected_gates  # noqa: E402
 from whilly.workflow import get_board, load_or_none, move_on_event  # noqa: E402
 
 
@@ -369,42 +370,18 @@ def run_execution(plan_path: Path, issue: IssueTask) -> bool:
 
 
 def run_quality_gate() -> tuple[bool, str]:
-    """Run pytest + ruff locally. Returns (passed, summary_text).
+    """Run the language-agnostic quality gate — auto-detects Python/Node/Go/Rust
+    toolchains in the current checkout and runs every applicable gate.
 
-    The agent worked in the main checkout (no worktree in this simplified
-    pipeline), so the gate reflects the project's live state.
+    Returns ``(passed, summary_text)``; on detection miss (e.g. a docs-only
+    repo) returns ``(True, "no gates detected")`` — "nothing to check" isn't
+    a failure. Skipping still honoured via ``--skip-quality-gate`` and
+    ``WHILLY_DRY_RUN``.
     """
     if SKIP_QUALITY_GATE or DRY_RUN:
         return True, "quality gate skipped"
-
-    pytest_proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if pytest_proc.returncode != 0:
-        return False, f"pytest failed:\n{pytest_proc.stdout[-600:]}"
-
-    ruff_proc = subprocess.run(
-        [sys.executable, "-m", "ruff", "check", "whilly/", "tests/"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if ruff_proc.returncode != 0:
-        return False, f"ruff check failed:\n{ruff_proc.stdout[-400:]}"
-
-    fmt_proc = subprocess.run(
-        [sys.executable, "-m", "ruff", "format", "--check", "whilly/", "tests/"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if fmt_proc.returncode != 0:
-        return False, f"ruff format check failed:\n{fmt_proc.stdout[-400:]}"
-
-    return True, "pytest + ruff clean"
+    result = run_detected_gates(Path.cwd())
+    return result.passed, result.summary
 
 
 def open_pr(issue: IssueTask, body: str, base: str = "main") -> str:
