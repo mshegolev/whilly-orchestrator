@@ -1298,6 +1298,8 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
   whilly --prd-wizard [slug]      Interactive PRD wizard — launches claude CLI
                                     preloaded with PRD master prompt. Диалог
                                     прямо в текущем терминале (без tmux).
+  whilly --from-github [labels]   Generate tasks from GitHub Issues with
+                                    specified labels (default: workshop,whilly:ready)
   whilly --no-worktree            Отключить изоляцию плана в отдельном git
                                     worktree (по умолчанию план исполняется в
                                     .whilly_workspaces/{slug}/ чтобы не мешать
@@ -1554,6 +1556,43 @@ def main(argv: list[str] | None = None) -> int:
         slug = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
         config = WhillyConfig.from_env()
         return run_prd_wizard(slug=slug, model=config.MODEL)
+
+    # --from-github: generate tasks from GitHub Issues
+    if "--from-github" in args:
+        from whilly.github_converter import generate_tasks_from_github
+
+        idx = args.index("--from-github")
+        labels_arg = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
+        labels = labels_arg.split(",") if labels_arg else ["workshop", "whilly:ready"]
+
+        output_file = "tasks-from-github.json"
+        prd_file = Path("docs/PRD-workshop.md") if Path("docs/PRD-workshop.md").exists() else None
+
+        _ansi(f"{CY}{B}Extracting GitHub Issues with labels: {', '.join(labels)}...{R}")
+        try:
+            tasks_path = generate_tasks_from_github(
+                output_path=output_file,
+                filter_labels=labels,
+                prd_file=prd_file
+            )
+            _ansi(f"{GR}Tasks generated: {tasks_path}{R}")
+
+            # Ask user if they want to run the tasks immediately
+            if sys.stdin.isatty():
+                choice = input(f"\nRun tasks immediately? [Y/n]: ").lower()
+                if choice in ("", "y", "yes"):
+                    _ansi(f"{CY}{B}Starting Whilly orchestrator...{R}")
+                    args = [str(tasks_path)]  # Set args to run the generated tasks
+                else:
+                    _ansi(f"{YL}Run later with: whilly {tasks_path}{R}")
+                    return 0
+            else:
+                _ansi(f"{YL}Run with: whilly {tasks_path}{R}")
+                return 0
+
+        except Exception as e:
+            _ansi(f"{RD}GitHub to tasks conversion failed: {e}{R}")
+            return 1
 
     # --init: generate PRD from description
     if "--init" in args:
