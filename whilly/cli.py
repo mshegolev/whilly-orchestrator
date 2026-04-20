@@ -1361,6 +1361,8 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     прямо в текущем терминале (без tmux).
   whilly --from-github [labels]   Generate tasks from GitHub Issues with
                                     specified labels (default: workshop,whilly:ready)
+  whilly --from-project <url>     🆕 Convert GitHub Project board to Issues and tasks
+                                    Usage: --from-project URL [--repo owner/name] [--go]
   whilly --no-worktree            Отключить изоляцию плана в отдельном git
                                     worktree (по умолчанию план исполняется в
                                     .whilly_workspaces/{slug}/ чтобы не мешать
@@ -1653,6 +1655,74 @@ def main(argv: list[str] | None = None) -> int:
 
         except Exception as e:
             _ansi(f"{RD}GitHub to tasks conversion failed: {e}{R}")
+            return 1
+
+    # --from-project: generate tasks from GitHub Project board
+    if "--from-project" in args:
+        from whilly.github_projects import GitHubProjectsConverter
+
+        idx = args.index("--from-project")
+        if idx + 1 >= len(args):
+            _ansi(f'{RD}Usage: whilly --from-project <project_url> [--repo owner/name]{R}')
+            return 1
+
+        project_url = args[idx + 1]
+
+        # Extract repo info from additional args or derive from current repo
+        repo_owner = None
+        repo_name = None
+
+        if "--repo" in args:
+            repo_idx = args.index("--repo")
+            if repo_idx + 1 < len(args):
+                repo_spec = args[repo_idx + 1]
+                if '/' in repo_spec:
+                    repo_owner, repo_name = repo_spec.split('/', 1)
+
+        # Auto-detect repo if not specified
+        if not repo_owner or not repo_name:
+            try:
+                result = subprocess.run(['git', 'remote', 'get-url', 'origin'],
+                                      capture_output=True, text=True, check=True)
+                remote_url = result.stdout.strip()
+                # Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
+                if 'github.com' in remote_url:
+                    import re
+                    match = re.search(r'github\.com[:/]([^/]+)/([^/.]+)', remote_url)
+                    if match:
+                        repo_owner = repo_owner or match.group(1)
+                        repo_name = repo_name or match.group(2)
+            except:
+                pass
+
+        if not repo_owner or not repo_name:
+            _ansi(f'{RD}Could not determine repository. Use: --repo owner/name{R}')
+            return 1
+
+        _ansi(f"{CY}{B}Converting GitHub Project to Issues and Whilly tasks...{R}")
+        _ansi(f"Project: {project_url}")
+        _ansi(f"Repository: {repo_owner}/{repo_name}")
+
+        try:
+            converter = GitHubProjectsConverter()
+            tasks_path = converter.project_to_whilly_tasks(
+                project_url, repo_owner, repo_name, "tasks-from-project.json"
+            )
+
+            _ansi(f"{GR}Tasks generated: {tasks_path}{R}")
+
+            if "--go" in args:
+                # Auto-execute with self-healing
+                _ansi(f"{CY}Auto-executing with self-healing...{R}")
+                import os
+                script_path = Path(__file__).parent.parent / "scripts" / "whilly_with_healing.py"
+                os.execv(sys.executable, [sys.executable, str(script_path), tasks_path])
+            else:
+                _ansi(f"{YL}Run with: python scripts/whilly_with_healing.py {tasks_path}{R}")
+                return 0
+
+        except Exception as e:
+            _ansi(f"{RD}GitHub Project conversion failed: {e}{R}")
             return 1
 
     # --init: generate PRD from description
