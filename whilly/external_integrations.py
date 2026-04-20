@@ -293,6 +293,13 @@ class ExternalIntegrationManager:
                 transition_to=jira_config.get("transition_to", "Done"),
             )
 
+    def is_integration_available(self, name: str) -> bool:
+        """Проверяет, настроена ли и доступна ли интеграция с указанным именем."""
+        integration = self.integrations.get(name)
+        if integration is None:
+            return False
+        return integration.is_available()
+
     def close_external_task(
         self, task_ref: ExternalTaskRef, whilly_task_id: str, commit_sha: str | None = None
     ) -> bool:
