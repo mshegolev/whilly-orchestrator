@@ -21,6 +21,7 @@ The base technique was first described in [Ghuntley's post on the Ralph Wiggum l
 - **Continuous agent loop** — pull tasks from a JSON plan, run Claude CLI on each, retry on transient errors
 - **Rich TUI dashboard** — live progress, token usage, cost totals, per-task status; hotkeys for pause/reset/skip
 - **Parallel execution** — tmux panes or git worktrees, up to N concurrent agents with budget/deadlock guards
+- **Self-healing system** 🛡️ — auto-detect crashes, fix common code errors (NameError, ImportError), restart pipeline
 - **Task decomposer** — LLM-based breakdown of oversized tasks into subtasks
 - **PRD wizard** — interactive Product Requirements Document generation, then auto-derive tasks from the PRD
 - **TRIZ analyzer** — surface contradictions and inventive principles for ambiguous tasks
@@ -92,6 +93,33 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or
 
 3. Watch the dashboard. Press `q` to quit, `d` for task detail, `l` for the live log of a running agent, `t` for the task overview.
 
+## 🛡️ Self-Healing System
+
+Whilly includes a built-in self-healing system that automatically detects, analyzes, and fixes code errors to ensure pipeline resilience:
+
+```bash
+# Standard whilly (no crash protection)
+whilly tasks.json
+
+# Self-healing whilly (auto-fix + restart on crashes)
+python scripts/whilly_with_healing.py tasks.json
+```
+
+**Supported error types:**
+- ✅ `NameError` — missing variables/parameters (auto-fix)
+- ✅ `ImportError` — missing modules (auto pip install)  
+- ✅ `TypeError` — function parameter mismatches (diagnosis)
+- ⚠️ `AttributeError` — missing object attributes (suggestions)
+
+**Features:**
+- 🔍 **Smart error detection** via traceback pattern analysis
+- 🔧 **Automated fixes** for common coding errors
+- 🔄 **Auto-restart** with exponential backoff (max 3 retries)
+- 📊 **Learning from patterns** in historical error logs
+- 💡 **Recovery suggestions** for complex issues
+
+See [Self-Healing Guide](docs/Self-Healing-Guide.md) for complete documentation.
+
 ## Modules
 
 | Module | Purpose |
@@ -106,6 +134,8 @@ Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or
 | `decomposer.py` | LLM-based task breakdown |
 | `prd_generator.py`, `prd_wizard.py`, `prd_launcher.py` | PRD generation and task derivation |
 | `triz_analyzer.py` | TRIZ contradiction analysis |
+| `self_healing.py` | 🛡️ Error detection, analysis, and automated fixing |
+| `recovery.py` | Task status synchronization and consistency validation |
 | `reporter.py` | Per-iteration reports, cost totals, summary markdown |
 | `verifier.py`, `notifications.py`, `history.py`, `config.py` | Infrastructure |
 
