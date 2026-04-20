@@ -1738,7 +1738,7 @@ def main(argv: list[str] | None = None) -> int:
         labels_arg = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
         # "all" / "*" / "-" → fetch every open issue without label filter
         if labels_arg and labels_arg.lower() in ("all", "*", "-"):
-            labels: list[str] | None = None
+            labels: list[str] = []  # explicit empty list = "no label filter"
         else:
             labels = labels_arg.split(",") if labels_arg else ["workshop", "whilly:ready"]
 
@@ -1750,6 +1750,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             tasks_path = generate_tasks_from_github(output_path=output_file, filter_labels=labels, prd_file=prd_file)
             _ansi(f"{GR}Tasks generated: {tasks_path}{R}")
+
+            # Nothing to run if no open issues matched — bail early.
+            try:
+                generated = json.loads(Path(tasks_path).read_text())
+                if not generated.get("tasks"):
+                    _ansi(f"{YL}No tasks were generated — nothing to run.{R}")
+                    return 0
+            except Exception:
+                pass  # fall through; downstream loop will report a clearer error
 
             # --go / --yes → skip the confirmation prompt and execute immediately
             auto_go = "--go" in args or "--yes" in args
