@@ -30,6 +30,12 @@ class Task:
     test_steps: list[str] = field(default_factory=list)
     prd_requirement: str = ""
 
+    # External integrations (optional)
+    github_issue: int | None = None
+    github_url: str | None = None
+    jira_key: str | None = None
+    jira_url: str | None = None
+
     @classmethod
     def from_dict(cls, data: dict) -> Task:
         """Create Task from a JSON dict, ignoring unknown keys."""
@@ -38,7 +44,7 @@ class Task:
 
     def to_dict(self) -> dict:
         """Serialize back to a dict suitable for JSON."""
-        return {
+        result = {
             "id": self.id,
             "phase": self.phase,
             "category": self.category,
@@ -51,6 +57,18 @@ class Task:
             "test_steps": self.test_steps,
             "prd_requirement": self.prd_requirement,
         }
+
+        # Add optional external integration fields if they exist
+        if self.github_issue is not None:
+            result["github_issue"] = self.github_issue
+        if self.github_url is not None:
+            result["github_url"] = self.github_url
+        if self.jira_key is not None:
+            result["jira_key"] = self.jira_key
+        if self.jira_url is not None:
+            result["jira_url"] = self.jira_url
+
+        return result
 
 
 @dataclass

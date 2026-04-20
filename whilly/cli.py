@@ -24,6 +24,7 @@ from pathlib import Path
 from whilly.agent_runner import collect_result, collect_result_from_file, is_api_error, is_auth_error, run_agent_async
 from whilly.config import WhillyConfig
 from whilly.dashboard import Dashboard, NullDashboard
+from whilly.external_integrations import create_integration_manager
 from whilly.decomposer import needs_decompose, run_decompose
 from whilly.notifications import (
     notify_all_done,
@@ -86,6 +87,55 @@ BGB = "\033[44m"
 def _ansi(msg: str) -> None:
     sys.stderr.write(msg + R + "\n")
     sys.stderr.flush()
+
+
+def _handle_task_completion(task: Task, tm: TaskManager, config: WhillyConfig) -> None:
+    """Обрабатывает завершение задачи - закрывает внешние Issues/Jira задачи."""
+    if not config.CLOSE_EXTERNAL_TASKS:
+        return
+
+    try:
+        # Создаем менеджер интеграций
+        integrations_config = config.get_external_integrations_config()
+        integration_manager = create_integration_manager(integrations_config)
+
+        # Извлекаем ссылки на внешние задачи
+        task_dict = task.to_dict()
+        external_refs = integration_manager.extract_external_refs_from_task(task_dict)
+
+        if not external_refs:
+            log.debug("No external task references found for task %s", task.id)
+            return
+
+        # Получаем последний коммит (если есть)
+        commit_sha = _get_latest_commit_sha()
+
+        # Закрываем каждую внешнюю задачу
+        for ref in external_refs:
+            log.info("🔗 Closing external task: %s %s", ref.system.upper(), ref.task_id)
+            success = integration_manager.close_external_task(ref, task.id, commit_sha)
+
+            if success:
+                log.info("✅ Closed %s %s successfully", ref.system.upper(), ref.task_id)
+            else:
+                log.warning("⚠️  Failed to close %s %s", ref.system.upper(), ref.task_id)
+
+    except Exception as e:
+        log.error("Error handling task completion for %s: %s", task.id, e)
+
+
+def _get_latest_commit_sha() -> str | None:
+    """Получает SHA последнего коммита."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return None
 
 
 def _get_version_info() -> tuple[str, str, str]:
@@ -467,6 +517,12 @@ def wait_and_collect_tmux(
         if result.is_complete:
             tm.mark_status([agent.task_id], "done")
             notify_task_done()
+
+            # Автоматическое закрытие внешних задач
+            task = next((t for t in tm.tasks if t.id == agent.task_id), None)
+            if task:
+                _handle_task_completion(task, tm, config)
+
             consecutive_errors.pop(agent.task_id, None)
             if log_dir:
                 _log_event(
@@ -561,6 +617,10 @@ def wait_and_collect_subprocess(
         if result.is_complete:
             tm.mark_status([task.id], "done")
             notify_task_done()
+
+            # Автоматическое закрытие внешних задач
+            _handle_task_completion(task, tm, config)
+
             consecutive_errors.pop(task.id, None)
             if log_dir:
                 _log_event(

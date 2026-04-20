@@ -35,6 +35,17 @@ class WhillyConfig:
     OPENCODE_SAFE: bool = False  # OPENCODE_SAFE=1 → safe mode (prompt before tool use)
     OPENCODE_SERVER_URL: str = ""  # optional remote OpenCode server URL (empty = local CLI)
 
+    # External integrations (GitHub Issues, Jira, etc)
+    CLOSE_EXTERNAL_TASKS: bool = True  # WHILLY_CLOSE_EXTERNAL_TASKS=0 → disable auto-closing
+    GITHUB_AUTO_CLOSE: bool = True  # Auto-close GitHub Issues
+    GITHUB_ADD_COMMENTS: bool = True  # Add completion comments to GitHub Issues
+    JIRA_ENABLED: bool = False  # Enable Jira integration
+    JIRA_SERVER_URL: str = ""  # Jira server URL
+    JIRA_USERNAME: str = ""  # Jira username
+    JIRA_AUTO_CLOSE: bool = True  # Auto-close Jira tasks
+    JIRA_ADD_COMMENTS: bool = True  # Add completion comments to Jira
+    JIRA_TRANSITION_TO: str = "Done"  # Target status for closing Jira tasks
+
     @classmethod
     def from_env(cls) -> WhillyConfig:
         """Load config from WHILLY_* environment variables, falling back to defaults."""
@@ -53,3 +64,23 @@ class WhillyConfig:
             else:
                 kwargs[f.name] = env_val
         return cls(**kwargs)
+
+    def get_external_integrations_config(self) -> dict[str, dict]:
+        """Returns configuration for external integrations."""
+        return {
+            "enabled": self.CLOSE_EXTERNAL_TASKS,
+            "github": {
+                "enabled": True,  # GitHub always available if CLI present
+                "auto_close": self.GITHUB_AUTO_CLOSE,
+                "add_comments": self.GITHUB_ADD_COMMENTS,
+            },
+            "jira": {
+                "enabled": self.JIRA_ENABLED,
+                "server_url": self.JIRA_SERVER_URL or os.getenv("JIRA_SERVER_URL", ""),
+                "username": self.JIRA_USERNAME or os.getenv("JIRA_USERNAME", ""),
+                "token": os.getenv("JIRA_API_TOKEN", ""),  # Always from env for security
+                "auto_close": self.JIRA_AUTO_CLOSE,
+                "add_comments": self.JIRA_ADD_COMMENTS,
+                "transition_to": self.JIRA_TRANSITION_TO,
+            }
+        }

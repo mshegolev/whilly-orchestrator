@@ -11,22 +11,33 @@
 
 ## 🚀 Быстрый старт
 
-### Вариант 1: Автоматический demo-скрипт
+### Вариант 1: Полная интеграция с автозакрытием Issues
+
+```bash
+./workshop_demo_with_integrations.sh
+```
+
+### Вариант 2: Базовый demo без интеграций
 
 ```bash
 ./workshop_demo.sh
 ```
 
-### Вариант 2: Пошаговая настройка
+### Вариант 3: Ручная настройка
 
 ```bash
-# 1. Извлечь задачи из GitHub
+# 1. Настроить интеграции (опционально)
+export WHILLY_CLOSE_EXTERNAL_TASKS=true
+export WHILLY_GITHUB_AUTO_CLOSE=true
+export WHILLY_GITHUB_ADD_COMMENTS=true
+
+# 2. Извлечь задачи из GitHub
 python3 -m whilly --from-github workshop,whilly:ready
 
-# 2. Запустить оркестратор
+# 3. Запустить оркестратор с интеграциями
 python3 -m whilly tasks-from-github.json
 
-# 3. Наблюдать как Whilly улучшает себя!
+# 4. Issues автоматически закроются после выполнения! 🎉
 ```
 
 ## 📋 Что происходит внутри
@@ -55,6 +66,38 @@ graph LR
   "github_url": "https://github.com/mshegolev/whilly-orchestrator/issues/1"
 }
 ```
+
+## 🔗 External Integrations (NEW!)
+
+### Автоматическое закрытие GitHub Issues
+```
+GitHub Issues → Whilly Tasks → Code → Commits → Comments → Closed Issues
+```
+
+**Что происходит:**
+1. 🔧 Whilly выполняет задачу и создает коммит
+2. 💬 Добавляет комментарий к GitHub Issue:
+   ```
+   🤖 Whilly Task Completed
+   - Task ID: gh-1-add-contributing-badge  
+   - Status: ✅ Completed successfully
+   - Commit: f04ebb1a
+   ```
+3. ❌ Закрывает Issue с reason "completed"
+
+### Настройка интеграций
+```bash
+# GitHub (автоматически если gh auth)
+export WHILLY_GITHUB_AUTO_CLOSE=true
+export WHILLY_GITHUB_ADD_COMMENTS=true
+
+# Jira (опционально)  
+export WHILLY_JIRA_ENABLED=true
+export WHILLY_JIRA_SERVER_URL="https://company.atlassian.net"
+export JIRA_API_TOKEN="your_token"
+```
+
+**📋 Подробнее:** [docs/EXTERNAL_INTEGRATIONS.md](docs/EXTERNAL_INTEGRATIONS.md)
 
 ## 🛠️ Созданные компоненты
 
