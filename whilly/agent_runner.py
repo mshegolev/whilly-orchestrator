@@ -15,11 +15,10 @@ importing from ``whilly.agents`` in new code.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 from pathlib import Path
 
-from whilly.agents import AgentBackend, get_backend
+from whilly.agents import AgentBackend, active_backend_from_env
 from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER
 
 log = logging.getLogger("whilly")
@@ -48,8 +47,8 @@ BACKOFF = [5, 15, 30]
 
 
 def _active_backend() -> AgentBackend:
-    """Resolve the active backend once per call. Honors ``WHILLY_AGENT_BACKEND``."""
-    return get_backend(os.environ.get("WHILLY_AGENT_BACKEND", "claude"))
+    """Resolve the active backend once per call via the shared env helper."""
+    return active_backend_from_env()
 
 
 def run_agent(

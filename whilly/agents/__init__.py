@@ -14,6 +14,8 @@ Selecting a backend:
 
 from __future__ import annotations
 
+import os
+
 from whilly.agents.base import AgentBackend, AgentResult, AgentUsage
 from whilly.agents.claude import ClaudeBackend
 from whilly.agents.opencode import OpenCodeBackend
@@ -24,9 +26,18 @@ __all__ = [
     "AgentUsage",
     "ClaudeBackend",
     "OpenCodeBackend",
+    "DEFAULT_BACKEND",
     "get_backend",
     "available_backends",
+    "active_backend_from_env",
 ]
+
+# Single source of truth for the built-in default. Mirror of
+# ``whilly.config.WhillyConfig.AGENT_BACKEND``; callers that care about user
+# config should prefer the config field, but the env-var-only path (tmux
+# children, subprocess runners) uses this constant so there's exactly one
+# place to change the name.
+DEFAULT_BACKEND = "claude"
 
 
 _REGISTRY: dict[str, type[AgentBackend]] = {
@@ -55,3 +66,16 @@ def get_backend(name: str) -> AgentBackend:
     if key not in _REGISTRY:
         raise ValueError(f"Unknown agent backend {name!r}. Available: {', '.join(available_backends())}")
     return _REGISTRY[key]()
+
+
+def active_backend_from_env() -> AgentBackend:
+    """Resolve the backend indicated by ``WHILLY_AGENT_BACKEND`` (or the
+    built-in default when unset).
+
+    Used by every runner that doesn't receive an explicit backend instance —
+    :func:`whilly.agent_runner.run_agent`, :func:`whilly.tmux_runner.launch_agent`,
+    and :func:`whilly.decision_gate._default_runner`. Having a single
+    resolver means the env-var name and default value live in exactly one
+    place in the codebase.
+    """
+    return get_backend(os.environ.get("WHILLY_AGENT_BACKEND", DEFAULT_BACKEND))
