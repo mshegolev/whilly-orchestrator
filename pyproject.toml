@@ -41,8 +41,9 @@ Documentation = "https://github.com/mshegolev/whilly-orchestrator/blob/main/docs
 [project.scripts]
 whilly = "whilly.cli:main"
 
-[tool.setuptools]
-packages = ["whilly"]
+[tool.setuptools.packages.find]
+include = ["whilly", "whilly.*"]
+exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 whilly = ["py.typed"]
