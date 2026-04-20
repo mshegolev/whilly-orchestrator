@@ -381,10 +381,13 @@ class GitHubProjectBoard:
             if st.name.lower() == target_lower:
                 return st
 
+        # GitHub's ProjectV2SingleSelectFieldOptionInput does NOT accept `id` —
+        # the mutation matches by `name` for preservation. Sending the full
+        # list (existing options + the new one) keeps prior assignments
+        # intact because the server re-links items by option name.
         existing_raw = self._cache["raw_options"]
         merged_options = [
             {
-                "id": opt["id"],
                 "name": opt["name"],
                 "color": opt["color"],
                 "description": opt["description"],
