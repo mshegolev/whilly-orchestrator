@@ -20,45 +20,90 @@ jobs:
           python-version: "3.12"
       - name: Install dev deps
         run: pip install -e '.[dev]'
-      - name: Ruff check
-        run: ruff check whilly/ tests/
-      - name: Ruff format check and auto-fix
+      - name: Ruff check and auto-fix
         run: |
-          # Проверяем форматирование
-          if ! ruff format --check whilly/ tests/; then
-            echo "❌ Formatting issues found. Auto-fixing..."
+          # 1. Первая проверка ruff check
+          echo "🔍 Running ruff check..."
+          if ruff check whilly/ tests/; then
+            echo "✅ No linting issues found"
+            LINT_CLEAN=true
+          else
+            echo "❌ Linting issues found. Attempting auto-fix..."
+            LINT_CLEAN=false
 
-            # Применяем форматирование
-            ruff format whilly/ tests/
+            # Пробуем автофикс
+            ruff check --fix whilly/ tests/ || true
 
-            # Настраиваем git для коммита
-            git config --local user.email "action@github.com"
-            git config --local user.name "GitHub Action"
-
-            # Проверяем есть ли изменения
-            if git diff --quiet; then
-              echo "✅ No changes after formatting"
+            # Проверяем снова после автофикса
+            echo "🔍 Re-checking after auto-fix..."
+            if ruff check whilly/ tests/; then
+              echo "✅ Auto-fix successful - no linting errors remain"
+              AUTOFIX_SUCCESS=true
             else
-              echo "📝 Committing formatting fixes..."
-              git add .
-              git commit -m "style: Auto-fix code formatting with ruff
+              echo "❌ Some linting issues require manual attention"
+              AUTOFIX_SUCCESS=false
+            fi
+          fi
 
-Automatically applied formatting fixes via GitHub Actions.
-This resolves CI formatting failures without blocking development.
+          # 2. Проверка форматирования (всегда)
+          echo "🎨 Checking code formatting..."
+          if ruff format --check whilly/ tests/; then
+            echo "✅ Code is properly formatted"
+            FORMAT_CLEAN=true
+          else
+            echo "❌ Formatting issues found. Auto-fixing..."
+            FORMAT_CLEAN=false
+            ruff format whilly/ tests/
+            echo "✅ Formatting applied"
+          fi
+
+          # 3. Финальная проверка и коммит (если были изменения)
+          if [ "$LINT_CLEAN" = "true" ] && [ "$FORMAT_CLEAN" = "true" ]; then
+            echo "🎉 All checks passed from the start!"
+            exit 0
+          fi
+
+          # Настраиваем git для коммита
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # Проверяем есть ли изменения для коммита
+          if git diff --quiet; then
+            echo "ℹ️  No changes to commit after auto-fixes"
+
+            # Если автофикс не помог с линтингом, прерываем CI
+            if [ "$AUTOFIX_SUCCESS" = "false" ]; then
+              echo "💥 Manual intervention required for linting issues"
+              exit 1
+            fi
+          else
+            echo "📝 Committing auto-fixes..."
+
+            # Финальная проверка что все чисто после наших изменений
+            if ruff check whilly/ tests/ && ruff format --check whilly/ tests/; then
+              git add .
+              git commit -m "style: Auto-fix linting and formatting issues
+
+Automatically applied fixes via GitHub Actions:
+- ruff check --fix (linting auto-fixes)
+- ruff format (code formatting)
+
+This resolves CI failures without blocking development.
 
 Co-Authored-By: GitHub Action <action@github.com>"
 
-              # Пушим в текущую ветку (работает для PR и прямых пушей)
+              # Пушим в текущую ветку
               if [ "${{ github.event_name }}" = "pull_request" ]; then
                 git push origin HEAD:${{ github.head_ref }}
               else
                 git push origin HEAD:${{ github.ref_name }}
               fi
 
-              echo "✅ Formatting fixes pushed to branch"
+              echo "✅ Auto-fixes pushed to branch"
+            else
+              echo "💥 Something went wrong - code still has issues after auto-fix"
+              exit 1
             fi
-          else
-            echo "✅ Code is properly formatted"
           fi
 
   test:
