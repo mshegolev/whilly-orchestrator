@@ -126,8 +126,12 @@ Configuration is done via environment variables (prefix `WHILLY_`). A few CLI fl
 | `WHILLY_STATE_FILE` | `.whilly_state.json` | Crash-recovery state file (`--resume` reads it) |
 | `WHILLY_HEADLESS` | auto | CI mode — JSON on stdout, exit codes |
 | `CLAUDE_BIN` | `claude` | Path to Claude CLI binary |
+| `WHILLY_AGENT_BACKEND` | `claude` | Active agent backend (`claude` or `opencode`) |
+| `WHILLY_OPENCODE_BIN` | `opencode` | Path to the OpenCode CLI binary |
+| `WHILLY_OPENCODE_SAFE` | `0` | `1` → drop `--dangerously-skip-permissions` for OpenCode |
+| `WHILLY_OPENCODE_SERVER_URL` | _(unset)_ | Optional remote OpenCode server URL |
 
-Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`.
+Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode}`.
 
 Exit codes in headless mode: `0` success, `1` some tasks failed, `2` budget exceeded, `3` timeout.
 
@@ -147,6 +151,17 @@ Whilly ships with a **HackSprint1 workshop kit** — a 90-minute hands-on tutori
 - **Track B (GitHub Issues)** — full e2e with PR creation, 60 min.
 
 Includes BRD, PRD, 12 ADRs, sample plans, and a roadmap. See [docs/workshop/INDEX.md](docs/workshop/INDEX.md) for the full guide. RU/EN bilingual.
+
+## Backends
+
+Whilly ships with pluggable agent backends behind a single `AgentBackend` Protocol (see `whilly/agents/`).
+
+| Backend | Select | CLI wrapped | Notes |
+|---|---|---|---|
+| **Claude** (default) | `--agent claude` / `WHILLY_AGENT_BACKEND=claude` | `claude --output-format json -p "…"` | Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code). Set `CLAUDE_BIN` to override path. |
+| **OpenCode** | `--agent opencode` / `WHILLY_AGENT_BACKEND=opencode` | `opencode run --format json --model <provider/id> "…"` | Requires [sst/opencode](https://github.com/sst/opencode) on `PATH` (or `WHILLY_OPENCODE_BIN`). Set `WHILLY_OPENCODE_SAFE=1` to respect its per-tool permission policy. |
+
+Model ids pass through normalization per backend — e.g. `claude-opus-4-6` automatically becomes `anthropic/claude-opus-4-6` for OpenCode. Completion is signalled identically (`<promise>COMPLETE</promise>`) so the main loop is backend-agnostic. Decision Gate, tmux runner, and the subprocess fallback all route through the active backend.
 
 ## Troubleshooting / FAQ
 

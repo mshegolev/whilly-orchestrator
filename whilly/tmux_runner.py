@@ -1,5 +1,6 @@
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -45,14 +46,36 @@ def tmux_available() -> bool:
     return TMUX is not None
 
 
-def launch_agent(task_id: str, prompt: str, model: str, log_dir: Path, cwd: Path | None = None) -> TmuxAgent:
-    """Launch claude agent in a new tmux session.
+def launch_agent(
+    task_id: str,
+    prompt: str,
+    model: str,
+    log_dir: Path,
+    cwd: Path | None = None,
+    backend: "object | None" = None,  # AgentBackend — avoid import cycle at module load
+) -> TmuxAgent:
+    """Launch an agent backend CLI in a new tmux session (OC-112).
 
     Args:
+        backend: AgentBackend instance. When ``None`` the active backend is
+            resolved from ``WHILLY_AGENT_BACKEND`` (default: ``claude``),
+            preserving legacy behaviour.
         cwd: Working directory (e.g., git worktree path for isolation).
+
+    The tmux wrapper reads the prompt from a file (``{task_id}_prompt.txt``)
+    via ``$(cat ...)`` so special characters in long prompts don't break shell
+    quoting. The rest of argv comes from ``backend.build_command`` — the last
+    positional slot (which every backend reserves for the prompt) is replaced
+    with the cat-substitution. Both Claude and OpenCode backends conform to
+    this convention.
     """
     if not TMUX:
         raise RuntimeError("tmux is not installed or not in PATH")
+
+    if backend is None:
+        from whilly.agents import get_backend
+
+        backend = get_backend(os.environ.get("WHILLY_AGENT_BACKEND", "claude"))
 
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / f"{task_id}.log"
@@ -65,33 +88,37 @@ def launch_agent(task_id: str, prompt: str, model: str, log_dir: Path, cwd: Path
 
     cd_prefix = f'cd "{cwd}" && ' if cwd else ""
 
-    # Use CLAUDE_BIN if set (bypasses shell function resolution, e.g. corporate proxy wrappers).
-    # Otherwise rely on interactive zsh which sources ~/.zshrc and exposes `claude` function/alias.
-    claude_cmd = os.environ.get("CLAUDE_BIN") or "claude"
-    # Default: --dangerously-skip-permissions (autonomous, no Bash approval prompts).
-    # WHILLY_CLAUDE_SAFE=1 → revert to --permission-mode acceptEdits (manual approve).
-    perm_args = (
-        "--permission-mode acceptEdits"
-        if os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes")
-        else "--dangerously-skip-permissions"
-    )
+    # Ask the backend for argv; the last element is the prompt placeholder we
+    # will replace with a shell cat-substitution. Assertion guards against any
+    # future backend that reorders argv — catch it here rather than silently
+    # double-escaping the prompt.
+    argv = backend.build_command(prompt, model=model)
+    if not argv or argv[-1] != prompt:
+        raise RuntimeError(
+            f"backend {getattr(backend, 'name', type(backend).__name__)!r} build_command "
+            "must place the prompt as the last argv element for tmux_runner to work"
+        )
+    prefix_argv = argv[:-1]
+    prefix_cmd = " ".join(shlex.quote(a) for a in prefix_argv)
+
     # Preamble: пишем сразу чтобы tail -f / TUI сразу видели активность,
-    # т.к. claude --output-format json пишет результат только в конце.
+    # т.к. --format/--output-format json пишет результат только в конце.
+    backend_name = getattr(backend, "name", "claude")
     preamble_cmd = (
         f'printf "# whilly agent preamble\\n'
         f'# timestamp : $(date \'+%Y-%m-%d %H:%M:%S\')\\n'
         f'# session   : {session_name}\\n'
         f'# task_id   : {task_id}\\n'
+        f'# backend   : {backend_name}\\n'
         f'# model     : {model}\\n'
         f'# cwd       : {cwd or "inherited"}\\n'
-        f'# note      : claude пишет результат в КОНЦЕ работы\\n'
+        f'# note      : агент пишет результат в КОНЦЕ работы\\n'
         f'# ---\\n" > "{log_file}"; '
     )
     wrapper = (
         f"{cd_prefix}"
         f"{preamble_cmd}"
-        f"{claude_cmd} {perm_args} --output-format json "
-        f'--model "{model}" -p "$(cat {prompt_file})" '
+        f'{prefix_cmd} "$(cat {shlex.quote(str(prompt_file))})" '
         f'>> "{log_file}" 2>&1; '
         f'echo "EXIT_CODE=$?" >> "{log_file}"'
     )
@@ -102,7 +129,7 @@ def launch_agent(task_id: str, prompt: str, model: str, log_dir: Path, cwd: Path
         check=True,
     )
 
-    log.info("Launched tmux session %s for %s", session_name, task_id)
+    log.info("Launched tmux session %s for %s (backend=%s)", session_name, task_id, backend_name)
     return TmuxAgent(
         task_id=task_id,
         session_name=session_name,

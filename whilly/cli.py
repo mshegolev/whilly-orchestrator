@@ -1302,6 +1302,8 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     worktree (по умолчанию план исполняется в
                                     .whilly_workspaces/{slug}/ чтобы не мешать
                                     параллельным агентам в основной репе).
+  whilly --agent {claude,opencode}  Select agent backend (default: claude;
+                                    overrides WHILLY_AGENT_BACKEND for this run)
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -1479,6 +1481,24 @@ def main(argv: list[str] | None = None) -> int:
     if "--no-worktree" in args or "--no-workspace" in args:
         config.USE_WORKSPACE = False
         args = [a for a in args if a not in ("--no-worktree", "--no-workspace")]
+
+    # --agent {claude,opencode}: override backend selection for this run (OC-111)
+    if "--agent" in args:
+        from whilly.agents import available_backends
+
+        idx = args.index("--agent")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}--agent requires a value ({'|'.join(available_backends())}){R}")
+            return 1
+        backend = args[idx + 1]
+        if backend not in available_backends():
+            _ansi(f"{RD}Unknown backend {backend!r}. Available: {', '.join(available_backends())}{R}")
+            return 1
+        config.AGENT_BACKEND = backend
+        # Propagate to env so whilly.agent_runner._active_backend() picks it up
+        # inside subprocess/tmux children too.
+        os.environ["WHILLY_AGENT_BACKEND"] = backend
+        args = args[:idx] + args[idx + 2 :]
 
     agent_name = resolve_agent_name(config)
     state_store = StateStore(config.STATE_FILE)
