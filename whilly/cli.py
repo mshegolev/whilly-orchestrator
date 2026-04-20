@@ -1751,12 +1751,19 @@ def main(argv: list[str] | None = None) -> int:
             tasks_path = generate_tasks_from_github(output_path=output_file, filter_labels=labels, prd_file=prd_file)
             _ansi(f"{GR}Tasks generated: {tasks_path}{R}")
 
-            # Ask user if they want to run the tasks immediately
-            if sys.stdin.isatty():
+            # --go / --yes → skip the confirmation prompt and execute immediately
+            auto_go = "--go" in args or "--yes" in args
+            if auto_go:
+                _ansi(f"{CY}{B}--go: auto-starting Whilly orchestrator...{R}")
+                args = [a for a in args if a not in ("--go", "--yes", "--from-github")]
+                if labels_arg and args and args[0] == labels_arg:
+                    args = args[1:]
+                args = [str(tasks_path)] + args
+            elif sys.stdin.isatty():
                 choice = input("\nRun tasks immediately? [Y/n]: ").lower()
                 if choice in ("", "y", "yes"):
                     _ansi(f"{CY}{B}Starting Whilly orchestrator...{R}")
-                    args = [str(tasks_path)]  # Set args to run the generated tasks
+                    args = [str(tasks_path)]
                 else:
                     _ansi(f"{YL}Run later with: whilly {tasks_path}{R}")
                     return 0
