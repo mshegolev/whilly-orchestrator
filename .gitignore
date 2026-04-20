@@ -41,3 +41,6 @@ htmlcov/
 
 # PRD wizard state
 .whilly_prd_state.json
+
+# Workflow mapping is a *committed* artefact — do NOT ignore .whilly/.
+# (Listed here so nobody re-adds it by muscle memory.)
