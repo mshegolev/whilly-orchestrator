@@ -15,6 +15,10 @@ dist/
 venv/
 env/
 
+# Local env overrides (use .env.example as the template)
+.env
+.env.local
+
 # Editor / OS
 .vscode/
 .idea/
