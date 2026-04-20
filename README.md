@@ -4,17 +4,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
 
-Python implementation of the **Ralph Wiggum technique** — continuous AI agent loops for autonomous software development. Drive a coding agent (Claude CLI) around a task board until the work is done, with a Rich TUI dashboard, task decomposition, TRIZ analysis and PRD generation.
+Python implementation of the **Whilly Wiggum loop** — Ralph Wiggum's smarter brother. Same family, same "I'm helping!" spirit, but with TRIZ contradiction analysis, a Decision Gate that refuses nonsense upfront, a PRD wizard, and a Rich TUI dashboard on top of the classic continuous agent loop.
 
 🇷🇺 [Краткое описание на русском](README-RU.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
 
-> "I'm helping!" — Ralph Wiggum
+> "I'm helping — and I've read ТРИЗ." — Whilly Wiggum
 
 ## What it does
 
 Whilly runs a loop: pick a pending task → hand it to an LLM agent → verify result → commit → next. It keeps running until the task board is empty, a budget is exhausted, or you stop it. Parallel mode dispatches multiple agents in tmux panes or git worktrees.
 
-Originally described in [Ghuntley's post on the Ralph Wiggum technique](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. This is a batteries-included orchestrator with a dashboard and task lifecycle around that loop.
+The base technique was first described in [Ghuntley's post on the Ralph Wiggum loop](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. Whilly is the brainier sibling: all of Ralph's "pick task → try → repeat" stamina, plus a TRIZ analyzer for surfacing contradictions, a Decision Gate for refusing garbage tasks, and a PRD wizard for understanding the problem before swinging at it.
 
 ## Features
 
@@ -185,12 +185,12 @@ ruff format whilly/ tests/
 
 ## Credits
 
-- Technique attribution: [Ghuntley — the Ralph Wiggum technique](https://ghuntley.com/ralph/)
-- Spirit of the technique — a Simpsons character whose "I'm helping!" captures the essence of an agent that just keeps going, no matter what
+- Technique lineage: [Ghuntley's original Ralph Wiggum loop post](https://ghuntley.com/ralph/) — the pattern whilly descends from.
+- Spirit of the family — Ralph's "I'm helping!" captures the essence of an agent that just keeps going, no matter what. Whilly is his smarter brother: same stamina, plus TRIZ, Decision Gate, PRD wizard.
 
 ## Related work
 
-- [`ralph-orchestrator`](https://pypi.org/project/ralph-orchestrator/) by [@mikeyobrien](https://github.com/mikeyobrien/ralph-orchestrator) — another implementation of the same technique. Whilly differentiates with a Rich TUI dashboard, TRIZ analyzer, PRD wizard, and tmux/git-worktree parallel execution.
+- Earlier Ralph-loop implementations exist across the Claude Code community. Whilly sets itself apart with a Rich TUI dashboard, TRIZ analyzer, Decision Gate pre-flight, PRD wizard, and tmux/git-worktree parallel execution — the "smarter brother" kit on top of the base loop.
 
 ## License
 

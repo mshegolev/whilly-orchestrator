@@ -7,7 +7,7 @@
 
 ## Context
 
-Когда whilly стартовал, на столе лежали три референсные реализации Ralph-loop:
+Когда whilly стартовал, на столе лежали три референсные реализации Ralph-loop (прообраза нынешнего Whilly-loop'а):
 
 - **`stepango/grkr`** — bash, ~200 LOC, минималистичный, single-agent.
 - **`egv/yolo-runner`** — Go, ~30K LOC, multi-backend, production-minded, DAG, TUI.

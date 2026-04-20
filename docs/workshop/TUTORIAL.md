@@ -80,7 +80,7 @@ whilly --help
 
 # Track A — `tasks.json` (no GitHub auth required)
 
-> **Цель:** за 30 минут увидеть Ralph loop в действии — агент берёт задачу, выполняет, помечает `done`, переходит к следующей.
+> **Цель:** за 30 минут увидеть Whilly loop в действии — агент берёт задачу, выполняет, помечает `done`, переходит к следующей. (Это Ralph loop в основе, плюс decomposer/Decision Gate сверху — отсюда «умный брат».)
 
 ## Step A.1 — Скопировать sample plan (2 мин)
 
@@ -372,7 +372,7 @@ sudo apt install obs-studio
 
 ## What you've learned in 90 minutes
 
-- **Track A:** Ralph loop, tasks.json, JSONL events, parallel agents в tmux.
+- **Track A:** Whilly loop (Ralph-loop в основе), tasks.json, JSONL events, parallel agents в tmux.
 - **Track B:** GitHub Issues source, PR creation, Decision Gate, retry-loop.
 - **Architecture:** ADR-001 to ADR-008 теперь будут читаться предметно.
 
