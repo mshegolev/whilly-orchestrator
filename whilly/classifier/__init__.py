@@ -33,6 +33,7 @@ from whilly.classifier.base import (
     RoutingDecision,
     TaskClassifier,
 )
+from whilly.classifier.epic_inferrer import InferredEpic, infer_epics
 from whilly.classifier.heuristic import HeuristicClassifier
 from whilly.classifier.llm import LLMClassifier
 from whilly.classifier.matcher import LLMParentMatcher, NoopParentMatcher
@@ -63,4 +64,6 @@ __all__ = [
     "rebuild_hierarchy",
     "apply_tree",
     "format_tree",
+    "InferredEpic",
+    "infer_epics",
 ]

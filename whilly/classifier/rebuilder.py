@@ -36,6 +36,7 @@ from whilly.classifier.base import (
     ParentMatcher,
     TaskClassifier,
 )
+from whilly.classifier.epic_inferrer import InferredEpic, infer_epics
 from whilly.classifier.llm import LLMClassifier
 from whilly.classifier.matcher import LLMParentMatcher
 from whilly.hierarchy.base import HierarchyAdapter, HierarchyLevel, WorkItem
@@ -87,6 +88,7 @@ class HierarchyTree:
     assignments: list[HierarchyAssignment] = field(default_factory=list)
     unparented: list[WorkItem] = field(default_factory=list)
     classifications: dict[str, ClassificationResult] = field(default_factory=dict)
+    inferred_epics: list[InferredEpic] = field(default_factory=list)
 
     def classified_level_of(self, item_id: str) -> HierarchyLevel | None:
         classification = self.classifications.get(item_id)
@@ -101,6 +103,7 @@ class HierarchyTree:
             "tasks": len(self.tasks),
             "assignments": len(self.assignments),
             "unparented": len(self.unparented),
+            "inferred_epics": len(self.inferred_epics),
         }
 
 
@@ -113,6 +116,7 @@ def rebuild_hierarchy(
     classifier: TaskClassifier | None = None,
     matcher: ParentMatcher | None = None,
     match_threshold: float = DEFAULT_MATCH_THRESHOLD,
+    infer_missing_epics: bool = False,
 ) -> HierarchyTree:
     """Classify + match + return a proposed hierarchy.
 
@@ -216,23 +220,91 @@ def rebuild_hierarchy(
     # unparented — don't add to unparented (clutters output). The counts
     # dict has them separately.
 
+    # Step 5 (optional): infer Epics from orphan Stories. Doesn't mutate
+    # tree.unparented — proposed Epics live in tree.inferred_epics until
+    # :func:`apply_tree` materialises them.
+    if infer_missing_epics:
+        orphan_stories_in_unparented = [s for s in tree.unparented if s.level is HierarchyLevel.STORY]
+        if orphan_stories_in_unparented:
+            tree.inferred_epics = infer_epics(orphan_stories_in_unparented)
+
     return tree
 
 
 # ── Applying the proposal via the adapter ───────────────────────────────────
 
 
-def apply_tree(tree: HierarchyTree, adapter: HierarchyAdapter) -> int:
-    """Call :meth:`HierarchyAdapter.link` for every assignment.
+def apply_tree(
+    tree: HierarchyTree,
+    adapter: HierarchyAdapter,
+    *,
+    materialise_inferred: bool = True,
+    inferred_confidence_threshold: float = 0.5,
+) -> int:
+    """Apply the rebuild proposal to the tracker.
 
-    Mutates each :class:`HierarchyAssignment` in-place (``applied=True``
-    on success). Returns the count of successfully applied links.
+    Steps:
 
-    On any adapter-side failure (the adapter's ``link`` returns False
-    or raises), the assignment is left with ``applied=False`` and the
-    error is logged — the rebuilder is best-effort.
+    1. Materialise any :attr:`HierarchyTree.inferred_epics` via
+       :meth:`HierarchyAdapter.create_at_level` (EPIC). Then link each
+       inferred Epic's declared children (lookup by id) via
+       :meth:`HierarchyAdapter.link`. Skips epics below
+       *inferred_confidence_threshold*.
+    2. Call :meth:`HierarchyAdapter.link` for every preexisting
+       assignment from the classify+match phase.
+
+    Returns the count of successfully applied link operations (inferred
+    Epic→Story links + rebuild assignments). Inferred Epic creations
+    themselves are counted when their first child is successfully linked
+    (otherwise they'd inflate the count without a real attachment).
+
+    Best-effort: adapter errors on a single op don't abort the rest;
+    they log and move on. Idempotent — re-running with the same tree
+    does not double-create or double-link (applied flags prevent it).
     """
     success = 0
+
+    # Index stories by id for inferred-Epic child lookup.
+    story_by_id = {s.id: s for s in tree.stories}
+
+    # ── Materialise inferred Epics first so their child links can run ────
+    if materialise_inferred and tree.inferred_epics:
+        for proposal in tree.inferred_epics:
+            if proposal.applied:
+                continue
+            if proposal.confidence < inferred_confidence_threshold:
+                log.info(
+                    "skipping inferred epic %r — confidence %.2f below threshold %.2f",
+                    proposal.title,
+                    proposal.confidence,
+                    inferred_confidence_threshold,
+                )
+                continue
+            try:
+                new_epic = adapter.create_at_level(HierarchyLevel.EPIC, proposal.title, proposal.body)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("create_at_level(EPIC) failed for %r: %r", proposal.title, exc)
+                continue
+
+            # Link each declared child story to the freshly-created epic.
+            linked_any = False
+            for child_id in proposal.child_story_ids:
+                story = story_by_id.get(child_id)
+                if story is None:
+                    log.warning("inferred epic %r references unknown story %r", proposal.title, child_id)
+                    continue
+                try:
+                    ok = adapter.link(new_epic, story)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("link %s → %s failed: %r", child_id, new_epic.id, exc)
+                    ok = False
+                if ok:
+                    success += 1
+                    linked_any = True
+            if linked_any:
+                proposal.applied = True
+
+    # ── Apply preexisting classify+match assignments ─────────────────────
     for assignment in tree.assignments:
         if assignment.applied:
             success += 1
@@ -312,6 +384,24 @@ def format_tree(tree: HierarchyTree, *, max_title: int = 60) -> str:
         lines.append("UNPARENTED TASKS (no matching story):")
         for t in orphan_tasks:
             lines.append(f"  TASK: {_title(t)}  [{t.id}]")
+        lines.append("")
+
+    # Inferred epics — proposed, not yet applied.
+    if tree.inferred_epics:
+        lines.append("INFERRED EPICS (proposed, not yet created):")
+        story_by_id = {s.id: s for s in tree.stories}
+        for ie in tree.inferred_epics:
+            applied_mark = " ✓" if ie.applied else ""
+            lines.append(
+                f"  + EPIC: {_title(WorkItem(id='-', level=HierarchyLevel.EPIC, title=ie.title))}  "
+                f"(confidence {ie.confidence:.2f}){applied_mark}"
+            )
+            if ie.reasoning:
+                lines.append(f"      why: {ie.reasoning[:120]}")
+            for cid in ie.child_story_ids:
+                story = story_by_id.get(cid)
+                label = _title(story) if story else f"(unknown id {cid})"
+                lines.append(f"      ├── would-parent STORY: {label}  [{cid}]")
         lines.append("")
 
     return "\n".join(lines).rstrip()

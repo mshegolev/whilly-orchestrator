@@ -498,6 +498,67 @@ class TestCreateChild:
 # ── link: attach existing ────────────────────────────────────────────────────
 
 
+class TestCreateAtLevel:
+    def _adapter(self):
+        return GitHubHierarchyAdapter(
+            project_url="https://github.com/users/me/projects/4",
+            repo="me/api",
+            gh_bin="/usr/bin/gh",
+        )
+
+    def test_create_epic_creates_draft(self):
+        a = self._adapter()
+        fake_run, _calls = _fake_run(
+            [
+                _project_and_repo_payload(),
+                {
+                    "data": {
+                        "addProjectV2DraftIssue": {
+                            "projectItem": {
+                                "id": "PVTI_new",
+                                "content": {"id": "DI_new", "title": "Auth initiative", "body": "b"},
+                            }
+                        }
+                    }
+                },
+            ]
+        )
+        with patch("whilly.hierarchy.github.subprocess.run", side_effect=fake_run):
+            epic = a.create_at_level(HierarchyLevel.EPIC, "Auth initiative", "b")
+        assert epic.level is HierarchyLevel.EPIC
+        assert epic.title == "Auth initiative"
+        assert epic.external_ref["project_item_id"] == "PVTI_new"
+
+    def test_create_story_creates_issue(self):
+        a = self._adapter()
+        fake_run, _calls = _fake_run(
+            [
+                _project_and_repo_payload(),
+                {
+                    "data": {
+                        "createIssue": {
+                            "issue": {
+                                "id": "I_s",
+                                "number": 50,
+                                "title": "New story",
+                                "url": "https://github.com/me/api/issues/50",
+                            }
+                        }
+                    }
+                },
+            ]
+        )
+        with patch("whilly.hierarchy.github.subprocess.run", side_effect=fake_run):
+            story = a.create_at_level(HierarchyLevel.STORY, "New story", "body")
+        assert story.level is HierarchyLevel.STORY
+        assert story.external_ref["number"] == 50
+
+    def test_create_task_raises(self):
+        a = self._adapter()
+        with pytest.raises(HierarchyError, match="tasks need a parent|create_child"):
+            a.create_at_level(HierarchyLevel.TASK, "x", "y")
+
+
 class TestLink:
     def test_task_as_parent_returns_false(self):
         a = GitHubHierarchyAdapter(
