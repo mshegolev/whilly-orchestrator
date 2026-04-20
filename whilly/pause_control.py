@@ -39,7 +39,7 @@ class PauseControl:
             return None
         try:
             return json.loads(self.pause_file.read_text())
-        except:
+        except (json.JSONDecodeError, OSError):
             return {"paused": True, "reason": "Unknown"}
 
     def wait_if_paused(self, check_interval: int = 2) -> None:
