@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
 
-Python-реализация **техники Ralph Wiggum** — непрерывного цикла, в котором AI-агент (Claude CLI) забирает задачи с board'а и выполняет их одну за другой, пока не закончатся или не сработает budget/timeout. Ralph TUI-дашборд, параллельные агенты в tmux + git worktree, decomposer, TRIZ analyzer и PRD wizard в комплекте.
+Python-реализация **Whilly Wiggum loop** — умного брата Ralph'а. Та же семья, тот же дух «I'm helping!», только сверху — TRIZ-анализатор противоречий, Decision Gate (отфильтровать мусорные задачи до старта), PRD wizard и Rich TUI-дашборд. Параллельные агенты в tmux/git-worktree, decomposer — в комплекте.
 
-> "I'm helping!" — Ralph Wiggum
+> "I'm helping — и я читал ТРИЗ." — Whilly Wiggum
 
 📘 [Full English README](README.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
 
@@ -14,7 +14,7 @@ Python-реализация **техники Ralph Wiggum** — непрерыв
 
 Whilly крутит loop: взять pending-задачу → передать LLM-агенту → проверить → коммит → следующая. Работает, пока board не пуст, бюджет не исчерпан или вы не остановили. Параллельный режим запускает несколько агентов в tmux pane'ах или git worktree'ах.
 
-Техника впервые описана в [посте Ghuntley о Ralph Wiggum](https://ghuntley.com/ralph/), стала популярна в Claude Code сообществе. Whilly — batteries-included оркестратор с дашбордом и task lifecycle вокруг этого цикла.
+Базовая техника впервые описана в [посте Ghuntley про Ralph Wiggum loop](https://ghuntley.com/ralph/) и стала популярна в Claude Code сообществе. Whilly — «умнастный брат» Ralph'а: та же упорная пахота «взял → попробовал → повторил», плюс TRIZ для противоречий, Decision Gate для фильтрации задач и PRD wizard для понимания проблемы *до* того, как бросаться её решать.
 
 ## Возможности
 
@@ -96,6 +96,23 @@ Whilly идёт с **workshop kit для HackSprint1** — hands-on на 90 ми
 | `WHILLY_USE_TMUX` | `1` | tmux для параллельных агентов |
 | `WHILLY_WORKTREE` | `0` | git worktree per task (нужен `MAX_PARALLEL>1`) |
 | `WHILLY_HEADLESS` | auto | CI mode — JSON на stdout |
+| `WHILLY_AGENT_BACKEND` | `claude` | активный backend (`claude` или `opencode`) |
+| `WHILLY_OPENCODE_BIN` | `opencode` | путь к OpenCode CLI |
+| `WHILLY_OPENCODE_SAFE` | `0` | `1` → не передавать `--dangerously-skip-permissions` в OpenCode |
+| `WHILLY_OPENCODE_SERVER_URL` | _(не задано)_ | URL удалённого OpenCode server'а |
+
+CLI-флаги: `--all`, `--headless`, `--resume`, `--reset PLAN.json`, `--init "desc"`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode}`.
+
+## Backends
+
+Whilly поддерживает два agent backend'а за единым `AgentBackend` Protocol'ом (`whilly/agents/`):
+
+| Backend | Выбор | Обёртка CLI | Заметки |
+|---|---|---|---|
+| **Claude** (по умолчанию) | `--agent claude` / `WHILLY_AGENT_BACKEND=claude` | `claude --output-format json -p "…"` | Нужен [Claude CLI](https://docs.claude.com/en/docs/claude-code). Путь через `CLAUDE_BIN`. |
+| **OpenCode** | `--agent opencode` / `WHILLY_AGENT_BACKEND=opencode` | `opencode run --format json --model <provider/id> "…"` | Нужен [sst/opencode](https://github.com/sst/opencode) в `PATH` (или `WHILLY_OPENCODE_BIN`). `WHILLY_OPENCODE_SAFE=1` — включить per-tool permission policy. |
+
+Модель автоматически нормализуется под backend (напр. `claude-opus-4-6` → `anthropic/claude-opus-4-6` для OpenCode). Сигнал завершения одинаковый (`<promise>COMPLETE</promise>`). Decision Gate, tmux-раннер и subprocess-fallback — все роутят через активный backend.
 
 ## Troubleshooting
 

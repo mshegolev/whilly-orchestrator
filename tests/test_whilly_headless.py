@@ -218,15 +218,16 @@ class TestHeadlessOutput:
 
 
 class TestRunPlanHeadless:
-    @_requires_claude
     def test_headless_produces_json_output(self, done_plan_file, tmp_path, capsys):
         """In headless mode, run_plan emits a 'complete' JSON event to stdout."""
-        config = WhillyConfig(HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1)
+        config = WhillyConfig(HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1, USE_WORKSPACE=False)
 
         with (
             patch.object(whilly_main, "Reporter") as MockReporter,
             patch.object(whilly_main, "needs_decompose", return_value=False),
             patch.object(whilly_main, "notify_plan_done"),
+            patch.object(whilly_main, "run_agent_async"),
+            patch.object(whilly_main, "kill_all_whilly_sessions"),
             patch("whilly.cli.time.sleep"),
         ):
             mock_reporter = MagicMock()
@@ -250,15 +251,16 @@ class TestRunPlanHeadless:
         assert "total" in evt
         assert "report" in evt
 
-    @_requires_claude
     def test_exit_code_0_on_success(self, done_plan_file, tmp_path):
         """Exit code is 0 when all tasks are done."""
-        config = WhillyConfig(HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1)
+        config = WhillyConfig(HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1, USE_WORKSPACE=False)
 
         with (
             patch.object(whilly_main, "Reporter") as MockReporter,
             patch.object(whilly_main, "needs_decompose", return_value=False),
             patch.object(whilly_main, "notify_plan_done"),
+            patch.object(whilly_main, "run_agent_async"),
+            patch.object(whilly_main, "kill_all_whilly_sessions"),
             patch("whilly.cli.time.sleep"),
         ):
             mock_reporter = MagicMock()
@@ -273,17 +275,18 @@ class TestRunPlanHeadless:
         _, exit_code = result
         assert exit_code == whilly_main.EXIT_SUCCESS
 
-    @_requires_claude
     def test_exit_code_1_on_failures(self, failed_plan_file, tmp_path):
         """Exit code is 1 when some tasks failed."""
         config = WhillyConfig(
-            HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1, MAX_TASK_RETRIES=0
+            HEADLESS=True, LOG_DIR=str(tmp_path / "logs"), MAX_PARALLEL=1, MAX_TASK_RETRIES=0, USE_WORKSPACE=False
         )
 
         with (
             patch.object(whilly_main, "Reporter") as MockReporter,
             patch.object(whilly_main, "needs_decompose", return_value=False),
             patch.object(whilly_main, "notify_plan_done"),
+            patch.object(whilly_main, "run_agent_async"),
+            patch.object(whilly_main, "kill_all_whilly_sessions"),
             patch("whilly.cli.time.sleep"),
         ):
             mock_reporter = MagicMock()
@@ -302,9 +305,10 @@ class TestRunPlanHeadless:
         """When timeout=1, the plan stops and returns EXIT_TIMEOUT."""
         config = WhillyConfig(
             HEADLESS=True,
-            TIMEOUT=1,  # 1 second timeout
+            TIMEOUT=1,
             LOG_DIR=str(tmp_path / "logs"),
             MAX_PARALLEL=1,
+            USE_WORKSPACE=False,
         )
 
         mock_proc = MagicMock()

@@ -98,13 +98,20 @@ def _get_version_info() -> tuple[str, str, str]:
 
     repo_dir = Path(__file__).resolve().parent
     try:
-        sha = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=3,
-        ).stdout.strip() or "?"
+        sha = (
+            subprocess.run(
+                ["git", "-C", str(repo_dir), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).stdout.strip()
+            or "?"
+        )
         dirty = subprocess.run(
             ["git", "-C", str(repo_dir), "status", "--porcelain"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True,
+            text=True,
+            timeout=3,
         ).stdout.strip()
         return __version__, sha, " (dirty)" if dirty else ""
     except (subprocess.TimeoutExpired, OSError, FileNotFoundError):
@@ -366,10 +373,7 @@ def build_task_prompt(task: Task, tasks_file: str, worktree_path: Path | None = 
         f'- Если не можешь завершить — оставь статус "in_progress" и опиши проблему'
     )
     if worktree_path:
-        prompt += (
-            f"\nWORKTREE: Working in isolated worktree at {worktree_path}. "
-            f"Commit here, merge is automatic.\n"
-        )
+        prompt += f"\nWORKTREE: Working in isolated worktree at {worktree_path}. " f"Commit here, merge is automatic.\n"
     return prompt
 
 
@@ -587,7 +591,12 @@ def wait_and_collect_subprocess(
 
 
 def run_plan(
-    plan_file: str, config: WhillyConfig, agent_name: str, *, resume: bool = False, state_store: StateStore | None = None
+    plan_file: str,
+    config: WhillyConfig,
+    agent_name: str,
+    *,
+    resume: bool = False,
+    state_store: StateStore | None = None,
 ) -> Path | None:
     """Execute one plan file. Returns reporter JSON path or None."""
     import os
@@ -778,7 +787,9 @@ def run_plan(
                     t.status = "pending"
                     log.info(
                         "Auto-retry failed task %s (attempt %d/%d) → pending",
-                        t.id, count + 1, config.MAX_TASK_RETRIES,
+                        t.id,
+                        count + 1,
+                        config.MAX_TASK_RETRIES,
                     )
             if failed_tasks:
                 tm.save()
@@ -857,8 +868,7 @@ def run_plan(
                 task_ids = [t.id for t in batch]
 
                 dashboard.status_msg = (
-                    f"[bold cyan]Batch: {', '.join(task_ids)}[/]"
-                    f"  [dim]({len(batches)} batches queued)[/]"
+                    f"[bold cyan]Batch: {', '.join(task_ids)}[/]" f"  [dim]({len(batches)} batches queued)[/]"
                 )
                 dashboard.update()
                 log.info("Iter %d: batch [%s] (%d batches total)", iteration, ", ".join(task_ids), len(batches))
@@ -891,9 +901,7 @@ def run_plan(
                     agents = launch_batch_tmux(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
                     wait_and_collect_tmux(agents, tm, dashboard, reporter, iteration, log_dir=log_dir)
                 else:
-                    procs = launch_batch_subprocess(
-                        batch, plan_file, config, log_dir, worktree_paths=worktree_paths
-                    )
+                    procs = launch_batch_subprocess(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
                     wait_and_collect_subprocess(procs, tm, dashboard, reporter, iteration, log_dir=log_dir)
 
                 # Merge worktrees for completed tasks, cleanup all
@@ -970,14 +978,16 @@ def run_plan(
                 now = time.monotonic()
                 if now - last_progress_emit >= 10:
                     tm.reload()
-                    _emit_json({
-                        "event": "progress",
-                        "done": tm.done_count,
-                        "total": tm.total_count,
-                        "failed": sum(1 for t in tm.tasks if t.status == "failed"),
-                        "cost_usd": round(reporter.totals.cost_usd, 4),
-                        "elapsed_sec": round(now - plan_start, 1),
-                    })
+                    _emit_json(
+                        {
+                            "event": "progress",
+                            "done": tm.done_count,
+                            "total": tm.total_count,
+                            "failed": sum(1 for t in tm.tasks if t.status == "failed"),
+                            "cost_usd": round(reporter.totals.cost_usd, 4),
+                            "elapsed_sec": round(now - plan_start, 1),
+                        }
+                    )
                     last_progress_emit = now
 
             # ── F1: Cost Budget Guard ────────────────────────────────
@@ -992,9 +1002,7 @@ def run_plan(
                         f"[bold red]BUDGET EXCEEDED: ${session_cost_usd:.2f} / ${config.BUDGET_USD:.2f}[/]"
                     )
                     dashboard.update()
-                    log.warning(
-                        "Budget exceeded: $%.2f / $%.2f — stopping", session_cost_usd, config.BUDGET_USD
-                    )
+                    log.warning("Budget exceeded: $%.2f / $%.2f — stopping", session_cost_usd, config.BUDGET_USD)
                     notify_budget_exceeded()
                     kill_all_whilly_sessions()
                     budget_exceeded = True
@@ -1167,7 +1175,9 @@ def _maybe_merge_workspace(workspace, tm, config) -> None:
     mode = (os.environ.get("WHILLY_AUTO_MERGE") or "ask").lower()
     commits = subprocess.run(
         ["git", "-C", str(workspace.path), "log", "--oneline", f"origin/master..{workspace.branch}"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     ).stdout.strip()
     if not commits:
         _ansi(f"{D}Workspace {workspace.slug}: нет новых коммитов для merge{R}")
@@ -1219,7 +1229,9 @@ def _run_automated_merge(workspace, tm) -> None:
     _ansi(f"\n{CY}🚀 Push {workspace.branch}...{R}")
     push = subprocess.run(
         ["git", "-C", str(workspace.path), "push", "-u", "origin", workspace.branch],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if push.returncode != 0:
         _ansi(f"{RD}Push failed: {push.stderr.strip()}{R}")
@@ -1290,6 +1302,27 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     worktree (по умолчанию план исполняется в
                                     .whilly_workspaces/{slug}/ чтобы не мешать
                                     параллельным агентам в основной репе).
+  whilly --agent {claude,opencode}  Select agent backend (default: claude;
+                                    overrides WHILLY_AGENT_BACKEND for this run)
+  whilly --workflow-analyze URL   Introspect a GitHub Project board, detect
+                                    mapping gaps, and write .whilly/workflow.json.
+                                    Extra flags: --apply (auto-add missing
+                                    columns), --report (dry-run).
+  whilly --classify "TITLE | BODY" --project URL --repo OWNER/REPO [--apply]
+                                  Smart routing — classify input as
+                                    Epic/Story/Task, find best parent, print
+                                    decision. With --apply: create the item at
+                                    the right level under the matched parent
+                                    (only when classifier confidence ≥ 0.75).
+  whilly --rebuild-hierarchy --project URL --repo OWNER/REPO [--label L]
+                             [--infer-epics] [--apply]
+                                  Classify every item in the project + repo,
+                                    match parents bottom-up (Task → Story →
+                                    Epic), print proposed tree + unparented
+                                    items. --infer-epics: synthesise Epics
+                                    from orphan Stories. --apply: link
+                                    assignments + materialise inferred Epics
+                                    via the tracker adapter.
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -1345,6 +1378,155 @@ def main(argv: list[str] | None = None) -> int:
 
     _show_startup_banner()
 
+    # --rebuild-hierarchy: classify flat list + match parents → proposed tree
+    if "--rebuild-hierarchy" in args:
+        from whilly.classifier import apply_tree, format_tree, rebuild_hierarchy
+        from whilly.hierarchy import HierarchyLevel, get_adapter
+
+        def _flag_value_rb(name):
+            if name not in args:
+                return None
+            i = args.index(name)
+            return args[i + 1] if i + 1 < len(args) else None
+
+        project_url = _flag_value_rb("--project")
+        repo = _flag_value_rb("--repo")
+        if not project_url or not repo:
+            _ansi(f"{RD}--rebuild-hierarchy requires --project <URL> and --repo <OWNER/REPO>{R}")
+            return 1
+        label = _flag_value_rb("--label")  # optional filter, e.g. whilly:ready
+        apply_flag = "--apply" in args
+        infer_epics_flag = "--infer-epics" in args
+
+        try:
+            adapter = get_adapter("github", project_url=project_url, repo=repo)
+        except Exception as exc:  # noqa: BLE001
+            _ansi(f"{RD}failed to build adapter: {exc}{R}")
+            return 1
+
+        # Gather the flat list — stories via repo issues + drafts as epics.
+        _ansi(f"{CY}Collecting items from project + repo...{R}")
+        try:
+            epic_items = adapter.list_at_level(HierarchyLevel.EPIC)
+            story_items = adapter.list_at_level(HierarchyLevel.STORY, label=label)
+        except Exception as exc:  # noqa: BLE001
+            _ansi(f"{RD}collection failed: {exc}{R}")
+            return 1
+        flat = epic_items + story_items
+        if not flat:
+            _ansi(f"{YL}Nothing to rebuild — project has no items.{R}")
+            return 0
+
+        _ansi(f"{CY}Classifying {len(flat)} item(s) + matching parents (LLM, may take a minute)...{R}")
+        tree = rebuild_hierarchy(flat, infer_missing_epics=infer_epics_flag)
+        print(format_tree(tree))
+
+        if apply_flag:
+            applied = apply_tree(tree, adapter)
+            _ansi(f"{GR}Applied {applied} of {tree.counts['assignments']} assignments.{R}")
+        else:
+            _ansi(
+                f"{YL}Dry-run. Re-run with --apply to execute "
+                f"{tree.counts['assignments']} assignments on the tracker.{R}"
+            )
+        return 0
+
+    # --classify: smart routing — classify input + find best parent
+    if "--classify" in args:
+        from whilly.classifier import Router, format_decision
+        from whilly.hierarchy import get_adapter
+
+        idx = args.index("--classify")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}Usage: whilly --classify 'TITLE | BODY' --project URL --repo OWNER/REPO [--apply]{R}")
+            return 1
+        raw = args[idx + 1]
+        # Accept "title | body" shape; body optional.
+        if "|" in raw:
+            title, body = raw.split("|", 1)
+            title, body = title.strip(), body.strip()
+        else:
+            title, body = raw.strip(), ""
+
+        def _flag_value(name):
+            if name not in args:
+                return None
+            i = args.index(name)
+            return args[i + 1] if i + 1 < len(args) else None
+
+        project_url = _flag_value("--project")
+        repo = _flag_value("--repo")
+        if not project_url or not repo:
+            _ansi(f"{RD}--classify requires --project <URL> and --repo <OWNER/REPO>{R}")
+            return 1
+        apply_flag = "--apply" in args
+
+        try:
+            adapter = get_adapter("github", project_url=project_url, repo=repo)
+        except Exception as exc:  # noqa: BLE001
+            _ansi(f"{RD}failed to build adapter: {exc}{R}")
+            return 1
+
+        router = Router(parent_search_label="whilly:ready")
+        decision = router.route_text(title, body, adapter)
+        print(format_decision(decision))
+        if apply_flag and decision.classification.is_high_confidence:
+            router.apply(decision, adapter)
+            _ansi(f"{GR}Applied.{R}")
+        elif apply_flag:
+            _ansi(
+                f"{YL}Not applied — confidence {decision.classification.confidence:.2f} "
+                f"below 0.75 threshold. Re-run with higher-quality input or review manually.{R}"
+            )
+        return 0
+
+    # --workflow-analyze: introspect a GitHub Project board + propose mapping
+    if "--workflow-analyze" in args:
+        from whilly.workflow import get_board
+        from whilly.workflow.analyzer import analyze, format_report, load_mapping, save_mapping
+        from whilly.workflow.proposer import propose
+
+        idx = args.index("--workflow-analyze")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}Usage: whilly --workflow-analyze <project_url> [--apply|--report]{R}")
+            return 1
+        url = args[idx + 1]
+        mode = "apply" if "--apply" in args else ("report" if "--report" in args else "auto")
+
+        try:
+            board = get_board("github_project", url=url)
+        except ValueError as exc:
+            _ansi(f"{RD}{exc}{R}")
+            return 1
+
+        existing = load_mapping()
+        try:
+            report = analyze(board, mapping=existing)
+        except RuntimeError as exc:
+            _ansi(f"{RD}workflow analysis failed: {exc}{R}")
+            return 1
+
+        print(format_report(report, title=f"{CY}{B}Workflow analysis{R}"))
+        if report.is_clean and not existing:
+            # Still persist a fresh mapping so subsequent runs skip analysis.
+            _, mapping = propose(report, board, existing=existing, mode="report")
+            path = save_mapping(mapping)
+            _ansi(f"{GR}Mapping saved: {path}{R}")
+            return 0
+        if report.is_clean:
+            return 0
+
+        proposal, mapping = propose(report, board, existing=existing, mode=mode)
+        if proposal.cancelled:
+            _ansi(f"{YL}Cancelled. Mapping file untouched.{R}")
+            return 1
+        path = save_mapping(mapping)
+        summary = (
+            f"  +{len(proposal.to_add)} added · " f"{len(proposal.to_map)} mapped · " f"{len(proposal.to_skip)} skipped"
+        )
+        _ansi(f"{GR}Mapping saved: {path}{R}\n{summary}")
+        return 0
+
     # --reset: сбросить все задачи в pending
     if "--reset" in args:
         rest = [a for a in args if a != "--reset"]
@@ -1379,7 +1561,7 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--init")
         if idx + 1 >= len(args):
-            _ansi(f"{RD}Usage: whilly --init \"project description\"{R}")
+            _ansi(f'{RD}Usage: whilly --init "project description"{R}')
             return 1
         description = args[idx + 1]
         also_plan = "--plan" in args
@@ -1467,6 +1649,24 @@ def main(argv: list[str] | None = None) -> int:
     if "--no-worktree" in args or "--no-workspace" in args:
         config.USE_WORKSPACE = False
         args = [a for a in args if a not in ("--no-worktree", "--no-workspace")]
+
+    # --agent {claude,opencode}: override backend selection for this run (OC-111)
+    if "--agent" in args:
+        from whilly.agents import available_backends
+
+        idx = args.index("--agent")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}--agent requires a value ({'|'.join(available_backends())}){R}")
+            return 1
+        backend = args[idx + 1]
+        if backend not in available_backends():
+            _ansi(f"{RD}Unknown backend {backend!r}. Available: {', '.join(available_backends())}{R}")
+            return 1
+        config.AGENT_BACKEND = backend
+        # Propagate to env so whilly.agent_runner._active_backend() picks it up
+        # inside subprocess/tmux children too.
+        os.environ["WHILLY_AGENT_BACKEND"] = backend
+        args = args[:idx] + args[idx + 2 :]
 
     agent_name = resolve_agent_name(config)
     state_store = StateStore(config.STATE_FILE)

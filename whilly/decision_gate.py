@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from whilly.agent_runner import AgentResult, run_agent
+from whilly.agents import AgentResult, active_backend_from_env
 from whilly.task_manager import Task
 
 log = logging.getLogger("whilly")
@@ -141,7 +141,11 @@ RunnerFn = Callable[[str, str, int | None], AgentResult]
 
 
 def _default_runner(prompt: str, model: str, timeout: int | None) -> AgentResult:
-    return run_agent(prompt, model=model, timeout=timeout)
+    """Default Decision Gate runner — resolves the active backend via the
+    shared :func:`whilly.agents.active_backend_from_env` helper (OC-113),
+    honoring ``WHILLY_AGENT_BACKEND`` so OpenCode runs don't accidentally
+    fall back to Claude for the gate call."""
+    return active_backend_from_env().run(prompt, model=model, timeout=timeout)
 
 
 def evaluate(

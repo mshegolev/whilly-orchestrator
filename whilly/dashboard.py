@@ -113,7 +113,9 @@ class Dashboard:
             return Group(
                 content,
                 Text(""),
-                Text.from_markup("[dim]Press any key to dismiss  \u2502  q=quit  d=detail  l=log  t=tasks  s=stats  r=reset  h=help[/]"),
+                Text.from_markup(
+                    "[dim]Press any key to dismiss  \u2502  q=quit  d=detail  l=log  t=tasks  s=stats  r=reset  h=help[/]"
+                ),
             )
 
         self.tm.reload()
@@ -123,7 +125,9 @@ class Dashboard:
         from whilly import __version__
 
         sha = os.environ.get("WHILLY_GIT_SHA") or "?"
-        iter_str = f"iter {self.iteration}" if self.max_iterations == 0 else f"iter {self.iteration}/{self.max_iterations}"
+        iter_str = (
+            f"iter {self.iteration}" if self.max_iterations == 0 else f"iter {self.iteration}/{self.max_iterations}"
+        )
         header = Text()
         header.append(
             f"  WHILLY v{__version__} @ {sha}  \u25c6  {self._elapsed()}  \u25c6  {self.agent_name.upper()}"
@@ -142,13 +146,13 @@ class Dashboard:
         skipped = counts.get("skipped", 0)
         pct = (done * 100 // total) if total > 0 else 0
 
-        phase_badge = {"plan": "[bold magenta]PLAN[/]", "work": "[bold cyan]WORK[/]"}.get(self.phase, "[dim]\u2014\u2014[/]")
+        phase_badge = {"plan": "[bold magenta]PLAN[/]", "work": "[bold cyan]WORK[/]"}.get(
+            self.phase, "[dim]\u2014\u2014[/]"
+        )
         bar_width = 50
         filled = pct * bar_width // 100
         bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
-        parts.append(
-            Text.from_markup(f" {phase_badge}  [green]{bar}[/]  {pct}%  [bold]{done}[/]/[dim]{total}[/] done")
-        )
+        parts.append(Text.from_markup(f" {phase_badge}  [green]{bar}[/]  {pct}%  [bold]{done}[/]/[dim]{total}[/] done"))
 
         # ── Status counts ────────────────────────────────────────────
         cnt = f"  [green]\u25cf{done} done[/]  [yellow]\u25cf{pending} pend[/]"
@@ -202,8 +206,7 @@ class Dashboard:
                 prio_text = f"[{prio_style}]{t.priority}[/]" if prio_style else t.priority
                 parts.append(
                     Text.from_markup(
-                        f"   [cyan]{t.id:<9}[/] [dim]{t.category:<12}[/]"
-                        f" {prio_text} [dim]{t.description[:60]}[/]"
+                        f"   [cyan]{t.id:<9}[/] [dim]{t.category:<12}[/]" f" {prio_text} [dim]{t.description[:60]}[/]"
                     )
                 )
             parts.append(Text(""))
@@ -241,9 +244,7 @@ class Dashboard:
         if done_tasks:
             parts.append(Text.from_markup(" [bold green]\u2713 COMPLETED[/] [dim](last 5)[/]"))
             for t in done_tasks[-5:]:
-                parts.append(
-                    Text.from_markup(f"   [dim green]{t.id:<9} {t.category:<12} {t.description[:60]}[/]")
-                )
+                parts.append(Text.from_markup(f"   [dim green]{t.id:<9} {t.category:<12} {t.description[:60]}[/]"))
             parts.append(Text(""))
 
         # ── Failed ───────────────────────────────────────────────────
@@ -251,9 +252,7 @@ class Dashboard:
         if failed_tasks:
             parts.append(Text.from_markup(" [bold red]\u2717 FAILED[/]"))
             for t in failed_tasks:
-                parts.append(
-                    Text.from_markup(f"   [red]{t.id:<9} {t.category:<12} {t.description[:60]}[/]")
-                )
+                parts.append(Text.from_markup(f"   [red]{t.id:<9} {t.category:<12} {t.description[:60]}[/]"))
             parts.append(Text(""))
 
         # ── Separator ────────────────────────────────────────────────
@@ -424,9 +423,7 @@ class Dashboard:
             return
         raw_lines = log_path.read_text(errors="replace").splitlines()[-30:]
         escaped = "\n".join(line.replace("[", "\\[") for line in raw_lines)
-        self._overlay_text = (
-            f"[bold]{title}[/] [dim](live, last 30 lines — press l to close)[/]\n\n" + escaped
-        )
+        self._overlay_text = f"[bold]{title}[/] [dim](live, last 30 lines — press l to close)[/]\n\n" + escaped
 
     def _show_all_tasks(self) -> None:
         """Hotkey t: show all tasks with status icons."""
@@ -547,8 +544,10 @@ class Dashboard:
             return
 
         # If any non-wizard overlay is showing — dismiss it
-        if self._overlay_text is not None and self._wizard_result is None and not (
-            self._prd_wizard and self._prd_wizard.is_running
+        if (
+            self._overlay_text is not None
+            and self._wizard_result is None
+            and not (self._prd_wizard and self._prd_wizard.is_running)
         ):
             self._overlay_text = None
             self.update()
@@ -679,10 +678,10 @@ class Dashboard:
         )
 
         print(f"\n\033[36m\033[1m{'='*60}\033[0m")
-        print(f"\033[36m\033[1m  PRD Wizard — Интерактивный режим\033[0m")
+        print("\033[36m\033[1m  PRD Wizard — Интерактивный режим\033[0m")
         print(f"\033[36m\033[1m  Идея: {idea}\033[0m")
         print(f"\033[36m\033[1m  PRD будет сохранён: {prd_path}\033[0m")
-        print(f"\033[36m\033[1m  Для выхода: /exit или Ctrl+C\033[0m")
+        print("\033[36m\033[1m  Для выхода: /exit или Ctrl+C\033[0m")
         print(f"\033[36m\033[1m{'='*60}\033[0m\n")
 
         # Launch Claude in INTERACTIVE mode (no -p, no --print)
@@ -691,8 +690,10 @@ class Dashboard:
             subprocess.run(
                 [
                     "claude",
-                    "--model", getattr(self, "_model", "claude-opus-4-6[1m]"),
-                    "--system-prompt", full_system,
+                    "--model",
+                    getattr(self, "_model", "claude-opus-4-6[1m]"),
+                    "--system-prompt",
+                    full_system,
                 ],
                 timeout=1800,  # 30 min max
             )
@@ -722,8 +723,7 @@ class Dashboard:
             def _post_prd_yes():
                 self.keyboard.register("y", lambda: None)
                 self._overlay_text = (
-                    "[bold cyan]Генерация задач из PRD...[/]\n\n"
-                    "[dim]Claude анализирует PRD и создаёт план задач.[/]"
+                    "[bold cyan]Генерация задач из PRD...[/]\n\n" "[dim]Claude анализирует PRD и создаёт план задач.[/]"
                 )
                 self.update()
                 self._launch_task_gen_from_prd(idea, prd_path, prd_dir)
@@ -877,7 +877,9 @@ class Dashboard:
 
             added = merge_tasks_into_plan(r.tasks_path, plan_path)
             self.tm.reload()
-            self._overlay_text = f"[bold green]Добавлено {added} задач в текущий план![/]\n[dim]Plan: {plan_path.name}[/]"
+            self._overlay_text = (
+                f"[bold green]Добавлено {added} задач в текущий план![/]\n[dim]Plan: {plan_path.name}[/]"
+            )
             self.status_msg = f"[green]+{added} задач из PRD Wizard[/]"
         except Exception as e:
             self._overlay_text = f"[red]Merge ошибка: {e}[/]"
@@ -1002,11 +1004,11 @@ class Dashboard:
         self._overlay_text = (
             "[bold]PRD & Task Plan Generator[/]\n\n"
             "[bold cyan]Create PRD from description:[/]\n"
-            "  [dim]$ whilly.py --init \"CLI tool для автоматизации QA\"[/]\n\n"
+            '  [dim]$ whilly.py --init "CLI tool для автоматизации QA"[/]\n\n'
             "[bold cyan]Generate tasks from PRD:[/]\n"
             "  [dim]$ whilly.py --plan docs/PRD-MyProject.md[/]\n\n"
             "[bold cyan]Both in one step:[/]\n"
-            "  [dim]$ whilly.py --init \"описание проекта\" --plan[/]\n\n"
+            '  [dim]$ whilly.py --init "описание проекта" --plan[/]\n\n'
             "[bold]Pipeline:[/]\n"
             "  1. [cyan]--init[/] → Claude генерирует PRD (markdown)\n"
             "     Разделы: Контекст, User Stories, Функциональные требования,\n"
@@ -1051,7 +1053,9 @@ class Dashboard:
         ]
         if self.budget_usd > 0:
             pct = self.session_cost_usd / self.budget_usd * 100
-            lines.append(f"    [{'red' if pct > 80 else 'yellow'}]Budget: ${self.session_cost_usd:.2f} / ${self.budget_usd:.2f} ({pct:.0f}%)[/]")
+            lines.append(
+                f"    [{'red' if pct > 80 else 'yellow'}]Budget: ${self.session_cost_usd:.2f} / ${self.budget_usd:.2f} ({pct:.0f}%)[/]"
+            )
 
         if self.active_agents:
             lines.append("\n  [bold]Active Agents:[/]")
@@ -1076,19 +1080,16 @@ class Dashboard:
         self._overlay_text = (
             f"[bold]WHILLY v{__version__} \u2014 Task Orchestrator for Claude Agents[/]\n"
             f"[dim]\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500[/]\n\n"
-
             "[bold]Quick Start[/]\n"
             "  Whilly \u2014 оркестратор, запускающий Claude CLI агентов по JSON-плану.\n"
             "  Каждая задача = один агент. Агенты работают параллельно (tmux).\n"
             "  Whilly следит за прогрессом, стоимостью и deadlock'ами.\n\n"
-
             "[bold]\u2666 Рабочий цикл[/]\n"
             "  [cyan]1.[/] Создать PRD:   [dim]whilly.py --init \"описание\" --plan[/]\n"
             "  [cyan]2.[/] Запустить:     [dim]whilly.py .planning/tasks.json[/]\n"
             "  [cyan]3.[/] Наблюдать:     Dashboard обновляется каждую секунду\n"
             "  [cyan]4.[/] Новая идея:    Нажми [bold]n[/] \u2014 PRD Wizard создаст задачи на лету\n"
             "  [cyan]5.[/] Проверить:     Нажми [bold]g[/] (ТРИЗ) или [bold]c[/] (Challenge)\n\n"
-
             "[bold]\u2666 Hotkeys[/]\n"
             "  [bold cyan]q[/]  Quit       \u2014 остановить агентов, сохранить отчёт\n"
             "  [bold cyan]d[/]  Detail     \u2014 описание текущей задачи + AC + deps\n"
@@ -1102,7 +1103,6 @@ class Dashboard:
             "  [bold cyan]p[/]  PRD info   \u2014 как создавать PRD и планы\n"
             "  [bold cyan]h[/]  Help       \u2014 этот экран\n"
             "  [bold dim]Любая[/]          \u2014 закрыть overlay\n\n"
-
             "[bold]\u2666 CLI команды[/]\n"
             "  [dim]whilly.py[/]                          Интерактивное меню\n"
             "  [dim]whilly.py plan.json[/]                Запуск плана\n"
@@ -1113,7 +1113,6 @@ class Dashboard:
             "  [dim]whilly.py --resume[/]                 Продолжить после crash\n"
             "  [dim]whilly.py --headless[/]               CI режим (JSON stdout)\n"
             "  [dim]whilly.py --reset plan.json[/]        Сбросить все в pending\n\n"
-
             "[bold]\u2666 Environment[/]\n"
             "  [dim]WHILLY_MAX_PARALLEL=3[/]     Параллельных агентов (1=sequential)\n"
             "  [dim]WHILLY_BUDGET_USD=0[/]       Лимит стоимости (0=unlimited)\n"
@@ -1122,7 +1121,6 @@ class Dashboard:
             "  [dim]WHILLY_WEB=1[/]              HTTP статус на localhost:9191\n"
             "  [dim]WHILLY_WORKTREE=1[/]         Git worktree изоляция агентов\n"
             "  [dim]WHILLY_VERIFY=1[/]           Lint+test после каждой задачи\n\n"
-
             f"[bold]\u2666 Текущая сессия[/]\n"
             f"  Plan:       {plan_name}\n"
             f"  Agent:      {self.agent_name}\n"

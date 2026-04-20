@@ -53,11 +53,7 @@ def _build_system_prompt(prd_path: Path) -> str:
         "**Первое сообщение пользователя — это его идея. НЕ РЕАЛИЗУЙ ЕЁ. Задай уточняющий вопрос.**\n\n"
         "---\n\n"
     )
-    tail = (
-        f"\n\n---\n\n"
-        f"## Путь сохранения PRD\n\n"
-        f"Используй ТОЛЬКО этот путь при Write: `{prd_path}`\n"
-    )
+    tail = f"\n\n---\n\n" f"## Путь сохранения PRD\n\n" f"Используй ТОЛЬКО этот путь при Write: `{prd_path}`\n"
     return head + base + tail
 
 
@@ -101,8 +97,10 @@ def run_prd_wizard(
 
     cmd = [
         "claude",
-        "--append-system-prompt", system_prompt,
-        "--permission-mode", "acceptEdits",
+        "--append-system-prompt",
+        system_prompt,
+        "--permission-mode",
+        "acceptEdits",
     ]
     if model:
         cmd.extend(["--model", model])
@@ -140,6 +138,7 @@ def run_prd_wizard(
         try:
             tasks_path = generate_tasks(prd_path, model=model) if model else generate_tasks(prd_path)
             import json
+
             task_count = len(json.loads(tasks_path.read_text(encoding="utf-8")).get("tasks", []))
             print(f"✅ Tasks: {tasks_path} ({task_count} задач)")
         except Exception as e:

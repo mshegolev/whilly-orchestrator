@@ -101,7 +101,9 @@ class _StatusState:
                 f"<td>{a.get('elapsed_sec',0):.0f}s</td></tr>"
                 for a in d["agents"]
             )
-            agents_html = f"<h3>Active Agents</h3><table><tr><th>Task</th><th>Status</th><th>Time</th></tr>{rows}</table>"
+            agents_html = (
+                f"<h3>Active Agents</h3><table><tr><th>Task</th><th>Status</th><th>Time</th></tr>{rows}</table>"
+            )
         return _HTML_TEMPLATE.format(
             pct=pct,
             done=d["done"],

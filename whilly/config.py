@@ -29,6 +29,12 @@ class WhillyConfig:
     WORKTREE: bool = False  # WHILLY_WORKTREE=1 — per-task git worktree (parallel agents)
     USE_WORKSPACE: bool = True  # WHILLY_USE_WORKSPACE=0 — отключить plan-level workspace
 
+    # Agent backend selection (OC-109) — drives whilly.agents.get_backend()
+    AGENT_BACKEND: str = "claude"  # "claude" | "opencode"
+    OPENCODE_BIN: str = "opencode"  # path to the opencode CLI binary
+    OPENCODE_SAFE: bool = False  # OPENCODE_SAFE=1 → safe mode (prompt before tool use)
+    OPENCODE_SERVER_URL: str = ""  # optional remote OpenCode server URL (empty = local CLI)
+
     @classmethod
     def from_env(cls) -> WhillyConfig:
         """Load config from WHILLY_* environment variables, falling back to defaults."""

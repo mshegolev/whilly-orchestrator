@@ -1,8 +1,8 @@
 # Whilly Workshop Kit — Index / Индекс
 
-> **EN:** Self-paced and instructor-led workshop kit for the **Ralph Wiggum loop**: drive Claude Code agents around a task board until the work is done. Built on top of `whilly-orchestrator`.
+> **EN:** Self-paced and instructor-led workshop kit for the **Whilly Wiggum loop** — Ralph's smarter brother (TRIZ + Decision Gate + PRD wizard on top of the classic continuous agent loop). Built on `whilly-orchestrator`.
 >
-> **RU:** Воркшоп-кит для **Ralph Wiggum loop**: непрерывный цикл «задача → агент → ревью → следующая». Базируется на `whilly-orchestrator`.
+> **RU:** Воркшоп-кит для **Whilly Wiggum loop** — умный брат Ralph'а: непрерывный цикл «задача → агент → ревью → следующая» плюс TRIZ, Decision Gate и PRD wizard сверху. На базе `whilly-orchestrator`.
 
 ---
 
@@ -37,7 +37,7 @@
 └─────────────────────────────────────────────────────┘
 
   Hour 1:   Install + first run on tasks.json
-            (Ralph loop for 1 task, dashboard appears)
+            (Whilly loop on 1 task, dashboard appears)
 
   Hour 2-3: Add GitHub Issues source — agent picks
             real open issue from your repo
@@ -58,7 +58,7 @@
 ## Audience / Аудитория
 
 - **Engineers** who never built an agent loop and want a 1-day on-ramp.
-- **Tech leads** evaluating Ralph-style automation against Devin/Cursor/Codex.
+- **Tech leads** evaluating Whilly-/Ralph-style automation against Devin/Cursor/Codex.
 - **Workshop facilitators** who need a working reference + lecture material.
 
 No prior agent experience required. Python 3.10+, git, `gh` CLI, Anthropic API key.
