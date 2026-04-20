@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import List
 
 from whilly.agent_runner import collect_result, collect_result_from_file, is_api_error, is_auth_error, run_agent_async
+from whilly.resource_monitor import get_monitor
 from whilly.config import WhillyConfig
 from whilly.dashboard import Dashboard, NullDashboard
 from whilly.external_integrations import create_integration_manager
@@ -732,6 +733,26 @@ def run_plan(
     log_dir = Path(config.LOG_DIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Initialize resource monitor
+    resource_monitor = None
+    if config.RESOURCE_CHECK_ENABLED:
+        try:
+            resource_monitor = get_monitor()
+            # Check initial resource state
+            initial_usage = resource_monitor.get_system_usage()
+            violations = resource_monitor.check_limits(initial_usage)
+            if violations:
+                recommendation = resource_monitor.get_recommendation(violations)
+                _ansi(f"{YL}⚠️  Resource warning at startup:{R}")
+                _ansi(f"{YL}   {recommendation}{R}")
+                if resource_monitor.should_throttle(initial_usage):
+                    _ansi(f"{RD}🚨 System overloaded. Waiting for resources...{R}")
+                    if not resource_monitor.wait_for_resources(max_wait_seconds=60):
+                        _ansi(f"{RD}❌ Resource limits exceeded. Aborting to prevent system damage.{R}")
+                        return None
+        except Exception as e:
+            log.warning("Failed to initialize resource monitor: %s", e)
+
     # Если workspace создан с нуля (удалили руками или git worktree prune убрал
     # stale регистрацию) — сбрасываем все задачи в pending, чтобы начать план
     # заново. Переиспользованный workspace сохраняет прогресс как был.
@@ -964,6 +985,22 @@ def run_plan(
                 dashboard.update()
                 log.info("Iter %d: batch [%s] (%d batches total)", iteration, ", ".join(task_ids), len(batches))
 
+                # Resource check before launching batch
+                if resource_monitor:
+                    current_usage = resource_monitor.get_system_usage()
+                    if resource_monitor.should_throttle(current_usage):
+                        violations = resource_monitor.check_limits(current_usage)
+                        recommendation = resource_monitor.get_recommendation(violations)
+                        _ansi(f"{YL}⚠️  System overloaded. Waiting before launching batch...{R}")
+                        dashboard.status_msg = "[yellow]⏱️  Waiting for system resources...[/]"
+                        dashboard.update()
+
+                        if not resource_monitor.wait_for_resources(max_wait_seconds=300):
+                            _ansi(f"{RD}❌ Resource limits exceeded. Skipping batch to prevent system damage.{R}")
+                            _ansi(f"{RD}   {recommendation}{R}")
+                            time.sleep(10)  # Brief pause before next iteration
+                            continue
+
                 tm.mark_status(task_ids, "in_progress")
                 _log_event(log_dir, "batch_start", iteration=iteration, tasks=task_ids)
 
@@ -1018,6 +1055,22 @@ def run_plan(
                 dashboard.status_msg = "[bold cyan]Запуск агента...[/]"
                 dashboard.update()
                 log.info("Iter %d start (sequential)", iteration)
+
+                # Resource check before launching sequential agent
+                if resource_monitor:
+                    current_usage = resource_monitor.get_system_usage()
+                    if resource_monitor.should_throttle(current_usage):
+                        violations = resource_monitor.check_limits(current_usage)
+                        recommendation = resource_monitor.get_recommendation(violations)
+                        _ansi(f"{YL}⚠️  System overloaded. Waiting before launching agent...{R}")
+                        dashboard.status_msg = "[yellow]⏱️  Waiting for system resources...[/]"
+                        dashboard.update()
+
+                        if not resource_monitor.wait_for_resources(max_wait_seconds=300):
+                            _ansi(f"{RD}❌ Resource limits exceeded. Skipping iteration to prevent system damage.{R}")
+                            _ansi(f"{RD}   {recommendation}{R}")
+                            time.sleep(10)  # Brief pause before next iteration
+                            continue
 
                 prompt = build_sequential_prompt(plan_file)
 
@@ -1436,6 +1489,11 @@ Exit codes (headless mode):
 Environment variables:
   WHILLY_MAX_ITERATIONS=N   Max work iterations per plan (0=unlimited)
   WHILLY_MAX_PARALLEL=N     Max concurrent agents (1=sequential, 2-3=parallel)
+  WHILLY_MAX_CPU_PERCENT=N  Max total CPU usage before throttling (default: 80)
+  WHILLY_MAX_MEMORY_PERCENT=N Max memory usage before throttling (default: 75)
+  WHILLY_MIN_FREE_SPACE_GB=N Min free disk space required (default: 5)
+  WHILLY_PROCESS_TIMEOUT_MINUTES=N Max process runtime (default: 30)
+  WHILLY_RESOURCE_CHECK_ENABLED=0 Disable resource monitoring
   WHILLY_USE_TMUX=1/0       Use tmux for parallel execution (default: 1)
   WHILLY_MODEL=MODEL        Model to use (default: claude-opus-4-6[1m])
   WHILLY_LOG_DIR=DIR        Directory for agent logs (default: whilly_logs)
