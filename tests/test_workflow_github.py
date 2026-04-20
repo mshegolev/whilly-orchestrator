@@ -435,9 +435,11 @@ class TestAddStatus:
         # Only the introspection call — no mutation roundtrip.
         assert len(calls) == 1
 
-    def test_add_preserves_existing_options_in_merge(self):
-        """The mutation payload must include every existing option with its id,
-        otherwise GitHub would wipe the column (API replaces the whole list)."""
+    def test_add_preserves_existing_options_by_name(self):
+        """The mutation payload must include every existing option by name
+        (GitHub's ProjectV2SingleSelectFieldOptionInput does NOT accept `id`;
+        preservation happens server-side via name-matching). Sending a
+        stripped list would wipe the column — we resend everything."""
         board = GitHubProjectBoard(
             url="https://github.com/users/mshegolev/projects/4",
             gh_bin="/usr/bin/gh",
@@ -454,8 +456,6 @@ class TestAddStatus:
                 ),
             ]
         )
-        # The second call is the mutation — the payload is sent via stdin (JSON).
-        # Verify the stdin we sent includes ids for the two existing options.
         captured_stdin = {}
 
         def run_capture(cmd, *args, **kwargs):
@@ -465,20 +465,18 @@ class TestAddStatus:
         with patch("whilly.workflow.github.subprocess.run", side_effect=run_capture):
             board.add_status("Failed")
 
-        # Second call carried JSON stdin with the merged options.
         mutation_stdin = captured_stdin["calls"][1]
         assert mutation_stdin is not None
         body = json.loads(mutation_stdin)
         sent_options = body["variables"]["options"]
-        # Two preserved + one new = 3 options in the payload.
+        # Two preserved + one new = 3 options.
         assert len(sent_options) == 3
-        preserved_ids = [opt.get("id") for opt in sent_options if opt.get("id")]
-        assert "opt_todo" in preserved_ids
-        assert "opt_done" in preserved_ids
-        # New option has name "Failed" and NO id (GitHub assigns one).
-        new_opt = [o for o in sent_options if "id" not in o]
-        assert len(new_opt) == 1
-        assert new_opt[0]["name"] == "Failed"
+        # NO option carries an `id` — GitHub's schema rejects it.
+        assert all("id" not in opt for opt in sent_options), sent_options
+        sent_names = [opt["name"] for opt in sent_options]
+        assert sent_names == ["Todo", "Done", "Failed"]
+        # Every option has the required shape (name + color + description).
+        assert all({"name", "color", "description"} <= set(opt.keys()) for opt in sent_options)
 
     def test_add_invalid_color_raises(self):
         board = GitHubProjectBoard(
@@ -543,13 +541,10 @@ class TestAddStatus:
             board.add_status("A")
             board.add_status("B")
 
-        # Second mutation body should preserve BOTH Todo and A (first added).
+        # Second mutation body should preserve BOTH Todo and A (first added) by name.
         second_mutation_stdin = captured_stdin["calls"][2]
         body = json.loads(second_mutation_stdin)
         sent = body["variables"]["options"]
-        preserved_ids = {opt.get("id") for opt in sent if opt.get("id")}
-        assert {"opt_todo", "opt_a"}.issubset(preserved_ids)
-        # And a new unkeyed option for "B".
-        new_opts = [o for o in sent if "id" not in o]
-        assert len(new_opts) == 1
-        assert new_opts[0]["name"] == "B"
+        sent_names = [opt["name"] for opt in sent]
+        assert sent_names == ["Todo", "A", "B"]
+        assert all("id" not in opt for opt in sent)
