@@ -2,17 +2,12 @@
 
 import json
 import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 import pytest
 
-from whilly.github_projects import (
-    GitHubProjectsConverter,
-    ProjectItem,
-    SyncConfig
-)
+from whilly.github_projects import GitHubProjectsConverter, ProjectItem, SyncConfig
 from whilly.config import WhillyConfig
 
 
@@ -28,17 +23,14 @@ def sync_config():
     """Test sync configuration."""
     with tempfile.TemporaryDirectory() as temp_dir:
         sync_file = Path(temp_dir) / "test_sync_state.json"
-        config = SyncConfig(
-            target_statuses={"Todo"},
-            sync_state_file=str(sync_file)
-        )
+        config = SyncConfig(target_statuses={"Todo"}, sync_state_file=str(sync_file))
         yield config
 
 
 @pytest.fixture
 def converter(mock_config, sync_config):
     """GitHub Projects converter instance."""
-    with patch.object(GitHubProjectsConverter, '_check_gh_cli'):
+    with patch.object(GitHubProjectsConverter, "_check_gh_cli"):
         return GitHubProjectsConverter(config=mock_config, sync_config=sync_config)
 
 
@@ -66,7 +58,7 @@ class TestProjectItem:
             ("Review", "whilly:review"),
             ("Done", "whilly:done"),
             ("Backlog", "whilly:backlog"),
-            ("Unknown Status", "whilly:ready")  # default
+            ("Unknown Status", "whilly:ready"),  # default
         ]
 
         for status, expected_label in test_cases:
@@ -109,11 +101,8 @@ class TestGitHubProjectsConverter:
         converter._save_sync_state()
 
         # Create new converter with same sync config
-        with patch.object(GitHubProjectsConverter, '_check_gh_cli'):
-            new_converter = GitHubProjectsConverter(
-                config=converter.config,
-                sync_config=converter.sync_config
-            )
+        with patch.object(GitHubProjectsConverter, "_check_gh_cli"):
+            new_converter = GitHubProjectsConverter(config=converter.config, sync_config=converter.sync_config)
 
         assert new_converter._sync_state["test_key"] == "test_value"
 
@@ -160,7 +149,7 @@ class TestGitHubProjectsConverter:
         with pytest.raises(ValueError, match="Invalid GitHub Project URL"):
             converter.parse_project_url("https://example.com/invalid")
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_fetch_project_items_with_filter(self, mock_run, converter):
         """Test fetching project items with status filter."""
         # Mock GraphQL response
@@ -173,35 +162,15 @@ class TestGitHubProjectsConverter:
                                 {
                                     "id": "item1",
                                     "updatedAt": "2024-01-01T00:00:00Z",
-                                    "fieldValues": {
-                                        "nodes": [
-                                            {
-                                                "name": "Todo",
-                                                "field": {"name": "Status"}
-                                            }
-                                        ]
-                                    },
-                                    "content": {
-                                        "title": "Test Item 1",
-                                        "body": "Test body 1"
-                                    }
+                                    "fieldValues": {"nodes": [{"name": "Todo", "field": {"name": "Status"}}]},
+                                    "content": {"title": "Test Item 1", "body": "Test body 1"},
                                 },
                                 {
                                     "id": "item2",
                                     "updatedAt": "2024-01-01T00:00:00Z",
-                                    "fieldValues": {
-                                        "nodes": [
-                                            {
-                                                "name": "Done",
-                                                "field": {"name": "Status"}
-                                            }
-                                        ]
-                                    },
-                                    "content": {
-                                        "title": "Test Item 2",
-                                        "body": "Test body 2"
-                                    }
-                                }
+                                    "fieldValues": {"nodes": [{"name": "Done", "field": {"name": "Status"}}]},
+                                    "content": {"title": "Test Item 2", "body": "Test body 2"},
+                                },
                             ]
                         }
                     }
@@ -209,30 +178,22 @@ class TestGitHubProjectsConverter:
             }
         }
 
-        mock_run.return_value = Mock(
-            stdout=json.dumps(mock_response),
-            returncode=0
-        )
+        mock_run.return_value = Mock(stdout=json.dumps(mock_response), returncode=0)
 
         # Fetch all items
-        all_items = converter.fetch_project_items(
-            "https://github.com/users/test/projects/1",
-            include_updated_at=True
-        )
+        all_items = converter.fetch_project_items("https://github.com/users/test/projects/1", include_updated_at=True)
         assert len(all_items) == 2
 
         # Fetch only Todo items
         todo_items = converter.fetch_project_items(
-            "https://github.com/users/test/projects/1",
-            filter_statuses={"Todo"},
-            include_updated_at=True
+            "https://github.com/users/test/projects/1", filter_statuses={"Todo"}, include_updated_at=True
         )
         assert len(todo_items) == 1
         assert todo_items[0].status == "Todo"
         assert todo_items[0].title == "Test Item 1"
 
-    @patch('subprocess.run')
-    @patch('whilly.sources.github_issues.fetch_github_issues')
+    @patch("subprocess.run")
+    @patch("whilly.sources.github_issues.fetch_github_issues")
     def test_sync_todo_items(self, mock_fetch_issues, mock_run, converter):
         """Test syncing Todo items."""
         # Mock project items response
@@ -245,18 +206,8 @@ class TestGitHubProjectsConverter:
                                 {
                                     "id": "item1",
                                     "updatedAt": "2024-01-01T00:00:00Z",
-                                    "fieldValues": {
-                                        "nodes": [
-                                            {
-                                                "name": "Todo",
-                                                "field": {"name": "Status"}
-                                            }
-                                        ]
-                                    },
-                                    "content": {
-                                        "title": "New Todo Item",
-                                        "body": "Test body"
-                                    }
+                                    "fieldValues": {"nodes": [{"name": "Todo", "field": {"name": "Status"}}]},
+                                    "content": {"title": "New Todo Item", "body": "Test body"},
                                 }
                             ]
                         }
@@ -270,16 +221,13 @@ class TestGitHubProjectsConverter:
 
         mock_run.side_effect = [
             Mock(stdout=json.dumps(mock_response), returncode=0),  # GraphQL query
-            Mock(stdout=issue_url, returncode=0)  # Issue creation
+            Mock(stdout=issue_url, returncode=0),  # Issue creation
         ]
 
         mock_fetch_issues.return_value = ("tasks.json", {"created": 1})
 
         # Run sync
-        stats = converter.sync_todo_items(
-            "https://github.com/users/test/projects/1",
-            "test", "repo"
-        )
+        stats = converter.sync_todo_items("https://github.com/users/test/projects/1", "test", "repo")
 
         assert stats["created_count"] == 1
         assert stats["total_todo_items"] == 1
@@ -287,13 +235,15 @@ class TestGitHubProjectsConverter:
     def test_get_sync_status(self, converter):
         """Test getting sync status."""
         # Set some state
-        converter._sync_state.update({
-            "last_sync": "2024-01-01T00:00:00Z",
-            "project_url": "https://github.com/users/test/projects/1",
-            "repo_owner": "test",
-            "repo_name": "repo",
-            "synced_items": {"item1:Todo": {"issue_number": 123}}
-        })
+        converter._sync_state.update(
+            {
+                "last_sync": "2024-01-01T00:00:00Z",
+                "project_url": "https://github.com/users/test/projects/1",
+                "repo_owner": "test",
+                "repo_name": "repo",
+                "synced_items": {"item1:Todo": {"issue_number": 123}},
+            }
+        )
 
         status = converter.get_sync_status()
 
@@ -314,28 +264,18 @@ class TestGitHubProjectsConverter:
         assert converter._sync_state["synced_items"] == {}
         assert "test_key" not in converter._sync_state
 
-    @patch('subprocess.run')
+    @patch("subprocess.run")
     def test_convert_items_to_issues_skip_existing(self, mock_run, converter):
         """Test that existing issues are skipped during conversion."""
         items = [
+            ProjectItem(id="item1", title="New Item", body="New body"),
             ProjectItem(
-                id="item1",
-                title="New Item",
-                body="New body"
+                id="item2", title="Existing Issue", body="Existing body", url="https://github.com/test/repo/issues/123"
             ),
-            ProjectItem(
-                id="item2",
-                title="Existing Issue",
-                body="Existing body",
-                url="https://github.com/test/repo/issues/123"
-            )
         ]
 
         # Mock issue creation only for new item
-        mock_run.return_value = Mock(
-            stdout="https://github.com/test/repo/issues/124",
-            returncode=0
-        )
+        mock_run.return_value = Mock(stdout="https://github.com/test/repo/issues/124", returncode=0)
 
         result = converter.convert_items_to_issues(items, "test", "repo")
 
@@ -370,7 +310,7 @@ class TestStatusMapping:
             ("In Progress", "whilly:in-progress"),
             ("Review", "whilly:review"),
             ("Done", "whilly:done"),
-            ("Backlog", "whilly:backlog")
+            ("Backlog", "whilly:backlog"),
         ]
 
         for status, expected_label in test_cases:
@@ -385,7 +325,7 @@ class TestStatusMapping:
             ("whilly:in-progress", "In Progress"),
             ("whilly:review", "Review"),
             ("whilly:done", "Done"),
-            ("whilly:backlog", "Backlog")
+            ("whilly:backlog", "Backlog"),
         ]
 
         for label, expected_status in test_cases:

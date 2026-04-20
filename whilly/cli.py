@@ -99,20 +99,21 @@ def _extract_repo_args(args: List[str]) -> tuple[str | None, str | None]:
         repo_idx = args.index("--repo")
         if repo_idx + 1 < len(args):
             repo_spec = args[repo_idx + 1]
-            if '/' in repo_spec:
-                repo_owner, repo_name = repo_spec.split('/', 1)
+            if "/" in repo_spec:
+                repo_owner, repo_name = repo_spec.split("/", 1)
 
     # Auto-detect repo if not specified
     if not repo_owner or not repo_name:
         try:
             import subprocess
-            result = subprocess.run(['git', 'remote', 'get-url', 'origin'],
-                                  capture_output=True, text=True, check=True)
+
+            result = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, check=True)
             remote_url = result.stdout.strip()
             # Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
-            if 'github.com' in remote_url:
+            if "github.com" in remote_url:
                 import re
-                match = re.search(r'github\.com[:/]([^/]+)/([^/.]+)', remote_url)
+
+                match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)", remote_url)
                 if match:
                     repo_owner = repo_owner or match.group(1)
                     repo_name = repo_name or match.group(2)
@@ -160,12 +161,7 @@ def _handle_task_completion(task: Task, tm: TaskManager, config: WhillyConfig) -
 def _get_latest_commit_sha() -> str | None:
     """Получает SHA последнего коммита."""
     try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        result = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
         return result.stdout.strip()
     except subprocess.CalledProcessError:
         return None
@@ -1674,11 +1670,7 @@ def main(argv: list[str] | None = None) -> int:
 
         _ansi(f"{CY}{B}Extracting GitHub Issues with labels: {', '.join(labels)}...{R}")
         try:
-            tasks_path = generate_tasks_from_github(
-                output_path=output_file,
-                filter_labels=labels,
-                prd_file=prd_file
-            )
+            tasks_path = generate_tasks_from_github(output_path=output_file, filter_labels=labels, prd_file=prd_file)
             _ansi(f"{GR}Tasks generated: {tasks_path}{R}")
 
             # Ask user if they want to run the tasks immediately
@@ -1704,7 +1696,7 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--from-project")
         if idx + 1 >= len(args):
-            _ansi(f'{RD}Usage: whilly --from-project <project_url> [--repo owner/name]{R}')
+            _ansi(f"{RD}Usage: whilly --from-project <project_url> [--repo owner/name]{R}")
             return 1
 
         project_url = args[idx + 1]
@@ -1717,19 +1709,21 @@ def main(argv: list[str] | None = None) -> int:
             repo_idx = args.index("--repo")
             if repo_idx + 1 < len(args):
                 repo_spec = args[repo_idx + 1]
-                if '/' in repo_spec:
-                    repo_owner, repo_name = repo_spec.split('/', 1)
+                if "/" in repo_spec:
+                    repo_owner, repo_name = repo_spec.split("/", 1)
 
         # Auto-detect repo if not specified
         if not repo_owner or not repo_name:
             try:
-                result = subprocess.run(['git', 'remote', 'get-url', 'origin'],
-                                      capture_output=True, text=True, check=True)
+                result = subprocess.run(
+                    ["git", "remote", "get-url", "origin"], capture_output=True, text=True, check=True
+                )
                 remote_url = result.stdout.strip()
                 # Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
-                if 'github.com' in remote_url:
+                if "github.com" in remote_url:
                     import re
-                    match = re.search(r'github\.com[:/]([^/]+)/([^/.]+)', remote_url)
+
+                    match = re.search(r"github\.com[:/]([^/]+)/([^/.]+)", remote_url)
                     if match:
                         repo_owner = repo_owner or match.group(1)
                         repo_name = repo_name or match.group(2)
@@ -1737,7 +1731,7 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
         if not repo_owner or not repo_name:
-            _ansi(f'{RD}Could not determine repository. Use: --repo owner/name{R}')
+            _ansi(f"{RD}Could not determine repository. Use: --repo owner/name{R}")
             return 1
 
         _ansi(f"{CY}{B}Converting GitHub Project to Issues and Whilly tasks...{R}")
@@ -1771,14 +1765,14 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--sync-todo")
         if idx + 1 >= len(args):
-            _ansi(f'{RD}Usage: whilly --sync-todo <project_url> [--repo owner/name]{R}')
+            _ansi(f"{RD}Usage: whilly --sync-todo <project_url> [--repo owner/name]{R}")
             return 1
 
         project_url = args[idx + 1]
         repo_owner, repo_name = _extract_repo_args(args)
 
         if not repo_owner or not repo_name:
-            _ansi(f'{RD}Could not determine repository. Use: --repo owner/name{R}')
+            _ansi(f"{RD}Could not determine repository. Use: --repo owner/name{R}")
             return 1
 
         _ansi(f"{CY}{B}Syncing Todo items from GitHub Project...{R}")
@@ -1807,14 +1801,14 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--watch-project")
         if idx + 1 >= len(args):
-            _ansi(f'{RD}Usage: whilly --watch-project <project_url> [--repo owner/name]{R}')
+            _ansi(f"{RD}Usage: whilly --watch-project <project_url> [--repo owner/name]{R}")
             return 1
 
         project_url = args[idx + 1]
         repo_owner, repo_name = _extract_repo_args(args)
 
         if not repo_owner or not repo_name:
-            _ansi(f'{RD}Could not determine repository. Use: --repo owner/name{R}')
+            _ansi(f"{RD}Could not determine repository. Use: --repo owner/name{R}")
             return 1
 
         _ansi(f"{CY}{B}Watching GitHub Project for Todo items...{R}")
@@ -1837,14 +1831,14 @@ def main(argv: list[str] | None = None) -> int:
 
         idx = args.index("--sync-status")
         if idx + 2 >= len(args):
-            _ansi(f'{RD}Usage: whilly --sync-status <issue_number> <status>{R}')
+            _ansi(f"{RD}Usage: whilly --sync-status <issue_number> <status>{R}")
             return 1
 
         try:
             issue_number = int(args[idx + 1])
             new_status = args[idx + 2]
         except ValueError:
-            _ansi(f'{RD}Invalid issue number: {args[idx + 1]}{R}')
+            _ansi(f"{RD}Invalid issue number: {args[idx + 1]}{R}")
             return 1
 
         _ansi(f"{CY}Updating Project status for issue #{issue_number} to '{new_status}'...{R}")
