@@ -4,6 +4,42 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, fields
+from pathlib import Path
+
+
+def load_dotenv(path: str | os.PathLike[str] = ".env", *, override: bool = False) -> int:
+    """Load KEY=VALUE pairs from a dotenv-style file into os.environ.
+
+    Silently no-ops if the file doesn't exist. Existing environment values win unless
+    ``override=True``. Supports ``#`` comments, blank lines, optional ``export`` prefix,
+    and single/double-quoted values. No shell expansion — keep it predictable.
+
+    Returns the number of variables actually set.
+    """
+    file = Path(path)
+    if not file.is_file():
+        return 0
+    count = 0
+    for raw in file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if (len(value) >= 2) and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if not key:
+            continue
+        if not override and key in os.environ:
+            continue
+        os.environ[key] = value
+        count += 1
+    return count
 
 
 @dataclass
