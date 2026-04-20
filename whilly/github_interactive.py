@@ -86,7 +86,7 @@ def github_interactive_menu() -> Optional[str]:
 
     # Проверяем интеграции
     try:
-        integration_manager = create_integration_manager(config)
+        integration_manager = create_integration_manager(config.get_external_integrations_config())
         github_available = integration_manager.is_integration_available("github")
         if github_available:
             print("✅ GitHub интеграция настроена")
