@@ -36,6 +36,13 @@ from whilly.classifier.base import (
 from whilly.classifier.heuristic import HeuristicClassifier
 from whilly.classifier.llm import LLMClassifier
 from whilly.classifier.matcher import LLMParentMatcher, NoopParentMatcher
+from whilly.classifier.rebuilder import (
+    HierarchyAssignment,
+    HierarchyTree,
+    apply_tree,
+    format_tree,
+    rebuild_hierarchy,
+)
 from whilly.classifier.router import Router, format_decision
 
 __all__ = [
@@ -51,4 +58,9 @@ __all__ = [
     "NoopParentMatcher",
     "Router",
     "format_decision",
+    "HierarchyAssignment",
+    "HierarchyTree",
+    "rebuild_hierarchy",
+    "apply_tree",
+    "format_tree",
 ]

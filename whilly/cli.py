@@ -1314,6 +1314,12 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     decision. With --apply: create the item at
                                     the right level under the matched parent
                                     (only when classifier confidence ≥ 0.75).
+  whilly --rebuild-hierarchy --project URL --repo OWNER/REPO [--label L] [--apply]
+                                  Classify every item in the project + repo,
+                                    match parents bottom-up (Task → Story →
+                                    Epic), print proposed tree + unparented
+                                    items. With --apply: link assignments via
+                                    the tracker adapter.
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -1368,6 +1374,58 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _show_startup_banner()
+
+    # --rebuild-hierarchy: classify flat list + match parents → proposed tree
+    if "--rebuild-hierarchy" in args:
+        from whilly.classifier import apply_tree, format_tree, rebuild_hierarchy
+        from whilly.hierarchy import HierarchyLevel, get_adapter
+
+        def _flag_value_rb(name):
+            if name not in args:
+                return None
+            i = args.index(name)
+            return args[i + 1] if i + 1 < len(args) else None
+
+        project_url = _flag_value_rb("--project")
+        repo = _flag_value_rb("--repo")
+        if not project_url or not repo:
+            _ansi(f"{RD}--rebuild-hierarchy requires --project <URL> and --repo <OWNER/REPO>{R}")
+            return 1
+        label = _flag_value_rb("--label")  # optional filter, e.g. whilly:ready
+        apply_flag = "--apply" in args
+
+        try:
+            adapter = get_adapter("github", project_url=project_url, repo=repo)
+        except Exception as exc:  # noqa: BLE001
+            _ansi(f"{RD}failed to build adapter: {exc}{R}")
+            return 1
+
+        # Gather the flat list — stories via repo issues + drafts as epics.
+        _ansi(f"{CY}Collecting items from project + repo...{R}")
+        try:
+            epic_items = adapter.list_at_level(HierarchyLevel.EPIC)
+            story_items = adapter.list_at_level(HierarchyLevel.STORY, label=label)
+        except Exception as exc:  # noqa: BLE001
+            _ansi(f"{RD}collection failed: {exc}{R}")
+            return 1
+        flat = epic_items + story_items
+        if not flat:
+            _ansi(f"{YL}Nothing to rebuild — project has no items.{R}")
+            return 0
+
+        _ansi(f"{CY}Classifying {len(flat)} item(s) + matching parents (LLM, may take a minute)...{R}")
+        tree = rebuild_hierarchy(flat)
+        print(format_tree(tree))
+
+        if apply_flag:
+            applied = apply_tree(tree, adapter)
+            _ansi(f"{GR}Applied {applied} of {tree.counts['assignments']} assignments.{R}")
+        else:
+            _ansi(
+                f"{YL}Dry-run. Re-run with --apply to execute "
+                f"{tree.counts['assignments']} assignments on the tracker.{R}"
+            )
+        return 0
 
     # --classify: smart routing — classify input + find best parent
     if "--classify" in args:
