@@ -35,6 +35,13 @@ class WhillyConfig:
     OPENCODE_SAFE: bool = False  # OPENCODE_SAFE=1 → safe mode (prompt before tool use)
     OPENCODE_SERVER_URL: str = ""  # optional remote OpenCode server URL (empty = local CLI)
 
+    # Resource protection limits
+    MAX_CPU_PERCENT: float = 80.0  # Max total CPU usage before throttling
+    MAX_MEMORY_PERCENT: float = 75.0  # Max memory usage before throttling
+    MIN_FREE_SPACE_GB: float = 5.0  # Min free disk space required
+    PROCESS_TIMEOUT_MINUTES: int = 30  # Max process runtime
+    RESOURCE_CHECK_ENABLED: bool = True  # Enable resource monitoring
+
     # External integrations (GitHub Issues, Jira, etc)
     CLOSE_EXTERNAL_TASKS: bool = True  # WHILLY_CLOSE_EXTERNAL_TASKS=0 → disable auto-closing
     GITHUB_AUTO_CLOSE: bool = True  # Auto-close GitHub Issues
