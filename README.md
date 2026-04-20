@@ -212,6 +212,10 @@ python scripts/whilly_e2e_triz_prd.py --limit 1
 | `tmux ls` shows no sessions after dispatch | Either tmux isn't installed, or `WHILLY_USE_TMUX=0` — whilly silently falls back to subprocess mode. |
 | Agent loops forever without marking done | Ensure prompt ends with the `<promise>COMPLETE</promise>` marker contract — `agent_runner.is_complete` checks that string. |
 
+## Workshop kit
+
+Running HackSprint1 or a self-paced walkthrough? The full workshop kit (BRD, PRD, ADRs, tutorial, roadmap) lives under [docs/workshop/INDEX.md](docs/workshop/INDEX.md).
+
 ## Development
 
 ```bash

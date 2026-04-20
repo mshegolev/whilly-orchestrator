@@ -31,6 +31,7 @@ whilly_logs/
 .whilly_state.json
 whilly_events.jsonl
 progress.txt
+.planning/reports/
 
 # Tests
 .pytest_cache/
@@ -40,6 +41,7 @@ htmlcov/
 .ruff_cache/
 
 # PRD wizard state
+.ralph_prd_state.json
 .whilly_prd_state.json
 
 # Workflow mapping is a *committed* artefact — do NOT ignore .whilly/.
