@@ -5,6 +5,7 @@ Supports status-oriented workflows with incremental sync and monitoring.
 """
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -14,6 +15,14 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 
 from whilly.config import WhillyConfig
+
+
+def _gh_env() -> dict[str, str]:
+    """Return os.environ copy with stale GITHUB_TOKEN removed — `gh` CLI prefers its keyring."""
+    env = dict(os.environ)
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("GH_TOKEN", None)
+    return env
 
 
 @dataclass
@@ -112,7 +121,7 @@ class GitHubProjectsConverter:
     def _check_gh_cli(self):
         """Verify GitHub CLI is available and authenticated."""
         try:
-            result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=True)
+            result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=True, env=_gh_env())
             if "Logged in to github.com" not in result.stdout:
                 raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
         except subprocess.CalledProcessError:
@@ -237,7 +246,7 @@ class GitHubProjectsConverter:
                 f"number={project_info['project_number']}",
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=_gh_env())
             data = json.loads(result.stdout)
 
             items = self._parse_project_items(data, include_updated_at)
@@ -352,7 +361,7 @@ class GitHubProjectsConverter:
             label,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=_gh_env())
         issue_url = result.stdout.strip()
 
         # Extract issue number from URL
