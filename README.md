@@ -8,7 +8,7 @@ Python implementation of the **Whilly Wiggum loop** — Ralph Wiggum's smarter b
 
 🇷🇺 [Краткое описание на русском](README-RU.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
 
-> "I'm helping — and I've read ТРИЗ." — Whilly Wiggum
+> "I'm helping — and I've read TRIZ." — Whilly Wiggum
 
 ## What it does
 
