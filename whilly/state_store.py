@@ -31,6 +31,8 @@ class StateStore:
         cost_usd: float,
         active_agents: list[dict],
         task_status: dict[str, str],
+        paused: bool = False,
+        pause_reason: str = "",
     ) -> None:
         """Atomic write state to file (write to .tmp, then rename)."""
         state = {
@@ -39,6 +41,9 @@ class StateStore:
             "cost_usd": cost_usd,
             "active_agents": active_agents,
             "task_status": task_status,
+            "paused": paused,
+            "pause_reason": pause_reason,
+            "paused_at": time.time() if paused else None,
             "saved_at": time.time(),
         }
         content = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
