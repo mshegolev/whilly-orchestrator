@@ -33,6 +33,10 @@ whilly_events.jsonl
 progress.txt
 .planning/reports/
 
+# Auto-generated task files
+tasks-*.json
+!tasks.json  # Keep example tasks.json files
+
 # Tests
 .pytest_cache/
 .coverage
