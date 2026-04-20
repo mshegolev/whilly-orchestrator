@@ -147,7 +147,9 @@ def gh_pr_view(pr_url_or_number: str) -> dict:
 
 
 def gh_pr_review_comment(pr_number: str, body: str) -> bool:
-    """Post a single PR review comment (request changes)."""
+    """Post a PR review. Uses --comment (works on own PRs; --request-changes
+    is forbidden by GitHub when the reviewer authored the PR, which is the
+    steady-state case for this self-hosting demo)."""
     proc = _run([
         "gh",
         "pr",
@@ -155,7 +157,7 @@ def gh_pr_review_comment(pr_number: str, body: str) -> bool:
         pr_number,
         "--repo",
         REPO,
-        "--request-changes",
+        "--comment",
         "--body",
         body,
     ])
