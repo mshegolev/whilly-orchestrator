@@ -671,7 +671,7 @@ def main() -> int:
         if not DRY_RUN and pr_number != "0":
             gh_pr_review_comment(
                 pr_number,
-                "🤖 Whilly e2e demo reached max review iterations without a clean review. " "Manual review required.",
+                "🤖 Whilly e2e demo reached max review iterations without a clean review. Manual review required.",
             )
         event("pr.left_open", task_id=task.id, pr=pr_number, reason="max_iterations")
 
