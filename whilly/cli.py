@@ -1304,6 +1304,10 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     параллельным агентам в основной репе).
   whilly --agent {claude,opencode}  Select agent backend (default: claude;
                                     overrides WHILLY_AGENT_BACKEND for this run)
+  whilly --workflow-analyze URL   Introspect a GitHub Project board, detect
+                                    mapping gaps, and write .whilly/workflow.json.
+                                    Extra flags: --apply (auto-add missing
+                                    columns), --report (dry-run).
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -1358,6 +1362,53 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _show_startup_banner()
+
+    # --workflow-analyze: introspect a GitHub Project board + propose mapping
+    if "--workflow-analyze" in args:
+        from whilly.workflow import get_board
+        from whilly.workflow.analyzer import analyze, format_report, load_mapping, save_mapping
+        from whilly.workflow.proposer import propose
+
+        idx = args.index("--workflow-analyze")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}Usage: whilly --workflow-analyze <project_url> [--apply|--report]{R}")
+            return 1
+        url = args[idx + 1]
+        mode = "apply" if "--apply" in args else ("report" if "--report" in args else "auto")
+
+        try:
+            board = get_board("github_project", url=url)
+        except ValueError as exc:
+            _ansi(f"{RD}{exc}{R}")
+            return 1
+
+        existing = load_mapping()
+        try:
+            report = analyze(board, mapping=existing)
+        except RuntimeError as exc:
+            _ansi(f"{RD}workflow analysis failed: {exc}{R}")
+            return 1
+
+        print(format_report(report, title=f"{CY}{B}Workflow analysis{R}"))
+        if report.is_clean and not existing:
+            # Still persist a fresh mapping so subsequent runs skip analysis.
+            _, mapping = propose(report, board, existing=existing, mode="report")
+            path = save_mapping(mapping)
+            _ansi(f"{GR}Mapping saved: {path}{R}")
+            return 0
+        if report.is_clean:
+            return 0
+
+        proposal, mapping = propose(report, board, existing=existing, mode=mode)
+        if proposal.cancelled:
+            _ansi(f"{YL}Cancelled. Mapping file untouched.{R}")
+            return 1
+        path = save_mapping(mapping)
+        summary = (
+            f"  +{len(proposal.to_add)} added · " f"{len(proposal.to_map)} mapped · " f"{len(proposal.to_skip)} skipped"
+        )
+        _ansi(f"{GR}Mapping saved: {path}{R}\n{summary}")
+        return 0
 
     # --reset: сбросить все задачи в pending
     if "--reset" in args:

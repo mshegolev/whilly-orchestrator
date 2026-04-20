@@ -163,6 +163,20 @@ Whilly ships with pluggable agent backends behind a single `AgentBackend` Protoc
 
 Model ids pass through normalization per backend — e.g. `claude-opus-4-6` automatically becomes `anthropic/claude-opus-4-6` for OpenCode. Completion is signalled identically (`<promise>COMPLETE</promise>`) so the main loop is backend-agnostic. Decision Gate, tmux runner, and the subprocess fallback all route through the active backend.
 
+## Workflow boards
+
+Whilly can sync a GitHub Projects v2 board as issues move through the pipeline (ready → picked_up → in_review → done / refused / failed). Board integration is Protocol-driven (`whilly/workflow/BoardSink`) — today one adapter ships (`GitHubProjectBoard` via `gh api graphql`); Jira/Linear/GitLab drop in as sibling implementations.
+
+Before first use, run the analyzer to map whilly's six lifecycle events to your board columns:
+
+```bash
+whilly --workflow-analyze https://github.com/users/<you>/projects/<N>
+```
+
+The analyzer prints matched / missing / ambiguous columns and walks you through `[A]dd / [M]ap / [S]kip` decisions. Output goes to `.whilly/workflow.json` — a committable artefact so teams share one contract. Extra flags: `--apply` (auto-add all missing columns, CI-friendly) and `--report` (dry-run, no writes).
+
+See [ADR-014](docs/workshop/adr/ADR-014-workflow-sink-protocol.md) for the design rationale and extension guide.
+
 ## Troubleshooting / FAQ
 
 | Issue | Fix |
