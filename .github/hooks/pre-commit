@@ -1,0 +1,198 @@
+#!/bin/bash
+# Pre-commit hook для проверки качества кода перед коммитом
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Цвета для вывода
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Функция для вывода ошибок
+error() {
+    echo -e "${RED}❌ $1${NC}" >&2
+}
+
+# Функция для вывода предупреждений
+warn() {
+    echo -e "${YELLOW}⚠️  $1${NC}" >&2
+}
+
+# Функция для успеха
+success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+# Проверяем что есть staged файлы
+staged_files=$(git diff --cached --name-only)
+if [ -z "$staged_files" ]; then
+    warn "No staged files found"
+    exit 0
+fi
+
+echo "Checking staged files: $staged_files"
+
+# 1. Проверка YAML синтаксиса в GitHub workflows
+echo -e "\n📝 Checking YAML syntax..."
+yaml_error=0
+
+for file in $(echo "$staged_files" | grep -E '\.ya?ml$' || true); do
+    if [ -f "$file" ]; then
+        echo "  Checking $file..."
+
+        # Используем python для проверки YAML
+        if ! python3 -c "
+import yaml
+import sys
+try:
+    with open('$file', 'r') as f:
+        yaml.safe_load(f)
+    print('    ✅ Valid YAML')
+except yaml.YAMLError as e:
+    print(f'    ❌ YAML Error: {e}')
+    sys.exit(1)
+except Exception as e:
+    print(f'    ❌ Error: {e}')
+    sys.exit(1)
+" 2>/dev/null; then
+            # Если python нет, пробуем альтернативы
+            if command -v yamllint >/dev/null 2>&1; then
+                if ! yamllint "$file" >/dev/null 2>&1; then
+                    error "YAML syntax error in $file"
+                    yaml_error=1
+                fi
+            elif command -v yq >/dev/null 2>&1; then
+                if ! yq eval . "$file" >/dev/null 2>&1; then
+                    error "YAML syntax error in $file"
+                    yaml_error=1
+                fi
+            else
+                warn "No YAML validator found (install yamllint or yq)"
+            fi
+        fi
+    fi
+done
+
+if [ $yaml_error -eq 1 ]; then
+    error "YAML syntax errors found. Fix them before committing."
+    exit 1
+fi
+
+success "YAML syntax check passed"
+
+# 2. Проверка ruff для Python файлов
+echo -e "\n🐍 Checking Python code quality..."
+python_files=$(echo "$staged_files" | grep -E '\.py$' || true)
+
+if [ -n "$python_files" ]; then
+    if command -v ruff >/dev/null 2>&1; then
+        echo "  Running ruff check..."
+        if ! ruff check $python_files; then
+            error "Ruff linting failed. Run 'ruff check --fix' to auto-fix issues."
+            exit 1
+        fi
+
+        echo "  Running ruff format check..."
+        if ! ruff format --check $python_files; then
+            error "Code formatting issues found. Run 'ruff format' to fix them."
+            exit 1
+        fi
+
+        success "Python code quality check passed"
+    else
+        warn "ruff not found - skipping Python checks"
+    fi
+else
+    echo "  No Python files to check"
+fi
+
+# 3. Проверка GitHub Actions workflow файлов на специфические проблемы
+echo -e "\n🔧 Checking GitHub Actions workflows..."
+workflow_files=$(echo "$staged_files" | grep -E '^\.github/workflows/.*\.ya?ml$' || true)
+
+if [ -n "$workflow_files" ]; then
+    for workflow in $workflow_files; do
+        if [ -f "$workflow" ]; then
+            echo "  Checking $workflow..."
+
+            # Проверяем на распространенные проблемы
+            if grep -q 'git commit -m ".*\n' "$workflow"; then
+                error "Multiline commit message without proper quoting in $workflow"
+                error "Use: git commit -m \"title\" -m \"body\""
+                exit 1
+            fi
+
+            # Проверяем что есть базовые секции
+            if ! grep -q "^on:" "$workflow"; then
+                error "Missing 'on:' trigger section in $workflow"
+                exit 1
+            fi
+
+            if ! grep -q "^jobs:" "$workflow"; then
+                error "Missing 'jobs:' section in $workflow"
+                exit 1
+            fi
+
+            echo "    ✅ Workflow structure looks good"
+        fi
+    done
+    success "GitHub Actions workflow check passed"
+else
+    echo "  No workflow files to check"
+fi
+
+# 4. Проверка на случайно добавленные секреты/токены
+echo -e "\n🔒 Checking for potential secrets..."
+secret_patterns=(
+    "AKIA[0-9A-Z]{16}"          # AWS Access Key
+    "ghp_[A-Za-z0-9]{36,}"      # GitHub PAT
+    "sk-[A-Za-z0-9]{32,}"       # OpenAI API Key
+    "xox[baosr]-[A-Za-z0-9-]+"  # Slack tokens
+    "['\"]password['\"]:\s*['\"][^'\"]+['\"]"  # Password in quotes
+)
+
+secret_found=0
+for pattern in "${secret_patterns[@]}"; do
+    for file in $staged_files; do
+        if [ -f "$file" ] && grep -E "$pattern" "$file" >/dev/null 2>&1; then
+            error "Potential secret found in $file (pattern: ${pattern:0:20}...)"
+            secret_found=1
+        fi
+    done
+done
+
+if [ $secret_found -eq 1 ]; then
+    error "Potential secrets detected. Remove them before committing."
+    exit 1
+fi
+
+success "Secret scan passed"
+
+# 5. Проверка размера файлов
+echo -e "\n📦 Checking file sizes..."
+large_file_found=0
+max_size=$((10 * 1024 * 1024))  # 10MB
+
+for file in $staged_files; do
+    if [ -f "$file" ]; then
+        size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
+        if [ "$size" -gt $max_size ]; then
+            error "Large file detected: $file ($(($size / 1024 / 1024))MB > 10MB)"
+            large_file_found=1
+        fi
+    fi
+done
+
+if [ $large_file_found -eq 1 ]; then
+    error "Large files detected. Consider using Git LFS or removing them."
+    exit 1
+fi
+
+success "File size check passed"
+
+# Финальное сообщение
+echo -e "\n🎉 ${GREEN}All pre-commit checks passed!${NC}"
+echo "Ready to commit safely 🚀"

@@ -328,6 +328,7 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
 
     print(f"{B}Действия:{R}")
     print(f"  {YL}n){R}  Новый PRD через wizard (--prd-wizard)")
+    print(f"  {YL}g){R}  🐙 GitHub интеграция (issues, projects)")
     if plans:
         print(f"  {YL}a){R}  Выполнить ВСЕ планы подряд")
     print(f"  {YL}x){R}  Удалить план/PRD (формат: x1, xp1, xall, xpall)")
@@ -343,6 +344,13 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
     if choice == "n":
         _ansi(f"{CY}Запусти: {R}whilly --prd-wizard")
         sys.exit(0)
+    if choice == "g":
+        from whilly.github_interactive import github_interactive_menu
+        github_plan = github_interactive_menu()
+        if github_plan:
+            from pathlib import Path
+            return [Path(github_plan)]
+        return select_plan_interactive(discover_plans())
     if choice == "a":
         if not plans:
             _ansi(f"{RD}Нет планов для выполнения{R}")
