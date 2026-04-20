@@ -50,23 +50,15 @@ class PauseControl:
             print(f"⏸️  Paused: {reason} (delete .whilly_pause to resume)")
             time.sleep(check_interval)
 
-=======
->>>>>>> d9f0ba9 (feat: Add basic pause/resume functionality)
+
 # Quick CLI commands
 def pause_plan(plan_file: str, reason: str = "Manual pause"):
     """Pause a plan execution."""
     pc = PauseControl(f".whilly_pause_{Path(plan_file).stem}")
     pc.pause(reason)
 
-<<<<<<< HEAD
 
 def resume_plan(plan_file: str):
     """Resume a plan execution."""
     pc = PauseControl(f".whilly_pause_{Path(plan_file).stem}")
     pc.resume()
-=======
-def resume_plan(plan_file: str):
-    """Resume a plan execution."""
-    pc = PauseControl(f".whilly_pause_{Path(plan_file).stem}")
-    pc.resume()
->>>>>>> d9f0ba9 (feat: Add basic pause/resume functionality)
