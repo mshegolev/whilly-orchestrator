@@ -20,6 +20,7 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import List
 
 from whilly.agent_runner import collect_result, collect_result_from_file, is_api_error, is_auth_error, run_agent_async
 from whilly.config import WhillyConfig
@@ -87,6 +88,38 @@ BGB = "\033[44m"
 def _ansi(msg: str) -> None:
     sys.stderr.write(msg + R + "\n")
     sys.stderr.flush()
+
+
+def _extract_repo_args(args: List[str]) -> tuple[str | None, str | None]:
+    """Extract repo owner and name from CLI args, with auto-detection fallback."""
+    repo_owner = None
+    repo_name = None
+
+    if "--repo" in args:
+        repo_idx = args.index("--repo")
+        if repo_idx + 1 < len(args):
+            repo_spec = args[repo_idx + 1]
+            if '/' in repo_spec:
+                repo_owner, repo_name = repo_spec.split('/', 1)
+
+    # Auto-detect repo if not specified
+    if not repo_owner or not repo_name:
+        try:
+            import subprocess
+            result = subprocess.run(['git', 'remote', 'get-url', 'origin'],
+                                  capture_output=True, text=True, check=True)
+            remote_url = result.stdout.strip()
+            # Parse git@github.com:owner/repo.git or https://github.com/owner/repo.git
+            if 'github.com' in remote_url:
+                import re
+                match = re.search(r'github\.com[:/]([^/]+)/([^/.]+)', remote_url)
+                if match:
+                    repo_owner = repo_owner or match.group(1)
+                    repo_name = repo_name or match.group(2)
+        except Exception:
+            pass
+
+    return repo_owner, repo_name
 
 
 def _handle_task_completion(task: Task, tm: TaskManager, config: WhillyConfig) -> None:
@@ -472,6 +505,7 @@ def wait_and_collect_tmux(
     dashboard: Dashboard,
     reporter: Reporter,
     iteration: int,
+    config: WhillyConfig,
     max_consecutive_errors: int = 3,
     log_dir: Path | None = None,
 ) -> None:
@@ -960,7 +994,7 @@ def run_plan(
 
                 if config.USE_TMUX and tmux_available():
                     agents = launch_batch_tmux(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
-                    wait_and_collect_tmux(agents, tm, dashboard, reporter, iteration, log_dir=log_dir)
+                    wait_and_collect_tmux(agents, tm, dashboard, reporter, iteration, config, log_dir=log_dir)
                 else:
                     procs = launch_batch_subprocess(batch, plan_file, config, log_dir, worktree_paths=worktree_paths)
                     wait_and_collect_subprocess(procs, tm, dashboard, reporter, iteration, config, log_dir=log_dir)
@@ -1363,6 +1397,13 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     specified labels (default: workshop,whilly:ready)
   whilly --from-project <url>     🆕 Convert GitHub Project board to Issues and tasks
                                     Usage: --from-project URL [--repo owner/name] [--go]
+  whilly --sync-todo <url>        🆕 Sync only Todo items from Project to Issues/tasks
+                                    Usage: --sync-todo URL [--repo owner/name]
+  whilly --watch-project <url>    🆕 Monitor Project for Todo items and sync continuously
+                                    Usage: --watch-project URL [--repo owner/name]
+  whilly --sync-status <issue> <status>  🆕 Update Project item status from Issue
+                                    Usage: --sync-status 123 "In Progress"
+  whilly --project-sync-status    🆕 Show current project sync status
   whilly --no-worktree            Отключить изоляцию плана в отдельном git
                                     worktree (по умолчанию план исполняется в
                                     .whilly_workspaces/{slug}/ чтобы не мешать
@@ -1642,7 +1683,7 @@ def main(argv: list[str] | None = None) -> int:
 
             # Ask user if they want to run the tasks immediately
             if sys.stdin.isatty():
-                choice = input(f"\nRun tasks immediately? [Y/n]: ").lower()
+                choice = input("\nRun tasks immediately? [Y/n]: ").lower()
                 if choice in ("", "y", "yes"):
                     _ansi(f"{CY}{B}Starting Whilly orchestrator...{R}")
                     args = [str(tasks_path)]  # Set args to run the generated tasks
@@ -1692,7 +1733,7 @@ def main(argv: list[str] | None = None) -> int:
                     if match:
                         repo_owner = repo_owner or match.group(1)
                         repo_name = repo_name or match.group(2)
-            except:
+            except Exception:
                 pass
 
         if not repo_owner or not repo_name:
@@ -1722,6 +1763,128 @@ def main(argv: list[str] | None = None) -> int:
 
         except Exception as e:
             _ansi(f"{RD}GitHub Project conversion failed: {e}{R}")
+            return 1
+
+    # --sync-todo: sync only Todo items from GitHub Project
+    if "--sync-todo" in args:
+        from whilly.github_projects import GitHubProjectsConverter, SyncConfig
+
+        idx = args.index("--sync-todo")
+        if idx + 1 >= len(args):
+            _ansi(f'{RD}Usage: whilly --sync-todo <project_url> [--repo owner/name]{R}')
+            return 1
+
+        project_url = args[idx + 1]
+        repo_owner, repo_name = _extract_repo_args(args)
+
+        if not repo_owner or not repo_name:
+            _ansi(f'{RD}Could not determine repository. Use: --repo owner/name{R}')
+            return 1
+
+        _ansi(f"{CY}{B}Syncing Todo items from GitHub Project...{R}")
+        _ansi(f"Project: {project_url}")
+        _ansi(f"Repository: {repo_owner}/{repo_name}")
+
+        try:
+            sync_config = SyncConfig(target_statuses={"Todo"})
+            converter = GitHubProjectsConverter(sync_config=sync_config)
+            stats = converter.sync_todo_items(project_url, repo_owner, repo_name)
+
+            _ansi(f"{GR}Sync completed:{R}")
+            _ansi(f"  - Created: {stats['created_count']} issues")
+            _ansi(f"  - Skipped: {stats['skipped_count']} items")
+            _ansi(f"  - Total Todo items: {stats['total_todo_items']}")
+
+            return 0
+
+        except Exception as e:
+            _ansi(f"{RD}Todo sync failed: {e}{R}")
+            return 1
+
+    # --watch-project: monitor GitHub Project for Todo items
+    if "--watch-project" in args:
+        from whilly.github_projects import GitHubProjectsConverter, SyncConfig
+
+        idx = args.index("--watch-project")
+        if idx + 1 >= len(args):
+            _ansi(f'{RD}Usage: whilly --watch-project <project_url> [--repo owner/name]{R}')
+            return 1
+
+        project_url = args[idx + 1]
+        repo_owner, repo_name = _extract_repo_args(args)
+
+        if not repo_owner or not repo_name:
+            _ansi(f'{RD}Could not determine repository. Use: --repo owner/name{R}')
+            return 1
+
+        _ansi(f"{CY}{B}Watching GitHub Project for Todo items...{R}")
+        _ansi(f"Project: {project_url}")
+        _ansi(f"Repository: {repo_owner}/{repo_name}")
+
+        try:
+            sync_config = SyncConfig(target_statuses={"Todo"})
+            converter = GitHubProjectsConverter(sync_config=sync_config)
+            converter.watch_project(project_url, repo_owner, repo_name)
+            return 0
+
+        except Exception as e:
+            _ansi(f"{RD}Project watching failed: {e}{R}")
+            return 1
+
+    # --sync-status: update Project item status from Issue
+    if "--sync-status" in args:
+        from whilly.github_projects import GitHubProjectsConverter
+
+        idx = args.index("--sync-status")
+        if idx + 2 >= len(args):
+            _ansi(f'{RD}Usage: whilly --sync-status <issue_number> <status>{R}')
+            return 1
+
+        try:
+            issue_number = int(args[idx + 1])
+            new_status = args[idx + 2]
+        except ValueError:
+            _ansi(f'{RD}Invalid issue number: {args[idx + 1]}{R}')
+            return 1
+
+        _ansi(f"{CY}Updating Project status for issue #{issue_number} to '{new_status}'...{R}")
+
+        try:
+            converter = GitHubProjectsConverter()
+            success = converter.sync_status_changes(issue_number, new_status)
+
+            if success:
+                _ansi(f"{GR}Status updated successfully{R}")
+                return 0
+            else:
+                _ansi(f"{YL}Status update completed with warnings{R}")
+                return 0
+
+        except Exception as e:
+            _ansi(f"{RD}Status sync failed: {e}{R}")
+            return 1
+
+    # --project-sync-status: show current sync status
+    if "--project-sync-status" in args:
+        from whilly.github_projects import GitHubProjectsConverter
+
+        _ansi(f"{CY}{B}Project Sync Status{R}")
+
+        try:
+            converter = GitHubProjectsConverter()
+            status = converter.get_sync_status()
+
+            _ansi(f"Last sync: {status['last_sync'] or 'Never'}")
+            _ansi(f"Project: {status['project_url'] or 'Not set'}")
+            _ansi(f"Repository: {status['repo'] or 'Not set'}")
+            _ansi(f"Synced items: {status['total_synced_items']}")
+            _ansi(f"Target statuses: {', '.join(status['target_statuses'])}")
+            _ansi(f"State file: {status['sync_state_file']}")
+
+            return 0
+
+        except Exception as e:
+            _ansi(f"{RD}Failed to get sync status: {e}{R}")
             return 1
 
     # --init: generate PRD from description

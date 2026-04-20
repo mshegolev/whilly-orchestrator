@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "github": {
+    "enabled": true,
+    "auto_close": true,
+    "add_comments": true
+  },
+  "jira": {
+    "enabled": false,
+    "auto_close": false,
+    "add_comments": false
+  },
+  "linear": {
+    "enabled": false
+  }
+}
