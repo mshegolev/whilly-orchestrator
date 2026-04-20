@@ -20,6 +20,7 @@ log = logging.getLogger("whilly.github_converter")
 @dataclass
 class GitHubIssue:
     """Структура GitHub Issue."""
+
     number: int
     title: str
     body: str | None
@@ -40,13 +41,14 @@ class GitHubIssue:
             labels=[label["name"] for label in issue_data.get("labels", [])],
             created_at=issue_data["createdAt"],
             updated_at=issue_data["updatedAt"],
-            url=issue_data["url"]
+            url=issue_data["url"],
         )
 
 
 @dataclass
 class WhillyTask:
     """Структура задачи Whilly - соответствует Task из task_manager."""
+
     id: str
     description: str
     phase: str = "implementation"
@@ -76,7 +78,7 @@ def _extract_priority(labels: list[str]) -> str:
         "priority:critical": "critical",
         "priority:high": "high",
         "priority:medium": "medium",
-        "priority:low": "low"
+        "priority:low": "low",
     }
 
     for label in labels:
@@ -171,15 +173,15 @@ def _extract_acceptance_criteria(body: str) -> list[str]:
 
     # Ищем чекбоксы или списки
     criteria = []
-    lines = body.split('\n')
+    lines = body.split("\n")
 
     for line in lines:
         line = line.strip()
         # GitHub checkboxes: - [ ] или - [x]
-        if line.startswith('- [ ]') or line.startswith('- [x]'):
+        if line.startswith("- [ ]") or line.startswith("- [x]"):
             criteria.append(line[5:].strip())
         # Простые списки
-        elif line.startswith('- ') and len(line) > 3:
+        elif line.startswith("- ") and len(line) > 3:
             criteria.append(line[2:].strip())
 
     return criteria or ["Task completed successfully", "Code passes linting"]
@@ -187,9 +189,7 @@ def _extract_acceptance_criteria(body: str) -> list[str]:
 
 def fetch_github_issues(filter_labels: list[str] | None = None) -> list[GitHubIssue]:
     """Получает Issues из GitHub через gh CLI."""
-    cmd = ["gh", "issue", "list", "--json",
-           "number,title,body,state,labels,createdAt,updatedAt,url",
-           "--limit", "100"]
+    cmd = ["gh", "issue", "list", "--json", "number,title,body,state,labels,createdAt,updatedAt,url", "--limit", "100"]
 
     if filter_labels:
         for label in filter_labels:
@@ -198,6 +198,7 @@ def fetch_github_issues(filter_labels: list[str] | None = None) -> list[GitHubIs
     try:
         # Используем текущее окружение, но без проблемного GITHUB_TOKEN
         import os
+
         env = os.environ.copy()
         env.pop("GITHUB_TOKEN", None)  # Убираем проблемный токен если есть
 
@@ -237,16 +238,15 @@ def convert_issues_to_tasks(issues: list[GitHubIssue]) -> list[WhillyTask]:
             test_steps=[
                 "Run `make lint` and verify no errors",
                 "Run `pytest` and verify all tests pass",
-                f"Verify GitHub Issue #{issue.number} requirements are met"
+                f"Verify GitHub Issue #{issue.number} requirements are met",
             ],
             prd_requirement=f"GitHub Issue #{issue.number}: {issue.title}",
             github_issue=issue.number,
-            github_url=issue.url
+            github_url=issue.url,
         )
 
         tasks.append(task)
-        log.info("Converted Issue #%d: %s → Task ID: %s",
-                issue.number, issue.title[:50], task.id)
+        log.info("Converted Issue #%d: %s → Task ID: %s", issue.number, issue.title[:50], task.id)
 
     return tasks
 
@@ -258,7 +258,7 @@ def create_whilly_plan(tasks: list[WhillyTask], prd_file: Path | None = None) ->
         "prd_file": str(prd_file) if prd_file else "docs/PRD-workshop.md",
         "created_at": datetime.now().isoformat(),
         "source": "github_issues",
-        "tasks": [task.to_dict() for task in tasks]
+        "tasks": [task.to_dict() for task in tasks],
     }
 
     return plan
@@ -267,7 +267,7 @@ def create_whilly_plan(tasks: list[WhillyTask], prd_file: Path | None = None) ->
 def generate_tasks_from_github(
     output_path: Path | str = "tasks-workshop.json",
     filter_labels: list[str] | None = None,
-    prd_file: Path | None = None
+    prd_file: Path | None = None,
 ) -> Path:
     """
     Главная функция: извлекает GitHub Issues и создает tasks.json для Whilly.

@@ -3,20 +3,18 @@ Self-healing error handler system.
 Detects common code errors and attempts automated fixes.
 """
 
-import ast
 import re
 import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 
 
 class CodeError:
     """Represents a detected code error with potential fix."""
 
-    def __init__(self, error_type: str, file_path: str, line_num: int,
-                 description: str, suggested_fix: str):
+    def __init__(self, error_type: str, file_path: str, line_num: int, description: str, suggested_fix: str):
         self.error_type = error_type
         self.file_path = file_path
         self.line_num = line_num
@@ -66,13 +64,11 @@ class SelfHealingHandler:
 
         # Read the file and analyze context
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path, "r") as f:
                 lines = f.readlines()
 
             if line_num > len(lines):
                 return None
-
-            error_line = lines[line_num - 1].strip()
 
             # Find function definition containing this line
             func_def_line = self._find_function_definition(lines, line_num)
@@ -80,7 +76,7 @@ class SelfHealingHandler:
                 func_signature = lines[func_def_line - 1].strip()
 
                 # Check if variable should be a parameter
-                if f"def " in func_signature and undefined_var not in func_signature:
+                if "def " in func_signature and undefined_var not in func_signature:
                     # Suggest adding parameter to function
                     suggested_fix = f"Add '{undefined_var}' parameter to function signature at line {func_def_line}"
 
@@ -89,7 +85,7 @@ class SelfHealingHandler:
                         file_path=file_path,
                         line_num=func_def_line,
                         description=f"Variable '{undefined_var}' not in scope, likely missing function parameter",
-                        suggested_fix=suggested_fix
+                        suggested_fix=suggested_fix,
                     )
 
         except Exception:
@@ -114,7 +110,7 @@ class SelfHealingHandler:
             file_path=file_path,
             line_num=line_num,
             description=f"Function {func_name} call is missing required parameters",
-            suggested_fix=suggested_fix
+            suggested_fix=suggested_fix,
         )
 
     def _fix_import_error(self, error_msg: str, file_path: str, line_num: int) -> Optional[CodeError]:
@@ -130,7 +126,7 @@ class SelfHealingHandler:
                 file_path=file_path,
                 line_num=line_num,
                 description=f"Missing module: {module_name}",
-                suggested_fix=suggested_fix
+                suggested_fix=suggested_fix,
             )
 
         return None
@@ -150,7 +146,7 @@ class SelfHealingHandler:
                 file_path=file_path,
                 line_num=line_num,
                 description=f"{obj_type} object missing attribute {attr_name}",
-                suggested_fix=suggested_fix
+                suggested_fix=suggested_fix,
             )
 
         return None
@@ -204,8 +200,9 @@ class SelfHealingHandler:
 
                 try:
                     print(f"🔧 Installing missing module: {module_name}")
-                    subprocess.run([sys.executable, "-m", "pip", "install", module_name],
-                                 check=True, capture_output=True)
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "install", module_name], check=True, capture_output=True
+                    )
                     return True
                 except subprocess.CalledProcessError:
                     print(f"Failed to install {module_name}")
@@ -220,7 +217,7 @@ def global_exception_handler(exctype, value, tb):
     healer = SelfHealingHandler(project_root)
 
     # Get the full traceback as string
-    tb_str = ''.join(traceback.format_exception(exctype, value, tb))
+    tb_str = "".join(traceback.format_exception(exctype, value, tb))
     error_msg = str(value)
 
     print("🚨 Error detected:")
@@ -247,9 +244,9 @@ def global_exception_handler(exctype, value, tb):
         print("🔍 No automated fix available")
 
     # Print full traceback for manual debugging
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("FULL TRACEBACK:")
-    print("="*80)
+    print("=" * 80)
     traceback.print_exception(exctype, value, tb)
 
 
@@ -265,6 +262,6 @@ if __name__ == "__main__":
 
     # Simulate some errors for testing
     try:
-        undefined_variable  # NameError
-    except:
+        raise NameError("Test error")
+    except NameError:
         pass

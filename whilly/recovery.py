@@ -50,13 +50,13 @@ def _extract_done_from_progress(progress_file: Path) -> Set[str]:
         return set()
 
     done_tasks = set()
-    content = progress_file.read_text(encoding='utf-8')
+    content = progress_file.read_text(encoding="utf-8")
 
     # Парсим строки вида: [task-id] DONE — description
-    for line in content.split('\n'):
+    for line in content.split("\n"):
         line = line.strip()
-        if line.startswith('[') and '] DONE' in line:
-            match = re.match(r'\[([^\]]+)\] DONE', line)
+        if line.startswith("[") and "] DONE" in line:
+            match = re.match(r"\[([^\]]+)\] DONE", line)
             if match:
                 done_tasks.add(match.group(1))
 
@@ -75,18 +75,17 @@ def _extract_done_from_logs(logs_dir: Path) -> Set[str]:
             continue
 
         try:
-            content = log_file.read_text(encoding='utf-8')
+            content = log_file.read_text(encoding="utf-8")
 
             # Проверяем наличие completion marker
             if COMPLETION_MARKER in content:
                 # Дополнительная проверка — парсим JSON если возможно
                 try:
-                    lines = content.split('\n')
+                    lines = content.split("\n")
                     for line in lines:
                         if line.startswith('{"type":"result"'):
                             result = json.loads(line)
-                            if (not result.get('is_error', False) and
-                                COMPLETION_MARKER in result.get('result', '')):
+                            if not result.get("is_error", False) and COMPLETION_MARKER in result.get("result", ""):
                                 task_id = log_file.stem
                                 done_tasks.add(task_id)
                                 break
@@ -123,14 +122,10 @@ def validate_task_consistency(task_manager, workspace_dir: Path) -> List[str]:
     # Проверяем несоответствия
     missing_in_tasks = (done_from_progress | done_from_logs) - done_in_tasks
     if missing_in_tasks:
-        warnings.append(
-            f"Tasks completed but not marked 'done': {sorted(missing_in_tasks)}"
-        )
+        warnings.append(f"Tasks completed but not marked 'done': {sorted(missing_in_tasks)}")
 
     extra_in_tasks = done_in_tasks - (done_from_progress | done_from_logs)
     if extra_in_tasks:
-        warnings.append(
-            f"Tasks marked 'done' but no completion evidence: {sorted(extra_in_tasks)}"
-        )
+        warnings.append(f"Tasks marked 'done' but no completion evidence: {sorted(extra_in_tasks)}")
 
     return warnings

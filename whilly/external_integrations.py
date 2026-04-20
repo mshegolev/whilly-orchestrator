@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import subprocess
@@ -19,6 +18,7 @@ log = logging.getLogger("whilly.external_integrations")
 @dataclass
 class ExternalTaskRef:
     """Ссылка на внешнюю задачу."""
+
     system: str  # "github" | "jira" | "linear" | etc
     task_id: str  # Issue number, ticket key, etc
     url: str
@@ -58,12 +58,7 @@ class GitHubIntegration(ExternalIntegration):
             env = os.environ.copy()
             env.pop("GITHUB_TOKEN", None)
 
-            result = subprocess.run(
-                ["gh", "auth", "status"],
-                capture_output=True,
-                text=True,
-                env=env
-            )
+            result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, env=env)
             return result.returncode == 0
         except FileNotFoundError:
             log.warning("GitHub CLI not found in PATH")
@@ -89,7 +84,7 @@ class GitHubIntegration(ExternalIntegration):
                 ["gh", "issue", "close", task_ref.task_id, "--reason", "completed"],
                 capture_output=True,
                 text=True,
-                env=env
+                env=env,
             )
 
             if result.returncode == 0:
@@ -113,10 +108,7 @@ class GitHubIntegration(ExternalIntegration):
             env.pop("GITHUB_TOKEN", None)
 
             result = subprocess.run(
-                ["gh", "issue", "comment", task_ref.task_id, "--body", comment],
-                capture_output=True,
-                text=True,
-                env=env
+                ["gh", "issue", "comment", task_ref.task_id, "--body", comment], capture_output=True, text=True, env=env
             )
 
             if result.returncode == 0:
@@ -132,14 +124,14 @@ class GitHubIntegration(ExternalIntegration):
 
     def _build_completion_comment(self, whilly_task_id: str, commit_sha: str | None) -> str:
         """Создает комментарий о завершении задачи."""
-        comment = f"🤖 **Whilly Task Completed**\n\n"
+        comment = "🤖 **Whilly Task Completed**\n\n"
         comment += f"- **Task ID**: `{whilly_task_id}`\n"
-        comment += f"- **Status**: ✅ Completed successfully\n"
+        comment += "- **Status**: ✅ Completed successfully\n"
 
         if commit_sha:
             comment += f"- **Commit**: {commit_sha[:8]}\n"
 
-        comment += f"\n*Automated by [Whilly Orchestrator](https://github.com/mshegolev/whilly-orchestrator)*"
+        comment += "\n*Automated by [Whilly Orchestrator](https://github.com/mshegolev/whilly-orchestrator)*"
         return comment
 
 
@@ -153,7 +145,7 @@ class JiraIntegration(ExternalIntegration):
         token: str | None = None,
         auto_close: bool = True,
         add_comments: bool = True,
-        transition_to: str = "Done"  # Статус для закрытия
+        transition_to: str = "Done",  # Статус для закрытия
     ):
         self.server_url = server_url or os.getenv("JIRA_SERVER_URL")
         self.username = username or os.getenv("JIRA_USERNAME")
@@ -261,14 +253,14 @@ class JiraIntegration(ExternalIntegration):
 
     def _build_completion_comment(self, whilly_task_id: str, commit_sha: str | None) -> str:
         """Создает комментарий о завершении задачи для Jira."""
-        comment = f"🤖 *Whilly Task Completed*\n\n"
+        comment = "🤖 *Whilly Task Completed*\n\n"
         comment += f"• *Task ID*: {whilly_task_id}\n"
-        comment += f"• *Status*: ✅ Completed successfully\n"
+        comment += "• *Status*: ✅ Completed successfully\n"
 
         if commit_sha:
             comment += f"• *Commit*: {commit_sha[:8]}\n"
 
-        comment += f"\n_Automated by Whilly Orchestrator_"
+        comment += "\n_Automated by Whilly Orchestrator_"
         return comment
 
 
@@ -286,8 +278,7 @@ class ExternalIntegrationManager:
         github_config = self.config.get("github", {})
         if github_config.get("enabled", True):
             self.integrations["github"] = GitHubIntegration(
-                auto_close=github_config.get("auto_close", True),
-                add_comments=github_config.get("add_comments", True)
+                auto_close=github_config.get("auto_close", True), add_comments=github_config.get("add_comments", True)
             )
 
         # Jira
@@ -299,10 +290,12 @@ class ExternalIntegrationManager:
                 token=jira_config.get("token"),
                 auto_close=jira_config.get("auto_close", True),
                 add_comments=jira_config.get("add_comments", True),
-                transition_to=jira_config.get("transition_to", "Done")
+                transition_to=jira_config.get("transition_to", "Done"),
             )
 
-    def close_external_task(self, task_ref: ExternalTaskRef, whilly_task_id: str, commit_sha: str | None = None) -> bool:
+    def close_external_task(
+        self, task_ref: ExternalTaskRef, whilly_task_id: str, commit_sha: str | None = None
+    ) -> bool:
         """Закрывает задачу во внешней системе."""
         integration = self.integrations.get(task_ref.system)
         if not integration:
@@ -321,20 +314,20 @@ class ExternalIntegrationManager:
 
         # GitHub Issue
         if "github_issue" in task_data and "github_url" in task_data:
-            refs.append(ExternalTaskRef(
-                system="github",
-                task_id=str(task_data["github_issue"]),
-                url=task_data["github_url"]
-            ))
+            refs.append(
+                ExternalTaskRef(system="github", task_id=str(task_data["github_issue"]), url=task_data["github_url"])
+            )
 
         # Jira Task (если есть в description или отдельном поле)
         jira_key = self._extract_jira_key_from_task(task_data)
         if jira_key:
-            refs.append(ExternalTaskRef(
-                system="jira",
-                task_id=jira_key,
-                url=f"{self.config.get('jira', {}).get('server_url', '')}/browse/{jira_key}"
-            ))
+            refs.append(
+                ExternalTaskRef(
+                    system="jira",
+                    task_id=jira_key,
+                    url=f"{self.config.get('jira', {}).get('server_url', '')}/browse/{jira_key}",
+                )
+            )
 
         return refs
 

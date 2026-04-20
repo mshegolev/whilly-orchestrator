@@ -36,7 +36,26 @@ def _generate_short_slug(description: str) -> str:
     # Remove brackets, tags, and common words
     cleaned = re.sub(r"[\[\](){}]", "", description.lower())
     # Split into words and filter out common/stop words
-    stop_words = {"add", "remove", "fix", "update", "create", "implement", "the", "to", "a", "an", "and", "or", "in", "on", "at", "for", "with", "by"}
+    stop_words = {
+        "add",
+        "remove",
+        "fix",
+        "update",
+        "create",
+        "implement",
+        "the",
+        "to",
+        "a",
+        "an",
+        "and",
+        "or",
+        "in",
+        "on",
+        "at",
+        "for",
+        "with",
+        "by",
+    }
     words = [w for w in re.findall(r"\b\w+\b", cleaned) if w not in stop_words and len(w) > 2]
 
     if not words:

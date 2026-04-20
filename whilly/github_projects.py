@@ -19,6 +19,7 @@ from whilly.config import WhillyConfig
 @dataclass
 class ProjectItem:
     """Single item from GitHub Project board."""
+
     id: str
     title: str
     body: str = ""
@@ -42,28 +43,34 @@ class ProjectItem:
             "In Progress": "whilly:in-progress",
             "Review": "whilly:review",
             "Done": "whilly:done",
-            "Backlog": "whilly:backlog"
+            "Backlog": "whilly:backlog",
         }
         return status_to_label.get(self.status, "whilly:ready")
+
 
 @dataclass
 class SyncConfig:
     """Configuration for status-oriented sync workflow."""
+
     target_statuses: Set[str] = field(default_factory=lambda: {"Todo"})
-    status_mapping: Dict[str, str] = field(default_factory=lambda: {
-        "Todo": "whilly:ready",
-        "In Progress": "whilly:in-progress",
-        "Review": "whilly:review",
-        "Done": "whilly:done",
-        "Backlog": "whilly:backlog"
-    })
-    reverse_mapping: Dict[str, str] = field(default_factory=lambda: {
-        "whilly:ready": "Todo",
-        "whilly:in-progress": "In Progress",
-        "whilly:review": "Review",
-        "whilly:done": "Done",
-        "whilly:backlog": "Backlog"
-    })
+    status_mapping: Dict[str, str] = field(
+        default_factory=lambda: {
+            "Todo": "whilly:ready",
+            "In Progress": "whilly:in-progress",
+            "Review": "whilly:review",
+            "Done": "whilly:done",
+            "Backlog": "whilly:backlog",
+        }
+    )
+    reverse_mapping: Dict[str, str] = field(
+        default_factory=lambda: {
+            "whilly:ready": "Todo",
+            "whilly:in-progress": "In Progress",
+            "whilly:review": "Review",
+            "whilly:done": "Done",
+            "whilly:backlog": "Backlog",
+        }
+    )
     sync_state_file: str = ".whilly_project_sync_state.json"
     watch_interval: int = 60  # seconds
 
@@ -85,31 +92,19 @@ class GitHubProjectsConverter:
         """Load sync state from file."""
         state_file = Path(self.sync_config.sync_state_file)
         if not state_file.exists():
-            return {
-                "last_sync": None,
-                "synced_items": {},
-                "project_url": None,
-                "repo_owner": None,
-                "repo_name": None
-            }
+            return {"last_sync": None, "synced_items": {}, "project_url": None, "repo_owner": None, "repo_name": None}
 
         try:
-            with open(state_file, 'r') as f:
+            with open(state_file, "r") as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
             print(f"⚠️  Failed to load sync state: {e}")
-            return {
-                "last_sync": None,
-                "synced_items": {},
-                "project_url": None,
-                "repo_owner": None,
-                "repo_name": None
-            }
+            return {"last_sync": None, "synced_items": {}, "project_url": None, "repo_owner": None, "repo_name": None}
 
     def _save_sync_state(self):
         """Save sync state to file."""
         try:
-            with open(self.sync_config.sync_state_file, 'w') as f:
+            with open(self.sync_config.sync_state_file, "w") as f:
                 json.dump(self._sync_state, f, indent=2, default=str)
         except IOError as e:
             print(f"⚠️  Failed to save sync state: {e}")
@@ -117,9 +112,8 @@ class GitHubProjectsConverter:
     def _check_gh_cli(self):
         """Verify GitHub CLI is available and authenticated."""
         try:
-            result = subprocess.run(['gh', 'auth', 'status'],
-                                  capture_output=True, text=True, check=True)
-            if 'Logged in to github.com' not in result.stdout:
+            result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=True)
+            if "Logged in to github.com" not in result.stdout:
                 raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
         except subprocess.CalledProcessError:
             raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
@@ -135,9 +129,9 @@ class GitHubProjectsConverter:
         # https://github.com/mshegolev/repo/projects/3
 
         patterns = [
-            r'github\.com/users/([^/]+)/projects/(\d+)',
-            r'github\.com/orgs/([^/]+)/projects/(\d+)',
-            r'github\.com/([^/]+)/([^/]+)/projects/(\d+)'
+            r"github\.com/users/([^/]+)/projects/(\d+)",
+            r"github\.com/orgs/([^/]+)/projects/(\d+)",
+            r"github\.com/([^/]+)/([^/]+)/projects/(\d+)",
         ]
 
         for pattern in patterns:
@@ -147,27 +141,22 @@ class GitHubProjectsConverter:
                     owner = match.group(1)
                     project_number = match.group(2)
                     return {
-                        'owner': owner,
-                        'project_number': int(project_number),
-                        'type': 'user' if '/users/' in project_url else 'org',
-                        'repo': None
+                        "owner": owner,
+                        "project_number": int(project_number),
+                        "type": "user" if "/users/" in project_url else "org",
+                        "repo": None,
                     }
                 else:  # repo format
                     owner = match.group(1)
                     repo = match.group(2)
                     project_number = match.group(3)
-                    return {
-                        'owner': owner,
-                        'repo': repo,
-                        'project_number': int(project_number),
-                        'type': 'repo'
-                    }
+                    return {"owner": owner, "repo": repo, "project_number": int(project_number), "type": "repo"}
 
         raise ValueError(f"Invalid GitHub Project URL format: {project_url}")
 
-    def fetch_project_items(self, project_url: str,
-                           filter_statuses: Optional[Set[str]] = None,
-                           include_updated_at: bool = False) -> List[ProjectItem]:
+    def fetch_project_items(
+        self, project_url: str, filter_statuses: Optional[Set[str]] = None, include_updated_at: bool = False
+    ) -> List[ProjectItem]:
         """Fetch items from GitHub Project board using GraphQL.
 
         Args:
@@ -181,7 +170,7 @@ class GitHubProjectsConverter:
         # GraphQL query to fetch project items
         updated_at_field = "updatedAt" if include_updated_at else ""
 
-        query = f'''
+        query = f"""
         query($owner: String!, $number: Int!) {{
           user(login: $owner) {{
             projectV2(number: $number) {{
@@ -232,15 +221,20 @@ class GitHubProjectsConverter:
             }}
           }}
         }}
-        '''
+        """
 
         try:
             # Execute GraphQL query via gh CLI
             cmd = [
-                'gh', 'api', 'graphql',
-                '-f', f'query={query}',
-                '-F', f'owner={project_info["owner"]}',
-                '-F', f'number={project_info["project_number"]}'
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={query}",
+                "-F",
+                f'owner={project_info["owner"]}',
+                "-F",
+                f'number={project_info["project_number"]}',
             ]
 
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -263,71 +257,69 @@ class GitHubProjectsConverter:
         """Parse GraphQL response into ProjectItem objects."""
 
         items = []
-        project_items = data.get('data', {}).get('user', {}).get('projectV2', {}).get('items', {}).get('nodes', [])
+        project_items = data.get("data", {}).get("user", {}).get("projectV2", {}).get("items", {}).get("nodes", [])
 
         for item_data in project_items:
-            content = item_data.get('content', {})
+            content = item_data.get("content", {})
 
             # Skip if no content (empty project item)
             if not content:
                 continue
 
-            title = content.get('title', 'Untitled')
-            body = content.get('body', '')
-            url = content.get('url')
-            issue_number = content.get('number')
+            title = content.get("title", "Untitled")
+            body = content.get("body", "")
+            url = content.get("url")
+            issue_number = content.get("number")
 
             # Extract field values (Status, Priority, etc.)
             status = "Todo"
             priority = "medium"
-            updated_at = item_data.get('updatedAt') if include_updated_at else None
+            updated_at = item_data.get("updatedAt") if include_updated_at else None
 
-            field_values = item_data.get('fieldValues', {}).get('nodes', [])
+            field_values = item_data.get("fieldValues", {}).get("nodes", [])
             for field_value in field_values:
-                field_name = field_value.get('field', {}).get('name', '').lower()
+                field_name = field_value.get("field", {}).get("name", "").lower()
 
-                if field_name == 'status':
-                    status = field_value.get('name', status)
-                elif field_name == 'priority':
-                    priority = field_value.get('name', priority).lower()
-                elif field_name in ['title']:
-                    if 'text' in field_value:
-                        title = field_value['text'] or title
+                if field_name == "status":
+                    status = field_value.get("name", status)
+                elif field_name == "priority":
+                    priority = field_value.get("name", priority).lower()
+                elif field_name in ["title"]:
+                    if "text" in field_value:
+                        title = field_value["text"] or title
 
             # Create ProjectItem
             item = ProjectItem(
-                id=item_data['id'],
+                id=item_data["id"],
                 title=title,
                 body=body,
                 status=status,
                 priority=priority,
                 url=url,
                 updated_at=updated_at,
-                issue_number=issue_number
+                issue_number=issue_number,
             )
 
             items.append(item)
 
         return items
 
-    def convert_items_to_issues(self, items: List[ProjectItem],
-                               repo_owner: str, repo_name: str,
-                               label: str = "whilly:ready") -> List[Dict[str, Any]]:
+    def convert_items_to_issues(
+        self, items: List[ProjectItem], repo_owner: str, repo_name: str, label: str = "whilly:ready"
+    ) -> List[Dict[str, Any]]:
         """Convert Project items to GitHub Issues."""
 
         created_issues = []
 
         for item in items:
             # Skip if already an issue (has URL with /issues/)
-            if item.url and '/issues/' in item.url:
+            if item.url and "/issues/" in item.url:
                 print(f"⏭️  Skipping {item.title} - already an issue")
                 continue
 
             try:
                 # Create GitHub Issue
-                issue_data = self._create_github_issue(
-                    item, repo_owner, repo_name, label
-                )
+                issue_data = self._create_github_issue(item, repo_owner, repo_name, label)
                 created_issues.append(issue_data)
                 print(f"✅ Created Issue: {item.title}")
 
@@ -347,31 +339,35 @@ class GitHubProjectsConverter:
 
         # Create issue via gh CLI
         cmd = [
-            'gh', 'issue', 'create',
-            '--repo', f'{owner}/{repo}',
-            '--title', item.title,
-            '--body', body,
-            '--label', label
+            "gh",
+            "issue",
+            "create",
+            "--repo",
+            f"{owner}/{repo}",
+            "--title",
+            item.title,
+            "--body",
+            body,
+            "--label",
+            label,
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         issue_url = result.stdout.strip()
 
         # Extract issue number from URL
-        issue_number = int(issue_url.split('/')[-1])
+        issue_number = int(issue_url.split("/")[-1])
 
-        return {
-            'title': item.title,
-            'body': body,
-            'url': issue_url,
-            'number': issue_number,
-            'labels': [label]
-        }
+        return {"title": item.title, "body": body, "url": issue_url, "number": issue_number, "labels": [label]}
 
-    def project_to_whilly_tasks(self, project_url: str,
-                               repo_owner: str, repo_name: str,
-                               output_file: str = "tasks-from-project.json",
-                               label: str = "whilly:ready") -> str:
+    def project_to_whilly_tasks(
+        self,
+        project_url: str,
+        repo_owner: str,
+        repo_name: str,
+        output_file: str = "tasks-from-project.json",
+        label: str = "whilly:ready",
+    ) -> str:
         """Complete pipeline: Project → Issues → Whilly tasks."""
 
         print(f"🔄 Fetching items from GitHub Project: {project_url}")
@@ -396,8 +392,9 @@ class GitHubProjectsConverter:
         print(f"✅ Whilly tasks saved to: {output_file}")
         return output_file
 
-    def sync_todo_items(self, project_url: str, repo_owner: str, repo_name: str,
-                       output_file: str = "tasks-from-project.json") -> Dict[str, Any]:
+    def sync_todo_items(
+        self, project_url: str, repo_owner: str, repo_name: str, output_file: str = "tasks-from-project.json"
+    ) -> Dict[str, Any]:
         """Sync only Todo items from GitHub Project to Issues and tasks.
 
         Returns sync statistics and information.
@@ -406,21 +403,14 @@ class GitHubProjectsConverter:
 
         # Fetch only Todo items
         items = self.fetch_project_items(
-            project_url,
-            filter_statuses=self.sync_config.target_statuses,
-            include_updated_at=True
+            project_url, filter_statuses=self.sync_config.target_statuses, include_updated_at=True
         )
 
         print(f"📋 Found {len(items)} Todo items")
 
         if not items:
             print("✅ No Todo items to sync")
-            return {
-                "synced_count": 0,
-                "created_count": 0,
-                "skipped_count": 0,
-                "total_todo_items": 0
-            }
+            return {"synced_count": 0, "created_count": 0, "skipped_count": 0, "total_todo_items": 0}
 
         # Track what we've already synced
         synced_items = self._sync_state.get("synced_items", {})
@@ -440,12 +430,12 @@ class GitHubProjectsConverter:
                     continue
 
             # Skip if already an issue
-            if item.url and '/issues/' in item.url:
+            if item.url and "/issues/" in item.url:
                 print(f"⏭️  Skipping {item.title} - already an issue")
                 synced_items[item_key] = {
                     "issue_number": item.issue_number,
                     "issue_url": item.url,
-                    "last_sync": datetime.now(timezone.utc).isoformat()
+                    "last_sync": datetime.now(timezone.utc).isoformat(),
                 }
                 skipped_count += 1
                 continue
@@ -460,7 +450,7 @@ class GitHubProjectsConverter:
                 synced_items[item_key] = {
                     "issue_number": issue_data["number"],
                     "issue_url": issue_data["url"],
-                    "last_sync": datetime.now(timezone.utc).isoformat()
+                    "last_sync": datetime.now(timezone.utc).isoformat(),
                 }
 
                 print(f"✅ Created Issue: {item.title}")
@@ -470,13 +460,15 @@ class GitHubProjectsConverter:
                 print(f"❌ Failed to create issue for {item.title}: {e}")
 
         # Update sync state
-        self._sync_state.update({
-            "last_sync": datetime.now(timezone.utc).isoformat(),
-            "synced_items": synced_items,
-            "project_url": project_url,
-            "repo_owner": repo_owner,
-            "repo_name": repo_name
-        })
+        self._sync_state.update(
+            {
+                "last_sync": datetime.now(timezone.utc).isoformat(),
+                "synced_items": synced_items,
+                "project_url": project_url,
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+            }
+        )
         self._save_sync_state()
 
         # Generate Whilly tasks from all issues with appropriate labels
@@ -493,7 +485,7 @@ class GitHubProjectsConverter:
             "synced_count": created_count,
             "created_count": created_count,
             "skipped_count": skipped_count,
-            "total_todo_items": len(items)
+            "total_todo_items": len(items),
         }
 
     def sync_status_changes(self, issue_number: int, new_status: str) -> bool:
@@ -536,8 +528,9 @@ class GitHubProjectsConverter:
         print("⚠️  Project item status updates not yet implemented (requires field IDs)")
         return True
 
-    def watch_project(self, project_url: str, repo_owner: str, repo_name: str,
-                     output_file: str = "tasks-from-project.json") -> None:
+    def watch_project(
+        self, project_url: str, repo_owner: str, repo_name: str, output_file: str = "tasks-from-project.json"
+    ) -> None:
         """Watch project for changes and sync Todo items continuously.
 
         This method runs indefinitely, checking for changes every sync_config.watch_interval seconds.
@@ -580,7 +573,7 @@ class GitHubProjectsConverter:
             "total_synced_items": len(synced_items),
             "sync_state_file": self.sync_config.sync_state_file,
             "target_statuses": list(self.sync_config.target_statuses),
-            "status_mapping": self.sync_config.status_mapping
+            "status_mapping": self.sync_config.status_mapping,
         }
 
     def reset_sync_state(self) -> None:
@@ -590,7 +583,7 @@ class GitHubProjectsConverter:
             "synced_items": {},
             "project_url": None,
             "repo_owner": None,
-            "repo_name": None
+            "repo_name": None,
         }
         self._save_sync_state()
         print("✅ Sync state reset")
@@ -602,7 +595,9 @@ def main():
 
     if len(sys.argv) < 4:
         print("Usage: python -m whilly.github_projects <project_url> <repo_owner> <repo_name>")
-        print("Example: python -m whilly.github_projects https://github.com/users/mshegolev/projects/4 mshegolev whilly-orchestrator")
+        print(
+            "Example: python -m whilly.github_projects https://github.com/users/mshegolev/projects/4 mshegolev whilly-orchestrator"
+        )
         sys.exit(1)
 
     converter = GitHubProjectsConverter()

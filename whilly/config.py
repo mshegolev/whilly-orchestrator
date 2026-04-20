@@ -82,5 +82,5 @@ class WhillyConfig:
                 "auto_close": self.JIRA_AUTO_CLOSE,
                 "add_comments": self.JIRA_ADD_COMMENTS,
                 "transition_to": self.JIRA_TRANSITION_TO,
-            }
+            },
         }
