@@ -75,7 +75,9 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         log(f"fetch failed: {exc}")
         return 0
-    log(f"plan={plan_path} new={stats.new} updated={stats.updated} closed_externally={stats.closed_externally} total_open={stats.total_open}")
+    log(
+        f"plan={plan_path} new={stats.new} updated={stats.updated} closed_externally={stats.closed_externally} total_open={stats.total_open}"
+    )
     if stats.secret_warnings:
         for w in stats.secret_warnings:
             log(f"WARN secret pattern: {w}")
