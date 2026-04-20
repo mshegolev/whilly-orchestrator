@@ -95,6 +95,10 @@ See `docs/Whilly-Usage.md` for the full CLI reference.
 - [Whilly-Usage.md](docs/Whilly-Usage.md) — CLI reference and flag catalog
 - [Whilly-Interfaces-and-Tasks.md](docs/Whilly-Interfaces-and-Tasks.md) — task file format, state store schema, agent output contract
 
+## Workshop kit
+
+Running HackSprint1 or a self-paced walkthrough? The full workshop kit (BRD, PRD, ADRs, tutorial, roadmap) lives under [docs/workshop/INDEX.md](docs/workshop/INDEX.md).
+
 ## Development
 
 ```bash
