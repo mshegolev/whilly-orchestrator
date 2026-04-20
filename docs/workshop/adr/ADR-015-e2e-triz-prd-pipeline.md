@@ -72,9 +72,12 @@ Key design choices:
    TRIZ + PRD + execute. When the cap is hit mid-run, remaining issues
    are skipped with `budget.exceeded` events (not errored out).
 
-6. **Quality gate runs pytest + ruff before PR opens.** Fails label the
-   PR (future) and leave it for human triage — whilly never opens a PR
-   it wouldn't accept from a human contributor.
+6. **Quality gate runs a language-agnostic check before PR opens** (see
+   ADR-016 for the Protocol-based implementation). Python/Node/Go/Rust
+   auto-detected from marker files; fails label the PR (future) and
+   leave it for human triage — whilly never opens a PR it wouldn't
+   accept from a human contributor. Originally inlined as pytest+ruff;
+   abstracted out so non-Python self-hosting works.
 
 7. **No auto-merge by default.** This pipeline can modify whilly's own
    code; `--allow-auto-merge` is an explicit opt-in flag and the default
