@@ -1,0 +1,45 @@
+# Патч для интеграции recovery механизма в whilly/cli.py
+
+# В функции run_plan, после создания TaskManager:
+
+from whilly.recovery import recover_task_statuses, validate_task_consistency
+
+def run_plan(plan_file, config, agent_name, *, resume=False, state_store=None):
+    # ... существующий код ...
+
+    tm = TaskManager(plan_file)
+
+    # 🔧 НОВОЕ: Recovery статусов после сбоя
+    if workspace_dir and workspace_dir.exists():
+        recovered = recover_task_statuses(tm, workspace_dir)
+        if recovered:
+            log.info("🔄 Recovered task statuses: %s", recovered)
+
+    # ... остальной код ...
+
+    # 🔧 НОВОЕ: Проверка консистентности в конце
+    warnings = validate_task_consistency(tm, workspace_dir)
+    if warnings:
+        for warning in warnings:
+            log.warning("⚠️  Status inconsistency: %s", warning)
+
+# Альтернативно можно добавить в reset_stale_tasks:
+
+def reset_stale_tasks(self, workspace_dir: Path = None) -> int:
+    """Reset in_progress -> pending at startup. Returns count."""
+    count = 0
+    for task in self.tasks:
+        if task.status == "in_progress":
+            task.status = "pending"
+            count += 1
+
+    # 🔧 НОВОЕ: Recovery done статусов
+    if workspace_dir:
+        from whilly.recovery import recover_task_statuses
+        recovered = recover_task_statuses(self, workspace_dir)
+        if recovered:
+            count += len(recovered)
+
+    if count:
+        self.save()
+    return count
