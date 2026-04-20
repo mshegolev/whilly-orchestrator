@@ -360,10 +360,10 @@ def format_tree(tree: HierarchyTree, *, max_title: int = 60) -> str:
         lines.append(f"EPIC: {_title(epic)}  [{epic.id}]")
         for story_a in children_of.get(epic.id, []):
             story = story_a.child
-            lines.append(f"  └── STORY: {_title(story)}  " f"(score {story_a.score:.2f})  [{story.id}]")
+            lines.append(f"  └── STORY: {_title(story)}  (score {story_a.score:.2f})  [{story.id}]")
             for task_a in children_of.get(story.id, []):
                 task = task_a.child
-                lines.append(f"        └── TASK: {_title(task)}  " f"(score {task_a.score:.2f})  [{task.id}]")
+                lines.append(f"        └── TASK: {_title(task)}  (score {task_a.score:.2f})  [{task.id}]")
         lines.append("")
 
     # Orphan stories (classified Story but no epic matched)
@@ -375,7 +375,7 @@ def format_tree(tree: HierarchyTree, *, max_title: int = 60) -> str:
                 pass  # rendered below the story
             lines.append(f"  STORY: {_title(s)}  [{s.id}]")
             for task_a in children_of.get(s.id, []):
-                lines.append(f"    └── TASK: {_title(task_a.child)}  " f"(score {task_a.score:.2f})")
+                lines.append(f"    └── TASK: {_title(task_a.child)}  (score {task_a.score:.2f})")
         lines.append("")
 
     # Orphan tasks (no matching story)

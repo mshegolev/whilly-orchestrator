@@ -6,7 +6,6 @@ This example shows how to use the new sync functionality programmatically.
 """
 
 from whilly.github_projects import GitHubProjectsConverter, SyncConfig
-from whilly.config import WhillyConfig
 import tempfile
 from pathlib import Path
 
@@ -25,7 +24,7 @@ def example_sync_workflow():
         sync_config = SyncConfig(
             target_statuses={"Todo"},
             sync_state_file=str(sync_state_file),
-            watch_interval=30  # Check every 30 seconds
+            watch_interval=30,  # Check every 30 seconds
         )
 
         # Create converter (this would normally check GitHub CLI auth)
@@ -83,16 +82,11 @@ def example_cli_workflow():
     repo_spec = "mshegolev/whilly-orchestrator"
 
     commands = [
-        ("Initial sync of Todo items",
-         f"whilly --sync-todo '{project_url}' --repo {repo_spec}"),
-        ("Continuous monitoring",
-         f"whilly --watch-project '{project_url}' --repo {repo_spec}"),
-        ("Update item status",
-         "whilly --sync-status 123 'In Progress'"),
-        ("Check sync status",
-         "whilly --project-sync-status"),
-        ("Full conversion (original)",
-         f"whilly --from-project '{project_url}' --repo {repo_spec}")
+        ("Initial sync of Todo items", f"whilly --sync-todo '{project_url}' --repo {repo_spec}"),
+        ("Continuous monitoring", f"whilly --watch-project '{project_url}' --repo {repo_spec}"),
+        ("Update item status", "whilly --sync-status 123 'In Progress'"),
+        ("Check sync status", "whilly --project-sync-status"),
+        ("Full conversion (original)", f"whilly --from-project '{project_url}' --repo {repo_spec}"),
     ]
 
     for description, command in commands:

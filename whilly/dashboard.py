@@ -206,7 +206,7 @@ class Dashboard:
                 prio_text = f"[{prio_style}]{t.priority}[/]" if prio_style else t.priority
                 parts.append(
                     Text.from_markup(
-                        f"   [cyan]{t.id:<9}[/] [dim]{t.category:<12}[/]" f" {prio_text} [dim]{t.description[:60]}[/]"
+                        f"   [cyan]{t.id:<9}[/] [dim]{t.category:<12}[/] {prio_text} [dim]{t.description[:60]}[/]"
                     )
                 )
             parts.append(Text(""))
@@ -677,12 +677,12 @@ class Dashboard:
             f"Начни с приветствия и первого вопроса."
         )
 
-        print(f"\n\033[36m\033[1m{'='*60}\033[0m")
+        print(f"\n\033[36m\033[1m{'=' * 60}\033[0m")
         print("\033[36m\033[1m  PRD Wizard — Интерактивный режим\033[0m")
         print(f"\033[36m\033[1m  Идея: {idea}\033[0m")
         print(f"\033[36m\033[1m  PRD будет сохранён: {prd_path}\033[0m")
         print("\033[36m\033[1m  Для выхода: /exit или Ctrl+C\033[0m")
-        print(f"\033[36m\033[1m{'='*60}\033[0m\n")
+        print(f"\033[36m\033[1m{'=' * 60}\033[0m\n")
 
         # Launch Claude in INTERACTIVE mode (no -p, no --print)
         # Claude opens its own REPL where user types messages
@@ -723,7 +723,7 @@ class Dashboard:
             def _post_prd_yes():
                 self.keyboard.register("y", lambda: None)
                 self._overlay_text = (
-                    "[bold cyan]Генерация задач из PRD...[/]\n\n" "[dim]Claude анализирует PRD и создаёт план задач.[/]"
+                    "[bold cyan]Генерация задач из PRD...[/]\n\n[dim]Claude анализирует PRD и создаёт план задач.[/]"
                 )
                 self.update()
                 self._launch_task_gen_from_prd(idea, prd_path, prd_dir)
@@ -1085,7 +1085,7 @@ class Dashboard:
             "  Каждая задача = один агент. Агенты работают параллельно (tmux).\n"
             "  Whilly следит за прогрессом, стоимостью и deadlock'ами.\n\n"
             "[bold]\u2666 Рабочий цикл[/]\n"
-            "  [cyan]1.[/] Создать PRD:   [dim]whilly.py --init \"описание\" --plan[/]\n"
+            '  [cyan]1.[/] Создать PRD:   [dim]whilly.py --init "описание" --plan[/]\n'
             "  [cyan]2.[/] Запустить:     [dim]whilly.py .planning/tasks.json[/]\n"
             "  [cyan]3.[/] Наблюдать:     Dashboard обновляется каждую секунду\n"
             "  [cyan]4.[/] Новая идея:    Нажми [bold]n[/] \u2014 PRD Wizard создаст задачи на лету\n"
@@ -1107,8 +1107,8 @@ class Dashboard:
             "  [dim]whilly.py[/]                          Интерактивное меню\n"
             "  [dim]whilly.py plan.json[/]                Запуск плана\n"
             "  [dim]whilly.py --all[/]                    Все планы\n"
-            "  [dim]whilly.py --init \"desc\" --plan[/]     PRD + задачи\n"
-            "  [dim]whilly.py --init \"desc\" --go[/]       PRD + задачи + запуск\n"
+            '  [dim]whilly.py --init "desc" --plan[/]     PRD + задачи\n'
+            '  [dim]whilly.py --init "desc" --go[/]       PRD + задачи + запуск\n'
             "  [dim]whilly.py --plan PRD.md[/]            Задачи из PRD\n"
             "  [dim]whilly.py --resume[/]                 Продолжить после crash\n"
             "  [dim]whilly.py --headless[/]               CI режим (JSON stdout)\n"

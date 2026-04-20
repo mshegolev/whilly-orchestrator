@@ -31,9 +31,9 @@ def _get_user_repos() -> list[str]:
     if not _check_gh_auth():
         return []
 
-    success, output = _run_command([
-        "gh", "repo", "list", "--limit", "20", "--json", "nameWithOwner", "-q", ".[].nameWithOwner"
-    ])
+    success, output = _run_command(
+        ["gh", "repo", "list", "--limit", "20", "--json", "nameWithOwner", "-q", ".[].nameWithOwner"]
+    )
 
     if success:
         return [line.strip() for line in output.splitlines() if line.strip()]
@@ -45,13 +45,13 @@ def _get_repo_issues(repo: str, label: str = "whilly:ready") -> list[dict]:
     if not _check_gh_auth():
         return []
 
-    success, output = _run_command([
-        "gh", "issue", "list", "--repo", repo, "--state", "open",
-        "--label", label, "--json", "number,title,url"
-    ])
+    success, output = _run_command(
+        ["gh", "issue", "list", "--repo", repo, "--state", "open", "--label", label, "--json", "number,title,url"]
+    )
 
     if success:
         import json
+
         try:
             return json.loads(output or "[]")
         except json.JSONDecodeError:
@@ -62,9 +62,9 @@ def _get_repo_issues(repo: str, label: str = "whilly:ready") -> list[dict]:
 def github_interactive_menu() -> Optional[str]:
     """Интерактивное меню для работы с GitHub."""
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("🐙 WHILLY — GitHub Integration")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Загружаем конфигурацию
     config = WhillyConfig.from_env()
@@ -86,7 +86,7 @@ def github_interactive_menu() -> Optional[str]:
 
     # Проверяем интеграции
     try:
-        integration_manager = create_integration_manager(config)
+        integration_manager = create_integration_manager(config.get_external_integrations_config())
         github_available = integration_manager.is_integration_available("github")
         if github_available:
             print("✅ GitHub интеграция настроена")
@@ -271,12 +271,7 @@ def _create_label_workflow() -> None:
     description = "Tasks ready for Whilly automation"
     color = "0052cc"  # Синий цвет
 
-    cmd = [
-        "gh", "label", "create", "whilly:ready",
-        "--repo", repo,
-        "--description", description,
-        "--color", color
-    ]
+    cmd = ["gh", "label", "create", "whilly:ready", "--repo", repo, "--description", description, "--color", color]
 
     success, output = _run_command(cmd)
 
@@ -307,13 +302,7 @@ This is a demo task to test Whilly automation.
 3. Validate completion status
 """
 
-    cmd = [
-        "gh", "issue", "create",
-        "--repo", repo,
-        "--title", title,
-        "--body", body,
-        "--label", label
-    ]
+    cmd = ["gh", "issue", "create", "--repo", repo, "--title", title, "--body", body, "--label", label]
 
     success, output = _run_command(cmd)
 

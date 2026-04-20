@@ -66,9 +66,9 @@ if ! command -v yamllint >/dev/null 2>&1; then
     echo "    pip install yamllint"
 fi
 
-if ! command -v ruff >/dev/null 2>&1; then
-    echo "  • Install ruff for Python code checking:"
-    echo "    pip install ruff"
+if ! python3 -m ruff --version >/dev/null 2>&1; then
+    echo "  • Install ruff for Python code checking (pinned in pyproject.toml):"
+    echo "    pip install -e '.[dev]'"
 fi
 
 echo ""

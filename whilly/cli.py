@@ -346,9 +346,11 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
         sys.exit(0)
     if choice == "g":
         from whilly.github_interactive import github_interactive_menu
+
         github_plan = github_interactive_menu()
         if github_plan:
             from pathlib import Path
+
             return [Path(github_plan)]
         return select_plan_interactive(discover_plans())
     if choice == "a":
@@ -461,7 +463,7 @@ def build_task_prompt(task: Task, tasks_file: str, worktree_path: Path | None = 
         f'- Если не можешь завершить — оставь статус "in_progress" и опиши проблему'
     )
     if worktree_path:
-        prompt += f"\nWORKTREE: Working in isolated worktree at {worktree_path}. " f"Commit here, merge is automatic.\n"
+        prompt += f"\nWORKTREE: Working in isolated worktree at {worktree_path}. Commit here, merge is automatic.\n"
     return prompt
 
 
@@ -990,7 +992,7 @@ def run_plan(
                 task_ids = [t.id for t in batch]
 
                 dashboard.status_msg = (
-                    f"[bold cyan]Batch: {', '.join(task_ids)}[/]" f"  [dim]({len(batches)} batches queued)[/]"
+                    f"[bold cyan]Batch: {', '.join(task_ids)}[/]  [dim]({len(batches)} batches queued)[/]"
                 )
                 dashboard.update()
                 log.info("Iter %d: batch [%s] (%d batches total)", iteration, ", ".join(task_ids), len(batches))
@@ -1692,9 +1694,7 @@ def main(argv: list[str] | None = None) -> int:
             _ansi(f"{YL}Cancelled. Mapping file untouched.{R}")
             return 1
         path = save_mapping(mapping)
-        summary = (
-            f"  +{len(proposal.to_add)} added · " f"{len(proposal.to_map)} mapped · " f"{len(proposal.to_skip)} skipped"
-        )
+        summary = f"  +{len(proposal.to_add)} added · {len(proposal.to_map)} mapped · {len(proposal.to_skip)} skipped"
         _ansi(f"{GR}Mapping saved: {path}{R}\n{summary}")
         return 0
 
