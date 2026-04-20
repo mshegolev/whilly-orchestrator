@@ -29,6 +29,17 @@ ralph_logs/
 .ralph_workspaces/
 ralph_events.jsonl
 
+# Whilly runtime artifacts
+whilly.log
+whilly_tasks.log
+whilly_*_tasks.log
+whilly_logs/
+.whilly_workspaces/
+.whilly_worktrees/
+whilly_events.jsonl
+.whilly_state.json
+.planning/reports/
+
 # Tests
 .pytest_cache/
 .coverage
@@ -38,3 +49,4 @@ htmlcov/
 
 # PRD wizard state
 .ralph_prd_state.json
+.whilly_prd_state.json
