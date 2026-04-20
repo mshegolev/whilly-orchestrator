@@ -98,7 +98,7 @@ _Q_PROJECT_INFO = {
                   ... on ProjectV2SingleSelectField {
                     id
                     name
-                    options { id name }
+                    options { id name color description }
                   }
                 }
               }
@@ -117,7 +117,7 @@ _Q_PROJECT_INFO = {
                   ... on ProjectV2SingleSelectField {
                     id
                     name
-                    options { id name }
+                    options { id name color description }
                   }
                 }
               }
@@ -160,15 +160,42 @@ _M_SET_STATUS = """
     }
 """
 
-# Create a new option on a SingleSelect field.
-_M_ADD_STATUS_OPTION = """
-    mutation($fieldId: ID!, $name: String!) {
+# Append a new option to a SingleSelect field.
+#
+# GitHub's ``updateProjectV2Field.singleSelectOptions`` **replaces** the whole
+# options list. To add a column without wiping existing ones we resend every
+# current option (with its id, so items keep their assignments) plus the new
+# one (no id → created). Colors are an enum; we let the caller pick GRAY by
+# default to avoid accidental semantic colouring.
+_M_UPDATE_STATUS_OPTIONS = """
+    mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
       updateProjectV2Field(input: {
         fieldId: $fieldId,
-        singleSelectOptions: [{ name: $name, color: GRAY, description: "Added by whilly" }]
-      }) { projectV2Field { __typename } }
+        singleSelectOptions: $options
+      }) {
+        projectV2Field {
+          ... on ProjectV2SingleSelectField {
+            id
+            options { id name color description }
+          }
+        }
+      }
     }
 """
+
+
+# Valid colour values for ProjectV2SingleSelectFieldOptionColor. Kept as a
+# tuple so tests can assert membership without importing from GitHub docs.
+_VALID_OPTION_COLORS: tuple[str, ...] = (
+    "GRAY",
+    "BLUE",
+    "GREEN",
+    "YELLOW",
+    "ORANGE",
+    "RED",
+    "PINK",
+    "PURPLE",
+)
 
 
 # ── The adapter ───────────────────────────────────────────────────────────────
@@ -203,17 +230,41 @@ class GitHubProjectBoard:
         return resolved
 
     def _graphql(self, query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Run a GraphQL query via ``gh api graphql`` and return the parsed
+        """Run a GraphQL request via ``gh api graphql`` and return the parsed
         ``data`` object. Raises :class:`RuntimeError` on non-zero exit or
-        GraphQL-level errors."""
-        cmd = [self._gh_path(), "api", "graphql", "-f", f"query={query}"]
-        for key, val in (variables or {}).items():
-            # gh api expects ints as -F and strings as -f. We route by type.
-            if isinstance(val, int):
-                cmd.extend(["-F", f"{key}={val}"])
-            else:
-                cmd.extend(["-f", f"{key}={val}"])
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        GraphQL-level errors.
+
+        Variable marshalling is value-type-aware:
+
+        * scalars (``str``, ``int``) go as ``-f`` / ``-F`` command-line vars —
+          the simple path, used by every query.
+        * ``list``/``dict`` values trigger the JSON-body path — ``gh api
+          graphql --input -`` with a full ``{query, variables}`` payload on
+          stdin. This is the only way to pass array/object inputs like the
+          ``singleSelectOptions`` array that :meth:`add_status` needs.
+        """
+        variables = variables or {}
+        has_complex = any(isinstance(v, (list, dict)) for v in variables.values())
+
+        if has_complex:
+            payload = {"query": query, "variables": variables}
+            cmd = [self._gh_path(), "api", "graphql", "--input", "-"]
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(payload),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        else:
+            cmd = [self._gh_path(), "api", "graphql", "-f", f"query={query}"]
+            for key, val in variables.items():
+                if isinstance(val, int):
+                    cmd.extend(["-F", f"{key}={val}"])
+                else:
+                    cmd.extend(["-f", f"{key}={val}"])
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
         if proc.returncode != 0:
             raise RuntimeError(f"gh api graphql failed: {proc.stderr.strip() or proc.stdout.strip()}")
         try:
@@ -275,9 +326,20 @@ class GitHubProjectBoard:
                 f"project {self.url} has no 'Status' single-select field — create one on the board first"
             )
         self._cache["status_field_id"] = status_field["id"]
-        self._cache["statuses"] = [
-            BoardStatus(id=opt["id"], name=opt["name"]) for opt in (status_field.get("options") or [])
+        raw_options = [
+            {
+                "id": opt["id"],
+                "name": opt["name"],
+                "color": (opt.get("color") or "GRAY").upper(),
+                "description": opt.get("description") or "",
+            }
+            for opt in (status_field.get("options") or [])
         ]
+        # Keep both shapes: BoardStatus for the Protocol surface, raw dicts for
+        # the preserve-then-append merge that add_status does (GitHub replaces
+        # the entire option list on every mutation — see _M_UPDATE_STATUS_OPTIONS).
+        self._cache["raw_options"] = raw_options
+        self._cache["statuses"] = [BoardStatus(id=opt["id"], name=opt["name"]) for opt in raw_options]
 
     # ── Protocol surface ──────────────────────────────────────────────────
 
@@ -285,26 +347,101 @@ class GitHubProjectBoard:
         self._ensure_cached()
         return list(self._cache["statuses"])
 
-    def add_status(self, name: str) -> BoardStatus:
-        """Create a new Status option via GraphQL mutation.
+    def add_status(self, name: str, color: str = "GRAY", description: str = "Added by whilly") -> BoardStatus:
+        """Create a new Status option on the board via GraphQL mutation.
 
-        GitHub's API on ``updateProjectV2Field.singleSelectOptions`` *replaces*
-        the full list — so we resend existing options plus the new one.
+        ``updateProjectV2Field.singleSelectOptions`` *replaces* the whole
+        options array — we resend every current option (with its id, so
+        items keep their assignment) and append the new one.
+
+        Args:
+            name: column label to create. Matched case-insensitively against
+                existing columns; a hit returns the existing :class:`BoardStatus`
+                without mutating (idempotent).
+            color: one of :data:`_VALID_OPTION_COLORS`. Default GRAY — the
+                caller (proposer) doesn't currently customise colours; future
+                lifecycle-event-aware colouring is a clean extension.
+            description: free-text description stored on the option.
+
+        Raises:
+            ValueError: ``color`` isn't a valid GitHub option colour.
+            RuntimeError: GraphQL mutation failed (permissions, API change,
+                network). The proposer's interactive flow catches this and
+                falls back to map-existing.
         """
+        color = (color or "GRAY").upper()
+        if color not in _VALID_OPTION_COLORS:
+            raise ValueError(f"invalid option color {color!r} — must be one of {', '.join(_VALID_OPTION_COLORS)}")
+
         self._ensure_cached()
-        existing = self._cache["statuses"]
-        # Refuse duplicates (case-insensitive).
-        for st in existing:
-            if st.name.lower() == name.lower():
+
+        # Idempotent: existing name (case-insensitive) short-circuits the mutation.
+        target_lower = name.strip().lower()
+        for st in self._cache["statuses"]:
+            if st.name.lower() == target_lower:
                 return st
-        # updateProjectV2Field replaces the whole options array — rebuild it.
-        merged = [{"name": s.name} for s in existing] + [{"name": name}]
-        raise NotImplementedError(
-            "add_status is pending GraphQL schema verification — "
-            f"cannot yet create status option {name!r} "
-            f"(would be set alongside {len(existing)} existing options: {merged}). "
-            "For now, add the column manually on the board UI and re-run analyze."
+
+        existing_raw = self._cache["raw_options"]
+        merged_options = [
+            {
+                "id": opt["id"],
+                "name": opt["name"],
+                "color": opt["color"],
+                "description": opt["description"],
+            }
+            for opt in existing_raw
+        ] + [
+            {
+                "name": name,
+                "color": color,
+                "description": description,
+            }
+        ]
+
+        data = self._graphql(
+            _M_UPDATE_STATUS_OPTIONS,
+            {"fieldId": self._cache["status_field_id"], "options": merged_options},
         )
+
+        # Parse returned options list, find the newly-created one by name.
+        returned = (((data.get("updateProjectV2Field") or {}).get("projectV2Field") or {}).get("options")) or []
+        new_opt: dict[str, Any] | None = None
+        for opt in returned:
+            if (opt.get("name") or "").lower() == target_lower:
+                # Prefer an id we didn't already know about — handles the race
+                # where our name collides with a just-added duplicate.
+                known_ids = {e["id"] for e in existing_raw}
+                if opt.get("id") and opt["id"] not in known_ids:
+                    new_opt = opt
+                    break
+                # Fallback: accept the match even if we can't disambiguate
+                # (should be rare — duplicate check above usually prevents it).
+                new_opt = opt
+
+        if not new_opt or not new_opt.get("id"):
+            # Mutation succeeded but we can't locate the new option — refresh
+            # the cache and re-scan so the caller always gets a usable handle.
+            self._cache.clear()
+            self._ensure_cached()
+            for st in self._cache["statuses"]:
+                if st.name.lower() == target_lower:
+                    return st
+            raise RuntimeError(f"add_status: mutation succeeded but option {name!r} not found in response")
+
+        new_status = BoardStatus(id=new_opt["id"], name=new_opt["name"])
+        # Refresh the cached option lists so the next mutation merges against
+        # the updated set.
+        self._cache["raw_options"] = [
+            {
+                "id": opt["id"],
+                "name": opt["name"],
+                "color": (opt.get("color") or "GRAY").upper(),
+                "description": opt.get("description") or "",
+            }
+            for opt in returned
+        ]
+        self._cache["statuses"] = [BoardStatus(id=opt["id"], name=opt["name"]) for opt in returned]
+        return new_status
 
     def move_item(self, issue_ref: str, status: BoardStatus) -> bool:
         try:

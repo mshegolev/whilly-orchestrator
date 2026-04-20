@@ -14,6 +14,7 @@ import pytest
 
 from whilly.workflow.base import BoardStatus
 from whilly.workflow.github import (
+    _VALID_OPTION_COLORS,
     GitHubProjectBoard,
     _parse_issue_ref,
     parse_project_url,
@@ -349,3 +350,206 @@ class TestMoveItem:
         with patch("whilly.workflow.github.subprocess.run", side_effect=boom):
             ok = board.move_item("x/y#1", BoardStatus("o", "Done"))
         assert ok is False
+
+
+# ── add_status ───────────────────────────────────────────────────────────────
+
+
+class TestAddStatus:
+    def _project_info_with(self, *names_with_ids, field_id="SF_status"):
+        """Build a canned project-info response with the given options."""
+        options = [
+            {
+                "id": oid,
+                "name": name,
+                "color": "GRAY",
+                "description": "",
+            }
+            for (oid, name) in names_with_ids
+        ]
+        return {
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "id": "PVT_xxx",
+                        "title": "Backlog",
+                        "fields": {
+                            "nodes": [
+                                {
+                                    "id": field_id,
+                                    "name": "Status",
+                                    "options": options,
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+
+    def _mutation_response(self, returned_options):
+        return {
+            "data": {
+                "updateProjectV2Field": {
+                    "projectV2Field": {
+                        "id": "SF_status",
+                        "options": returned_options,
+                    }
+                }
+            }
+        }
+
+    def test_add_happy_path_returns_new_status(self):
+        board = GitHubProjectBoard(
+            url="https://github.com/users/mshegolev/projects/4",
+            gh_bin="/usr/bin/gh",
+        )
+        fake_run, _calls = _fake_run(
+            [
+                self._project_info_with(("opt_todo", "Todo"), ("opt_done", "Done")),
+                self._mutation_response(
+                    [
+                        {"id": "opt_todo", "name": "Todo", "color": "GRAY", "description": ""},
+                        {"id": "opt_done", "name": "Done", "color": "GRAY", "description": ""},
+                        {"id": "opt_failed", "name": "Failed", "color": "RED", "description": "Added by whilly"},
+                    ]
+                ),
+            ]
+        )
+        with patch("whilly.workflow.github.subprocess.run", side_effect=fake_run):
+            new_status = board.add_status("Failed", color="RED")
+        assert new_status.id == "opt_failed"
+        assert new_status.name == "Failed"
+
+    def test_add_idempotent_when_duplicate(self):
+        """Existing column with the same (case-insensitive) name skips the mutation."""
+        board = GitHubProjectBoard(
+            url="https://github.com/users/mshegolev/projects/4",
+            gh_bin="/usr/bin/gh",
+        )
+        fake_run, calls = _fake_run([self._project_info_with(("opt_done", "Done"))])
+        with patch("whilly.workflow.github.subprocess.run", side_effect=fake_run):
+            result = board.add_status("done")  # case mismatch, still a hit
+        assert result.id == "opt_done"
+        assert result.name == "Done"
+        # Only the introspection call — no mutation roundtrip.
+        assert len(calls) == 1
+
+    def test_add_preserves_existing_options_in_merge(self):
+        """The mutation payload must include every existing option with its id,
+        otherwise GitHub would wipe the column (API replaces the whole list)."""
+        board = GitHubProjectBoard(
+            url="https://github.com/users/mshegolev/projects/4",
+            gh_bin="/usr/bin/gh",
+        )
+        fake_run, calls = _fake_run(
+            [
+                self._project_info_with(("opt_todo", "Todo"), ("opt_done", "Done")),
+                self._mutation_response(
+                    [
+                        {"id": "opt_todo", "name": "Todo", "color": "GRAY", "description": ""},
+                        {"id": "opt_done", "name": "Done", "color": "GRAY", "description": ""},
+                        {"id": "opt_new", "name": "Failed", "color": "GRAY", "description": "Added by whilly"},
+                    ]
+                ),
+            ]
+        )
+        # The second call is the mutation — the payload is sent via stdin (JSON).
+        # Verify the stdin we sent includes ids for the two existing options.
+        captured_stdin = {}
+
+        def run_capture(cmd, *args, **kwargs):
+            captured_stdin.setdefault("calls", []).append(kwargs.get("input"))
+            return fake_run(cmd, *args, **kwargs)
+
+        with patch("whilly.workflow.github.subprocess.run", side_effect=run_capture):
+            board.add_status("Failed")
+
+        # Second call carried JSON stdin with the merged options.
+        mutation_stdin = captured_stdin["calls"][1]
+        assert mutation_stdin is not None
+        body = json.loads(mutation_stdin)
+        sent_options = body["variables"]["options"]
+        # Two preserved + one new = 3 options in the payload.
+        assert len(sent_options) == 3
+        preserved_ids = [opt.get("id") for opt in sent_options if opt.get("id")]
+        assert "opt_todo" in preserved_ids
+        assert "opt_done" in preserved_ids
+        # New option has name "Failed" and NO id (GitHub assigns one).
+        new_opt = [o for o in sent_options if "id" not in o]
+        assert len(new_opt) == 1
+        assert new_opt[0]["name"] == "Failed"
+
+    def test_add_invalid_color_raises(self):
+        board = GitHubProjectBoard(
+            url="https://github.com/users/mshegolev/projects/4",
+            gh_bin="/usr/bin/gh",
+        )
+        with pytest.raises(ValueError, match="invalid option color"):
+            board.add_status("X", color="FUCHSIA")
+
+    def test_valid_colors_sanity(self):
+        assert "GRAY" in _VALID_OPTION_COLORS
+        assert "RED" in _VALID_OPTION_COLORS
+        assert len(_VALID_OPTION_COLORS) == 8
+
+    def test_add_mutation_error_surfaces(self):
+        board = GitHubProjectBoard(
+            url="https://github.com/users/mshegolev/projects/4",
+            gh_bin="/usr/bin/gh",
+        )
+        fake_run, _calls = _fake_run(
+            [
+                self._project_info_with(("opt_todo", "Todo")),
+                {"errors": [{"message": "Must have write access"}]},
+            ]
+        )
+        with patch("whilly.workflow.github.subprocess.run", side_effect=fake_run):
+            with pytest.raises(RuntimeError, match="Must have write access"):
+                board.add_status("Failed")
+
+    def test_cache_updated_after_add(self):
+        """A second add_status call on the same board must merge against the
+        UPDATED options list from the first mutation, not the original one."""
+        board = GitHubProjectBoard(
+            url="https://github.com/users/mshegolev/projects/4",
+            gh_bin="/usr/bin/gh",
+        )
+        fake_run, _calls = _fake_run(
+            [
+                self._project_info_with(("opt_todo", "Todo")),
+                self._mutation_response(
+                    [
+                        {"id": "opt_todo", "name": "Todo", "color": "GRAY", "description": ""},
+                        {"id": "opt_a", "name": "A", "color": "GRAY", "description": ""},
+                    ]
+                ),
+                self._mutation_response(
+                    [
+                        {"id": "opt_todo", "name": "Todo", "color": "GRAY", "description": ""},
+                        {"id": "opt_a", "name": "A", "color": "GRAY", "description": ""},
+                        {"id": "opt_b", "name": "B", "color": "GRAY", "description": ""},
+                    ]
+                ),
+            ]
+        )
+        captured_stdin = {"calls": []}
+
+        def run_capture(cmd, *args, **kwargs):
+            captured_stdin["calls"].append(kwargs.get("input"))
+            return fake_run(cmd, *args, **kwargs)
+
+        with patch("whilly.workflow.github.subprocess.run", side_effect=run_capture):
+            board.add_status("A")
+            board.add_status("B")
+
+        # Second mutation body should preserve BOTH Todo and A (first added).
+        second_mutation_stdin = captured_stdin["calls"][2]
+        body = json.loads(second_mutation_stdin)
+        sent = body["variables"]["options"]
+        preserved_ids = {opt.get("id") for opt in sent if opt.get("id")}
+        assert {"opt_todo", "opt_a"}.issubset(preserved_ids)
+        # And a new unkeyed option for "B".
+        new_opts = [o for o in sent if "id" not in o]
+        assert len(new_opts) == 1
+        assert new_opts[0]["name"] == "B"
