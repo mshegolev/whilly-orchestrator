@@ -128,16 +128,18 @@ def gh_pr_diff(pr_url_or_number: str) -> str:
 
 
 def gh_pr_view(pr_url_or_number: str) -> dict:
-    proc = _run([
-        "gh",
-        "pr",
-        "view",
-        pr_url_or_number,
-        "--repo",
-        REPO,
-        "--json",
-        "number,url,headRefName,mergeable,reviewDecision",
-    ])
+    proc = _run(
+        [
+            "gh",
+            "pr",
+            "view",
+            pr_url_or_number,
+            "--repo",
+            REPO,
+            "--json",
+            "number,url,headRefName,mergeable,reviewDecision",
+        ]
+    )
     if proc.returncode != 0:
         return {}
     try:
@@ -150,17 +152,19 @@ def gh_pr_review_comment(pr_number: str, body: str) -> bool:
     """Post a PR review. Uses --comment (works on own PRs; --request-changes
     is forbidden by GitHub when the reviewer authored the PR, which is the
     steady-state case for this self-hosting demo)."""
-    proc = _run([
-        "gh",
-        "pr",
-        "review",
-        pr_number,
-        "--repo",
-        REPO,
-        "--comment",
-        "--body",
-        body,
-    ])
+    proc = _run(
+        [
+            "gh",
+            "pr",
+            "review",
+            pr_number,
+            "--repo",
+            REPO,
+            "--comment",
+            "--body",
+            body,
+        ]
+    )
     if proc.returncode != 0:
         log(f"gh pr review failed: {proc.stderr.strip()}")
         return False
@@ -168,31 +172,35 @@ def gh_pr_review_comment(pr_number: str, body: str) -> bool:
 
 
 def gh_pr_approve(pr_number: str, body: str = "Whilly review: clean. Approving.") -> bool:
-    proc = _run([
-        "gh",
-        "pr",
-        "review",
-        pr_number,
-        "--repo",
-        REPO,
-        "--approve",
-        "--body",
-        body,
-    ])
+    proc = _run(
+        [
+            "gh",
+            "pr",
+            "review",
+            pr_number,
+            "--repo",
+            REPO,
+            "--approve",
+            "--body",
+            body,
+        ]
+    )
     return proc.returncode == 0
 
 
 def gh_pr_merge(pr_number: str) -> bool:
-    proc = _run([
-        "gh",
-        "pr",
-        "merge",
-        pr_number,
-        "--repo",
-        REPO,
-        "--squash",
-        "--delete-branch",
-    ])
+    proc = _run(
+        [
+            "gh",
+            "pr",
+            "merge",
+            pr_number,
+            "--repo",
+            REPO,
+            "--squash",
+            "--delete-branch",
+        ]
+    )
     if proc.returncode != 0:
         log(f"gh pr merge failed: {proc.stderr.strip()}")
         return False
@@ -401,9 +409,10 @@ def run_fixer(task: Task, review: ReviewResult, iteration: int, branch: str) -> 
     """Run an agent in fix mode. Returns True on success."""
     global _total_cost
 
-    comments_block = "\n".join(
-        f"- [{c.severity}] {c.file}: {c.message}" for c in review.comments
-    ) or "(no specific comments — re-read summary above)"
+    comments_block = (
+        "\n".join(f"- [{c.severity}] {c.file}: {c.message}" for c in review.comments)
+        or "(no specific comments — re-read summary above)"
+    )
 
     prompt = FIXER_PROMPT.format(
         task_id=task.id,
@@ -662,8 +671,7 @@ def main() -> int:
         if not DRY_RUN and pr_number != "0":
             gh_pr_review_comment(
                 pr_number,
-                "🤖 Whilly e2e demo reached max review iterations without a clean review. "
-                "Manual review required.",
+                "🤖 Whilly e2e demo reached max review iterations without a clean review. " "Manual review required.",
             )
         event("pr.left_open", task_id=task.id, pr=pr_number, reason="max_iterations")
 

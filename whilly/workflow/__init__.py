@@ -37,6 +37,7 @@ from whilly.workflow.registry import (
     known_events,
     register_event,
 )
+from whilly.workflow.sync import load_or_none, move_on_event
 
 __all__ = [
     "BoardSink",
@@ -50,6 +51,8 @@ __all__ = [
     "register_event",
     "get_board",
     "available_boards",
+    "move_on_event",
+    "load_or_none",
 ]
 
 
