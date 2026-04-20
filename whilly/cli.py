@@ -814,13 +814,15 @@ def run_plan(
 
     initial_task_count = tm.total_count
 
-    # Worktree isolation for parallel agents
+    # Worktree isolation: только для параллельной работы (избегаем лишний оверхед при одном агенте)
     from whilly.worktree_runner import WorktreeManager
 
     use_worktree = config.WORKTREE and config.MAX_PARALLEL > 1
     wm = WorktreeManager() if use_worktree else None
     if wm:
-        log.info("Worktree isolation enabled for parallel agents")
+        log.info("Worktree isolation enabled for %d parallel agents", config.MAX_PARALLEL)
+    elif config.MAX_PARALLEL == 1:
+        log.info("Single agent mode - worktree isolation disabled for performance")
 
     # 2. Setup dashboard, reporter
     project = tm.plan.project or "(unnamed)"
@@ -1503,6 +1505,7 @@ Environment variables:
   WHILLY_PROCESS_TIMEOUT_MINUTES=N Max process runtime (default: 30)
   WHILLY_RESOURCE_CHECK_ENABLED=0 Disable resource monitoring
   WHILLY_USE_TMUX=1/0       Use tmux for parallel execution (default: 1)
+  WHILLY_WORKTREE=1/0       Git worktree isolation (only when MAX_PARALLEL > 1)
   WHILLY_MODEL=MODEL        Model to use (default: claude-opus-4-6[1m])
   WHILLY_LOG_DIR=DIR        Directory for agent logs (default: whilly_logs)
   WHILLY_AGENT=NAME         Agent name for reports

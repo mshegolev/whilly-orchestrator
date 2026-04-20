@@ -49,3 +49,16 @@ class PauseControl:
             reason = pause_info.get("reason", "Unknown") if pause_info else "Unknown"
             print(f"⏸️  Paused: {reason} (delete .whilly_pause to resume)")
             time.sleep(check_interval)
+
+
+# Quick CLI commands
+def pause_plan(plan_file: str, reason: str = "Manual pause"):
+    """Pause a plan execution."""
+    pc = PauseControl(f".whilly_pause_{Path(plan_file).stem}")
+    pc.pause(reason)
+
+
+def resume_plan(plan_file: str):
+    """Resume a plan execution."""
+    pc = PauseControl(f".whilly_pause_{Path(plan_file).stem}")
+    pc.resume()
