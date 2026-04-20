@@ -1,7 +1,10 @@
 # Whilly Orchestrator
 
+[![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Self-Healing](https://img.shields.io/badge/self--healing-enabled-green.svg)](docs/Self-Healing-Guide.md)
 [![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
 
 Python implementation of the **Whilly Wiggum loop** — Ralph Wiggum's smarter brother. Same family, same "I'm helping!" spirit, but with TRIZ contradiction analysis, a Decision Gate that refuses nonsense upfront, a PRD wizard, and a Rich TUI dashboard on top of the classic continuous agent loop.
