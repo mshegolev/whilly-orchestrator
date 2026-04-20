@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
 
 from whilly.resource_monitor import (
     ResourceLimits,

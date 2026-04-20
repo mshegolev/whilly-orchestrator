@@ -4,12 +4,10 @@
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
 from typing import Optional
 
 from whilly.config import WhillyConfig
-from whilly.sources.github_issues import GitHubIssuesSource, fetch_github_issues
+from whilly.sources.github_issues import fetch_github_issues
 from whilly.external_integrations import create_integration_manager
 
 
@@ -72,14 +70,14 @@ def github_interactive_menu() -> Optional[str]:
     config = WhillyConfig.from_env()
 
     # Показываем текущие настройки
-    print(f"\n⚙️  Текущая конфигурация:")
+    print("\n⚙️  Текущая конфигурация:")
     print(f"   GitHub auto-close: {config.GITHUB_AUTO_CLOSE}")
     print(f"   GitHub comments: {config.GITHUB_ADD_COMMENTS}")
     print(f"   External integrations: {config.CLOSE_EXTERNAL_TASKS}")
 
     # Проверяем авторизацию
     if not _check_gh_auth():
-        print(f"\n❌ GitHub CLI не авторизован")
+        print("\n❌ GitHub CLI не авторизован")
         print("Для работы с GitHub необходимо выполнить:")
         print("  gh auth login")
         return None
@@ -98,7 +96,7 @@ def github_interactive_menu() -> Optional[str]:
         print(f"⚠️  Ошибка проверки интеграций: {e}")
 
     while True:
-        print(f"\n📋 Выберите действие:")
+        print("\n📋 Выберите действие:")
         print("  1) 📥 Импортировать issues из репозитория")
         print("  2) 🔍 Просмотреть issues с меткой whilly:ready")
         print("  3) 🏷️  Создать метку whilly:ready в репозитории")
@@ -142,7 +140,7 @@ def github_interactive_menu() -> Optional[str]:
 def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
     """Workflow для импорта issues."""
 
-    print(f"\n📥 Импорт GitHub Issues")
+    print("\n📥 Импорт GitHub Issues")
     print("-" * 30)
 
     # Получаем репозитории пользователя
@@ -155,7 +153,7 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
             print("❌ Неверный формат репозитория")
             return None
     else:
-        print(f"\n📁 Ваши репозитории:")
+        print("\n📁 Ваши репозитории:")
         for i, repo in enumerate(repos[:10], 1):
             print(f"  {i}) {repo}")
 
@@ -182,7 +180,7 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
         return None
 
     # Выбор метки
-    label = input(f"\nМетка для фильтрации (по умолчанию 'whilly:ready'): ").strip() or "whilly:ready"
+    label = input("\nМетка для фильтрации (по умолчанию 'whilly:ready'): ").strip() or "whilly:ready"
 
     # Проверяем наличие issues
     issues = _get_repo_issues(repo, label)
@@ -203,7 +201,7 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
 
     # Показываем что произойдет с задачами
     if config.CLOSE_EXTERNAL_TASKS:
-        print(f"\n📋 После выполнения задач:")
+        print("\n📋 После выполнения задач:")
         if config.GITHUB_AUTO_CLOSE:
             print("   ✅ Issues будут автоматически закрыты")
         if config.GITHUB_ADD_COMMENTS:
@@ -211,7 +209,7 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
         if not config.GITHUB_AUTO_CLOSE and not config.GITHUB_ADD_COMMENTS:
             print("   📝 Issues останутся без изменений")
     else:
-        print(f"\n📋 Внешние интеграции отключены - Issues не будут изменены")
+        print("\n📋 Внешние интеграции отключены - Issues не будут изменены")
 
     # Создаем план
     output_file = f"github-{repo.replace('/', '-')}-tasks.json"
@@ -219,10 +217,9 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
     print(f"\n🚀 Создаем план задач: {output_file}")
 
     try:
-        source = GitHubIssuesSource.parse(f"{repo}:{label}")
         stats = fetch_github_issues(repo, label=label, out_path=output_file)
 
-        print(f"✅ Импорт завершен!")
+        print("✅ Импорт завершен!")
         print(f"   Новых задач: {stats.new}")
         print(f"   Обновлено: {stats.updated}")
         print(f"   Файл плана: {output_file}")
@@ -237,7 +234,7 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
 def _browse_issues_workflow() -> None:
     """Просмотр issues с меткой whilly:ready."""
 
-    print(f"\n🔍 Просмотр GitHub Issues")
+    print("\n🔍 Просмотр GitHub Issues")
     print("-" * 25)
 
     repo = input("Репозиторий (owner/repo): ").strip()
@@ -263,7 +260,7 @@ def _browse_issues_workflow() -> None:
 def _create_label_workflow() -> None:
     """Создание метки whilly:ready."""
 
-    print(f"\n🏷️  Создание метки whilly:ready")
+    print("\n🏷️  Создание метки whilly:ready")
     print("-" * 30)
 
     repo = input("Репозиторий (owner/repo): ").strip()
@@ -329,7 +326,7 @@ This is a demo task to test Whilly automation.
 def _github_projects_workflow() -> Optional[str]:
     """GitHub Projects workflow."""
 
-    print(f"\n📊 GitHub Projects Workflow")
+    print("\n📊 GitHub Projects Workflow")
     print("-" * 30)
 
     print("Этот режим позволяет:")
@@ -347,7 +344,7 @@ def _github_projects_workflow() -> Optional[str]:
         print("❌ Неверный формат репозитория")
         return None
 
-    print(f"\n🔄 Доступные операции:")
+    print("\n🔄 Доступные операции:")
     print("  1) Синхронизировать Todo items")
     print("  2) Мониторинг проекта")
     print("  3) Полная конвертация проекта")
@@ -367,7 +364,7 @@ def _github_projects_workflow() -> Optional[str]:
         print("❌ Неверный выбор")
         return None
 
-    print(f"\n🚀 Команда для выполнения:")
+    print("\n🚀 Команда для выполнения:")
     print(f"   {cmd}")
     print("\n(Это расширенная функциональность, требует дополнительной настройки)")
 
@@ -377,7 +374,7 @@ def _github_projects_workflow() -> Optional[str]:
 def _configure_auto_close() -> None:
     """Настройка автозакрытия GitHub Issues."""
 
-    print(f"\n⚙️  Настройка автозакрытия GitHub Issues")
+    print("\n⚙️  Настройка автозакрытия GitHub Issues")
     print("-" * 35)
 
     print("Автозакрытие Issues означает что после успешного выполнения задачи")
@@ -394,7 +391,7 @@ def _configure_auto_close() -> None:
 def _configure_comments() -> None:
     """Настройка комментариев в GitHub Issues."""
 
-    print(f"\n💬 Настройка комментариев в GitHub Issues")
+    print("\n💬 Настройка комментариев в GitHub Issues")
     print("-" * 35)
 
     print("Автоматические комментарии добавляются к Issues при выполнении задач.")
@@ -410,10 +407,10 @@ def _configure_comments() -> None:
 def _show_help(config: WhillyConfig) -> None:
     """Показывает помощь по настройке с учетом текущей конфигурации."""
 
-    print(f"\n❓ Помощь по настройке GitHub интеграции")
+    print("\n❓ Помощь по настройке GitHub интеграции")
     print("=" * 50)
 
-    print(f"\n📊 Текущая конфигурация:")
+    print("\n📊 Текущая конфигурация:")
     print(f"   GitHub автозакрытие: {config.GITHUB_AUTO_CLOSE}")
     print(f"   GitHub комментарии: {config.GITHUB_ADD_COMMENTS}")
     print(f"   Внешние интеграции: {config.CLOSE_EXTERNAL_TASKS}")
@@ -421,15 +418,15 @@ def _show_help(config: WhillyConfig) -> None:
     print(f"   Параллельность: {config.MAX_PARALLEL}")
     print(f"   Бюджет: {config.BUDGET_USD} USD")
 
-    print(f"\n1️⃣  Авторизация GitHub CLI:")
+    print("\n1️⃣  Авторизация GitHub CLI:")
     print("   gh auth login")
     print("   # Выберите GitHub.com, HTTPS, и авторизуйтесь через браузер")
 
-    print(f"\n2️⃣  Создание меток в репозитории:")
+    print("\n2️⃣  Создание меток в репозитории:")
     print("   gh label create whilly:ready --repo owner/repo")
     print("   # Или используйте опцию 3 в этом меню")
 
-    print(f"\n3️⃣  Подготовка issues:")
+    print("\n3️⃣  Подготовка issues:")
     print("   • Создайте issues в GitHub")
     print("   • Добавьте метку 'whilly:ready' к готовым задачам")
     print("   • Используйте разделы в описании:")
@@ -437,11 +434,11 @@ def _show_help(config: WhillyConfig) -> None:
     print("     ## Test Steps")
     print("     ## Dependencies")
 
-    print(f"\n4️⃣  Запуск автоматизации:")
+    print("\n4️⃣  Запуск автоматизации:")
     print("   whilly --source gh:owner/repo")
     print("   # Или используйте опцию 1 в этом меню")
 
-    print(f"\n5️⃣  Настройка переменных окружения:")
+    print("\n5️⃣  Настройка переменных окружения:")
     print("   # Основные настройки")
     print("   export WHILLY_MAX_PARALLEL=3")
     print("   export WHILLY_BUDGET_USD=10")
@@ -457,7 +454,7 @@ def _show_help(config: WhillyConfig) -> None:
     print("   export WHILLY_MAX_CPU_PERCENT=80")
     print("   export WHILLY_MAX_MEMORY_PERCENT=75")
 
-    input(f"\n📖 Нажмите Enter для возврата в меню...")
+    input("\n📖 Нажмите Enter для возврата в меню...")
 
 
 if __name__ == "__main__":
