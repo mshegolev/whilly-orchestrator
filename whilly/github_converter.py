@@ -282,15 +282,25 @@ def generate_tasks_from_github(
     """
     output_path = Path(output_path)
 
+    # Semantics:
+    #   filter_labels is None  → apply default labels (workshop, whilly:ready)
+    #   filter_labels == []    → no label filter (all open issues)
+    #   non-empty list         → filter by exactly those labels
     if filter_labels is None:
         filter_labels = ["workshop", "whilly:ready"]
 
-    log.info("Fetching GitHub Issues with labels: %s", filter_labels)
+    if filter_labels:
+        log.info("Fetching GitHub Issues with labels: %s", filter_labels)
+    else:
+        log.info("Fetching all open GitHub Issues (no label filter)")
     issues = fetch_github_issues(filter_labels)
     log.info("Found %d issues", len(issues))
 
     if not issues:
-        log.warning("No GitHub Issues found with labels: %s", filter_labels)
+        if filter_labels:
+            log.warning("No GitHub Issues found with labels: %s", filter_labels)
+        else:
+            log.warning("No open GitHub Issues found in the current repository")
         return output_path
 
     log.info("Converting issues to Whilly tasks...")
