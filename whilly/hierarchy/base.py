@@ -212,3 +212,22 @@ class HierarchyAdapter(Protocol):
         (permission, already linked, etc.). Never raises.
         """
         ...
+
+    def create_at_level(
+        self,
+        level: "HierarchyLevel",
+        title: str,
+        body: str = "",
+    ) -> WorkItem:
+        """Create a new item at the given root level (no parent).
+
+        Use for materialising inferred Epics (from ADR-020) or creating a
+        top-level Story when no Epic applies. For TASK level, adapters
+        should raise :class:`HierarchyError` — tasks always need a parent
+        (use :meth:`create_child` instead).
+
+        Raises:
+            HierarchyError: when the level isn't supported as a root on
+                this tracker (e.g., TASK on GitHub).
+        """
+        ...

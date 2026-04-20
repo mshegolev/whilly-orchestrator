@@ -1314,12 +1314,15 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     decision. With --apply: create the item at
                                     the right level under the matched parent
                                     (only when classifier confidence ≥ 0.75).
-  whilly --rebuild-hierarchy --project URL --repo OWNER/REPO [--label L] [--apply]
+  whilly --rebuild-hierarchy --project URL --repo OWNER/REPO [--label L]
+                             [--infer-epics] [--apply]
                                   Classify every item in the project + repo,
                                     match parents bottom-up (Task → Story →
                                     Epic), print proposed tree + unparented
-                                    items. With --apply: link assignments via
-                                    the tracker adapter.
+                                    items. --infer-epics: synthesise Epics
+                                    from orphan Stories. --apply: link
+                                    assignments + materialise inferred Epics
+                                    via the tracker adapter.
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -1393,6 +1396,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         label = _flag_value_rb("--label")  # optional filter, e.g. whilly:ready
         apply_flag = "--apply" in args
+        infer_epics_flag = "--infer-epics" in args
 
         try:
             adapter = get_adapter("github", project_url=project_url, repo=repo)
@@ -1414,7 +1418,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         _ansi(f"{CY}Classifying {len(flat)} item(s) + matching parents (LLM, may take a minute)...{R}")
-        tree = rebuild_hierarchy(flat)
+        tree = rebuild_hierarchy(flat, infer_missing_epics=infer_epics_flag)
         print(format_tree(tree))
 
         if apply_flag:

@@ -138,6 +138,26 @@ _M_ADD_SUB_ISSUE = """
 """
 
 
+# Create a draft item on the project (EPIC level — materialise an
+# inferred epic without making a repo-level issue).
+_M_ADD_DRAFT = """
+    mutation($projectId: ID!, $title: String!, $body: String!) {
+      addProjectV2DraftIssue(input: {
+        projectId: $projectId,
+        title: $title,
+        body: $body
+      }) {
+        projectItem {
+          id
+          content {
+            ... on DraftIssue { id title body }
+          }
+        }
+      }
+    }
+"""
+
+
 # Fetch an issue by owner/repo/number — used by get() and list_at_level
 # when we only have a bare issue number.
 _Q_ISSUE_BY_NUMBER = """
@@ -584,6 +604,73 @@ class GitHubHierarchyAdapter:
         )
         if proc.returncode != 0:
             log.warning("gh issue edit (checkbox fallback) failed: %s", proc.stderr.strip()[:200])
+
+    # ── create_at_level: root-level creation (no parent) ──────────────────
+
+    def create_at_level(
+        self,
+        level: HierarchyLevel,
+        title: str,
+        body: str = "",
+    ) -> WorkItem:
+        """Create a root-level item — Epic (project draft) or Story (repo issue).
+
+        TASK level raises :class:`HierarchyError`: tasks always need a
+        parent; callers must use :meth:`create_child` instead.
+        """
+        # Validate before doing any network.
+        if level is HierarchyLevel.TASK:
+            raise HierarchyError("create_at_level(task) is not supported — tasks need a parent; use create_child()")
+        self._ensure_cache()
+        if level is HierarchyLevel.EPIC:
+            data = self._graphql(
+                _M_ADD_DRAFT,
+                {
+                    "projectId": self._cache["project_id"],
+                    "title": title,
+                    "body": body,
+                },
+            )
+            item = ((data.get("addProjectV2DraftIssue") or {}).get("projectItem")) or {}
+            if not item.get("id"):
+                raise HierarchyError("addProjectV2DraftIssue returned no projectItem")
+            content = item.get("content") or {}
+            return WorkItem(
+                id=item["id"],
+                level=HierarchyLevel.EPIC,
+                title=content.get("title") or title,
+                body=body,
+                external_ref={
+                    "project_item_id": item["id"],
+                    "draft_id": content.get("id", ""),
+                },
+            )
+        if level is HierarchyLevel.STORY:
+            data = self._graphql(
+                _M_CREATE_ISSUE,
+                {
+                    "repoId": self._cache["repo_id"],
+                    "title": title,
+                    "body": body,
+                    "labels": [],
+                },
+            )
+            issue = ((data.get("createIssue") or {}).get("issue")) or {}
+            if not issue.get("id"):
+                raise HierarchyError("createIssue returned no issue")
+            return WorkItem(
+                id=issue.get("url") or str(issue.get("number")),
+                level=HierarchyLevel.STORY,
+                title=issue.get("title") or title,
+                body=body,
+                external_ref={
+                    "issue_node_id": issue["id"],
+                    "repo": self.repo,
+                    "number": issue.get("number"),
+                    "url": issue.get("url"),
+                },
+            )
+        raise HierarchyError(f"create_at_level({level.value}) is not a valid root-level creation")
 
     # ── link: attach existing child to parent ─────────────────────────────
 
