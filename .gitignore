@@ -30,7 +30,6 @@ whilly_logs/
 .whilly_worktrees/
 .whilly_state.json
 whilly_events.jsonl
-ralph.log
 progress.txt
 
 # Tests

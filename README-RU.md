@@ -4,9 +4,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
 
-Python-реализация **техники Ralph Wiggum** — непрерывного цикла, в котором AI-агент (Claude CLI) забирает задачи с board'а и выполняет их одну за другой, пока не закончатся или не сработает budget/timeout. Ralph TUI-дашборд, параллельные агенты в tmux + git worktree, decomposer, TRIZ analyzer и PRD wizard в комплекте.
+Python-реализация **Whilly Wiggum loop** — умного брата Ralph'а. Та же семья, тот же дух «I'm helping!», только сверху — TRIZ-анализатор противоречий, Decision Gate (отфильтровать мусорные задачи до старта), PRD wizard и Rich TUI-дашборд. Параллельные агенты в tmux/git-worktree, decomposer — в комплекте.
 
-> "I'm helping!" — Ralph Wiggum
+> "I'm helping — и я читал ТРИЗ." — Whilly Wiggum
 
 📘 [Full English README](README.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
 
@@ -14,7 +14,7 @@ Python-реализация **техники Ralph Wiggum** — непрерыв
 
 Whilly крутит loop: взять pending-задачу → передать LLM-агенту → проверить → коммит → следующая. Работает, пока board не пуст, бюджет не исчерпан или вы не остановили. Параллельный режим запускает несколько агентов в tmux pane'ах или git worktree'ах.
 
-Техника впервые описана в [посте Ghuntley о Ralph Wiggum](https://ghuntley.com/ralph/), стала популярна в Claude Code сообществе. Whilly — batteries-included оркестратор с дашбордом и task lifecycle вокруг этого цикла.
+Базовая техника впервые описана в [посте Ghuntley про Ralph Wiggum loop](https://ghuntley.com/ralph/) и стала популярна в Claude Code сообществе. Whilly — «умнастный брат» Ralph'а: та же упорная пахота «взял → попробовал → повторил», плюс TRIZ для противоречий, Decision Gate для фильтрации задач и PRD wizard для понимания проблемы *до* того, как бросаться её решать.
 
 ## Возможности
 

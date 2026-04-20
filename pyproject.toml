@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "whilly-orchestrator"
 version = "3.0.0"
-description = "Ralph Wiggum technique — continuous AI agent loops with Rich TUI dashboard, task decomposer, TRIZ analyzer and PRD wizard"
+description = "Whilly Wiggum loop — Ralph's smarter brother technique for continuous AI agent loops: TRIZ analyzer, Decision Gate, PRD wizard, Rich TUI dashboard, tmux/git-worktree parallelism"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Mikhail Shchegolev", email = "mshegolev@gmail.com" }]

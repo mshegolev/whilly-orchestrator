@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Whilly is a Python implementation of the **Ralph Wiggum technique** — a continuous loop that hands pending tasks to a Claude CLI agent until a plan is done. It ships as the `whilly` console script (entry `whilly.cli:main`) plus a small `whilly` package. Version lives in `whilly/__init__.py` and `pyproject.toml` (keep them in sync).
+Whilly is a Python implementation of the **Whilly Wiggum loop** — Ralph Wiggum's smarter brother in Ghuntley's technique lineage. Ralph picks a task, tries, shouts "I'm helping!", repeats. Whilly does the same but with TRIZ contradiction analysis, a Decision Gate that refuses nonsense tasks upfront, and a PRD wizard that understands the problem first. Ships as the `whilly` console script (entry `whilly.cli:main`) plus a small `whilly` package. Version lives in `whilly/__init__.py` and `pyproject.toml` (keep them in sync).
 
 Requires Python 3.10+. Most end-to-end paths shell out to the Claude CLI on `PATH` (override with `CLAUDE_BIN`); tests that need it skip when it isn't present.
 

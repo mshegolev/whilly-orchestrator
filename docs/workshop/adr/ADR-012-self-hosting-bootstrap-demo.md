@@ -25,7 +25,7 @@ whilly --source gh:mshegolev/whilly-orchestrator \
 
 Демонстрирует:
 - Реальную интеграцию с GH Issues.
-- Ralph loop в действии.
+- Whilly loop в действии (Ralph-loop в основе + Decision Gate сверху).
 - Decision Gate (refusing 1 «плохо описанный» issue).
 - PR creation с traceability.
 - Dashboard / TUI работает.
