@@ -398,10 +398,16 @@ class GitHubHierarchyAdapter:
         after: str | None = None
         label_norm = (label or "").lower() or None
         while True:
-            data = self._graphql(
-                _Q_PROJECT_ITEMS,
-                {"projectId": self._cache["project_id"], "first": 100, "after": after},
-            )
+            # Conditionally include `after` — GitHub rejects a null/empty
+            # cursor ("after does not appear to be a valid cursor"). Pass it
+            # only on subsequent pages when we have a real endCursor.
+            variables: dict[str, Any] = {
+                "projectId": self._cache["project_id"],
+                "first": 100,
+            }
+            if after:
+                variables["after"] = after
+            data = self._graphql(_Q_PROJECT_ITEMS, variables)
             items_node = ((data.get("node") or {}).get("items")) or {}
             for item in items_node.get("nodes") or []:
                 content = item.get("content") or {}
