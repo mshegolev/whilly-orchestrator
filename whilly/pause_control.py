@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+
 class PauseControl:
     """Simple pause/resume mechanism for Whilly."""
 
@@ -17,7 +18,7 @@ class PauseControl:
             "paused": True,
             "reason": reason,
             "paused_at": time.time(),
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         self.pause_file.write_text(json.dumps(pause_state, indent=2))
         print(f"⏸️  Paused: {reason}")
@@ -49,11 +50,13 @@ class PauseControl:
             print(f"⏸️  Paused: {reason} (delete .whilly_pause to resume)")
             time.sleep(check_interval)
 
+
 # Quick CLI commands
 def pause_plan(plan_file: str, reason: str = "Manual pause"):
     """Pause a plan execution."""
     pc = PauseControl(f".whilly_pause_{Path(plan_file).stem}")
     pc.pause(reason)
+
 
 def resume_plan(plan_file: str):
     """Resume a plan execution."""
