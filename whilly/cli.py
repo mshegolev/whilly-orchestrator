@@ -1308,6 +1308,12 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     mapping gaps, and write .whilly/workflow.json.
                                     Extra flags: --apply (auto-add missing
                                     columns), --report (dry-run).
+  whilly --classify "TITLE | BODY" --project URL --repo OWNER/REPO [--apply]
+                                  Smart routing — classify input as
+                                    Epic/Story/Task, find best parent, print
+                                    decision. With --apply: create the item at
+                                    the right level under the matched parent
+                                    (only when classifier confidence ≥ 0.75).
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -1362,6 +1368,55 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _show_startup_banner()
+
+    # --classify: smart routing — classify input + find best parent
+    if "--classify" in args:
+        from whilly.classifier import Router, format_decision
+        from whilly.hierarchy import get_adapter
+
+        idx = args.index("--classify")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}Usage: whilly --classify 'TITLE | BODY' --project URL --repo OWNER/REPO [--apply]{R}")
+            return 1
+        raw = args[idx + 1]
+        # Accept "title | body" shape; body optional.
+        if "|" in raw:
+            title, body = raw.split("|", 1)
+            title, body = title.strip(), body.strip()
+        else:
+            title, body = raw.strip(), ""
+
+        def _flag_value(name):
+            if name not in args:
+                return None
+            i = args.index(name)
+            return args[i + 1] if i + 1 < len(args) else None
+
+        project_url = _flag_value("--project")
+        repo = _flag_value("--repo")
+        if not project_url or not repo:
+            _ansi(f"{RD}--classify requires --project <URL> and --repo <OWNER/REPO>{R}")
+            return 1
+        apply_flag = "--apply" in args
+
+        try:
+            adapter = get_adapter("github", project_url=project_url, repo=repo)
+        except Exception as exc:  # noqa: BLE001
+            _ansi(f"{RD}failed to build adapter: {exc}{R}")
+            return 1
+
+        router = Router(parent_search_label="whilly:ready")
+        decision = router.route_text(title, body, adapter)
+        print(format_decision(decision))
+        if apply_flag and decision.classification.is_high_confidence:
+            router.apply(decision, adapter)
+            _ansi(f"{GR}Applied.{R}")
+        elif apply_flag:
+            _ansi(
+                f"{YL}Not applied — confidence {decision.classification.confidence:.2f} "
+                f"below 0.75 threshold. Re-run with higher-quality input or review manually.{R}"
+            )
+        return 0
 
     # --workflow-analyze: introspect a GitHub Project board + propose mapping
     if "--workflow-analyze" in args:
