@@ -49,12 +49,15 @@ class WhillyTask:
     """Структура задачи Whilly."""
     id: str
     description: str
+    phase: str = "implementation"
+    category: str = "feature"
     status: str = "pending"
     priority: str = "medium"
     dependencies: list[str] | None = None
     key_files: list[str] | None = None
     acceptance_criteria: list[str] | None = None
     test_steps: list[str] | None = None
+    prd_requirement: str = ""
     github_issue: int | None = None
     github_url: str | None = None
 
@@ -102,6 +105,52 @@ def _extract_key_files(title: str, body: str) -> list[str]:
         key_files.append("scripts/")
 
     return key_files or ["README.md"]  # fallback
+
+
+def _determine_category(title: str, labels: list[str]) -> str:
+    """Определяет категорию задачи на основе заголовка и лейблов."""
+    title_lower = title.lower()
+
+    # Проверяем лейблы
+    if "bug" in labels or "bugfix" in labels:
+        return "bugfix"
+    if "documentation" in labels or "docs" in labels:
+        return "documentation"
+    if "test" in labels or "testing" in labels:
+        return "testing"
+
+    # Проверяем заголовок
+    if any(word in title_lower for word in ["fix", "bug", "error", "issue"]):
+        return "bugfix"
+    if any(word in title_lower for word in ["add", "create", "implement", "new"]):
+        return "feature"
+    if any(word in title_lower for word in ["update", "improve", "enhance"]):
+        return "enhancement"
+    if any(word in title_lower for word in ["refactor", "cleanup", "reorganize"]):
+        return "refactor"
+    if any(word in title_lower for word in ["test", "spec"]):
+        return "testing"
+    if any(word in title_lower for word in ["doc", "readme", "contributing"]):
+        return "documentation"
+
+    return "feature"  # default
+
+
+def _determine_phase(category: str, title: str) -> str:
+    """Определяет фазу задачи на основе категории и заголовка."""
+    title_lower = title.lower()
+
+    # Специальные фазы для определенных типов
+    if category == "documentation":
+        return "documentation"
+    if category == "testing":
+        return "testing"
+    if "setup" in title_lower or "init" in title_lower:
+        return "setup"
+    if "config" in title_lower or "setting" in title_lower:
+        return "configuration"
+
+    return "implementation"  # default
 
 
 def _generate_task_id(issue_number: int, title: str) -> str:
@@ -172,9 +221,14 @@ def convert_issues_to_tasks(issues: list[GitHubIssue]) -> list[WhillyTask]:
         if issue.state != "OPEN":
             continue
 
+        category = _determine_category(issue.title, issue.labels)
+        phase = _determine_phase(category, issue.title)
+
         task = WhillyTask(
             id=_generate_task_id(issue.number, issue.title),
             description=issue.title,
+            phase=phase,
+            category=category,
             priority=_extract_priority(issue.labels),
             key_files=_extract_key_files(issue.title, issue.body or ""),
             acceptance_criteria=_extract_acceptance_criteria(issue.body or ""),
@@ -183,6 +237,7 @@ def convert_issues_to_tasks(issues: list[GitHubIssue]) -> list[WhillyTask]:
                 "Run `pytest` and verify all tests pass",
                 f"Verify GitHub Issue #{issue.number} requirements are met"
             ],
+            prd_requirement=f"GitHub Issue #{issue.number}: {issue.title}",
             github_issue=issue.number,
             github_url=issue.url
         )
