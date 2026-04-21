@@ -1,3 +1,3 @@
 """Whilly task orchestrator — Python rewrite of whilly.sh."""
 
-__version__ = "3.1.0"
+__version__ = "3.2.0"
