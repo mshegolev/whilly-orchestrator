@@ -182,7 +182,59 @@ See [docs/Whilly-Usage.md](docs/Whilly-Usage.md) for the full config guide (TOML
 | `WHILLY_OPENCODE_SAFE` | `0` | `1` → drop `--dangerously-skip-permissions` for OpenCode |
 | `WHILLY_OPENCODE_SERVER_URL` | _(unset)_ | Optional remote OpenCode server URL |
 
-Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode}`.
+Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode,claude_handoff}`.
+
+### Task sources (pull issues into plans)
+
+```bash
+whilly --from-github whilly:ready --go          # all open issues with label
+whilly --from-github all --go                   # every open issue, no label filter
+whilly --from-issue owner/repo/42 --go          # one GitHub issue (slash form — shell-safe)
+whilly --from-issue 'owner/repo#42' --go        # same, with '#' (quote in zsh/bash)
+whilly --from-jira ABC-123 --go                 # one Jira ticket
+whilly --from-project <project-v2-url> --go     # GitHub Projects v2 board
+whilly --from-issues-project <url> --repo owner/name   # board-filtered issues
+```
+
+### Lifecycle sync (live board updates as whilly works)
+
+Enable in `whilly.toml`:
+```toml
+[project_board]                                  # GitHub Projects v2
+url = "https://github.com/users/you/projects/4"
+default_repo = "you/your-repo"
+
+[jira]                                           # Jira transitions (complements auto-close)
+server_url = "https://company.atlassian.net"
+username   = "you@example.com"
+token      = "keyring:whilly/jira"
+enable_board_sync = true
+```
+
+Task status → column mapping is identical for both: `pending → Todo/To Do`, `in_progress → In Progress`, `done → In Review`, `merged → Done`, `failed → Failed`, `skipped → Refused/Cancelled`, `blocked → On Hold/Blocked`, `human_loop → Human Loop/Waiting for Customer`. Override per-section via `[project_board.status_mapping]` / `[jira.status_mapping]`.
+
+One-off helpers:
+```bash
+whilly --ensure-board-statuses             # create any missing Status columns
+whilly --post-merge <plan.json>            # after an external merge, flush cards to Done
+python3 scripts/populate_board.py …        # bulk-add issues onto a Projects v2 board
+```
+
+### Human-in-the-loop backend (`claude_handoff`)
+
+```bash
+WHILLY_AGENT_BACKEND=claude_handoff whilly --from-issue alice/repo/42 --go
+```
+
+Each task's prompt lands in `.whilly/handoff/<task_id>/prompt.md`; whilly blocks until you write `result.json`. Three companion commands:
+
+```bash
+whilly --handoff-list                                  # see pending handoffs
+whilly --handoff-show GH-42                            # read the prompt
+whilly --handoff-complete GH-42 --status complete --message "done"
+```
+
+Accepted statuses: `complete` / `failed` / `blocked` / `human_loop` / `partial`. `blocked` and `human_loop` map to extra whilly statuses + board columns so tickets needing a decision land in a dedicated column instead of being misreported as failed.
 
 Exit codes in headless mode: `0` success, `1` some tasks failed, `2` budget exceeded, `3` timeout.
 
