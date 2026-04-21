@@ -129,6 +129,69 @@ class ProjectBoardClient:
 
         return self._update_status(meta.project_id, item_id, meta.status_field_id, option_id, status_name, issue_number)
 
+    def ensure_statuses(
+        self,
+        names: list[str],
+        *,
+        default_color: str = "GRAY",
+    ) -> tuple[list[str], list[str]]:
+        """Ensure the Status field exposes every option name in *names*.
+
+        Returns ``(added, already_present)`` — the caller can report what was
+        created. If *names* is empty the call is a no-op and returns empty lists.
+
+        GitHub's ``updateProjectV2SingleSelectField`` mutation replaces the full
+        option list, so this method reads current options, merges the new ones
+        in, and re-writes the list preserving ids of existing options (so cards
+        assigned to them don't lose their status).
+
+        ``default_color`` is one of GitHub's palette names (``GRAY``, ``PURPLE``,
+        ``PINK``, ``RED``, ``ORANGE``, ``YELLOW``, ``GREEN``, ``BLUE``).
+        """
+        if not names:
+            return [], []
+
+        meta = self._load_meta()
+        # Need full option objects (id, name, color, description) to avoid losing
+        # existing colours on the round-trip. Re-fetch just the options:
+        option_details = self._fetch_status_options(meta.status_field_id)
+
+        existing_names = {opt["name"] for opt in option_details}
+        to_add = [n for n in names if n not in existing_names]
+        already = [n for n in names if n in existing_names]
+
+        if not to_add:
+            return [], already
+
+        # ``ProjectV2SingleSelectFieldOptionInput`` accepts name/color/description
+        # only — no id. GitHub matches existing options by name on the round-trip,
+        # so we rebuild the list without ids, preserving existing names/colors
+        # and appending the new ones.
+        payload_options: list[dict[str, Any]] = []
+        for opt in option_details:
+            payload_options.append(
+                {
+                    "name": opt["name"],
+                    "color": (opt.get("color") or default_color).upper(),
+                    "description": opt.get("description") or "",
+                }
+            )
+        for name in to_add:
+            payload_options.append(
+                {
+                    "name": name,
+                    "color": default_color.upper(),
+                    "description": f"Added by whilly --ensure-board-statuses (whilly status {name!r}).",
+                }
+            )
+
+        self._update_status_field_options(meta.status_field_id, payload_options)
+        # Invalidate the cache so the next `set_issue_status` re-reads the
+        # newly-added option ids.
+        self._meta = None
+        log.info("Project board: added %d Status option(s) — %s", len(to_add), ", ".join(to_add))
+        return to_add, already
+
     def set_task_status(self, task: Any, whilly_status: str) -> bool:
         """Translate a whilly status → board column and move the card for the task's issue.
 
@@ -272,6 +335,52 @@ class ProjectBoardClient:
             return False
         log.info("Project board: issue #%d → %r", issue_number, status_name)
         return True
+
+    def _fetch_status_options(self, field_id: str) -> list[dict[str, Any]]:
+        """Return the full option list for a ProjectV2SingleSelectField."""
+        data = self._gh_api(
+            "query($field: ID!) {"
+            "  node(id: $field) {"
+            "    ... on ProjectV2SingleSelectField {"
+            "      options { id name color description }"
+            "    }"
+            "  }"
+            "}",
+            field=field_id,
+        )
+        node = data.get("data", {}).get("node") or {}
+        return list(node.get("options") or [])
+
+    def _update_status_field_options(self, field_id: str, options: list[dict[str, Any]]) -> None:
+        """Replace the Status field's options with *options* (full list).
+
+        ``gh api graphql`` can't natively pass array GraphQL variables via
+        ``-f`` / ``-F``, so we post the body on stdin via ``--input -``.
+        """
+        mutation = (
+            "mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {"
+            "  updateProjectV2Field("
+            "    input: { fieldId: $field, singleSelectOptions: $options }"
+            "  ) { projectV2Field { __typename } }"
+            "}"
+        )
+        body = json.dumps(
+            {"query": mutation, "variables": {"field": field_id, "options": options}},
+            ensure_ascii=False,
+        )
+        proc = subprocess.run(
+            ["gh", "api", "graphql", "--input", "-"],
+            input=body,
+            capture_output=True,
+            text=True,
+            env=gh_subprocess_env(),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout or "gh graphql failed").strip())
+        response = json.loads(proc.stdout or "{}")
+        errors = response.get("errors")
+        if errors:
+            raise RuntimeError("GraphQL errors: " + json.dumps(errors, ensure_ascii=False))
 
     @staticmethod
     def _gh_api(query: str, **variables: Any) -> dict:
