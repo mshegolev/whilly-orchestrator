@@ -36,10 +36,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mshegolev/whilly-orchestrator"
+Homepage = "https://mshegolev.github.io/whilly-orchestrator/"
+Documentation = "https://mshegolev.github.io/whilly-orchestrator/"
 Repository = "https://github.com/mshegolev/whilly-orchestrator"
 Issues = "https://github.com/mshegolev/whilly-orchestrator/issues"
-Documentation = "https://github.com/mshegolev/whilly-orchestrator/blob/main/docs/Whilly-Usage.md"
+Changelog = "https://github.com/mshegolev/whilly-orchestrator/blob/main/CHANGELOG.md"
 
 [project.scripts]
 whilly = "whilly.cli:main"
