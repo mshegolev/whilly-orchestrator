@@ -1,3 +1,8 @@
+---
+title: Interfaces & Tasks
+nav_order: 5
+---
+
 # Whilly v2: Интерфейсы, стек, задачи
 
 ## 1. Технический стек
