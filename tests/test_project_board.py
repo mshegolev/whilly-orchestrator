@@ -278,3 +278,70 @@ def test_real_task_object_has_derivable_issue_number():
     )
     n, repo = ProjectBoardClient._extract_issue_ref(task)
     assert (n, repo) == (42, "alice/myrepo")
+
+
+# ─── _finalise_project_board — post-merge hook ─────────────────────────────────
+
+
+def test_finalise_moves_only_done_tasks(tmp_path):
+    from whilly.cli import _finalise_project_board
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"project":"t","tasks":['
+        '{"id":"GH-1","phase":"p","category":"x","priority":"medium","status":"done","description":"t1"},'
+        '{"id":"GH-2","phase":"p","category":"x","priority":"medium","status":"in_progress","description":"t2"},'
+        '{"id":"GH-3","phase":"p","category":"x","priority":"medium","status":"done","description":"t3"},'
+        '{"id":"TASK-X","phase":"p","category":"x","priority":"medium","status":"done","description":"non-gh"}'
+        "]}",
+        encoding="utf-8",
+    )
+    tm = TaskManager(plan)
+
+    calls: list[tuple[str, str]] = []
+
+    class _FakeClient:
+        def set_task_status(self, task, status):
+            calls.append((task.id, status))
+            return task.id.startswith("GH-")  # non-GH tasks return False
+
+    tm.project_board = _FakeClient()
+    moved = _finalise_project_board(tm)
+    # Attempted 3 done tasks (both GH-* + the non-GH one), 2 succeeded.
+    assert sorted(t for t, _ in calls) == ["GH-1", "GH-3", "TASK-X"]
+    assert all(status == "merged" for _, status in calls)
+    assert moved == 2
+
+
+def test_finalise_is_noop_without_client(tmp_path):
+    from whilly.cli import _finalise_project_board
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"project":"t","tasks":[{"id":"GH-1","phase":"p","category":"x",'
+        '"priority":"medium","status":"done","description":"t"}]}',
+        encoding="utf-8",
+    )
+    tm = TaskManager(plan)
+    # No .project_board attribute → helper returns 0 without error.
+    assert _finalise_project_board(tm) == 0
+
+
+def test_finalise_swallows_client_exceptions(tmp_path):
+    from whilly.cli import _finalise_project_board
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(
+        '{"project":"t","tasks":[{"id":"GH-1","phase":"p","category":"x",'
+        '"priority":"medium","status":"done","description":"t"}]}',
+        encoding="utf-8",
+    )
+    tm = TaskManager(plan)
+
+    class _FlakyClient:
+        def set_task_status(self, task, status):
+            raise RuntimeError("GraphQL rate limit")
+
+    tm.project_board = _FlakyClient()
+    # Exception is logged, not raised — returns 0 (nothing moved).
+    assert _finalise_project_board(tm) == 0
