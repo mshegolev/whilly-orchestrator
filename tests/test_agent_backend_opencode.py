@@ -301,7 +301,7 @@ class TestRunAsyncPreamble:
 
         with patch("whilly.agents.opencode.subprocess.Popen") as popen_mock:
             OpenCodeBackend().run_async("p", log_file=log)
-        text = log.read_text()
+        text = log.read_text(encoding="utf-8")
         assert "whilly agent preamble" in text
         assert "backend   : opencode" in text
         popen_mock.assert_called_once()
