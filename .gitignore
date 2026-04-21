@@ -41,6 +41,10 @@ whilly_events.jsonl
 progress.txt
 .planning/reports/
 
+# whilly-auto.sh iteration logs
+whilly-auto-runs/
+whilly-auto-run-*.log
+
 # Auto-generated task files
 tasks-*.json
 !tasks.json  # Keep example tasks.json files
