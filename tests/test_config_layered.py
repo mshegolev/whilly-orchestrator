@@ -151,13 +151,12 @@ def test_user_config_path_uses_platformdirs(monkeypatch, os_name, expected_fragm
     import platformdirs
 
     monkeypatch.setattr(platformdirs, "user_config_dir", fake_user_config_dir)
-    # Drop the monkeypatched user_config_path (from _isolate_env) so we test the real one.
-    # We stored the real function reference on the module at import time.
     result = str(Path(fake_user_config_dir("whilly")) / "config.toml")
-    # Rebuild the function manually since _isolate_env patched it — we verify
-    # the formula the real code uses.
-    assert expected_fragment in result
-    assert result.endswith("config.toml")
+    # Normalise separators so the substring match works regardless of host OS
+    # (Path on Windows rewrites / to \ when rendering posix-style inputs).
+    result_normalised = result.replace("\\", "/")
+    assert expected_fragment in result_normalised
+    assert result_normalised.endswith("config.toml")
 
 
 # ─── secrets resolver ──────────────────────────────────────────────────────────
@@ -267,3 +266,76 @@ def test_gh_subprocess_env_prefer_keyring_skips_toml(tmp_path, monkeypatch):
     load_layered(cwd=tmp_path)
     env = gh_utils.gh_subprocess_env()
     assert "GITHUB_TOKEN" not in env
+
+
+# ─── migrate_env_to_toml ───────────────────────────────────────────────────────
+
+
+def test_migrate_env_to_toml_dry_run(tmp_path):
+    from whilly.config import migrate_env_to_toml
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "WHILLY_MAX_PARALLEL=7\n"
+        "WHILLY_MODEL=claude-opus-4-7[1m]\n"
+        "GITHUB_TOKEN=ghp_real_token\n"
+        "JIRA_SERVER_URL=https://jira.example\n"
+        "JIRA_API_TOKEN=jira-secret\n",
+        encoding="utf-8",
+    )
+    summary = migrate_env_to_toml(env_file, tmp_path / "whilly.toml", dry_run=True)
+    assert summary["written"] is False
+    assert "MAX_PARALLEL" in summary["scalar_fields"]
+    assert summary["sections"]["jira"]["server_url"] == "https://jira.example"
+    secrets = {s["var"]: s for s in summary["secrets_found"]}
+    assert secrets["GITHUB_TOKEN"]["keyring"] == "whilly/github"
+    assert secrets["JIRA_API_TOKEN"]["keyring"] == "whilly/jira"
+    assert not (tmp_path / "whilly.toml").exists()
+
+
+def test_migrate_env_to_toml_writes_toml_and_backs_up_env(tmp_path):
+    from whilly.config import migrate_env_to_toml
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("WHILLY_MAX_PARALLEL=5\nGITHUB_TOKEN=ghp_xxx\n", encoding="utf-8")
+    result = migrate_env_to_toml(env_file, tmp_path / "whilly.toml", dry_run=False)
+
+    assert result["written"] is True
+    assert (tmp_path / "whilly.toml").is_file()
+    assert not env_file.exists()  # renamed
+    assert result["backup"] == env_file.parent / ".env.bak"
+    assert result["backup"].is_file()
+
+    contents = (tmp_path / "whilly.toml").read_text(encoding="utf-8")
+    assert "MAX_PARALLEL = 5" in contents
+    assert "[github]" in contents
+    assert 'token = "keyring:whilly/github"' in contents
+
+
+def test_dotenv_deprecation_warning_emits_once(tmp_path, caplog, monkeypatch):
+    """Back-compat: .env still loads, but users are nudged toward migrate."""
+    import whilly.config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "_dotenv_warning_emitted", False)
+    (tmp_path / ".env").write_text("WHILLY_MAX_PARALLEL=6\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="whilly"):
+        load_layered(cwd=tmp_path)
+        # second call inside the same process should NOT warn again
+        load_layered(cwd=tmp_path)
+
+    warnings = [r for r in caplog.records if "Legacy .env" in r.message]
+    assert len(warnings) == 1
+
+
+def test_dotenv_warning_suppressed_by_env(tmp_path, caplog, monkeypatch):
+    import whilly.config as cfg_mod
+
+    monkeypatch.setattr(cfg_mod, "_dotenv_warning_emitted", False)
+    monkeypatch.setenv("WHILLY_SUPPRESS_DOTENV_WARNING", "1")
+    (tmp_path / ".env").write_text("WHILLY_MAX_PARALLEL=2\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="whilly"):
+        load_layered(cwd=tmp_path)
+
+    assert not any("Legacy .env" in r.message for r in caplog.records)

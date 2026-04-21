@@ -199,19 +199,25 @@ def _get_version_info() -> tuple[str, str, str]:
 
 
 def _run_config_command(sub: str) -> int:
-    """Handle ``whilly --config <sub>``. Only ``show`` is implemented in this PR."""
+    """Handle ``whilly --config <sub>``: show / path / migrate / edit."""
     from dataclasses import fields
 
     from whilly.config import WhillyConfig, get_toml_section, load_layered, user_config_path
     from whilly.secrets import redact
 
-    if sub in ("path",):
+    if sub == "path":
         print(user_config_path())
         return 0
 
+    if sub == "migrate":
+        return _run_config_migrate()
+
+    if sub == "edit":
+        return _run_config_edit()
+
     if sub not in ("show", None, ""):
         print(f"Unknown --config subcommand: {sub!r}", file=sys.stderr)
-        print("Supported: show, path", file=sys.stderr)
+        print("Supported: show, path, migrate, edit", file=sys.stderr)
         return 2
 
     cfg = load_layered()
@@ -246,6 +252,120 @@ def _run_config_command(sub: str) -> int:
             redacted = redact(v) if k in {"token", "api_token", "password"} else v
             print(f"  {k:<28} = {redacted!r}")
     return 0
+
+
+def _run_config_migrate() -> int:
+    """Convert legacy `.env` into `whilly.toml` + push secrets into keyring."""
+    from whilly.config import migrate_env_to_toml
+
+    env_path = Path.cwd() / ".env"
+    toml_path = Path.cwd() / "whilly.toml"
+
+    if not env_path.is_file():
+        _ansi(f"{YL}No .env found at {env_path} — nothing to migrate.{R}")
+        return 0
+
+    if toml_path.is_file() and "--force" not in sys.argv:
+        _ansi(f"{RD}{toml_path} already exists. Re-run with --force to overwrite.{R}")
+        return 1
+
+    # Dry-run first so we can confirm before touching disk.
+    preview = migrate_env_to_toml(env_path, toml_path, dry_run=True)
+    _ansi(f"\n{B}Migration plan:{R}")
+    _ansi(f"  .env        : {env_path}")
+    _ansi(f"  whilly.toml : {toml_path}")
+    _ansi(f"  fields      : {len(preview['scalar_fields'])} scalar key(s)")
+    _ansi(f"  sections    : {', '.join(k for k, v in preview['sections'].items() if v) or '(none)'}")
+    _ansi(f"  secrets     : {len(preview['secrets_found'])} detected")
+    for s in preview["secrets_found"]:
+        _ansi(f"    • {s['var']} → [{s['target']}]  (stored as keyring:{s['keyring']})")
+
+    if preview["secrets_found"]:
+        _ansi(f"\n{YL}Secrets will be written to the OS keyring. You will be prompted to confirm each one.{R}")
+
+    if sys.stdin.isatty():
+        choice = input("\nProceed with migration? [y/N]: ").strip().lower()
+        if choice not in ("y", "yes"):
+            _ansi(f"{D}Aborted — nothing changed.{R}")
+            return 0
+
+    # Push secrets to keyring BEFORE writing TOML so we don't end up with a
+    # dangling keyring reference if the user cancels mid-migration.
+    for s in preview["secrets_found"]:
+        value = _read_env_value(env_path, s["var"])
+        if not value:
+            continue
+        service, _, user = s["keyring"].partition("/")
+        try:
+            import keyring
+
+            keyring.set_password(service, user or "default", value)
+            _ansi(f"{GR}  ✓ stored {s['var']} in keyring ({s['keyring']}){R}")
+        except Exception as exc:
+            _ansi(f"{RD}  ✗ keyring write failed for {s['keyring']}: {exc}{R}")
+            _ansi(f"{D}    Migration aborted; .env kept intact.{R}")
+            return 1
+
+    result = migrate_env_to_toml(env_path, toml_path, dry_run=False)
+    _ansi(f"\n{GR}✓ Wrote {result['toml_path']}{R}")
+    if result["backup"]:
+        _ansi(f"{GR}✓ Backed up original .env to {result['backup']}{R}")
+    _ansi(f"\n{D}Run {B}whilly --config show{R}{D} to verify the merged config.{R}")
+    return 0
+
+
+def _read_env_value(env_path: Path, var: str) -> str:
+    """Small re-parser of .env to pick a single value — used during migrate."""
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() != var:
+            continue
+        value = value.strip()
+        if (len(value) >= 2) and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        return value
+    return ""
+
+
+def _run_config_edit() -> int:
+    """Open the user config file in `$EDITOR` (or a sensible OS default)."""
+    import platform
+
+    from whilly.config import user_config_path
+
+    path = user_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.is_file():
+        path.write_text(
+            "# Whilly user config — edit freely.\n# See `whilly.example.toml` in the repo for supported keys.\n",
+            encoding="utf-8",
+        )
+        _ansi(f"{D}Created fresh {path}{R}")
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if editor:
+        cmd = [editor, str(path)]
+    elif platform.system() == "Windows":
+        os.startfile(str(path))  # type: ignore[attr-defined]  # Windows-only API
+        return 0
+    elif platform.system() == "Darwin":
+        cmd = ["open", str(path)]
+    else:
+        cmd = ["xdg-open", str(path)]
+
+    try:
+        return subprocess.call(cmd)
+    except FileNotFoundError:
+        _ansi(f"{RD}Editor not found: {cmd[0]}{R}")
+        _ansi(f"{D}Set $EDITOR or install a default editor, then retry.{R}")
+        return 127
 
 
 def _show_startup_banner() -> None:

@@ -309,8 +309,11 @@ def load_layered(cwd: Path | str | None = None) -> WhillyConfig:
     _toml_sections_cache.clear()
     _toml_sections_cache.update(merged_sections)
 
-    # .env feeds os.environ (no overwrite of real env vars).
-    load_dotenv(base_dir / ".env")
+    # .env feeds os.environ (no overwrite of real env vars). Warn if present so
+    # users are nudged toward `whilly --config migrate`.
+    dotenv_path = base_dir / ".env"
+    _maybe_warn_dotenv_deprecation(dotenv_path)
+    load_dotenv(dotenv_path)
 
     # Shell env wins over TOML for every WHILLY_* field explicitly set.
     env_layer = WhillyConfig.from_env_only()
@@ -325,6 +328,184 @@ __all__ = [
     "WhillyConfig",
     "load_dotenv",
     "load_layered",
+    "migrate_env_to_toml",
     "user_config_path",
     "get_toml_section",
 ]
+
+
+# ── .env → whilly.toml migration ──────────────────────────────────────────────
+
+
+# Variables that must go through the OS secret store, never into TOML plaintext.
+_SECRET_ENV_VARS: dict[str, tuple[str, str]] = {
+    # env var name → (TOML section path, keyring reference suffix)
+    "GITHUB_TOKEN": ("github.token", "whilly/github"),
+    "WHILLY_GH_TOKEN": ("github.token", "whilly/github"),
+    "JIRA_API_TOKEN": ("jira.token", "whilly/jira"),
+}
+
+
+def migrate_env_to_toml(
+    env_path: Path | str = ".env",
+    toml_path: Path | str = "whilly.toml",
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Parse ``env_path`` and write a ``whilly.toml`` next to it.
+
+    Returns a summary dict:
+
+        {
+            "written": bool,
+            "toml_path": Path,
+            "scalar_fields": [...],   # WHILLY_* → dataclass fields
+            "sections": {"github": {...}, "jira": {...}},
+            "secrets_found": [{"var": str, "target": str, "keyring": str}, ...],
+            "backup": Path | None,    # .env.bak, when rename succeeded
+        }
+
+    The caller decides whether to actually push secrets into keyring — this
+    function just reports where they would go.
+    """
+    env_path = Path(env_path)
+    toml_path = Path(toml_path)
+
+    parsed: dict[str, str] = {}
+    if env_path.is_file():
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].lstrip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if (len(value) >= 2) and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            if key:
+                parsed[key] = value
+
+    dataclass_values: dict[str, Any] = {}
+    github_section: dict[str, Any] = {}
+    jira_section: dict[str, Any] = {}
+    secrets_found: list[dict[str, str]] = []
+
+    field_names = {f.name for f in fields(WhillyConfig)}
+    field_types = {f.name: f.type for f in fields(WhillyConfig)}
+
+    for key, raw in parsed.items():
+        if key in _SECRET_ENV_VARS and raw:
+            section_path, keyring_ref = _SECRET_ENV_VARS[key]
+            secrets_found.append({"var": key, "target": section_path, "keyring": keyring_ref})
+            # Point the TOML field at the keyring rather than embedding the token.
+            section_name, _, field_name = section_path.partition(".")
+            (github_section if section_name == "github" else jira_section)[field_name] = f"keyring:{keyring_ref}"
+            continue
+
+        if not key.startswith("WHILLY_"):
+            # Non-WHILLY vars like JIRA_SERVER_URL fall into the right section.
+            if key == "JIRA_SERVER_URL" and raw:
+                jira_section["server_url"] = raw
+            elif key == "JIRA_USERNAME" and raw:
+                jira_section["username"] = raw
+            continue
+
+        field = key[len("WHILLY_") :]
+        if field in field_names:
+            dataclass_values[field] = _coerce(field_types[field], raw)
+
+    summary: dict[str, Any] = {
+        "written": False,
+        "toml_path": toml_path,
+        "scalar_fields": sorted(dataclass_values),
+        "sections": {"github": github_section, "jira": jira_section},
+        "secrets_found": secrets_found,
+        "backup": None,
+    }
+
+    if dry_run:
+        return summary
+
+    rendered = _render_toml(dataclass_values, github_section, jira_section)
+    toml_path.write_text(rendered, encoding="utf-8")
+    summary["written"] = True
+
+    if env_path.is_file():
+        backup = env_path.with_suffix(env_path.suffix + ".bak")
+        env_path.rename(backup)
+        summary["backup"] = backup
+
+    return summary
+
+
+def _render_toml(
+    scalars: dict[str, Any],
+    github: dict[str, Any],
+    jira: dict[str, Any],
+) -> str:
+    """Minimal TOML writer so we don't need a separate dependency just to write.
+
+    We only support the narrow value types the migration can produce:
+    ``str``, ``bool``, ``int``, ``float``. Good enough for :class:`WhillyConfig`.
+    """
+
+    def fmt(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        # Escape backslashes + double-quotes for a basic string literal.
+        text = str(value).replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{text}"'
+
+    lines = [
+        "# Auto-generated by `whilly --config migrate`.",
+        "# Edit freely; rerun the migration command to regenerate from an updated .env.",
+        "",
+    ]
+    for name in sorted(scalars):
+        lines.append(f"{name} = {fmt(scalars[name])}")
+
+    if github:
+        lines += ["", "[github]"]
+        for k in sorted(github):
+            lines.append(f"{k} = {fmt(github[k])}")
+
+    if jira:
+        lines += ["", "[jira]"]
+        for k in sorted(jira):
+            lines.append(f"{k} = {fmt(jira[k])}")
+
+    return "\n".join(lines) + "\n"
+
+
+# ── .env deprecation warning ──────────────────────────────────────────────────
+
+
+_dotenv_warning_emitted = False
+
+
+def _maybe_warn_dotenv_deprecation(path: Path) -> None:
+    """Emit a one-time deprecation warning when a legacy ``.env`` is picked up.
+
+    Users can silence it entirely with ``WHILLY_SUPPRESS_DOTENV_WARNING=1``.
+    """
+    global _dotenv_warning_emitted
+    if _dotenv_warning_emitted:
+        return
+    if not path.is_file():
+        return
+    if os.environ.get("WHILLY_SUPPRESS_DOTENV_WARNING", "").strip().lower() in ("1", "true", "yes"):
+        _dotenv_warning_emitted = True
+        return
+    log.warning(
+        "Legacy .env detected at %s — consider migrating with `whilly --config migrate` "
+        "so secrets move into the OS keyring and behaviour into whilly.toml. "
+        "Silence with WHILLY_SUPPRESS_DOTENV_WARNING=1.",
+        path,
+    )
+    _dotenv_warning_emitted = True

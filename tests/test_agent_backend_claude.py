@@ -242,7 +242,7 @@ class TestRunAsyncPreamble:
         with patch("whilly.agents.claude.subprocess.Popen") as popen_mock:
             ClaudeBackend().run_async("hello prompt", log_file=log)
         assert log.exists()
-        content = log.read_text()
+        content = log.read_text(encoding="utf-8")
         assert "whilly agent preamble" in content
         assert "backend   : claude" in content
         popen_mock.assert_called_once()

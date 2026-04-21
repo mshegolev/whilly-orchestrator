@@ -371,7 +371,8 @@ class OpenCodeBackend:
 
         if log_file:
             log_file.parent.mkdir(parents=True, exist_ok=True)
-            stdout_target = open(log_file, "w")  # noqa: SIM115
+            # Force UTF-8 — Windows defaults to cp1252 and trips on Cyrillic/emoji in the preamble.
+            stdout_target = open(log_file, "w", encoding="utf-8")  # noqa: SIM115
             preamble = (
                 "# whilly agent preamble\n"
                 f"# timestamp : {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
