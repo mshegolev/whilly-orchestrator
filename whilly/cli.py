@@ -198,6 +198,56 @@ def _get_version_info() -> tuple[str, str, str]:
         return __version__, "?", ""
 
 
+def _run_config_command(sub: str) -> int:
+    """Handle ``whilly --config <sub>``. Only ``show`` is implemented in this PR."""
+    from dataclasses import fields
+
+    from whilly.config import WhillyConfig, get_toml_section, load_layered, user_config_path
+    from whilly.secrets import redact
+
+    if sub in ("path",):
+        print(user_config_path())
+        return 0
+
+    if sub not in ("show", None, ""):
+        print(f"Unknown --config subcommand: {sub!r}", file=sys.stderr)
+        print("Supported: show, path", file=sys.stderr)
+        return 2
+
+    cfg = load_layered()
+    resolved = cfg.resolved()
+
+    print(f"User config path : {user_config_path()}")
+    print(f"Repo TOML        : {Path.cwd() / 'whilly.toml'}")
+    print(f".env             : {Path.cwd() / '.env'}")
+    print()
+    print("Merged WhillyConfig (secrets redacted):")
+    _SECRET_FIELDS = {"JIRA_USERNAME", "JIRA_SERVER_URL"}  # non-secret strings stay visible
+    for f in fields(WhillyConfig):
+        value = getattr(resolved, f.name)
+        # Redact anything that passed through whilly.secrets (its output is always str)
+        raw_value = getattr(cfg, f.name)
+        if isinstance(raw_value, str) and raw_value != value:
+            # A secret scheme was resolved — redact the resolved value.
+            shown = redact(value)
+        elif f.name in _SECRET_FIELDS and isinstance(value, str) and value:
+            shown = value  # still just a URL/username, safe to print
+        else:
+            shown = value
+        print(f"  {f.name:<28} = {shown!r}")
+
+    for section_name in ("github", "jira"):
+        section = get_toml_section(section_name)
+        if not section:
+            continue
+        print()
+        print(f"[{section_name}]")
+        for k, v in section.items():
+            redacted = redact(v) if k in {"token", "api_token", "password"} else v
+            print(f"  {k:<28} = {redacted!r}")
+    return 0
+
+
 def _show_startup_banner() -> None:
     """Large pre-flight reminder with version/commit info. Shown for 5 seconds before work starts."""
     version, sha, dirty = _get_version_info()
@@ -1552,6 +1602,12 @@ def main(argv: list[str] | None = None) -> int:
     if "--help" in args or "-h" in args:
         print(HELP_TEXT)
         return 0
+
+    # --config show  — read-only diagnostic: merged layered config + resolved paths
+    if "--config" in args:
+        idx = args.index("--config")
+        sub = args[idx + 1] if idx + 1 < len(args) else "show"
+        return _run_config_command(sub)
 
     _show_startup_banner()
 
