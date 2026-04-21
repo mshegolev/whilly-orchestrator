@@ -216,15 +216,77 @@ def _wire_project_board_sync(task_manager: "TaskManager", config: "WhillyConfig"
     if client is None:
         return
 
+    # Optional Jira mirror — attaches to the same on_status_change fan-out so a
+    # JIRA-prefixed task moves its Jira ticket AND its project card in one go.
+    jira_client = _resolve_jira_board_client(config)
+
     def _sync(task: Task, old_status: str, new_status: str) -> None:
         try:
             client.set_task_status(task, new_status)
         except Exception:
             log.exception("project board sync failed for task %s (%s → %s)", task.id, old_status, new_status)
+        if jira_client is not None:
+            try:
+                jira_client.set_task_status(task, new_status)
+            except Exception:
+                log.exception("jira board sync failed for task %s (%s → %s)", task.id, old_status, new_status)
 
     task_manager.on_status_change = _sync
     task_manager.project_board = client  # type: ignore[attr-defined]
+    if jira_client is not None:
+        task_manager.jira_board = jira_client  # type: ignore[attr-defined]
     _ansi(f"{D}Project board sync enabled: {client.project_url}{R}")
+    if jira_client is not None:
+        _ansi(f"{D}Jira transitions sync enabled: {jira_client.auth.server_url}{R}")
+
+
+def _resolve_jira_board_client(config: "WhillyConfig"):
+    """Return a JiraBoardClient when [jira] is configured, else None. Never raises."""
+    try:
+        from whilly.jira_board import JiraBoardClient
+    except ImportError:
+        return None
+    try:
+        return JiraBoardClient.from_config(config)
+    except Exception:
+        log.exception("Could not build JiraBoardClient — continuing without Jira sync")
+        return None
+
+
+def _run_ensure_board_statuses(names_arg: str | None) -> int:
+    """Create any missing Status options on the configured Projects v2 board.
+
+    Without an argument, ensures every whilly-mapped column from
+    ``DEFAULT_STATUS_MAPPING`` exists (Todo / In Progress / In Review / Done /
+    Refused / Failed / On Hold / Human Loop). With a comma-separated arg, only
+    ensures those names.
+    """
+    from whilly.project_board import DEFAULT_STATUS_MAPPING, ProjectBoardClient
+
+    config = WhillyConfig.from_env()
+    client = ProjectBoardClient.from_config(config)
+    if client is None:
+        print("Project board not configured. Set [project_board].url in whilly.toml.", file=sys.stderr)
+        return 4
+
+    if names_arg:
+        names = [n.strip() for n in names_arg.split(",") if n.strip()]
+    else:
+        names = sorted(set(DEFAULT_STATUS_MAPPING.values()))
+
+    try:
+        added, already = client.ensure_statuses(names)
+    except Exception as exc:
+        print(f"✗ Could not update board: {exc}", file=sys.stderr)
+        return 1
+
+    if added:
+        print(f"✓ Added {len(added)} option(s): {', '.join(added)}")
+    if already:
+        print(f"  Already present: {', '.join(already)}")
+    if not added and not already:
+        print("Nothing to ensure — target list was empty.")
+    return 0
 
 
 def _run_handoff_list() -> int:
@@ -1947,6 +2009,11 @@ def main(argv: list[str] | None = None) -> int:
     # --handoff-list / --handoff-complete / --handoff-show: companion commands for
     # the claude_handoff backend. Let the operator (or an interactive Claude) pick
     # up dispatched tasks and signal completion / block / human-loop back to whilly.
+    if "--ensure-board-statuses" in args:
+        idx = args.index("--ensure-board-statuses")
+        names_arg = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
+        return _run_ensure_board_statuses(names_arg)
+
     if "--handoff-list" in args:
         return _run_handoff_list()
     if "--handoff-show" in args:
@@ -2135,6 +2202,53 @@ def main(argv: list[str] | None = None) -> int:
         slug = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
         config = WhillyConfig.from_env()
         return run_prd_wizard(slug=slug, model=config.MODEL)
+
+    # --from-jira: single-task plan from one Jira issue key / URL
+    if "--from-jira" in args:
+        from whilly.sources import fetch_single_jira_issue, parse_jira_key
+
+        idx = args.index("--from-jira")
+        ref = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
+        if not ref:
+            _ansi(f"{RD}Usage: whilly --from-jira ABC-123 [--go]{R}")
+            return 2
+        try:
+            key = parse_jira_key(ref)
+        except ValueError as exc:
+            _ansi(f"{RD}{exc}{R}")
+            return 2
+
+        output_file = f"tasks-jira-{key}.json"
+        _ansi(f"{CY}{B}Fetching Jira {key} → {output_file}{R}")
+        try:
+            plan_path, stats = fetch_single_jira_issue(key, out_path=output_file)
+        except Exception as exc:
+            _ansi(f"{RD}Failed to fetch {key}: {exc}{R}")
+            return 1
+        _ansi(f"{GR}Tasks generated: {plan_path}  (new={stats.new}, updated={stats.updated}){R}")
+
+        try:
+            generated = json.loads(Path(plan_path).read_text())
+            if not generated.get("tasks"):
+                _ansi(f"{YL}No task generated — issue may be inaccessible.{R}")
+                return 0
+        except Exception:
+            pass
+
+        auto_go = "--go" in args or "--yes" in args
+        if auto_go:
+            _ansi(f"{CY}{B}--go: auto-starting Whilly orchestrator...{R}")
+            args = [str(plan_path)]
+        elif sys.stdin.isatty():
+            choice = input("\nRun task immediately? [Y/n]: ").strip().lower()
+            if choice in ("", "y", "yes"):
+                args = [str(plan_path)]
+            else:
+                _ansi(f"{YL}Run later with: whilly {plan_path}{R}")
+                return 0
+        else:
+            _ansi(f"{YL}Run with: whilly {plan_path}{R}")
+            return 0
 
     # --from-issue: generate a single-task plan from one GitHub issue reference
     if "--from-issue" in args:
