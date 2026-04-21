@@ -198,6 +198,34 @@ def _get_version_info() -> tuple[str, str, str]:
         return __version__, "?", ""
 
 
+def _task_title_for_notify(task: object | None) -> str | None:
+    """Best-effort extraction of a user-readable task title for audio announcements.
+
+    Tasks use the first line of ``description`` as their title; `issue_to_task`
+    builds description as ``"<title>\\n\\n<body>"``. Falls back to task ``id`` so
+    the listener still hears something identifiable when description is empty.
+    """
+    if task is None:
+        return None
+    description = getattr(task, "description", "") or ""
+    first_line = description.splitlines()[0].strip() if description else ""
+    if first_line:
+        return first_line
+    task_id = getattr(task, "id", None)
+    return str(task_id) if task_id else None
+
+
+def _last_done_title(task_manager: object | None) -> str | None:
+    """Return the title of the most recently-completed task, if any."""
+    if task_manager is None:
+        return None
+    tasks = getattr(task_manager, "tasks", []) or []
+    for task in reversed(list(tasks)):
+        if getattr(task, "status", None) == "done":
+            return _task_title_for_notify(task)
+    return None
+
+
 def _run_config_command(sub: str) -> int:
     """Handle ``whilly --config <sub>``: show / path / migrate / edit."""
     from dataclasses import fields
@@ -727,10 +755,9 @@ def wait_and_collect_tmux(
 
         if result.is_complete:
             tm.mark_status([agent.task_id], "done")
-            notify_task_done()
-
             # Автоматическое закрытие внешних задач
             task = next((t for t in tm.tasks if t.id == agent.task_id), None)
+            notify_task_done(_task_title_for_notify(task))
             if task:
                 _handle_task_completion(task, tm, config)
 
@@ -828,7 +855,7 @@ def wait_and_collect_subprocess(
 
         if result.is_complete:
             tm.mark_status([task.id], "done")
-            notify_task_done()
+            notify_task_done(_task_title_for_notify(task))
 
             # Автоматическое закрытие внешних задач
             _handle_task_completion(task, tm, config)
@@ -1420,7 +1447,8 @@ def run_plan(
     if state_store:
         state_store.clear()
 
-    notify_plan_done()
+    last_title = _last_done_title(tm)
+    notify_plan_done([last_title] if last_title else None)
 
     # Finalize
     total_dur = time.monotonic() - plan_start
