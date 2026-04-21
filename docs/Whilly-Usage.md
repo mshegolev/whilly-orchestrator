@@ -26,7 +26,94 @@ whilly --all
 
 # Pull open GitHub issues as tasks and start immediately
 whilly --from-github whilly:ready --go
+
+# One specific issue or Jira ticket
+whilly --from-issue owner/repo/42 --go           # slash form — shell-safe
+whilly --from-issue 'owner/repo#42' --go         # '#' form, quote in zsh/bash
+whilly --from-jira ABC-123 --go                  # single Jira ticket
 ```
+
+## Task sources
+
+| Flag | Source | Notes |
+|------|--------|-------|
+| `--from-github <label>` | GitHub issues by label | `all`/`*`/`-` = no filter |
+| `--from-issue <ref>` | one GitHub issue | `owner/repo/N`, `owner/repo#N`, or URL |
+| `--from-jira <key>` | one Jira ticket | `ABC-123` or browse URL; auth via `[jira]` |
+| `--from-project <url>` | GitHub Projects v2 board | full board items |
+| `--from-issues-project <url> --repo o/r` | Projects board filtered by issue repo | |
+
+Every source writes to an idempotent plan file (`tasks-…json`); re-running refreshes description/priority/labels without losing status.
+
+## Lifecycle sync
+
+Two integrations drive cards/tickets automatically as whilly task statuses change. Enable one or both in `whilly.toml`.
+
+### GitHub Projects v2
+```toml
+[project_board]
+url = "https://github.com/users/you/projects/4"
+enabled = true
+default_repo = "you/your-repo"
+
+[project_board.status_mapping]    # optional
+in_progress = "Doing"
+```
+Requires `gh auth refresh -s project` once.
+
+### Jira
+```toml
+[jira]
+server_url = "https://company.atlassian.net"
+username   = "you@example.com"
+token      = "keyring:whilly/jira"
+enabled    = true
+enable_board_sync = true
+
+[jira.status_mapping]             # optional
+in_progress = "Doing"
+done        = "Review"
+```
+Drives Jira transitions via REST v3. Uses `urllib` stdlib — no extra deps.
+
+### Status mapping (defaults)
+
+| whilly | GitHub column | Jira transition |
+|---|---|---|
+| `pending` | Todo | To Do |
+| `in_progress` | In Progress | In Progress |
+| `done` (PR open) | In Review | In Review |
+| `merged` | Done | Done |
+| `failed` | Failed | Failed |
+| `skipped` | Refused | Cancelled |
+| `blocked` | On Hold | Blocked |
+| `human_loop` | Human Loop | Waiting for Customer |
+
+## Companion commands
+
+```bash
+whilly --config show                           # merged config, secrets redacted
+whilly --config path                           # OS-native user config location
+whilly --config migrate                        # legacy .env → whilly.toml + keyring
+whilly --ensure-board-statuses                 # create missing Projects v2 columns
+whilly --post-merge <plan.json>                # after an out-of-band merge: flush cards/tickets to Done
+```
+
+## Human-in-the-loop backend
+
+`claude_handoff` pauses each task and waits for an external operator (or an interactive Claude session) to do the work:
+
+```bash
+WHILLY_AGENT_BACKEND=claude_handoff whilly --from-issue alice/repo/42 --go
+# whilly writes .whilly/handoff/GH-42/prompt.md and blocks
+
+whilly --handoff-list
+whilly --handoff-show GH-42
+whilly --handoff-complete GH-42 --status complete --message "done"
+#                              ^^^^^^^^ complete / failed / blocked / human_loop / partial
+```
+
+`blocked` and `human_loop` signal "task can't finish without help" — they land in the corresponding board column without being misreported as failed.
 
 ## Configuration
 

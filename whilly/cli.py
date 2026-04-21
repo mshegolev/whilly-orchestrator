@@ -399,12 +399,15 @@ def _run_post_merge(plan_path: str) -> int:
         return 3
     tm = TaskManager(plan_p)
     _wire_project_board_sync(tm, config)
-    if getattr(tm, "project_board", None) is None:
-        print("Project board not configured — nothing to do.", file=sys.stderr)
-        print("Set [project_board] in whilly.toml to enable.", file=sys.stderr)
+    has_board = getattr(tm, "project_board", None) is not None
+    has_jira = getattr(tm, "jira_board", None) is not None
+    if not (has_board or has_jira):
+        print("Neither GitHub Projects board nor Jira configured — nothing to do.", file=sys.stderr)
+        print("Set [project_board] and/or [jira] in whilly.toml to enable.", file=sys.stderr)
         return 4
     moved = _finalise_project_board(tm)
-    print(f"Moved {moved} card(s) to Done.")
+    jira_moved = _finalise_jira_board(tm)
+    print(f"Moved {moved} card(s) to Done, {jira_moved} Jira ticket(s) transitioned.")
     return 0
 
 
@@ -430,6 +433,35 @@ def _finalise_project_board(task_manager: "TaskManager") -> int:
     if moved:
         _ansi(f"{D}Project board: {moved} card(s) moved to Done{R}")
     return moved
+
+
+def _finalise_jira_board(task_manager: "TaskManager") -> int:
+    """Symmetric Jira equivalent: transition every ``done`` JIRA task to the ``merged`` mapping.
+
+    Reads the stashed ``JiraBoardClient`` that ``_wire_project_board_sync``
+    attached. Exceptions are swallowed — advisory, never kills the loop.
+    """
+    client = getattr(task_manager, "jira_board", None)
+    if client is None:
+        return 0
+    moved = 0
+    for task in task_manager.tasks:
+        if getattr(task, "status", None) != "done":
+            continue
+        try:
+            if client.set_task_status(task, "merged"):
+                moved += 1
+        except Exception:
+            log.exception("post-merge Jira transition failed for task %s", task.id)
+    if moved:
+        _ansi(f"{D}Jira: {moved} ticket(s) transitioned to Done{R}")
+    return moved
+
+
+def _finalise_external_trackers(task_manager: "TaskManager") -> None:
+    """Run both post-merge hooks (GitHub Projects + Jira)."""
+    _finalise_project_board(task_manager)
+    _finalise_jira_board(task_manager)
 
 
 def _task_title_for_notify(task: object | None) -> str | None:
@@ -1826,7 +1858,7 @@ def _run_automated_merge(workspace, tm) -> None:
         _ansi(f"{RD}Push failed: {push.stderr.strip()}{R}")
         return
     _ansi(f"{GR}✓ Branch pushed{R}")
-    _finalise_project_board(tm)
+    _finalise_external_trackers(tm)
     _ansi(f"\n{CY}📝 Создать MR → merge нужно вручную через gitlab UI или gh CLI{R}")
     _ansi(f"{D}Autoбранч: {workspace.branch} → master{R}")
     _ansi(f"{D}Подсказка: запустите выбранный скрипт/CI для ожидания pipeline и merge{R}")
@@ -1870,7 +1902,7 @@ def _run_claude_merge(workspace, tm) -> None:
         # Best-effort: if the user confirmed the merge in Claude's TUI, sync the
         # board. When merge didn't actually happen, the mutation just re-affirms
         # the card's current column — no damage done.
-        _finalise_project_board(tm)
+        _finalise_external_trackers(tm)
 
 
 # ── Argument parsing & main ───────────────────────────────────
