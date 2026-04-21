@@ -241,12 +241,11 @@ def label_flip_for_gh_task(
     ]
 
     if runner is None:
-        import os as _os
         import subprocess
 
-        env = dict(_os.environ)
-        env.pop("GITHUB_TOKEN", None)
-        env.pop("GH_TOKEN", None)
+        from whilly.gh_utils import gh_subprocess_env
+
+        env = gh_subprocess_env()
         proc = subprocess.run(["gh", *args], capture_output=True, text=True, env=env, check=False)
         if proc.returncode != 0:
             log.warning("gh issue edit (label flip) failed for %s: %s", task.id, proc.stderr.strip())

@@ -5,7 +5,6 @@ Supports status-oriented workflows with incremental sync and monitoring.
 """
 
 import json
-import os
 import re
 import subprocess
 import time
@@ -15,14 +14,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any, Set
 
 from whilly.config import WhillyConfig
-
-
-def _gh_env() -> dict[str, str]:
-    """Return os.environ copy with stale GITHUB_TOKEN removed — `gh` CLI prefers its keyring."""
-    env = dict(os.environ)
-    env.pop("GITHUB_TOKEN", None)
-    env.pop("GH_TOKEN", None)
-    return env
+from whilly.gh_utils import gh_subprocess_env as _gh_env
 
 
 @dataclass

@@ -72,13 +72,14 @@ class GitHubPRSink:
 
 
 def _strip_env_tokens() -> dict:
-    """Return os.environ copy with GH/GITHUB tokens removed (prefer keyring auth)."""
-    import os as _os
+    """Return a subprocess env prepared by the centralised whilly helper.
 
-    env = dict(_os.environ)
-    env.pop("GITHUB_TOKEN", None)
-    env.pop("GH_TOKEN", None)
-    return env
+    See :mod:`whilly.gh_utils` for how `WHILLY_GH_TOKEN` / `WHILLY_GH_PREFER_KEYRING`
+    / ambient `GITHUB_TOKEN` interact.
+    """
+    from whilly.gh_utils import gh_subprocess_env
+
+    return gh_subprocess_env()
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 60) -> subprocess.CompletedProcess:
