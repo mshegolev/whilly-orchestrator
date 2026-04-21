@@ -2026,6 +2026,53 @@ def main(argv: list[str] | None = None) -> int:
         config = WhillyConfig.from_env()
         return run_prd_wizard(slug=slug, model=config.MODEL)
 
+    # --from-issue: generate a single-task plan from one GitHub issue reference
+    if "--from-issue" in args:
+        from whilly.sources import fetch_single_issue, parse_issue_ref
+
+        idx = args.index("--from-issue")
+        ref = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
+        if not ref:
+            _ansi(f"{RD}Usage: whilly --from-issue owner/repo#N [--go]{R}")
+            return 2
+        try:
+            repo, number = parse_issue_ref(ref)
+        except ValueError as exc:
+            _ansi(f"{RD}{exc}{R}")
+            return 2
+
+        output_file = f"tasks-issue-{repo.replace('/', '-')}-{number}.json"
+        _ansi(f"{CY}{B}Fetching {repo}#{number} → {output_file}{R}")
+        try:
+            plan_path, stats = fetch_single_issue(ref, out_path=output_file)
+        except Exception as exc:
+            _ansi(f"{RD}Failed to fetch {ref}: {exc}{R}")
+            return 1
+        _ansi(f"{GR}Tasks generated: {plan_path}{R}")
+
+        try:
+            generated = json.loads(Path(plan_path).read_text())
+            if not generated.get("tasks"):
+                _ansi(f"{YL}No task generated — issue may not exist or is not accessible.{R}")
+                return 0
+        except Exception:
+            pass
+
+        auto_go = "--go" in args or "--yes" in args
+        if auto_go:
+            _ansi(f"{CY}{B}--go: auto-starting Whilly orchestrator...{R}")
+            args = [str(plan_path)]
+        elif sys.stdin.isatty():
+            choice = input("\nRun task immediately? [Y/n]: ").strip().lower()
+            if choice in ("", "y", "yes"):
+                args = [str(plan_path)]
+            else:
+                _ansi(f"{YL}Run later with: whilly {plan_path}{R}")
+                return 0
+        else:
+            _ansi(f"{YL}Run with: whilly {plan_path}{R}")
+            return 0
+
     # --from-github: generate tasks from GitHub Issues
     if "--from-github" in args:
         from whilly.github_converter import generate_tasks_from_github

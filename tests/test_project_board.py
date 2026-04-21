@@ -105,6 +105,7 @@ _FAKE_METADATA = {
                     ]
                 },
                 "items": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
                         {
                             "id": "ITEM_1",
@@ -122,7 +123,7 @@ _FAKE_METADATA = {
                                 "repository": {"nameWithOwner": "alice/other"},
                             },
                         },
-                    ]
+                    ],
                 },
             }
         }

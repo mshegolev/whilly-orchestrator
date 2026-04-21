@@ -168,10 +168,21 @@ class ProjectBoardClient:
         return None, None
 
     def _load_meta(self) -> _ProjectMeta:
+        """Fetch project id, Status field metadata, and item→issue mapping.
+
+        Paginates the ``items`` connection in 100-card chunks (GitHub's hard cap
+        per page) so boards of any size are handled. Results are cached so every
+        subsequent transition is one mutation call.
+        """
         if self._meta is not None:
             return self._meta
-        data = self._gh_api(
-            (
+        project_id: str | None = None
+        status_field: dict[str, Any] | None = None
+        item_map: dict[tuple[str, int], str] = {}
+        cursor: str | None = None
+        while True:
+            after = f', after: "{cursor}"' if cursor else ""
+            query = (
                 "query($owner: String!, $number: Int!) {"
                 f"  {self._owner_type}(login: $owner) {{"
                 "    projectV2(number: $number) {"
@@ -182,7 +193,8 @@ class ProjectBoardClient:
                 "          ... on ProjectV2SingleSelectField { id name options { id name } }"
                 "        }"
                 "      }"
-                "      items(first: 200) {"
+                f"      items(first: 100{after}) {{"
+                "        pageInfo { hasNextPage endCursor }"
                 "        nodes {"
                 "          id"
                 "          content {"
@@ -194,31 +206,35 @@ class ProjectBoardClient:
                 "    }"
                 "  }"
                 "}"
-            ),
-            owner=self._owner,
-            number=self._number,
-        )
-        project = data["data"][self._owner_type]["projectV2"]
-        status_field = next(
-            (
-                n
-                for n in project["fields"]["nodes"]
-                if n.get("name") == "Status" and n.get("__typename") == "ProjectV2SingleSelectField"
-            ),
-            None,
-        )
+            )
+            data = self._gh_api(query, owner=self._owner, number=self._number)
+            project = data["data"][self._owner_type]["projectV2"]
+            project_id = project["id"]
+            # Status field + options only need reading on the first page.
+            if status_field is None:
+                status_field = next(
+                    (
+                        n
+                        for n in project["fields"]["nodes"]
+                        if n.get("name") == "Status" and n.get("__typename") == "ProjectV2SingleSelectField"
+                    ),
+                    None,
+                )
+            for node in project["items"]["nodes"]:
+                content = node.get("content") or {}
+                if content.get("__typename") != "Issue":
+                    continue
+                repo = content["repository"]["nameWithOwner"]
+                item_map[(repo, content["number"])] = node["id"]
+            page = project["items"]["pageInfo"]
+            if not page["hasNextPage"]:
+                break
+            cursor = page["endCursor"]
         if not status_field:
             raise RuntimeError("Project has no 'Status' single-select field")
         option_id_by_name = {opt["name"]: opt["id"] for opt in status_field["options"]}
-        item_map: dict[tuple[str, int], str] = {}
-        for node in project["items"]["nodes"]:
-            content = node.get("content") or {}
-            if content.get("__typename") != "Issue":
-                continue
-            repo = content["repository"]["nameWithOwner"]
-            item_map[(repo, content["number"])] = node["id"]
         self._meta = _ProjectMeta(
-            project_id=project["id"],
+            project_id=project_id,  # type: ignore[arg-type]
             status_field_id=status_field["id"],
             option_id_by_name=option_id_by_name,
             item_id_by_key=item_map,
