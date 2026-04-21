@@ -170,7 +170,12 @@ jobs:
           from whilly.agents import AgentBackend, available_backends, get_backend
           from whilly.agents.base import AgentResult, AgentUsage
           names = available_backends()
-          assert names == ['claude', 'opencode'], names
+          # `claude_handoff` is an optional, operator-driven backend. The other
+          # two are the production subprocess backends covered by the rest of
+          # this job's assertions.
+          required = {'claude', 'opencode'}
+          missing = required - set(names)
+          assert not missing, f"Missing production backends: {missing} (have {names})"
           for n in names:
               b = get_backend(n)
               assert b.name == n
