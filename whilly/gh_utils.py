@@ -9,7 +9,10 @@ agrees on the auth source. Resolution order (first match wins):
 2. ``WHILLY_GH_PREFER_KEYRING=1`` — explicitly strip ``GITHUB_TOKEN`` /
    ``GH_TOKEN`` and force ``gh`` to use its keyring auth. Useful on macOS
    when the ambient ``GITHUB_TOKEN`` is stale but ``gh auth login`` was run.
-3. Otherwise, ``GITHUB_TOKEN`` / ``GH_TOKEN`` pass through unchanged —
+3. ``[github].token`` in ``whilly.toml`` — optionally routed through
+   :mod:`whilly.secrets` (e.g. ``"keyring:whilly/github"``) for
+   cross-platform secret storage.
+4. Otherwise, ``GITHUB_TOKEN`` / ``GH_TOKEN`` pass through unchanged —
    the cross-platform default that works on Linux, Windows, and CI.
 """
 
@@ -37,8 +40,33 @@ def gh_subprocess_env() -> dict[str, str]:
     if prefer_keyring:
         env.pop("GITHUB_TOKEN", None)
         env.pop("GH_TOKEN", None)
+        return env
+
+    toml_token = _resolve_toml_github_token()
+    if toml_token:
+        env["GITHUB_TOKEN"] = toml_token
+        env.pop("GH_TOKEN", None)
 
     return env
+
+
+def _resolve_toml_github_token() -> str:
+    """Return a resolved ``github.token`` from ``whilly.toml`` (or empty string).
+
+    Kept as a separate function so tests can monkeypatch it without stubbing
+    the whole config module.
+    """
+    try:
+        from whilly.config import get_toml_section
+        from whilly.secrets import resolve as resolve_secret
+    except ImportError:
+        return ""
+    section = get_toml_section("github")
+    raw = section.get("token")
+    if not raw:
+        return ""
+    resolved = resolve_secret(raw)
+    return resolved if isinstance(resolved, str) else ""
 
 
 __all__ = ["gh_subprocess_env"]

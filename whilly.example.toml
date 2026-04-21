@@ -1,0 +1,94 @@
+# Whilly Orchestrator — cross-platform config template.
+#
+# Copy this file to ONE of:
+#   • repository root as `whilly.toml`  → settings scoped to this project only
+#   • your OS-native user config path    → defaults for every repo you run whilly in
+#
+# Find the user config path for the machine you're on:
+#
+#   python3 -c "from whilly.config import user_config_path; print(user_config_path())"
+#
+# Expected locations:
+#   macOS   : ~/Library/Application Support/whilly/config.toml
+#   Linux   : ~/.config/whilly/config.toml          (respects XDG_CONFIG_HOME)
+#   Windows : %APPDATA%\whilly\config.toml
+#
+# Precedence (last wins):
+#   defaults < user TOML < repo TOML < .env < shell env (WHILLY_*) < CLI flags
+#
+# Secrets (GitHub / Jira tokens) are NEVER stored in TOML as plaintext.
+# Use a scheme reference instead — see the [github] and [jira] sections below.
+
+
+# ── Core loop ──────────────────────────────────────────────────────────────
+MAX_PARALLEL = 1            # number of concurrent agents (1 = sequential)
+MAX_ITERATIONS = 0          # 0 = unlimited
+MAX_TASK_RETRIES = 10       # retries before a task is skipped/failed
+BUDGET_USD = 0              # 0 = unlimited; warns at 80 %, kills at 100 %
+TIMEOUT = 0                 # 0 = unlimited; wall-clock seconds per plan
+HEARTBEAT_INTERVAL = 1
+
+
+# ── Agent & model ──────────────────────────────────────────────────────────
+AGENT_BACKEND = "claude"
+MODEL = "claude-opus-4-7[1m]"
+
+
+# ── Workspace / tmux / worktree ────────────────────────────────────────────
+USE_WORKSPACE = true
+USE_TMUX = false
+WORKTREE = false
+
+
+# ── Dashboards & notifications ─────────────────────────────────────────────
+VOICE = false
+HEADLESS = false
+
+
+# ── Logging ────────────────────────────────────────────────────────────────
+LOG_DIR = "whilly_logs"
+STATE_FILE = ".whilly_state.json"
+
+
+# ── Resource limits ────────────────────────────────────────────────────────
+RESOURCE_CHECK_ENABLED = false
+MAX_CPU_PERCENT = 80
+MAX_MEMORY_PERCENT = 75
+MIN_FREE_SPACE_GB = 5
+PROCESS_TIMEOUT_MINUTES = 30
+
+
+# ── External integrations ──────────────────────────────────────────────────
+CLOSE_EXTERNAL_TASKS = true
+GITHUB_AUTO_CLOSE = true
+GITHUB_ADD_COMMENTS = true
+JIRA_ENABLED = false
+
+
+# ── GitHub auth (cross-platform) ───────────────────────────────────────────
+# Four ways to supply the token, in priority order:
+#   1. WHILLY_GH_TOKEN env var              (overrides everything here)
+#   2. WHILLY_GH_PREFER_KEYRING=1 env var   (strip env, use `gh` keyring)
+#   3. [github].token below                 (scheme refs resolve secrets)
+#   4. GITHUB_TOKEN / GH_TOKEN env          (plain passthrough)
+#
+# Schemes understood by [github].token:
+#   "env:NAME"          →  read os.environ[NAME]
+#   "keyring:svc/user"  →  macOS Keychain / libsecret / Windows Cred. Manager
+#   "file:~/.whilly/gh" →  read + strip() the named file
+#   "ghp_real_token…"   →  literal (not recommended)
+#
+# Store the actual token once with:
+#   python3 -c "import keyring; keyring.set_password('whilly', 'github', 'ghp_xxx')"
+
+[github]
+# token = "keyring:whilly/github"
+
+
+# ── Jira (optional) ────────────────────────────────────────────────────────
+# Same scheme syntax as [github]. When unset, code falls back to the JIRA_*
+# environment variables.
+[jira]
+# server_url = "https://jira.example.com"
+# username   = "you@example.com"
+# token      = "keyring:whilly/jira"
