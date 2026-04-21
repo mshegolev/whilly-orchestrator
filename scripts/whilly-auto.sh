@@ -186,13 +186,18 @@ if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] gh pr create --base $BASE_BRANCH --head $BRANCH --title \"$TITLE\""
     PR_URL="https://example.invalid/dry-run"
 else
-    PR_URL=$(gh pr create \
+    # `gh pr create` writes warnings ("Warning: 1 uncommitted change") to stderr
+    # before emitting the PR URL on stdout. Capture both, then extract only the
+    # PR URL line so $PR_URL isn't multi-line garbage downstream.
+    PR_OUT=$(gh pr create \
         --repo "$REPO" \
         --base "$BASE_BRANCH" \
         --head "$BRANCH" \
         --title "$TITLE" \
         --body "$PR_BODY" 2>&1) \
-        || die "gh pr create failed: $PR_URL" 3
+        || die "gh pr create failed: $PR_OUT" 3
+    PR_URL=$(grep -oE "https://github\.com/[^ ]+/pull/[0-9]+" <<<"$PR_OUT" | head -1)
+    [[ -n "$PR_URL" ]] || die "gh pr create ok but no URL in output: $PR_OUT" 3
 fi
 info "PR: $PR_URL"
 
