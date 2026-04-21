@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import Optional
 
@@ -11,10 +12,18 @@ from whilly.sources.github_issues import fetch_github_issues
 from whilly.external_integrations import create_integration_manager
 
 
+def _gh_env() -> dict[str, str]:
+    """Return os.environ copy with stale GITHUB_TOKEN / GH_TOKEN removed — `gh` CLI prefers its keyring."""
+    env = dict(os.environ)
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("GH_TOKEN", None)
+    return env
+
+
 def _run_command(cmd: list[str]) -> tuple[bool, str]:
     """Запускает команду и возвращает (success, output)."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=_gh_env())
         return result.returncode == 0, result.stdout.strip() or result.stderr.strip()
     except Exception as e:
         return False, str(e)
