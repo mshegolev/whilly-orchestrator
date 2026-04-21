@@ -200,13 +200,19 @@ info "PR: $PR_URL"
 
 # --auto is a no-op when branch protection is off (merges immediately) and the
 # right thing to do when it is on (merges once all required checks pass).
+#
+# We do NOT pass --delete-branch here: the local branch is checked out in the
+# workspace worktree, so `git branch -D` (which --delete-branch triggers after
+# merge) will fail with "Cannot delete branch ... checked out at ...". Instead
+# we clean up locally ourselves once the merge is confirmed.
 if [[ "$DRY_RUN" != "1" ]]; then
-    gh pr merge "$PR_URL" --"$MERGE_METHOD" --delete-branch --auto \
+    gh pr merge "$PR_URL" --"$MERGE_METHOD" --auto \
         || die "gh pr merge failed" 3
 
     # Poll until actually merged so the post-merge hook runs after the card
     # is truly ready to move to Done. Cap at 30 minutes to avoid hanging CI.
     info "Waiting for merge..."
+    STATE=""
     for _ in $(seq 1 180); do
         STATE=$(gh pr view "$PR_URL" --json state -q .state 2>/dev/null || echo "")
         [[ "$STATE" == "MERGED" ]] && break
@@ -215,6 +221,17 @@ if [[ "$DRY_RUN" != "1" ]]; then
     done
     [[ "$STATE" == "MERGED" ]] || die "PR not merged after 30 minutes" 3
     info "Merged"
+
+    # Merge succeeded — now safe to tear down the worktree + local branch.
+    # Remote branch: `gh pr merge` deletes it when the PR opts in; we do it
+    # explicitly here (idempotent — the remote may already be gone).
+    info "Cleaning up worktree + branch"
+    git worktree remove "$NEW_WT" --force >/dev/null 2>&1 \
+        || echo "warn: could not remove worktree $NEW_WT"
+    git branch -D "$BRANCH" >/dev/null 2>&1 \
+        || echo "warn: could not delete local branch $BRANCH"
+    git push origin --delete "$BRANCH" >/dev/null 2>&1 \
+        || true  # remote may already be gone (gh pr merge usually deletes it)
 fi
 
 # ── 6. Post-merge: In Review → Done on the Projects v2 board ──────────────────
