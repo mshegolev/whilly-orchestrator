@@ -44,6 +44,9 @@ progress.txt
 # Auto-generated task files
 tasks-*.json
 !tasks.json  # Keep example tasks.json files
+github-*-tasks.json
+# Safety against earlier one-off filename shapes with colons / slashes
+github-https:*
 
 # Tests
 .pytest_cache/
