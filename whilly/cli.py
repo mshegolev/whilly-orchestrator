@@ -347,7 +347,7 @@ def _run_config_command(sub: str) -> int:
             shown = value
         print(f"  {f.name:<28} = {shown!r}")
 
-    for section_name in ("github", "jira"):
+    for section_name in ("github", "jira", "project_board"):
         section = get_toml_section(section_name)
         if not section:
             continue
