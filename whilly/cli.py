@@ -201,9 +201,11 @@ def _get_version_info() -> tuple[str, str, str]:
 def _wire_project_board_sync(task_manager: "TaskManager", config: "WhillyConfig") -> None:
     """Register a TaskManager callback that mirrors status changes onto the GitHub Projects board.
 
-    Silent no-op when the board integration is unconfigured (no ``[project_board]``
-    section in ``whilly.toml`` / TOML-equivalent). Never raises — board sync is
-    best-effort; a broken hook must not kill the orchestration loop.
+    Also stashes the client on ``task_manager.project_board`` so the merge flow
+    can reuse it to move cards to ``Done`` after a successful merge.
+
+    Silent no-op when the board integration is unconfigured. Never raises —
+    board sync is advisory; a broken hook must not kill the orchestration loop.
     """
     try:
         from whilly.project_board import ProjectBoardClient
@@ -221,7 +223,56 @@ def _wire_project_board_sync(task_manager: "TaskManager", config: "WhillyConfig"
             log.exception("project board sync failed for task %s (%s → %s)", task.id, old_status, new_status)
 
     task_manager.on_status_change = _sync
+    task_manager.project_board = client  # type: ignore[attr-defined]
     _ansi(f"{D}Project board sync enabled: {client.project_url}{R}")
+
+
+def _run_post_merge(plan_path: str) -> int:
+    """Move every ``done`` card in the plan to the ``Done`` column.
+
+    Intended for callers that merge the PR through some mechanism whilly can't
+    observe (GitLab UI, GitHub web merge, manual ``gh pr merge``) and still
+    want the board reflected. The plan file's TaskManager is loaded, the
+    board client is wired from config, and the finalise helper is called.
+    """
+    config = WhillyConfig.from_env()
+    plan_p = Path(plan_path)
+    if not plan_p.is_file():
+        print(f"Plan file not found: {plan_p}", file=sys.stderr)
+        return 3
+    tm = TaskManager(plan_p)
+    _wire_project_board_sync(tm, config)
+    if getattr(tm, "project_board", None) is None:
+        print("Project board not configured — nothing to do.", file=sys.stderr)
+        print("Set [project_board] in whilly.toml to enable.", file=sys.stderr)
+        return 4
+    moved = _finalise_project_board(tm)
+    print(f"Moved {moved} card(s) to Done.")
+    return 0
+
+
+def _finalise_project_board(task_manager: "TaskManager") -> int:
+    """Move every ``done`` task's card to the mapped ``merged`` column (typically ``Done``).
+
+    Intended to be called from the merge flow once the workspace branch has
+    landed on ``origin``. Returns the number of cards successfully moved.
+    No-op (returns 0) when the board sync wasn't configured.
+    """
+    client = getattr(task_manager, "project_board", None)
+    if client is None:
+        return 0
+    moved = 0
+    for task in task_manager.tasks:
+        if getattr(task, "status", None) != "done":
+            continue
+        try:
+            if client.set_task_status(task, "merged"):
+                moved += 1
+        except Exception:
+            log.exception("post-merge board move failed for task %s", task.id)
+    if moved:
+        _ansi(f"{D}Project board: {moved} card(s) moved to Done{R}")
+    return moved
 
 
 def _task_title_for_notify(task: object | None) -> str | None:
@@ -1618,6 +1669,7 @@ def _run_automated_merge(workspace, tm) -> None:
         _ansi(f"{RD}Push failed: {push.stderr.strip()}{R}")
         return
     _ansi(f"{GR}✓ Branch pushed{R}")
+    _finalise_project_board(tm)
     _ansi(f"\n{CY}📝 Создать MR → merge нужно вручную через gitlab UI или gh CLI{R}")
     _ansi(f"{D}Autoбранч: {workspace.branch} → master{R}")
     _ansi(f"{D}Подсказка: запустите выбранный скрипт/CI для ожидания pipeline и merge{R}")
@@ -1657,6 +1709,11 @@ def _run_claude_merge(workspace, tm) -> None:
         _ansi(f"{RD}claude CLI не найден. Установи CLAUDE_BIN или запусти claudeproxy{R}")
     except KeyboardInterrupt:
         _ansi(f"\n{YL}Прервано пользователем{R}")
+    else:
+        # Best-effort: if the user confirmed the merge in Claude's TUI, sync the
+        # board. When merge didn't actually happen, the mutation just re-affirms
+        # the card's current column — no damage done.
+        _finalise_project_board(tm)
 
 
 # ── Argument parsing & main ───────────────────────────────────
@@ -1783,6 +1840,14 @@ def main(argv: list[str] | None = None) -> int:
         idx = args.index("--config")
         sub = args[idx + 1] if idx + 1 < len(args) else "show"
         return _run_config_command(sub)
+
+    if "--post-merge" in args:
+        idx = args.index("--post-merge")
+        plan_arg = args[idx + 1] if idx + 1 < len(args) else None
+        if not plan_arg or plan_arg.startswith("-"):
+            print("Usage: whilly --post-merge <plan.json>", file=sys.stderr)
+            return 2
+        return _run_post_merge(plan_arg)
 
     _show_startup_banner()
 
