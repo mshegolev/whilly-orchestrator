@@ -227,6 +227,42 @@ def _wire_project_board_sync(task_manager: "TaskManager", config: "WhillyConfig"
     _ansi(f"{D}Project board sync enabled: {client.project_url}{R}")
 
 
+def _run_ensure_board_statuses(names_arg: str | None) -> int:
+    """Create any missing Status options on the configured Projects v2 board.
+
+    Without an argument, ensures every whilly-mapped column from
+    ``DEFAULT_STATUS_MAPPING`` exists (Todo / In Progress / In Review / Done /
+    Refused / Failed / On Hold / Human Loop). With a comma-separated arg, only
+    ensures those names.
+    """
+    from whilly.project_board import DEFAULT_STATUS_MAPPING, ProjectBoardClient
+
+    config = WhillyConfig.from_env()
+    client = ProjectBoardClient.from_config(config)
+    if client is None:
+        print("Project board not configured. Set [project_board].url in whilly.toml.", file=sys.stderr)
+        return 4
+
+    if names_arg:
+        names = [n.strip() for n in names_arg.split(",") if n.strip()]
+    else:
+        names = sorted(set(DEFAULT_STATUS_MAPPING.values()))
+
+    try:
+        added, already = client.ensure_statuses(names)
+    except Exception as exc:
+        print(f"✗ Could not update board: {exc}", file=sys.stderr)
+        return 1
+
+    if added:
+        print(f"✓ Added {len(added)} option(s): {', '.join(added)}")
+    if already:
+        print(f"  Already present: {', '.join(already)}")
+    if not added and not already:
+        print("Nothing to ensure — target list was empty.")
+    return 0
+
+
 def _run_handoff_list() -> int:
     """Print every task currently awaiting a result.json from the operator."""
     from whilly.agents.claude_handoff import handoff_root, list_pending
@@ -1947,6 +1983,11 @@ def main(argv: list[str] | None = None) -> int:
     # --handoff-list / --handoff-complete / --handoff-show: companion commands for
     # the claude_handoff backend. Let the operator (or an interactive Claude) pick
     # up dispatched tasks and signal completion / block / human-loop back to whilly.
+    if "--ensure-board-statuses" in args:
+        idx = args.index("--ensure-board-statuses")
+        names_arg = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
+        return _run_ensure_board_statuses(names_arg)
+
     if "--handoff-list" in args:
         return _run_handoff_list()
     if "--handoff-show" in args:
