@@ -22,7 +22,10 @@ classifiers = [
 ]
 dependencies = [
     "rich>=13.0.0",
-    "psutil>=5.9.0",  # System resource monitoring
+    "psutil>=5.9.0",           # System resource monitoring
+    "platformdirs>=4.0",       # OS-native user config / data directories
+    "tomli>=2.0; python_version<'3.11'",  # TOML parsing on 3.10 (stdlib tomllib on 3.11+)
+    "keyring>=24.0",           # OS secret store (macOS Keychain / libsecret / Windows Credential Manager)
 ]
 
 [project.optional-dependencies]
