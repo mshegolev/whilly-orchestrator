@@ -8,12 +8,22 @@ from __future__ import annotations
 
 import os
 import sys
-import termios
 import threading
 import time
-import tty
 from collections.abc import Callable
 from pathlib import Path
+
+# termios / tty are POSIX-only. Windows ships without them; the TTY hot-key
+# listener is simply disabled on Windows (the dashboard itself still works).
+try:
+    import termios
+    import tty
+
+    _HAS_TERMIOS = True
+except ImportError:  # pragma: no cover - exercised only on Windows
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
+    _HAS_TERMIOS = False
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -1167,6 +1177,10 @@ class KeyboardHandler:
         self._running = False
 
     def _listen(self) -> None:
+        if not _HAS_TERMIOS:
+            # Windows: no cbreak hotkey support yet. Listener simply no-ops so
+            # the rest of the dashboard keeps working.
+            return
         try:
             fd = sys.stdin.fileno()
             old_settings = termios.tcgetattr(fd)
