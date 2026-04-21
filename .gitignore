@@ -18,6 +18,10 @@ env/
 # Local env overrides (use .env.example as the template)
 .env
 .env.local
+.env.bak
+
+# Local whilly config — personal, use whilly.example.toml as the template
+whilly.toml
 
 # Editor / OS
 .vscode/
