@@ -39,6 +39,8 @@ DEFAULT_STATUS_MAPPING: dict[str, str] = {
     "merged": "Done",  # synthetic post-merge state signalled by the merge flow
     "failed": "Failed",
     "skipped": "Refused",
+    "blocked": "On Hold",  # waiting on external thing — CI, dep, decision
+    "human_loop": "Human Loop",  # needs a real person in the loop
 }
 
 

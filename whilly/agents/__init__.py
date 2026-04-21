@@ -18,6 +18,7 @@ import os
 
 from whilly.agents.base import AgentBackend, AgentResult, AgentUsage
 from whilly.agents.claude import ClaudeBackend
+from whilly.agents.claude_handoff import ClaudeHandoffBackend
 from whilly.agents.opencode import OpenCodeBackend
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "AgentResult",
     "AgentUsage",
     "ClaudeBackend",
+    "ClaudeHandoffBackend",
     "OpenCodeBackend",
     "DEFAULT_BACKEND",
     "get_backend",
@@ -42,6 +44,7 @@ DEFAULT_BACKEND = "claude"
 
 _REGISTRY: dict[str, type[AgentBackend]] = {
     "claude": ClaudeBackend,
+    "claude_handoff": ClaudeHandoffBackend,
     "opencode": OpenCodeBackend,
 }
 
