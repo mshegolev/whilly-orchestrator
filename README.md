@@ -144,7 +144,25 @@ See [Self-Healing Guide](docs/Self-Healing-Guide.md) for complete documentation.
 
 ## Configuration
 
-Configuration is done via environment variables (prefix `WHILLY_`). A few CLI flags exist for one-shot overrides — see `whilly --help`.
+Whilly resolves config through layers (last wins):
+
+```
+defaults → user TOML → ./whilly.toml → .env → shell env (WHILLY_*) → CLI flags
+```
+
+Start from the committed template (works cross-platform — macOS / Linux / Windows):
+
+```bash
+cp whilly.example.toml whilly.toml           # project-local
+# or place settings at the OS-native user path:
+whilly --config path                         # shows the location
+whilly --config edit                         # opens it in $EDITOR
+
+# legacy .env users: one-shot migration that moves tokens into the OS keyring
+whilly --config migrate
+```
+
+See [docs/Whilly-Usage.md](docs/Whilly-Usage.md) for the full config guide (TOML fields, secret schemes, user-config paths per OS). The env-var table below is kept as a reference — every `WHILLY_*` variable has an equivalent TOML field of the same name.
 
 | Variable | Default | Purpose |
 |---|---|---|
