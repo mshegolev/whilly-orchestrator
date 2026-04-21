@@ -1,3 +1,8 @@
+---
+title: Getting Started
+nav_order: 2
+---
+
 # Whilly — Getting Started
 
 Step-by-step walkthroughs for the most common flows. If you want the full flag/config reference, see [`Whilly-Usage.md`](./Whilly-Usage.md).
