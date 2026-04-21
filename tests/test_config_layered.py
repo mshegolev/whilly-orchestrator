@@ -151,13 +151,12 @@ def test_user_config_path_uses_platformdirs(monkeypatch, os_name, expected_fragm
     import platformdirs
 
     monkeypatch.setattr(platformdirs, "user_config_dir", fake_user_config_dir)
-    # Drop the monkeypatched user_config_path (from _isolate_env) so we test the real one.
-    # We stored the real function reference on the module at import time.
     result = str(Path(fake_user_config_dir("whilly")) / "config.toml")
-    # Rebuild the function manually since _isolate_env patched it — we verify
-    # the formula the real code uses.
-    assert expected_fragment in result
-    assert result.endswith("config.toml")
+    # Normalise separators so the substring match works regardless of host OS
+    # (Path on Windows rewrites / to \ when rendering posix-style inputs).
+    result_normalised = result.replace("\\", "/")
+    assert expected_fragment in result_normalised
+    assert result_normalised.endswith("config.toml")
 
 
 # ─── secrets resolver ──────────────────────────────────────────────────────────
