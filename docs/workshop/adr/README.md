@@ -22,6 +22,7 @@
 | [010](ADR-010-prd-wizard.md) | PRD wizard pipeline | accepted | Workflow |
 | [011](ADR-011-task-decomposer.md) | Mid-run task decomposer | accepted | Workflow |
 | [012](ADR-012-self-hosting-bootstrap-demo.md) | Self-hosting bootstrap demo | accepted (gap pack) | Demo |
+| [021](ADR-021-draft-pr-vs-auto-merge.md) | Draft PR vs auto-merge: clarifying the human gate | accepted | Sink / safety policy |
 
 ---
 
