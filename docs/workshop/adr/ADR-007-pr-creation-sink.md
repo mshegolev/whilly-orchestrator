@@ -128,3 +128,4 @@ gh pr create \
 - `whilly/sinks/github_pr.py` (gap pack).
 - PRD §2.2.2 FR-PR-1 to FR-PR-5.
 - ADR-006 — GH source.
+- ADR-021 — Draft PR vs auto-merge policy (clarifies how the `draft` flag here composes with the e2e `--allow-auto-merge`).
