@@ -239,13 +239,39 @@ if [[ "$DRY_RUN" != "1" ]]; then
         || true  # remote may already be gone (gh pr merge usually deletes it)
 fi
 
-# ── 6. Post-merge: In Review → Done on the Projects v2 board ──────────────────
+# ── 6. Post-merge: close issue + move card to Done ────────────────────────────
 
-if [[ -f "$PLAN" ]]; then
+PROJECT_URL="${PROJECT_URL:-https://github.com/users/mshegolev/projects/4}"
+
+# 6a. whilly --post-merge (uses keyring token — may fail with fine-grained PAT
+# that lacks Projects v2 scope). We treat it as advisory and fall back below.
+POST_MERGE_MOVED=0
+if [[ -f "$PLAN" ]] && [[ "$DRY_RUN" != "1" ]]; then
     info "Running: whilly --post-merge $PLAN"
-    run "whilly --post-merge '$PLAN'" || echo "warn: post-merge hook non-zero (board sync is advisory)"
-else
-    echo "warn: plan file '$PLAN' missing — skipping post-merge board sync"
+    WHILLY_PM_OUT=$(whilly --post-merge "$PLAN" 2>&1 || true)
+    echo "$WHILLY_PM_OUT"
+    if grep -qE "Moved [1-9][0-9]* card\(s\) to Done" <<<"$WHILLY_PM_OUT"; then
+        POST_MERGE_MOVED=1
+    fi
 fi
 
-info "Done · issue #$NUMBER merged into $BASE_BRANCH"
+# 6b. Close the issue explicitly. GitHub's auto-close from "Closes #N" is not
+# always reliable after squash-merge, so we do it unconditionally — idempotent.
+if [[ "$DRY_RUN" != "1" ]]; then
+    if [[ "$(gh issue view "$NUMBER" --repo "$REPO" --json state -q .state 2>/dev/null)" == "OPEN" ]]; then
+        info "Closing issue #$NUMBER"
+        gh issue close "$NUMBER" --repo "$REPO" \
+            --comment "Landed via $PR_URL (merged to $BASE_BRANCH)." 2>&1 | tail -2 \
+            || echo "warn: gh issue close failed — close manually at $URL"
+    fi
+fi
+
+# 6c. Fallback: move the Projects v2 card to Done using the gh CLI token
+# (which has `project` scope even when the keyring token does not).
+if [[ "$POST_MERGE_MOVED" != "1" ]] && [[ -x "scripts/move_project_card.py" ]] && [[ "$DRY_RUN" != "1" ]]; then
+    info "Fallback: moving card #$NUMBER → Done via gh CLI token"
+    python3 scripts/move_project_card.py "$PROJECT_URL" "$NUMBER" "Done" --repo "$REPO" 2>&1 | tail -2 \
+        || echo "warn: fallback card move failed — check $PROJECT_URL manually"
+fi
+
+info "✓ Done · issue #$NUMBER merged into $BASE_BRANCH"
