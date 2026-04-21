@@ -226,14 +226,16 @@ def _import_issues_workflow(config: WhillyConfig) -> Optional[str]:
     print(f"\n🚀 Создаем план задач: {output_file}")
 
     try:
-        stats = fetch_github_issues(repo, label=label, out_path=output_file)
+        plan_path, stats = fetch_github_issues(repo, label=label, out_path=output_file)
 
         print("✅ Импорт завершен!")
+        print(f"   Найдено открытых: {stats.total_open}")
         print(f"   Новых задач: {stats.new}")
         print(f"   Обновлено: {stats.updated}")
-        print(f"   Файл плана: {output_file}")
+        print(f"   Закрыто внешне: {stats.closed_externally}")
+        print(f"   Файл плана: {plan_path}")
 
-        return output_file
+        return str(plan_path)
 
     except Exception as e:
         print(f"❌ Ошибка импорта: {e}")
