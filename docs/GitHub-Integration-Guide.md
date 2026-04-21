@@ -1,3 +1,8 @@
+---
+title: GitHub Integration
+nav_order: 4
+---
+
 # GitHub Integration Guide
 
 Whilly предоставляет несколько способов интеграции с GitHub для автоматизации работы с Issues и Projects.

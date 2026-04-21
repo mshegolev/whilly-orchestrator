@@ -1,3 +1,8 @@
+---
+title: Full Usage Reference
+nav_order: 3
+---
+
 # Whilly — Task Orchestrator
 
 Python-based task orchestrator that runs Claude CLI agents to execute tasks from a JSON plan file.
