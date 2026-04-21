@@ -92,11 +92,13 @@ if [[ "${SKIP_SYNC:-0}" != "1" ]]; then
         git pull --ff-only origin "$BASE_BRANCH" --quiet \
             || die "git pull --ff-only origin $BASE_BRANCH failed (local diverged)" 1
         info "On $BASE_BRANCH @ $(git rev-parse --short HEAD)"
-        # Best-effort restore: switch back + pop stash only if we moved.
+        # Stay on $BASE_BRANCH so whilly's workspace worktree (phase 3) is
+        # rooted in the up-to-date base branch, not the caller's feature
+        # branch. The caller can run `git checkout $CURRENT_BRANCH` afterwards.
         if [[ "$CURRENT_BRANCH" != "$BASE_BRANCH" ]]; then
-            git checkout "$CURRENT_BRANCH" --quiet 2>/dev/null || true
+            info "Note: staying on $BASE_BRANCH; was on '$CURRENT_BRANCH' — switch back after the run completes."
         fi
-        [[ "$STASHED" == "1" ]] && git stash pop --quiet 2>/dev/null || true
+        [[ "$STASHED" == "1" ]] && info "Note: local changes stashed as 'whilly-auto autosync' — recover with 'git stash pop' after the run."
     fi
 fi
 
