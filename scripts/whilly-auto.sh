@@ -44,6 +44,21 @@ die()  { echo "error: $*" >&2; exit "${2:-1}"; }
 info() { echo "→ $*"; }
 run()  { [[ "$DRY_RUN" == "1" ]] && echo "[dry-run] $*" || eval "$@"; }
 
+# ── 0.0. Proxy preflight (zshp equivalent for this shell only) ────────────────
+# Whilly spawns `claude` which hits api.anthropic.com; in this environment the
+# host needs the SSH tunnel that `zshp` sets up. This block ensures the tunnel
+# is live and exports HTTP(S)_PROXY / NO_PROXY for the whole process tree
+# (whilly → claude) without requiring the user to pre-run `zshp`.
+#
+# Skip with WHILLY_PROXY_SKIP=1 if you're on a network without this requirement.
+
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${_SCRIPT_DIR}/whilly-proxy-preflight.sh" ]]; then
+    # shellcheck source=whilly-proxy-preflight.sh
+    source "${_SCRIPT_DIR}/whilly-proxy-preflight.sh" \
+        || die "proxy preflight failed — see errors above" 1
+fi
+
 # ── 0. Preconditions ───────────────────────────────────────────────────────────
 
 command -v whilly >/dev/null || die "whilly not on PATH — pip install whilly-orchestrator" 1
