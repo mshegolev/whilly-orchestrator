@@ -1,0 +1,49 @@
+title: Whilly Orchestrator
+description: Python task orchestrator that runs Claude CLI agents on a JSON plan — loopable, resumable, budget-capped.
+remote_theme: just-the-docs/just-the-docs
+url: https://mshegolev.github.io
+baseurl: /whilly-orchestrator
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# ── Just-the-Docs theme settings ────────────────────────────────────────────
+color_scheme: dark
+search_enabled: true
+heading_anchors: true
+back_to_top: true
+back_to_top_text: "↑ top"
+
+aux_links:
+  "GitHub repo":
+    - "https://github.com/mshegolev/whilly-orchestrator"
+  "Latest release":
+    - "https://github.com/mshegolev/whilly-orchestrator/releases/latest"
+
+footer_content: >-
+  Source on
+  <a href="https://github.com/mshegolev/whilly-orchestrator">GitHub</a>
+  · MIT licensed · Built with
+  <a href="https://pmarsceill.github.io/just-the-docs/">Just the Docs</a>
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  warning:
+    title: Warning
+    color: yellow
+
+# Things outside the docs tree should not be rendered.
+exclude:
+  - "*.json"
+  - "*.log"
+  - workshop/
+  - tests/
+
+# Kramdown / syntax highlighter — default is fine; explicit for clarity.
+markdown: kramdown
+kramdown:
+  syntax_highlighter: rouge
