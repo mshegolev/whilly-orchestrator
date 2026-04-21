@@ -128,13 +128,47 @@ The schema is validated by `cli.validate_schema` before the plan is accepted. No
 
 ## Phase 3 — Workspace isolation
 
-Whilly creates (or reuses) a git worktree so the agent works on an isolated copy of the repository. The worktree branch name is deterministic:
+Whilly creates (or reuses) a **git worktree** — not a clone — so the agent works on an isolated copy of the repository. The worktree branch name is deterministic:
 
 ```
 whilly/workspace/{slug}
 ```
 
 where `{slug}` is derived from the plan filename. The main repo's working tree is never touched by the agent during execution.
+
+### Worktree, not clone
+
+`git worktree add` is fundamentally different from `git clone`. Both give you an isolated working directory, but the cost and the semantics are not the same.
+
+| | `git clone` | `git worktree add` (what Whilly uses) |
+|---|---|---|
+| Network traffic | yes — pulls objects from the remote | none — fully local |
+| `.git/` directory | separate copy | shared with the main repo (one `.git/` directory serves both) |
+| Object storage | duplicated on disk | not duplicated — one set of blobs/commits is referenced from both |
+| Branches | remote refs are a second universe | all branches from the main repo are visible immediately |
+| Creation speed | seconds to minutes | milliseconds |
+| Isolation | complete | working files are isolated; history and objects are shared |
+
+Concretely, when Phase 3 runs, the command executed is:
+
+```bash
+git worktree add .whilly_workspaces/{slug}/ -b whilly/workspace/{slug} HEAD
+```
+
+That creates:
+
+- A new directory `.whilly_workspaces/{slug}/` with the files checked out.
+- A new branch `whilly/workspace/{slug}` rooted at the current `HEAD`.
+- A plain file called `.git` inside the worktree (not a directory) that points back to the shared `.git/` in the main repo.
+
+The agent reads, edits, and commits inside `.whilly_workspaces/{slug}/`. Commits land in the **same** `.git/objects/` store as the main repo — there is no duplication of history — but they live on a separate branch. This is why a 5 GB repo creates a worktree in milliseconds without using another 5 GB of disk.
+
+Uncommitted changes in the main working tree are not visible in the worktree, and vice versa. The two directories have fully independent file states. Only the branch graph and object store are shared.
+{: .note }
+
+### Where cloning actually happens
+
+A `git clone` only happens once — the first time you check out the repository on your machine. After that, `scripts/whilly-auto.sh` keeps the local checkout current with an incremental `git fetch origin $BASE_BRANCH` (documented in phase 0.1 of the script), which downloads only new commits, not the whole repo. The worktree itself is a purely local operation.
 
 The `run_plan` function `chdir`s into the worktree before dispatching any agents. The plan file itself is resolved to an absolute path *before* the chdir so the orchestrator always reads and writes the canonical JSON in the main repo, not the worktree copy.
 
