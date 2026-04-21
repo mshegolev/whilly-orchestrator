@@ -227,6 +227,101 @@ def _wire_project_board_sync(task_manager: "TaskManager", config: "WhillyConfig"
     _ansi(f"{D}Project board sync enabled: {client.project_url}{R}")
 
 
+def _run_handoff_list() -> int:
+    """Print every task currently awaiting a result.json from the operator."""
+    from whilly.agents.claude_handoff import handoff_root, list_pending
+
+    pending = list_pending()
+    if not pending:
+        print(f"No pending handoffs under {handoff_root()}")
+        return 0
+    print(f"{len(pending)} pending handoff(s):\n")
+    for entry in pending:
+        task_id = entry["task_id"]
+        started = entry.get("started_at") or "?"
+        plan = entry.get("plan_file") or "?"
+        print(f"  • {task_id:<24} started={started}  plan={plan}")
+        print(f"      prompt: {entry['prompt']}")
+        print(f"      reply : {entry['result']}")
+    print("\nFinish one with: whilly --handoff-complete <task_id> --status complete --message '…'")
+    return 0
+
+
+def _run_handoff_show(task_id: str) -> int:
+    """Print the prompt.md contents for *task_id* so the operator can read it."""
+    from whilly.agents.claude_handoff import task_dir_for
+
+    td = task_dir_for(task_id)
+    prompt = td / "prompt.md"
+    if not prompt.is_file():
+        print(f"No prompt file at {prompt}", file=sys.stderr)
+        return 3
+    print(prompt.read_text(encoding="utf-8"))
+    return 0
+
+
+def _run_handoff_complete(args: list[str]) -> int:
+    """Write the result.json for a task so whilly's waiting subprocess unblocks.
+
+    Accepted flags (all after ``--handoff-complete``):
+        --status STATUS          complete | failed | blocked | human_loop | partial  (default: complete)
+        --message TEXT           human-readable summary (required for non-complete)
+        --cost-usd FLOAT         0.0 default
+        --num-turns INT          1 default
+        --duration-s FLOAT       0 default
+        --input-tokens INT
+        --output-tokens INT
+    """
+    from whilly.agents.claude_handoff import write_result
+
+    idx = args.index("--handoff-complete")
+    task_id = args[idx + 1] if idx + 1 < len(args) and not args[idx + 1].startswith("-") else None
+    if not task_id:
+        print(
+            "Usage: whilly --handoff-complete <task_id> "
+            "[--status complete|failed|blocked|human_loop|partial] [--message '…']",
+            file=sys.stderr,
+        )
+        return 2
+
+    def _flag(name: str, default: str | None = None) -> str | None:
+        if name not in args:
+            return default
+        i = args.index(name)
+        if i + 1 >= len(args):
+            return default
+        return args[i + 1]
+
+    status = _flag("--status", "complete") or "complete"
+    message = _flag("--message", "") or ""
+    try:
+        cost_usd = float(_flag("--cost-usd", "0") or 0)
+        num_turns = int(_flag("--num-turns", "1") or 1)
+        duration_s = float(_flag("--duration-s", "0") or 0)
+        input_tokens = int(_flag("--input-tokens", "0") or 0)
+        output_tokens = int(_flag("--output-tokens", "0") or 0)
+    except ValueError as exc:
+        print(f"Invalid numeric flag value: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        path = write_result(
+            task_id,
+            status=status,
+            message=message,
+            cost_usd=cost_usd,
+            num_turns=num_turns,
+            duration_s=duration_s,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 3
+    print(f"✓ Wrote {path} (status={status})")
+    return 0
+
+
 def _run_post_merge(plan_path: str) -> int:
     """Move every ``done`` card in the plan to the ``Done`` column.
 
@@ -1848,6 +1943,21 @@ def main(argv: list[str] | None = None) -> int:
             print("Usage: whilly --post-merge <plan.json>", file=sys.stderr)
             return 2
         return _run_post_merge(plan_arg)
+
+    # --handoff-list / --handoff-complete / --handoff-show: companion commands for
+    # the claude_handoff backend. Let the operator (or an interactive Claude) pick
+    # up dispatched tasks and signal completion / block / human-loop back to whilly.
+    if "--handoff-list" in args:
+        return _run_handoff_list()
+    if "--handoff-show" in args:
+        idx = args.index("--handoff-show")
+        task_id = args[idx + 1] if idx + 1 < len(args) else None
+        if not task_id:
+            print("Usage: whilly --handoff-show <task_id>", file=sys.stderr)
+            return 2
+        return _run_handoff_show(task_id)
+    if "--handoff-complete" in args:
+        return _run_handoff_complete(args)
 
     _show_startup_banner()
 
