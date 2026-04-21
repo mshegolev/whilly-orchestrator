@@ -182,6 +182,8 @@ See [docs/Whilly-Usage.md](docs/Whilly-Usage.md) for the full config guide (TOML
 | `WHILLY_OPENCODE_SAFE` | `0` | `1` → drop `--dangerously-skip-permissions` for OpenCode |
 | `WHILLY_OPENCODE_SERVER_URL` | _(unset)_ | Optional remote OpenCode server URL |
 
+**New here?** Start with [`docs/Getting-Started.md`](docs/Getting-Started.md) — practical walkthroughs from install to first run.
+
 Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode,claude_handoff}`.
 
 ### Task sources (pull issues into plans)
