@@ -181,7 +181,7 @@ class WhillyConfig:
 # Public-ish map of extra non-dataclass namespaces we read from TOML. Values are
 # returned by :func:`load_layered` via ``get_toml_section`` so downstream modules
 # (gh_utils, secrets consumers) can reach them without parsing TOML themselves.
-_EXTRA_TOML_NAMESPACES = ("github", "jira")
+_EXTRA_TOML_NAMESPACES = ("github", "jira", "project_board")
 
 
 def user_config_path() -> Path:

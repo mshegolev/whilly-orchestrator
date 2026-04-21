@@ -92,3 +92,26 @@ JIRA_ENABLED = false
 # server_url = "https://jira.example.com"
 # username   = "you@example.com"
 # token      = "keyring:whilly/jira"
+
+
+# ── GitHub Projects v2 board sync (optional) ───────────────────────────────
+# When configured, whilly moves project cards as tasks progress:
+#   pending → Todo, in_progress → In Progress, done → In Review,
+#   failed → Failed, skipped → Refused.
+# Post-merge cleanup (moving the card to Done) happens via the merge flow.
+#
+# Requires `gh auth refresh -s project` once.
+#
+# [project_board]
+# url = "https://github.com/users/youruser/projects/4"
+# enabled = true                        # set false to disable the hook without deleting the URL
+# default_repo = "youruser/your-repo"  # optional — fall-back for tasks whose ref doesn't include repo
+#
+# Override the mapping if your board uses different column names:
+# [project_board.status_mapping]
+# pending     = "Backlog"
+# in_progress = "Doing"
+# done        = "Review"
+# merged      = "Done"
+# failed      = "Blocked"
+# skipped     = "Cancelled"
