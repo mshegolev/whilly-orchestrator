@@ -1,117 +1,168 @@
-# Whilly Orchestrator — cross-platform config template.
+# whilly.example.toml — full annotated reference
 #
-# Copy this file to ONE of:
-#   • repository root as `whilly.toml`  → settings scoped to this project only
-#   • your OS-native user config path    → defaults for every repo you run whilly in
-#
-# Find the user config path for the machine you're on:
-#
-#   python3 -c "from whilly.config import user_config_path; print(user_config_path())"
-#
-# Expected locations:
-#   macOS   : ~/Library/Application Support/whilly/config.toml
-#   Linux   : ~/.config/whilly/config.toml          (respects XDG_CONFIG_HOME)
-#   Windows : %APPDATA%\whilly\config.toml
+# Copy to ONE of:
+#   ./whilly.toml                        # project-local
+#   $(whilly --config path)              # OS-native per-user
 #
 # Precedence (last wins):
-#   defaults < user TOML < repo TOML < .env < shell env (WHILLY_*) < CLI flags
+#   defaults < user TOML < repo TOML < .env < WHILLY_* env < CLI flags
 #
-# Secrets (GitHub / Jira tokens) are NEVER stored in TOML as plaintext.
-# Use a scheme reference instead — see the [github] and [jira] sections below.
+# Every key is also available as env var ``WHILLY_<KEY>`` (same name, any case).
+# Secrets use whilly.secrets schemes — see [github] / [jira] sections below.
 
 
-# ── Core loop ──────────────────────────────────────────────────────────────
-MAX_PARALLEL = 1            # number of concurrent agents (1 = sequential)
-MAX_ITERATIONS = 0          # 0 = unlimited
-MAX_TASK_RETRIES = 10       # retries before a task is skipped/failed
-BUDGET_USD = 0              # 0 = unlimited; warns at 80 %, kills at 100 %
-TIMEOUT = 0                 # 0 = unlimited; wall-clock seconds per plan
-HEARTBEAT_INTERVAL = 1
+# ── core loop ──────────────────────────────────────────────────────────────
+MAX_PARALLEL      = 1          # concurrent agents; 1 = strict sequential
+MAX_ITERATIONS    = 0          # work-iteration cap per plan; 0 = unlimited
+MAX_TASK_RETRIES  = 10         # attempts before a task is marked skipped/failed
+DECOMPOSE_EVERY   = 5          # re-plan oversized pending tasks every N iterations
+HEARTBEAT_INTERVAL = 1         # dashboard refresh cadence (seconds)
+TIMEOUT           = 0          # wall-clock cap (seconds); 0 = unlimited
+BUDGET_USD        = 0          # API spend cap in USD; 0 = unlimited, warns at 80%
 
 
-# ── Agent & model ──────────────────────────────────────────────────────────
-AGENT_BACKEND = "claude"
-MODEL = "claude-opus-4-7[1m]"
+# ── agent backend + model ──────────────────────────────────────────────────
+AGENT_BACKEND     = "claude"   # "claude" | "opencode" | "claude_handoff"
+MODEL             = "claude-opus-4-7[1m]"  # LLM id; advisory only for handoff
+
+# OpenCode backend (if AGENT_BACKEND = "opencode")
+OPENCODE_BIN        = "opencode"           # CLI path; override if not on PATH
+OPENCODE_SAFE       = false                # true → prompt before every tool call
+OPENCODE_SERVER_URL = ""                   # remote server URL; empty = local CLI
 
 
-# ── Workspace / tmux / worktree ────────────────────────────────────────────
-USE_WORKSPACE = true
-USE_TMUX = false
-WORKTREE = false
+# ── orchestration strategy ─────────────────────────────────────────────────
+ORCHESTRATOR      = "file"     # "file" = key_files collisions | "llm" = LLM batching
+AGENT             = ""         # legacy alias for AGENT_BACKEND; leave empty
 
 
-# ── Dashboards & notifications ─────────────────────────────────────────────
-VOICE = false
-HEADLESS = false
+# ── workspace / worktree / tmux ────────────────────────────────────────────
+USE_WORKSPACE     = true       # one git worktree per plan (clean base for agent)
+USE_TMUX          = false      # wrap each agent in its own tmux session
+WORKTREE          = false      # per-task worktree (needs MAX_PARALLEL > 1)
 
 
-# ── Logging ────────────────────────────────────────────────────────────────
-LOG_DIR = "whilly_logs"
-STATE_FILE = ".whilly_state.json"
+# ── dashboards / notifications ─────────────────────────────────────────────
+RICH_DASHBOARD    = true       # Rich Live TUI when stdout is a TTY
+HEADLESS          = false      # JSON stdout, no TUI (auto when non-TTY)
+VOICE             = false      # macOS `say` voice cues (per-task title announced)
 
 
-# ── Resource limits ────────────────────────────────────────────────────────
-RESOURCE_CHECK_ENABLED = false
-MAX_CPU_PERCENT = 80
-MAX_MEMORY_PERCENT = 75
-MIN_FREE_SPACE_GB = 5
-PROCESS_TIMEOUT_MINUTES = 30
+# ── logging & state ────────────────────────────────────────────────────────
+LOG_DIR           = "whilly_logs"      # per-task log file directory
+STATE_FILE        = ".whilly_state.json"  # crash-resume checkpoint file
 
 
-# ── External integrations ──────────────────────────────────────────────────
-CLOSE_EXTERNAL_TASKS = true
-GITHUB_AUTO_CLOSE = true
-GITHUB_ADD_COMMENTS = true
-JIRA_ENABLED = false
+# ── resource guards ────────────────────────────────────────────────────────
+RESOURCE_CHECK_ENABLED  = false   # enable CPU/RAM/disk throttling
+MAX_CPU_PERCENT         = 80.0    # throttle when system CPU exceeds this
+MAX_MEMORY_PERCENT      = 75.0    # throttle when system RAM exceeds this
+MIN_FREE_SPACE_GB       = 5.0     # refuse to start under this much free disk
+PROCESS_TIMEOUT_MINUTES = 30      # max runtime for one agent subprocess
 
 
-# ── GitHub auth (cross-platform) ───────────────────────────────────────────
-# Four ways to supply the token, in priority order:
-#   1. WHILLY_GH_TOKEN env var              (overrides everything here)
-#   2. WHILLY_GH_PREFER_KEYRING=1 env var   (strip env, use `gh` keyring)
-#   3. [github].token below                 (scheme refs resolve secrets)
-#   4. GITHUB_TOKEN / GH_TOKEN env          (plain passthrough)
+# ── merge / PR workflow ────────────────────────────────────────────────────
+# Env-only (not a WhillyConfig field yet — set via WHILLY_* or here for env loader):
+#   WHILLY_AUTO_MERGE  = "ask"      # "ask" | "yes" | "claude" | "no"
+#     ask    — prompt [y/c/s/n] interactively when plan finishes
+#     yes    — push branch automatically; PR/merge still manual
+#     claude — spawn Claude CLI with "push → PR → wait CI → merge" prompt (full auto)
+#     no     — skip merge step entirely
+#   WHILLY_MR_TARGET   = "upstream main branch"    # human-readable target for merge prompt
+#   WHILLY_GH_BIN      = "gh"       # path to GitHub CLI binary
+#   WHILLY_CLAUDE_TIMEOUT = 1800    # seconds per Claude subprocess invocation
+#   WHILLY_MAX_TASKS   = 0          # global task-count cap (0 = unlimited)
+
+
+# ── external integrations: GitHub Issues (auto-close on done) ──────────────
+CLOSE_EXTERNAL_TASKS = true   # master switch for all external-task closing
+GITHUB_AUTO_CLOSE    = true   # close linked Issues when task is done
+GITHUB_ADD_COMMENTS  = true   # post completion comment before closing
+
+
+# ── external integrations: Jira (auto-close on done) ───────────────────────
+JIRA_ENABLED        = false   # master switch; true enables close + transitions
+JIRA_AUTO_CLOSE     = true    # move Jira ticket to JIRA_TRANSITION_TO on done
+JIRA_ADD_COMMENTS   = true    # post completion comment to the ticket
+JIRA_TRANSITION_TO  = "Done"  # target Jira transition name when closing
+JIRA_SERVER_URL     = ""      # https://company.atlassian.net (also env JIRA_SERVER_URL)
+JIRA_USERNAME       = ""      # Atlassian email/login (also env JIRA_USERNAME)
+# Token goes in [jira] section below, never plaintext here.
+
+
+# ── handoff backend tuning (active only when AGENT_BACKEND = "claude_handoff") ─
+# All env-only:
+#   WHILLY_HANDOFF_DIR     = ".whilly/handoff"  # where prompt.md / result.json live
+#   WHILLY_HANDOFF_TIMEOUT = 3600               # seconds to wait for operator reply
+
+
+# ── .env deprecation silencer ──────────────────────────────────────────────
+# WHILLY_SUPPRESS_DOTENV_WARNING = 1   # silences the "Legacy .env detected" warning
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Nested sections below configure external integrations. Keys NOT mirrored
+# as ``WHILLY_<KEY>`` — they live only in TOML.
+# ═════════════════════════════════════════════════════════════════════════
+
+
+# ── GitHub auth for `gh` subprocess ────────────────────────────────────────
+# Secret schemes (see whilly/secrets.py):
+#   env:NAME          → os.environ[NAME]
+#   keyring:svc/user  → OS keychain / libsecret / Windows Cred. Manager
+#   file:/path        → strip() of file contents
+#   "literal-token"   → plaintext (discouraged)
 #
-# Schemes understood by [github].token:
-#   "env:NAME"          →  read os.environ[NAME]
-#   "keyring:svc/user"  →  macOS Keychain / libsecret / Windows Cred. Manager
-#   "file:~/.whilly/gh" →  read + strip() the named file
-#   "ghp_real_token…"   →  literal (not recommended)
+# Store the actual token once:
+#   python3 -c "import keyring; keyring.set_password('whilly','github','ghp_xxx')"
 #
-# Store the actual token once with:
-#   python3 -c "import keyring; keyring.set_password('whilly', 'github', 'ghp_xxx')"
+# Resolution order gh_subprocess_env() uses:
+#   1. WHILLY_GH_TOKEN env var              — overrides everything
+#   2. WHILLY_GH_PREFER_KEYRING=1 env var   — strip env tokens, use gh keyring
+#   3. [github].token below                 — with scheme resolver
+#   4. ambient GITHUB_TOKEN / GH_TOKEN      — passed through (default)
 
 [github]
-# token = "keyring:whilly/github"
+token = "keyring:whilly/github"
 
 
-# ── Jira (optional) ────────────────────────────────────────────────────────
-# Same scheme syntax as [github]. When unset, code falls back to the JIRA_*
-# environment variables.
+# ── Jira REST auth + optional board-sync toggle ────────────────────────────
+# Required scopes for a Jira API token: https://id.atlassian.com/manage-profile/security/api-tokens
+#
+# Status transitions in the user's Jira workflow must match names in the
+# mapping — otherwise the transition is soft-skipped (logged, not fatal).
+
 [jira]
-# server_url = "https://jira.example.com"
-# username   = "you@example.com"
-# token      = "keyring:whilly/jira"
+# server_url        = "https://company.atlassian.net"   # can be here or in top-level JIRA_SERVER_URL
+# username          = "you@example.com"
+# token             = "keyring:whilly/jira"             # same secret schemes as [github]
+# enabled           = true                               # matches JIRA_ENABLED; this takes precedence when set
+# enable_board_sync = true                               # perform Jira transitions as tasks move
+
+# Override transition names if your workflow differs from the defaults.
+# Defaults: pending→To Do, in_progress→In Progress, done→In Review, merged→Done,
+#           failed→Failed, skipped→Cancelled, blocked→Blocked,
+#           human_loop→Waiting for Customer
+# [jira.status_mapping]
+# in_progress = "Doing"
+# done        = "Review"
 
 
-# ── GitHub Projects v2 board sync (optional) ───────────────────────────────
-# When configured, whilly moves project cards as tasks progress:
-#   pending → Todo, in_progress → In Progress, done → In Review,
-#   failed → Failed, skipped → Refused.
-# Post-merge cleanup (moving the card to Done) happens via the merge flow.
-#
-# Requires `gh auth refresh -s project` once.
-#
-# [project_board]
-# url = "https://github.com/users/youruser/projects/4"
-# enabled = true                        # set false to disable the hook without deleting the URL
-# default_repo = "youruser/your-repo"  # optional — fall-back for tasks whose ref doesn't include repo
-#
-# Override the mapping if your board uses different column names:
+# ── GitHub Projects v2 board sync ──────────────────────────────────────────
+# Requires `gh auth refresh -s project` (one-time).
+# Ensure all columns exist: `whilly --ensure-board-statuses`.
+
+[project_board]
+# url          = "https://github.com/users/yourname/projects/4"
+# enabled      = true                          # set false to disable without deleting url
+# default_repo = "yourname/your-repo"          # fallback for tasks with no repo ref
+
+# Override column names per project if your board uses different ones.
+# Defaults: pending→Todo, in_progress→In Progress, done→In Review,
+#           merged→Done, failed→Failed, skipped→Refused,
+#           blocked→On Hold, human_loop→Human Loop
 # [project_board.status_mapping]
 # pending     = "Backlog"
 # in_progress = "Doing"
 # done        = "Review"
-# merged      = "Done"
-# failed      = "Blocked"
-# skipped     = "Cancelled"
+# merged      = "Shipped"
