@@ -119,19 +119,16 @@ def _gh_bin() -> str:
 
 
 def _run_gh(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
-    """Run `gh` with GITHUB_TOKEN unset to prefer the user's keyring auth.
+    """Run `gh` with the centrally-resolved whilly auth env.
 
-    GITHUB_TOKEN env is sometimes set to expired CI tokens; gh prefers that env over the keyring,
-    which causes spurious 401s. We unset it explicitly for this subprocess only.
+    See :mod:`whilly.gh_utils` — ``WHILLY_GH_TOKEN`` overrides the ambient token,
+    ``WHILLY_GH_PREFER_KEYRING=1`` strips env tokens to force `gh` keyring auth,
+    and otherwise ``GITHUB_TOKEN`` / ``GH_TOKEN`` pass through unchanged.
     """
-    import os as _os
-
-    env = dict(_os.environ)
-    env.pop("GITHUB_TOKEN", None)
-    env.pop("GH_TOKEN", None)
+    from whilly.gh_utils import gh_subprocess_env
 
     cmd = [_gh_bin(), *args]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=gh_subprocess_env(), check=False)
 
 
 def _gh_issue_list(source: GitHubIssuesSource, timeout: int = 30) -> list[dict]:

@@ -3,21 +3,13 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from typing import Optional
 
 from whilly.config import WhillyConfig
+from whilly.gh_utils import gh_subprocess_env as _gh_env
 from whilly.sources.github_issues import fetch_github_issues
 from whilly.external_integrations import create_integration_manager
-
-
-def _gh_env() -> dict[str, str]:
-    """Return os.environ copy with stale GITHUB_TOKEN / GH_TOKEN removed — `gh` CLI prefers its keyring."""
-    env = dict(os.environ)
-    env.pop("GITHUB_TOKEN", None)
-    env.pop("GH_TOKEN", None)
-    return env
 
 
 def _run_command(cmd: list[str]) -> tuple[bool, str]:

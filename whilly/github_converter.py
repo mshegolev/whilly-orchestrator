@@ -196,13 +196,9 @@ def fetch_github_issues(filter_labels: list[str] | None = None) -> list[GitHubIs
             cmd.extend(["--label", label])
 
     try:
-        # Используем текущее окружение, но без проблемного GITHUB_TOKEN
-        import os
+        from whilly.gh_utils import gh_subprocess_env
 
-        env = os.environ.copy()
-        env.pop("GITHUB_TOKEN", None)  # Убираем проблемный токен если есть
-
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env, check=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, env=gh_subprocess_env(), check=True)
         issues_data = json.loads(result.stdout)
 
         return [GitHubIssue.from_gh_json(issue) for issue in issues_data]

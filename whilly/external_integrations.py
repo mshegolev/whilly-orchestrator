@@ -54,11 +54,9 @@ class GitHubIntegration(ExternalIntegration):
     def is_available(self) -> bool:
         """Проверяет что GitHub CLI доступен и авторизован."""
         try:
-            # Убираем проблемный GITHUB_TOKEN
-            env = os.environ.copy()
-            env.pop("GITHUB_TOKEN", None)
+            from whilly.gh_utils import gh_subprocess_env
 
-            result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, env=env)
+            result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, env=gh_subprocess_env())
             return result.returncode == 0
         except FileNotFoundError:
             log.warning("GitHub CLI not found in PATH")
@@ -76,15 +74,13 @@ class GitHubIntegration(ExternalIntegration):
                 comment = self._build_completion_comment(whilly_task_id, commit_sha)
                 self.add_comment(task_ref, comment)
 
-            # Закрываем issue
-            env = os.environ.copy()
-            env.pop("GITHUB_TOKEN", None)
+            from whilly.gh_utils import gh_subprocess_env
 
             result = subprocess.run(
                 ["gh", "issue", "close", task_ref.task_id, "--reason", "completed"],
                 capture_output=True,
                 text=True,
-                env=env,
+                env=gh_subprocess_env(),
             )
 
             if result.returncode == 0:
@@ -104,11 +100,13 @@ class GitHubIntegration(ExternalIntegration):
             return False
 
         try:
-            env = os.environ.copy()
-            env.pop("GITHUB_TOKEN", None)
+            from whilly.gh_utils import gh_subprocess_env
 
             result = subprocess.run(
-                ["gh", "issue", "comment", task_ref.task_id, "--body", comment], capture_output=True, text=True, env=env
+                ["gh", "issue", "comment", task_ref.task_id, "--body", comment],
+                capture_output=True,
+                text=True,
+                env=gh_subprocess_env(),
             )
 
             if result.returncode == 0:
