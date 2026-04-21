@@ -14,7 +14,20 @@ log = logging.getLogger("whilly")
 
 PRIORITY_ORDER: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
-VALID_STATUSES = frozenset({"pending", "in_progress", "done", "failed", "skipped"})
+VALID_STATUSES = frozenset(
+    {
+        "pending",
+        "in_progress",
+        "done",
+        "failed",
+        "skipped",
+        # Added for human-in-the-loop and explicit blocks so agents (including
+        # the claude_handoff backend) can signal "can't finish without help"
+        # without misrepresenting as failed/skipped.
+        "blocked",  # external blocker — CI broken, dep missing, waiting on upstream
+        "human_loop",  # needs a human decision before the agent can proceed
+    }
+)
 
 
 @dataclass
