@@ -1784,6 +1784,66 @@ def main(argv: list[str] | None = None) -> int:
             _ansi(f"{RD}GitHub to tasks conversion failed: {e}{R}")
             return 1
 
+    # --from-issues-project: unified source (Project v2 board filters which issues to materialise)
+    if "--from-issues-project" in args:
+        from whilly.sources import fetch_issues_and_project
+
+        idx = args.index("--from-issues-project")
+        if idx + 1 >= len(args):
+            _ansi(f"{RD}Usage: whilly --from-issues-project <project_url> --repo owner/name [--status Todo,Ready]{R}")
+            return 1
+        project_url = args[idx + 1]
+
+        repo_spec = None
+        if "--repo" in args:
+            repo_idx = args.index("--repo")
+            if repo_idx + 1 < len(args):
+                repo_spec = args[repo_idx + 1]
+        if not repo_spec or "/" not in repo_spec:
+            _ansi(f"{RD}Missing or malformed --repo. Expected owner/name.{R}")
+            return 1
+
+        statuses_raw = None
+        if "--status" in args:
+            sidx = args.index("--status")
+            if sidx + 1 < len(args) and not args[sidx + 1].startswith("-"):
+                statuses_raw = args[sidx + 1]
+        statuses = {s.strip() for s in statuses_raw.split(",")} if statuses_raw else None
+
+        out_file = f"tasks-{repo_spec.replace('/', '-')}-from-project.json"
+        _ansi(f"{CY}{B}Unified GitHub Issues + Project source...{R}")
+        _ansi(f"Project: {project_url}")
+        _ansi(f"Repository: {repo_spec}")
+        _ansi(f"Statuses: {sorted(statuses) if statuses else ['Todo']}")
+        try:
+            plan_path, stats = fetch_issues_and_project(
+                repo=repo_spec, project_url=project_url, target_statuses=statuses, out_path=out_file
+            )
+            _ansi(f"{GR}Tasks generated: {plan_path}{R}")
+            _ansi(f"{D}   new={stats.new}  updated={stats.updated}  closed_externally={stats.closed_externally}{R}")
+
+            if stats.total_open == 0:
+                _ansi(f"{YL}No matching items — nothing to run.{R}")
+                return 0
+
+            auto_go = "--go" in args or "--yes" in args
+            if auto_go:
+                _ansi(f"{CY}{B}--go: auto-starting Whilly orchestrator...{R}")
+                args = [str(plan_path)]
+            elif sys.stdin.isatty():
+                choice = input("\nRun tasks immediately? [Y/n]: ").strip().lower()
+                if choice in ("", "y", "yes"):
+                    args = [str(plan_path)]
+                else:
+                    _ansi(f"{YL}Run later with: whilly {plan_path}{R}")
+                    return 0
+            else:
+                _ansi(f"{YL}Run with: whilly {plan_path}{R}")
+                return 0
+        except Exception as e:
+            _ansi(f"{RD}Unified GitHub source failed: {e}{R}")
+            return 1
+
     # --from-project: generate tasks from GitHub Project board
     if "--from-project" in args:
         from whilly.github_projects import GitHubProjectsConverter
