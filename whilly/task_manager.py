@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger("whilly")
 
 PRIORITY_ORDER: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -102,6 +105,10 @@ class TaskManager:
         self.path = Path(plan_path)
         self._data: dict = {}
         self.tasks: list[Task] = []
+        # Optional external observer invoked on every status transition. Signature:
+        # ``callback(task, old_status, new_status)``. Exceptions are swallowed so a
+        # misbehaving hook can't corrupt the orchestration loop.
+        self.on_status_change = None  # type: ignore[var-annotated]
         self.reload()
 
     def reload(self) -> None:
@@ -151,10 +158,20 @@ class TaskManager:
         if status not in VALID_STATUSES:
             raise ValueError(f"Invalid status {status!r}, must be one of {VALID_STATUSES}")
         id_set = set(task_ids)
+        transitions: list[tuple[Task, str, str]] = []
         for task in self.tasks:
-            if task.id in id_set:
+            if task.id in id_set and task.status != status:
+                transitions.append((task, task.status, status))
                 task.status = status
         self.save()
+        # Fire observers only after the save succeeded, so a failing hook never
+        # leaves status and disk out of sync. Hook exceptions are swallowed.
+        if self.on_status_change and transitions:
+            for task, old, new in transitions:
+                try:
+                    self.on_status_change(task, old, new)
+                except Exception:
+                    log.exception("on_status_change hook raised for task %s (%s → %s)", task.id, old, new)
 
     @property
     def done_count(self) -> int:

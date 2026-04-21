@@ -198,6 +198,32 @@ def _get_version_info() -> tuple[str, str, str]:
         return __version__, "?", ""
 
 
+def _wire_project_board_sync(task_manager: "TaskManager", config: "WhillyConfig") -> None:
+    """Register a TaskManager callback that mirrors status changes onto the GitHub Projects board.
+
+    Silent no-op when the board integration is unconfigured (no ``[project_board]``
+    section in ``whilly.toml`` / TOML-equivalent). Never raises — board sync is
+    best-effort; a broken hook must not kill the orchestration loop.
+    """
+    try:
+        from whilly.project_board import ProjectBoardClient
+    except ImportError:
+        return
+
+    client = ProjectBoardClient.from_config(config)
+    if client is None:
+        return
+
+    def _sync(task: Task, old_status: str, new_status: str) -> None:
+        try:
+            client.set_task_status(task, new_status)
+        except Exception:
+            log.exception("project board sync failed for task %s (%s → %s)", task.id, old_status, new_status)
+
+    task_manager.on_status_change = _sync
+    _ansi(f"{D}Project board sync enabled: {client.project_url}{R}")
+
+
 def _task_title_for_notify(task: object | None) -> str | None:
     """Best-effort extraction of a user-readable task title for audio announcements.
 
@@ -937,6 +963,7 @@ def run_plan(
             _workspace = None
 
     tm = TaskManager(plan_file)
+    _wire_project_board_sync(tm, config)
     log_dir = Path(config.LOG_DIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
