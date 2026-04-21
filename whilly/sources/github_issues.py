@@ -369,6 +369,101 @@ def merge_into_plan(
 # ── Top-level convenience function ─────────────────────────────────────────────
 
 
+def parse_issue_ref(ref: str) -> tuple[str, int]:
+    """Parse a single-issue reference into ``("owner/repo", number)``.
+
+    Accepted forms::
+
+        owner/repo#42
+        owner/repo/42                     # forward-slash variant
+        https://github.com/owner/repo/issues/42
+
+    Returns the owner+repo and the issue number. Raises :class:`ValueError`
+    for anything else — callers can surface the message verbatim.
+    """
+    if not ref or not isinstance(ref, str):
+        raise ValueError(f"Issue reference must be a non-empty string, got {ref!r}")
+    s = ref.strip()
+
+    # Allow GitHub issue URLs as shorthand.
+    url_match = re.match(
+        r"^https?://github\.com/([^/]+)/([^/]+)/issues/(\d+)/?(?:\?.*)?(?:#.*)?$",
+        s,
+    )
+    if url_match:
+        return f"{url_match.group(1)}/{url_match.group(2)}", int(url_match.group(3))
+
+    # Canonical owner/repo#N or owner/repo/N.
+    short_match = re.match(r"^([^/\s]+)/([^/#\s]+)[#/](\d+)$", s)
+    if short_match:
+        return f"{short_match.group(1)}/{short_match.group(2)}", int(short_match.group(3))
+
+    raise ValueError(
+        f"Cannot parse issue reference {ref!r}. Expected 'owner/repo#N', 'owner/repo/N', or a GitHub issue URL."
+    )
+
+
+def _gh_issue_view(repo: str, number: int, timeout: int = 30) -> dict | None:
+    """Fetch a single issue JSON via ``gh issue view``. Returns None on failure."""
+    args = [
+        "issue",
+        "view",
+        str(number),
+        "--repo",
+        repo,
+        "--json",
+        "number,title,body,labels,url,createdAt,updatedAt,state",
+    ]
+    proc = _run_gh(args, timeout=timeout)
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "no output").strip()
+        raise RuntimeError(f"gh issue view {repo}#{number} failed (exit {proc.returncode}): {msg}")
+    try:
+        return json.loads(proc.stdout or "null")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"gh returned non-JSON for issue {repo}#{number}: {exc}") from exc
+
+
+def fetch_single_issue(
+    ref: str,
+    out_path: str | Path = "tasks.json",
+    timeout: int = 30,
+) -> tuple[Path, FetchStats]:
+    """Fetch one GitHub issue by reference and merge it into a one-task plan.
+
+    Uses the same :class:`GitHubIssuesSource` plumbing as :func:`fetch_github_issues`
+    so the idempotent upsert semantics stay identical: re-running keeps status,
+    refreshes description/labels/etc.
+    """
+    repo, number = parse_issue_ref(ref)
+    owner, repo_name = repo.split("/", 1)
+    source = GitHubIssuesSource(owner=owner, repo=repo_name, label=f"#{number}", limit=1)
+
+    issue = _gh_issue_view(repo, number, timeout=timeout)
+    if issue is None:
+        plan_path = Path(out_path).resolve()
+        log.warning("Issue %s#%d not found", repo, number)
+        return plan_path, FetchStats(total_open=0)
+    if (issue.get("state") or "").upper() != "OPEN":
+        log.warning("Issue %s#%d is not open (state=%s)", repo, number, issue.get("state"))
+
+    plan_path = Path(out_path).resolve()
+    stats = merge_into_plan([issue], source, plan_path)
+
+    log.info(
+        "GitHub single-issue source: %s#%d fetched (new=%d, updated=%d)",
+        repo,
+        number,
+        stats.new,
+        stats.updated,
+    )
+    if stats.secret_warnings:
+        for warning in stats.secret_warnings:
+            log.warning("Secret-like pattern detected in issue body: %s", warning)
+
+    return plan_path, stats
+
+
 def fetch_github_issues(
     repo: str,
     label: str = DEFAULT_LABEL,
