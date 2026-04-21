@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 # termios / tty are POSIX-only. Windows ships without them; the TTY hot-key
@@ -31,6 +32,20 @@ from rich.text import Text
 
 from whilly.reporter import CostTotals, fmt_duration, fmt_tokens
 from whilly.task_manager import PRIORITY_ORDER, TaskManager
+
+
+@dataclass
+class TaskCostEntry:
+    """Per-task cost accumulator."""
+
+    task_id: str
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    duration_s: float = 0.0
+    iterations: int = 0
+    status: str = "in_progress"
 
 
 class Dashboard:
@@ -59,6 +74,7 @@ class Dashboard:
         self._log_task_id: str | None = None  # Task whose per-agent log is shown in 'task_log' mode
         self.budget_usd: float = 0.0  # 0 = unlimited
         self.session_cost_usd: float = 0.0
+        self.task_costs: dict[str, TaskCostEntry] = {}  # per-task cost breakdown
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -72,6 +88,7 @@ class Dashboard:
         self.keyboard.register("l", self._show_log)
         self.keyboard.register("t", self._show_all_tasks)
         self.keyboard.register("s", self._show_stats)
+        self.keyboard.register("$", self._show_cost_panel)
         self.keyboard.register("p", self._show_prd_info)
         self.keyboard.register("g", self._generate_plan)
         self.keyboard.register("c", self._challenge_plan)
@@ -102,6 +119,33 @@ class Dashboard:
     def _elapsed(self) -> str:
         d = int(time.monotonic() - self.start_time)
         return f"{d // 3600:02d}:{(d % 3600) // 60:02d}:{d % 60:02d}"
+
+    # ------------------------------------------------------------------
+    # Cost tracking
+    # ------------------------------------------------------------------
+
+    def record_task_cost(
+        self,
+        task_id: str,
+        cost_usd: float,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        duration_s: float = 0.0,
+        status: str = "in_progress",
+    ) -> None:
+        """Record cost data for a specific task. Called by the orchestrator after each agent run."""
+        entry = self.task_costs.get(task_id)
+        if entry is None:
+            entry = TaskCostEntry(task_id=task_id)
+            self.task_costs[task_id] = entry
+        entry.cost_usd += cost_usd
+        entry.input_tokens += input_tokens
+        entry.output_tokens += output_tokens
+        entry.cache_read_tokens += cache_read_tokens
+        entry.duration_s += duration_s
+        entry.iterations += 1
+        entry.status = status
 
     # ------------------------------------------------------------------
     # Render
@@ -305,6 +349,7 @@ class Dashboard:
                 "[bold reverse]  l [/]Log "
                 "[bold reverse]  t [/]Tasks "
                 "[bold reverse]  s [/]Stats "
+                "[bold reverse]  $ [/]Cost "
                 "[bold reverse]  n [/][bold cyan]New Idea[/] "
                 "[bold reverse]  g [/]ТРИЗ "
                 "[bold reverse]  c [/]Challenge "
@@ -1077,6 +1122,87 @@ class Dashboard:
         self._overlay_text = "\n".join(lines)
         self.update()
 
+    def _show_cost_panel(self) -> None:
+        """Hotkey $: show per-task cost breakdown and budget consumption."""
+        if self._overlay_text is not None:
+            self._overlay_text = None
+            self.update()
+            return
+
+        elapsed = int(time.monotonic() - self.start_time)
+        elapsed_str = fmt_duration(elapsed)
+        lines = [
+            "[bold yellow]Cost Panel[/]\n",
+            f"  [bold]Session Total:[/]  [yellow]${self.totals.cost_usd:.4f}[/]",
+            f"  [bold]Elapsed:[/]        {elapsed_str}",
+        ]
+
+        if self.budget_usd > 0:
+            pct = (self.session_cost_usd / self.budget_usd * 100) if self.budget_usd else 0
+            remaining = max(0, self.budget_usd - self.session_cost_usd)
+            color = "red" if pct > 80 else "yellow" if pct > 50 else "green"
+            bar_width = 30
+            filled = int(pct * bar_width / 100)
+            bar = "\u2588" * min(filled, bar_width) + "\u2591" * max(0, bar_width - filled)
+            lines.extend(
+                [
+                    "",
+                    f"  [bold]Budget:[/]         [{color}]${self.session_cost_usd:.4f} / ${self.budget_usd:.2f}[/]",
+                    f"  [bold]Remaining:[/]      [{color}]${remaining:.4f}[/]",
+                    f"  [{color}]  {bar}  {pct:.1f}%[/]",
+                ]
+            )
+            if pct > 0 and elapsed > 0:
+                rate_per_hour = self.session_cost_usd / (elapsed / 3600)
+                if rate_per_hour > 0:
+                    hours_left = remaining / rate_per_hour
+                    lines.append(
+                        f"  [dim]Rate: ${rate_per_hour:.2f}/hr — budget exhausted in ~{fmt_duration(hours_left * 3600)}[/]"
+                    )
+        else:
+            lines.append("  [dim]Budget: unlimited[/]")
+
+        lines.extend(
+            [
+                "",
+                "  [bold]Token Breakdown:[/]",
+                f"    Input:        {fmt_tokens(self.totals.input_tokens)}",
+                f"    Output:       {fmt_tokens(self.totals.output_tokens)}",
+                f"    Cache Read:   {fmt_tokens(self.totals.cache_read_tokens)}",
+                f"    Cache Create: {fmt_tokens(self.totals.cache_create_tokens)}",
+            ]
+        )
+
+        if self.task_costs:
+            sorted_costs = sorted(self.task_costs.values(), key=lambda e: e.cost_usd, reverse=True)
+            total_cost = self.totals.cost_usd or 1.0
+            lines.extend(
+                [
+                    "",
+                    "  [bold]Per-Task Cost Breakdown:[/]",
+                    f"  [dim]{'TASK':<12} {'COST':>8} {'%':>5} {'TOKENS':>9} {'TIME':>7} {'RUNS':>4} STATUS[/]",
+                ]
+            )
+            for entry in sorted_costs[:20]:
+                pct = (entry.cost_usd / total_cost * 100) if total_cost > 0 else 0
+                tok = fmt_tokens(entry.input_tokens + entry.output_tokens)
+                dur = fmt_duration(entry.duration_s)
+                status_icon = {
+                    "done": "[green]\u2713[/]",
+                    "failed": "[red]\u2717[/]",
+                    "in_progress": "[cyan]\u25b6[/]",
+                }.get(entry.status, "[dim]?[/]")
+                lines.append(
+                    f"  {entry.task_id:<12} [yellow]${entry.cost_usd:.4f}[/] {pct:>4.1f}% {tok:>9} {dur:>7} {entry.iterations:>4} {status_icon}"
+                )
+            if len(sorted_costs) > 20:
+                lines.append(f"  [dim]... +{len(sorted_costs) - 20} more tasks[/]")
+        else:
+            lines.extend(["", "  [dim]No per-task cost data yet (tasks haven't completed).[/]"])
+
+        self._overlay_text = "\n".join(lines)
+        self.update()
+
     def _show_help(self) -> None:
         """Hotkey h: show help screen."""
         if self._overlay_text is not None:
@@ -1106,6 +1232,7 @@ class Dashboard:
             "  [bold cyan]l[/]  Log        \u2014 последние 30 строк whilly.log\n"
             "  [bold cyan]t[/]  Tasks      \u2014 все задачи со статусами\n"
             "  [bold cyan]s[/]  Stats      \u2014 токены, стоимость, время, бюджет\n"
+            "  [bold cyan]$[/]  Cost       \u2014 per-task cost breakdown, budget burn rate\n"
             "  [bold cyan]n[/]  New Idea   \u2014 PRD Wizard: идея \u2192 PRD \u2192 tasks (фоновый)\n"
             "  [bold cyan]r[/]  Reset      \u2014 сбросить failed/in_progress задачу в pending (или 'all')\n"
             "  [bold cyan]g[/]  ТРИЗ       \u2014 анализ плана по ТРИЗ (противоречия, ИКР)\n"
@@ -1222,6 +1349,9 @@ class NullDashboard:
         self.initial_task_count: int = 0
         self.active_agents: list[dict] = []
         self.keyboard = _NullKeyboard()
+        self.task_costs: dict[str, TaskCostEntry] = {}
+        self.budget_usd: float = 0.0
+        self.session_cost_usd: float = 0.0
 
     def start(self) -> None:
         pass
@@ -1231,6 +1361,19 @@ class NullDashboard:
 
     def update(self) -> None:
         pass
+
+    def record_task_cost(self, task_id: str, cost_usd: float, **kwargs) -> None:
+        entry = self.task_costs.get(task_id)
+        if entry is None:
+            entry = TaskCostEntry(task_id=task_id)
+            self.task_costs[task_id] = entry
+        entry.cost_usd += cost_usd
+        entry.input_tokens += kwargs.get("input_tokens", 0)
+        entry.output_tokens += kwargs.get("output_tokens", 0)
+        entry.cache_read_tokens += kwargs.get("cache_read_tokens", 0)
+        entry.duration_s += kwargs.get("duration_s", 0.0)
+        entry.iterations += 1
+        entry.status = kwargs.get("status", "in_progress")
 
 
 class _NullKeyboard:

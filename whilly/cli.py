@@ -1019,6 +1019,18 @@ def wait_and_collect_tmux(
         )
         reporter.add_iteration(ir)
 
+        task_status = "done" if result.is_complete else "in_progress"
+        if hasattr(dashboard, "record_task_cost"):
+            dashboard.record_task_cost(
+                task_id=agent.task_id,
+                cost_usd=result.usage.cost_usd,
+                input_tokens=result.usage.input_tokens,
+                output_tokens=result.usage.output_tokens,
+                cache_read_tokens=result.usage.cache_read_tokens,
+                duration_s=result.duration_s,
+                status=task_status,
+            )
+
         if result.is_complete:
             tm.mark_status([agent.task_id], "done")
             # Автоматическое закрытие внешних задач
@@ -1118,6 +1130,18 @@ def wait_and_collect_subprocess(
             task_ids=[task.id],
         )
         reporter.add_iteration(ir)
+
+        task_status = "done" if result.is_complete else "in_progress"
+        if hasattr(dashboard, "record_task_cost"):
+            dashboard.record_task_cost(
+                task_id=task.id,
+                cost_usd=result.usage.cost_usd,
+                input_tokens=result.usage.input_tokens,
+                output_tokens=result.usage.output_tokens,
+                cache_read_tokens=result.usage.cache_read_tokens,
+                duration_s=result.duration_s,
+                status=task_status,
+            )
 
         if result.is_complete:
             tm.mark_status([task.id], "done")
