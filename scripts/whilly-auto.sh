@@ -106,8 +106,23 @@ BEFORE=$(git worktree list --porcelain | awk '/^worktree /{print $2}' | sort)
 PLAN="tasks-issue-${REPO//\//-}-${NUMBER}.json"
 info "Running: whilly --from-issue ${REPO}#${NUMBER} --go --headless"
 if [[ "$DRY_RUN" != "1" ]]; then
-    whilly --from-issue "${REPO}#${NUMBER}" --go --headless \
-        || die "whilly run failed — check whilly_logs/ and $PLAN" 2
+    if ! whilly --from-issue "${REPO}#${NUMBER}" --go --headless; then
+        # Whilly chdir's into the workspace worktree on phase 3, so its
+        # whilly_logs/ is inside the worktree, not the main repo.
+        FAIL_WT=$(git worktree list --porcelain \
+            | awk '
+                /^worktree / {wt=$2}
+                /^branch refs\/heads\/whilly\/workspace\// {print wt; exit}
+              ' 2>/dev/null)
+        LOG_HINT="whilly_logs/"
+        [[ -n "$FAIL_WT" && -d "$FAIL_WT/whilly_logs" ]] && LOG_HINT="$FAIL_WT/whilly_logs/"
+        echo "error: whilly run failed — task not completed" >&2
+        echo "       plan:         $PLAN"                     >&2
+        echo "       agent logs:   $LOG_HINT"                  >&2
+        echo "       events log:   ${LOG_HINT}whilly_events.jsonl" >&2
+        echo "       quick triage: tail -1 ${LOG_HINT}seq_iter1.log | python3 -m json.tool | grep -E 'is_error|result|api_error'" >&2
+        exit 2
+    fi
 fi
 
 # ── 3. Locate the workspace worktree and its branch ────────────────────────────
