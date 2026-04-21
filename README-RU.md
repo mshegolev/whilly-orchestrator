@@ -16,6 +16,39 @@ Whilly крутит loop: взять pending-задачу → передать L
 
 Базовая техника впервые описана в [посте Ghuntley про Ralph Wiggum loop](https://ghuntley.com/ralph/) и стала популярна в Claude Code сообществе. Whilly — «умнастный брат» Ralph'а: та же упорная пахота «взял → попробовал → повторил», плюс TRIZ для противоречий, Decision Gate для фильтрации задач и PRD wizard для понимания проблемы *до* того, как бросаться её решать.
 
+## vNext — Whilly Forge (Issue → PR)
+
+> Whilly не просто *отвечает* на issue. Он *сдаёт Pull Request, который можно смёржить.*
+
+**Forge** — направление, в котором Whilly идёт в vNext: конвейер, превращающий один GitHub Issue в ветку, диф и PR, готовый к ревью. Тот же agent loop в ядре, но со структурой *до* и *после* агента.
+
+```
+Issue ──► Intake ──► Normalize ──► Readiness ──► Strategy ──► Plan ──► Execute ──► Verify ──► Repair ──► Compose PR ──► Timeline
+         (fetch)    (spec +       (Decision    (bugfix /    (per-     (agent    (tests +   (auto-fix   (what/why/    (board +
+                     classify)    Gate)         feature /    task)     loop)     lint)      loop)       validation)   dashboard)
+                                                refactor /
+                                                unknown)
+```
+
+| Стадия | Что есть сегодня | Куда идёт vNext |
+|---|---|---|
+| **Intake** — забрать issue в план | `whilly --from-issue owner/repo/N` | `whilly/intake_github.py` (FR-1) |
+| **Normalize** — явный spec + классификатор типа задачи | ad-hoc prompts | `whilly/spec.py` + classifier (FR-2) |
+| **Readiness** — отфильтровать недо-issue до старта | `decision_gate.py` | состояния `whilly/readiness.py` (FR-3) |
+| **Strategy** — подобрать playbook под тип задачи | один общий loop | 4 стратегии (FR-4) |
+| **Plan** — план, заскоупленный под задачу (не по всему репо) | `decomposer.py` | `whilly/planner.py` (FR-5) |
+| **Execute** — agent loop, parallel / tmux / worktree | ✅ стабильно | — (ядро) |
+| **Verify** — структурированный вердикт, учитывает repo profile | `verifier.py` | structured verdict (FR-7) |
+| **Repair** — auto-fix цикл при фейле verify | частично (self-healing) | `whilly/repair.py` (FR-8) |
+| **Compose PR** — ветка `whilly/issue-{N}-{slug}`, тело what/why/validation | `github_pr.py` | полная композиция (FR-9 / FR-10) |
+| **Timeline** — каждая стадия видна на board + dashboard | пока только колонки board | timeline events (FR-11) |
+
+**Почему «Forge»?** Кузница превращает сырой материал в готовую деталь. Whilly превращает сырой issue в готовый patch — с той же упёртостью «I'm helping!», только теперь с квитанциями на каждой стадии.
+
+**Что работает сегодня:** `scripts/whilly_e2e_demo.py` и `scripts/whilly_e2e_triz_prd.py` уже демонстрируют e2e-поток. vNext refactor (трекается в issues `FR-1`…`FR-11`) разбивает его на чётко очерченные модули, чтобы команды могли подменять strategy, verifier и PR composer под свой стек.
+
+**Что за рамками:** Whilly не вмёрживает код в прод сам. Для всего нетривиального Forge создаёт Draft PR; финальный мёрдж — за человеком. Политика Draft-vs-auto-merge — в [ADR-017](https://github.com/mshegolev/whilly-orchestrator/issues/158).
+
 ## Возможности
 
 - **Непрерывный agent loop** — pending-задачи из JSON, прогон через Claude CLI, retry на transient errors.

@@ -19,6 +19,39 @@ Whilly runs a loop: pick a pending task → hand it to an LLM agent → verify r
 
 The base technique was first described in [Ghuntley's post on the Ralph Wiggum loop](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. Whilly is the brainier sibling: all of Ralph's "pick task → try → repeat" stamina, plus a TRIZ analyzer for surfacing contradictions, a Decision Gate for refusing garbage tasks, and a PRD wizard for understanding the problem before swinging at it.
 
+## vNext — Whilly Forge (Issue → PR)
+
+> Whilly doesn't just *answer* your issue. It *delivers a reviewable Pull Request.*
+
+**Forge** is the direction Whilly is heading in vNext: an opinionated pipeline that takes a single GitHub Issue and produces a branch, a diff, and a PR a human can merge. Same continuous-loop backbone; more structure in front of and behind the agent.
+
+```
+Issue ──► Intake ──► Normalize ──► Readiness ──► Strategy ──► Plan ──► Execute ──► Verify ──► Repair ──► Compose PR ──► Timeline
+         (fetch)    (spec +       (Decision    (bugfix /    (per-     (agent    (tests +   (auto-fix   (what/why/    (board +
+                     classify)    Gate)         feature /    task)     loop)     lint)      loop)       validation)   dashboard)
+                                                refactor /
+                                                unknown)
+```
+
+| Stage | Ships today | vNext direction |
+|---|---|---|
+| **Intake** — pull an issue into a task plan | `whilly --from-issue owner/repo/N` | `whilly/intake_github.py` (FR-1) |
+| **Normalize** — explicit spec + task-type classifier | ad-hoc prompts | `whilly/spec.py` + classifier (FR-2) |
+| **Readiness** — refuse under-specified issues up front | `decision_gate.py` | `whilly/readiness.py` states (FR-3) |
+| **Strategy** — choose the right playbook per task type | single loop | 4 strategies (FR-4) |
+| **Plan** — per-task scoped plan (not whole-repo) | `decomposer.py` | `whilly/planner.py` (FR-5) |
+| **Execute** — agent loop, parallel / tmux / worktree | ✅ stable | — (core loop) |
+| **Verify** — structured verdict, repo-profile aware | `verifier.py` | structured verdict (FR-7) |
+| **Repair** — auto-fix loop on verify failure | partial (self-healing) | `whilly/repair.py` (FR-8) |
+| **Compose PR** — branch `whilly/issue-{N}-{slug}`, what/why/validation body | `github_pr.py` | full composition (FR-9 / FR-10) |
+| **Timeline** — every stage visible on board + dashboard | board columns only | full timeline events (FR-11) |
+
+**Why "Forge"?** A forge turns raw material into finished parts. Whilly turns a raw issue into a finished patch — with the same "I'm helping!" stamina, but now with receipts at every stage.
+
+**What you get today:** `scripts/whilly_e2e_demo.py` and `scripts/whilly_e2e_triz_prd.py` already demonstrate the end-to-end flow. The vNext refactor (tracked in issues `FR-1` through `FR-11`) breaks this into well-bounded modules so teams can swap strategies, verifiers, and PR composers for their own stack.
+
+**Not in scope:** Whilly does not ship code to production on its own. Forge produces a Draft PR by default for anything non-trivial; a human still merges. See [ADR-017](https://github.com/mshegolev/whilly-orchestrator/issues/158) for the Draft-vs-auto-merge policy.
+
 ## Features
 
 - **Continuous agent loop** — pull tasks from a JSON plan, run Claude CLI on each, retry on transient errors
