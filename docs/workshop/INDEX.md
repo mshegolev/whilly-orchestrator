@@ -17,6 +17,7 @@
 | 5 | [ROADMAP.md](ROADMAP.md) | What's next / Дорожная карта расширений |
 | 6 | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) | 3-minute screencast shot list / Покадровый план 3-мин демо |
 | 7 | [adr/](adr/) | Why these decisions / Почему такие архитектурные решения |
+| 8 | [POSTMORTEM-PR-204.md](POSTMORTEM-PR-204.md) | Self-healing retry loop case study / Разбор self-heal ретрая (PR #204) |
 
 ---
 
