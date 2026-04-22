@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whilly-orchestrator"
-version = "3.2.0"
+version = "3.2.1"
 description = "Whilly Wiggum loop — Ralph's smarter brother technique for continuous AI agent loops: TRIZ analyzer, Decision Gate, PRD wizard, Rich TUI dashboard, tmux/git-worktree parallelism, self-healing system"
 readme = "README.md"
 requires-python = ">=3.10"
