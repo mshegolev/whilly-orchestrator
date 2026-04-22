@@ -15,7 +15,8 @@
 | 3 | [PRD-Whilly.md](PRD-Whilly.md) | What we built, contracts / Архитектура, контракты, scope |
 | 4 | [READINESS-REPORT.md](READINESS-REPORT.md) | Workshop fitness check / Готовность к воркшопу |
 | 5 | [ROADMAP.md](ROADMAP.md) | What's next / Дорожная карта расширений |
-| 6 | [adr/](adr/) | Why these decisions / Почему такие архитектурные решения |
+| 6 | [DEMO-SCRIPT.md](DEMO-SCRIPT.md) | 3-minute screencast shot list / Покадровый план 3-мин демо |
+| 7 | [adr/](adr/) | Why these decisions / Почему такие архитектурные решения |
 
 ---
 
