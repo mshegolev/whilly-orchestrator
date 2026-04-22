@@ -5,6 +5,24 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2026-04-22
+
+### Fixed
+- `scripts/whilly-auto.sh` now parses the PR URL out of `gh pr create` stdout with a strict regex instead of capturing the whole output — fixes spurious `gh pr merge failed 3` when `gh` prepends a `Warning: 1 uncommitted change` line, which was causing the retry loop to close an otherwise-clean PR. Post-mortem walkthrough: [POSTMORTEM-PR-204.md](docs/workshop/POSTMORTEM-PR-204.md) (fixed in [`feb02b2`](https://github.com/mshegolev/whilly-orchestrator/commit/feb02b2), observed as [PR #204 closed](https://github.com/mshegolev/whilly-orchestrator/pull/204) → [PR #205 merged](https://github.com/mshegolev/whilly-orchestrator/pull/205)).
+- `scripts/whilly-auto.sh` no longer passes `--delete-branch` to `gh pr merge`; the branch is removed in a separate cleanup step after a successful merge so that merge and cleanup exit codes can be attributed independently ([`4409ac7`](https://github.com/mshegolev/whilly-orchestrator/commit/4409ac7)).
+- `scripts/whilly-auto.sh` stays checked out on `$BASE_BRANCH` after the pre-flight `git fetch + pull --ff-only` so that the subsequent workspace worktree is rooted at the latest origin commit — previously, a leftover detached HEAD from an earlier iteration could produce a worktree branched from a stale SHA ([`41cc7f9`](https://github.com/mshegolev/whilly-orchestrator/commit/41cc7f9)).
+- Post-merge Projects v2 card move falls back to a plain `gh project-item-edit` call using the `gh` CLI's token when the GraphQL mutation fails with "Resource not accessible by personal access token" — prevents the card from getting stuck in *In Review* when the primary PAT lacks `projects:write` but `gh` itself is authenticated via device flow ([`feb02b2`](https://github.com/mshegolev/whilly-orchestrator/commit/feb02b2), [`d5237aa`](https://github.com/mshegolev/whilly-orchestrator/commit/d5237aa)).
+- Post-merge step now explicitly calls `gh issue close` after the PR merges, instead of relying on GitHub's automatic "Closes #N" detection, which was silently failing when the PR body's `Closes #` reference was rewritten during squash-merge ([`d5237aa`](https://github.com/mshegolev/whilly-orchestrator/commit/d5237aa)).
+
+### Added
+- `scripts/whilly-auto-loop.sh` — bounded retry loop wrapping `whilly-auto-reset.sh` + `whilly-auto.sh`. `MAX_ATTEMPTS` (default `10`) and `BACKOFF_SEC` (default `30`) caps. Each iteration writes a timestamped log under `whilly-auto-runs/iter-N-<ts>.log` ([`b5adee4`](https://github.com/mshegolev/whilly-orchestrator/commit/b5adee4), [`65e95e0`](https://github.com/mshegolev/whilly-orchestrator/commit/65e95e0)).
+- `scripts/whilly-proxy-preflight.sh` — checks the Claude CLI proxy is reachable before `whilly-auto.sh` kicks off, so a dead proxy fails fast at the start of an iteration instead of midway through a 6-minute agent run ([`65e95e0`](https://github.com/mshegolev/whilly-orchestrator/commit/65e95e0)).
+- `docs/workshop/POSTMORTEM-PR-204.md` — reproducible case study of the self-healing retry loop recovering from the PR-URL parse bug, wired into `docs/workshop/INDEX.md` as reading-order row 8.
+
+### Notes
+- This is a **self-healed release**: the `whilly-auto.sh` bug fixed here was discovered and worked-around in-flight by the retry loop introduced in the same release. PR #204 (closed) and PR #205 (merged) document the exact handoff. Preserved closed PRs are the primary evidence for this post-mortem — do not purge them.
+- No changes to the `whilly/` Python package contents. Version bumped for release discipline: the shell scripts shipped with `whilly-orchestrator` are part of the distribution surface.
+
 ## [3.2.0] - 2026-04-22
 
 ### Added
