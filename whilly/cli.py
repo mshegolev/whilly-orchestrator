@@ -806,8 +806,10 @@ def select_plan_interactive(plans: list[Path]) -> list[Path]:
     if choice in ("q", ""):
         sys.exit(0)
     if choice == "n":
-        _ansi(f"{CY}Запусти: {R}whilly --prd-wizard")
-        sys.exit(0)
+        from whilly.prd_launcher import run_prd_wizard
+
+        config = WhillyConfig.from_env()
+        sys.exit(run_prd_wizard(model=config.MODEL))
     if choice == "g":
         from whilly.github_interactive import github_interactive_menu
 
