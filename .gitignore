@@ -28,6 +28,7 @@ whilly.toml
 .idea/
 .DS_Store
 *.swp
+.claude/
 
 # Whilly runtime artifacts
 whilly.log
