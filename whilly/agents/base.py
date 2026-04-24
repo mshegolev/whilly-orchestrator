@@ -11,10 +11,57 @@ behind this Protocol — selected via ``--agent {claude,opencode}`` CLI flag
 
 from __future__ import annotations
 
+import logging
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol, TypeVar
+
+log = logging.getLogger("whilly")
+
+_T = TypeVar("_T")
+
+
+def spawn_with_eagain_retry(
+    spawn_fn: Callable[[], _T],
+    *,
+    attempts: int = 5,
+    initial_delay: float = 0.5,
+) -> _T:
+    """Run *spawn_fn* and retry on ``BlockingIOError`` (EAGAIN from fork/posix_spawn).
+
+    On macOS ``fork()`` / ``posix_spawn()`` may return ``EAGAIN`` (errno 35)
+    when the per-user process/thread limit (``RLIMIT_NPROC``, often 5333) is
+    momentarily exhausted — e.g. when other Node.js CLIs or background agents
+    hold many threads. That's transient: other processes will exit within
+    seconds. Without a retry one such blip kills an entire plan run.
+
+    Delays are exponential (default 0.5, 1, 2, 4, 8s — up to ~15s total).
+    After *attempts* failures the last ``BlockingIOError`` is re-raised so
+    callers still see the real operational failure if the system is truly
+    saturated.
+    """
+    delay = initial_delay
+    last_err: BlockingIOError | None = None
+    for attempt in range(attempts):
+        try:
+            return spawn_fn()
+        except BlockingIOError as e:  # EAGAIN on fork/exec
+            last_err = e
+            if attempt == attempts - 1:
+                break
+            log.warning(
+                "spawn hit EAGAIN (errno %s) — retrying in %.1fs (attempt %d/%d)",
+                e.errno,
+                delay,
+                attempt + 1,
+                attempts,
+            )
+            time.sleep(delay)
+            delay *= 2
+    assert last_err is not None
+    raise last_err
 
 
 @dataclass
