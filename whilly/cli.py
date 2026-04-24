@@ -1225,7 +1225,7 @@ def run_plan(
             log.info("chdir → %s (workspace %s)", _workspace.path, slug)
         except RuntimeError as e:
             _ansi(f"{RD}Workspace creation failed: {e}{R}")
-            _ansi(f"{YL}Продолжаю без workspace (--no-worktree для подавления){R}")
+            _ansi(f"{YL}Продолжаю без workspace (workspace сейчас off by default; --workspace для явного включения){R}")
             _workspace = None
 
     tm = TaskManager(plan_file)
@@ -2763,7 +2763,12 @@ def main(argv: list[str] | None = None) -> int:
             _ansi(f"{RD}--timeout requires a value{R}")
             return 1
 
-    # --no-worktree / --no-workspace: disable plan-level git worktree isolation
+    # Plan-level git worktree isolation is OFF by default as of v3.3.0.
+    # --workspace / --worktree: explicitly enable.
+    # --no-workspace / --no-worktree: retained as no-ops for backward compatibility.
+    if "--workspace" in args or "--worktree" in args:
+        config.USE_WORKSPACE = True
+        args = [a for a in args if a not in ("--workspace", "--worktree")]
     if "--no-worktree" in args or "--no-workspace" in args:
         config.USE_WORKSPACE = False
         args = [a for a in args if a not in ("--no-worktree", "--no-workspace")]

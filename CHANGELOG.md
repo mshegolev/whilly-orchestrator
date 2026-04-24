@@ -5,6 +5,22 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-04-24
+
+### Changed (BREAKING)
+- **Plan-level git worktree workspace is OFF by default.** Previously `USE_WORKSPACE` defaulted to `true`, so every `run_plan` invocation created/entered `.whilly_workspaces/{slug}/` via `git worktree add`. In the real-world pilot flows (pending-change-heavy repos, subprocess pipelines with absolute paths into `.venv`) this more often surprised users than it protected them. New default is `false` — agents run in cwd. Opt back in with `whilly --workspace` (alias `--worktree`) or `WHILLY_USE_WORKSPACE=1` / `USE_WORKSPACE = true` in `whilly.toml`. `--no-workspace` / `--no-worktree` are retained as no-ops for backward compatibility. Docs: `README.md`, `docs/Whilly-Usage.md`, `docs/Getting-Started.md`, `CLAUDE.md` all refreshed.
+
+## [3.2.2] - 2026-04-24
+
+### Added
+- `whilly doctor` now detects **ghost plans** — task-plan JSONs referenced by state/history that no longer exist on disk (or point outside the repo). Surfaced as a dedicated diagnostic row so a stale `.whilly_state.json` can't silently re-point the orchestrator at a deleted plan ([#209](https://github.com/mshegolev/whilly-orchestrator/pull/209), [`a6ac28d`](https://github.com/mshegolev/whilly-orchestrator/commit/a6ac28d)).
+
+### Fixed
+- Interactive menu: `n` hotkey (new plan / PRD wizard entry) was swallowed by the Rich Live layer in some terminals; now routed through the same keybind dispatcher as `q`/`p`/`d`/`l`/`t`/`h` ([#209](https://github.com/mshegolev/whilly-orchestrator/pull/209), [`a6ac28d`](https://github.com/mshegolev/whilly-orchestrator/commit/a6ac28d)).
+
+### Chore
+- `.gitignore` now excludes `.claude/` so per-machine Claude Code project state (settings, memory, transcripts) never leaks into PRs. Sync-state manifests refreshed from the 2026-04-23 sync run ([#211](https://github.com/mshegolev/whilly-orchestrator/pull/211), [`757c0fd`](https://github.com/mshegolev/whilly-orchestrator/commit/757c0fd)).
+
 ## [3.2.1] - 2026-04-22
 
 ### Fixed

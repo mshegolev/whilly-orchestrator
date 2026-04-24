@@ -42,7 +42,7 @@ Line length is 120 (`[tool.ruff]` in `pyproject.toml`). Target `py310`.
 - `whilly --reset PLAN.json` resets all tasks to `pending`.
 - `whilly --init "desc" [--plan] [--go]` PRD → tasks → optional auto-exec pipeline.
 - `whilly --prd-wizard [slug]` launches Claude CLI interactively with the PRD master prompt.
-- `whilly --no-worktree` / `--no-workspace` disables the default plan-level workspace in `.whilly_workspaces/{slug}/`.
+- Plan-level workspace in `.whilly_workspaces/{slug}/` is **off by default since v3.3.0**. Opt in with `whilly --workspace` (or `--worktree`) / `WHILLY_USE_WORKSPACE=1`. `--no-workspace` / `--no-worktree` are retained as no-ops for backward compatibility.
 
 Config is almost entirely env vars read by `WhillyConfig.from_env()` (`whilly/config.py`) — prefix `WHILLY_`, e.g. `WHILLY_MAX_PARALLEL`, `WHILLY_BUDGET_USD`, `WHILLY_MODEL`, `WHILLY_USE_TMUX`, `WHILLY_HEADLESS`, `WHILLY_TIMEOUT`, `WHILLY_STATE_FILE`. Defaults: model `claude-opus-4-6[1m]`, max_parallel 3, log_dir `whilly_logs/`.
 
@@ -50,7 +50,7 @@ Config is almost entirely env vars read by `WhillyConfig.from_env()` (`whilly/co
 
 The main loop lives in `whilly/cli.py::run_plan`. One plan execution flows like this:
 
-1. **Workspace isolation.** If `USE_WORKSPACE` (default on), `worktree_runner.create_plan_workspace` creates/reuses a git worktree at `.whilly_workspaces/{slug}/` and the loop `chdir`s into it. The plan file itself is resolved to an absolute path *before* chdir so agents still read/write the canonical JSON in the main repo.
+1. **Workspace isolation.** If `USE_WORKSPACE` is on (**off by default since v3.3.0** — enable with `--workspace` or `WHILLY_USE_WORKSPACE=1`), `worktree_runner.create_plan_workspace` creates/reuses a git worktree at `.whilly_workspaces/{slug}/` and the loop `chdir`s into it. The plan file itself is resolved to an absolute path *before* chdir so agents still read/write the canonical JSON in the main repo.
 2. **Task loading.** `task_manager.TaskManager` loads a JSON plan (`{project, prd_file, tasks: [...]}`) with atomic writes. Task statuses: `pending | in_progress | done | failed | skipped`. `get_ready_tasks()` respects `dependencies`, `PRIORITY_ORDER`, and resets stale `in_progress` tasks on startup.
 3. **Batch planning.** If `MAX_PARALLEL > 1`, `orchestrator.plan_batches` groups ready tasks by non-overlapping `key_files` (or `plan_batches_llm` asks an LLM). Only the first batch of each iteration is dispatched — the loop re-evaluates after it completes so newly-unblocked tasks can join the next batch.
 4. **Agent dispatch.** Two runners:

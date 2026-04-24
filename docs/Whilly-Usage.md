@@ -10,8 +10,9 @@ Python-based task orchestrator that runs Claude CLI agents to execute tasks from
 ## Quick Start
 
 ```bash
-# Install (pipx works on macOS/Linux/Windows)
+# Install — prod (default, released version, isolated CLI on macOS/Linux/Windows)
 pipx install whilly-orchestrator
+# Contributor install instead? See README "For contributors (dev)" or: make install-dev
 
 # First run: let whilly tell you where your user config lives
 whilly --config path
@@ -168,7 +169,7 @@ AGENT_BACKEND = "claude"
 MODEL = "claude-opus-4-7[1m]"
 
 # Workspace + tmux
-USE_WORKSPACE = true
+USE_WORKSPACE = false           # v3.3.0: off by default; set to true or pass --workspace to enable
 USE_TMUX = false
 
 # Logging
@@ -218,7 +219,7 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 | `WHILLY_AGENT_BACKEND`            | `claude`               | `claude` or `opencode` |
 | `WHILLY_MODEL`                    | `claude-opus-4-6[1m]`  | LLM model |
 | `WHILLY_USE_TMUX`                 | `0`                    | Run each agent in its own tmux session |
-| `WHILLY_USE_WORKSPACE`            | `1`                    | Plan-level git worktree workspace |
+| `WHILLY_USE_WORKSPACE`            | `0`                    | Plan-level git worktree workspace (off by default since v3.3.0; set `1` or use `--workspace` to enable) |
 | `WHILLY_LOG_DIR`                  | `whilly_logs`          | Directory for per-task logs |
 | `WHILLY_ORCHESTRATOR`             | `file`                 | `file` (key-files collisions) or `llm` (LLM batching) |
 | `WHILLY_VOICE`                    | `1`                    | macOS voice notifications |
