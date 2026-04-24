@@ -204,7 +204,7 @@ Iterates every `done` task in the plan, moves its card to `Done`, and transition
 |---|---|
 | `gh: Bad credentials (HTTP 401)` | `unset GITHUB_TOKEN && gh auth status` — if that's clean, set `WHILLY_GH_PREFER_KEYRING=1` in whilly.toml |
 | `Legacy .env detected` warning each run | `whilly --config migrate` |
-| Dashboard doesn't render | non-TTY stdout → auto-headless; run whilly in a real terminal, or pass `--no-worktree` to simplify |
+| Dashboard doesn't render | non-TTY stdout → auto-headless; run whilly in a real terminal. Workspace isolation is off by default since v3.3.0 (pass `--workspace` to opt in). |
 | Card doesn't move | `gh auth refresh -s project` (Projects scope) + `whilly --ensure-board-statuses` |
 | Windows: some hotkeys don't work | expected — `q/d/l/t/h` are POSIX-only; dashboard rendering still works |
 | Task stuck "in_progress" across restarts | whilly resets stale in_progress tasks automatically on start |

@@ -66,19 +66,33 @@ Issue ──► Intake ──► Normalize ──► Readiness ──► Strateg
 
 ## Install
 
+Two install variants — pick the one that matches your role.
+
+### For users (prod — default)
+
+Isolated CLI via [pipx](https://pipx.pypa.io/), latest release from PyPI:
+
 ```bash
+pipx install whilly-orchestrator
+# or, if you don't have pipx:
 pip install whilly-orchestrator
 ```
 
-Or from source:
+### For contributors (dev)
+
+Editable link to your local checkout + `[dev]` extras (ruff, pytest, mypy). Edits in `whilly/` reflect immediately on the next `whilly` invocation — no reinstall needed:
 
 ```bash
 git clone https://github.com/mshegolev/whilly-orchestrator
 cd whilly-orchestrator
-pip install -e .
+make install-dev
+# Equivalent to: pipx install --force --editable '.[dev]'
+# Without pipx:   python3 -m pip install -e '.[dev]'
 ```
 
-Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or set `CLAUDE_BIN`).
+Useful contributor targets (see `make help` for all): `make lint`, `make format`, `make test`, `make version` (diagnose install drift — shows source vs installed-CLI version), `make uninstall`.
+
+Both variants require [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or set `CLAUDE_BIN`).
 
 ## Quick start
 
@@ -217,7 +231,7 @@ See [docs/Whilly-Usage.md](docs/Whilly-Usage.md) for the full config guide (TOML
 
 **New here?** Start with [`docs/Getting-Started.md`](docs/Getting-Started.md) — practical walkthroughs from install to first run.
 
-Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--no-worktree`, `--agent {claude,opencode,claude_handoff}`.
+Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--workspace` (opt into plan-level git worktree — off by default since v3.3.0), `--agent {claude,opencode,claude_handoff}`.
 
 ### Task sources (pull issues into plans)
 
@@ -356,11 +370,13 @@ Running HackSprint1 or a self-paced walkthrough? The full workshop kit (BRD, PRD
 
 ## Development
 
+See **[Install → For contributors (dev)](#for-contributors-dev)** for the one-command setup (`make install-dev`). Day-to-day loops:
+
 ```bash
-pip install -e ".[dev]"
-pytest
-ruff check whilly/ tests/
-ruff format whilly/ tests/
+make test          # pytest -q
+make lint          # ruff check + format --check (same command CI runs)
+make format        # ruff format + ruff check --fix
+make version       # show source version vs installed CLI — diagnoses install drift
 ```
 
 ## Credits
