@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER
+from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER, spawn_with_eagain_retry
 
 log = logging.getLogger("whilly")
 
@@ -146,13 +146,15 @@ class ClaudeBackend:
         start = time.monotonic()
         cmd = self.build_command(prompt, model=model)
         try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                cwd=str(cwd) if cwd else None,
-                check=False,
+            proc = spawn_with_eagain_retry(
+                lambda: subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    cwd=str(cwd) if cwd else None,
+                    check=False,
+                )
             )
         except subprocess.TimeoutExpired:
             return AgentResult(
@@ -165,6 +167,12 @@ class ClaudeBackend:
                 exit_code=-2,
                 duration_s=time.monotonic() - start,
                 result_text=f"{self._claude_bin()} CLI not found",
+            )
+        except BlockingIOError as e:
+            return AgentResult(
+                exit_code=-3,
+                duration_s=time.monotonic() - start,
+                result_text=f"spawn EAGAIN after retries: {e}",
             )
 
         duration = time.monotonic() - start
@@ -211,11 +219,13 @@ class ClaudeBackend:
         else:
             stdout_target = subprocess.PIPE
 
-        return subprocess.Popen(
-            cmd,
-            stdout=stdout_target,
-            stderr=subprocess.STDOUT,
-            cwd=str(cwd) if cwd else None,
+        return spawn_with_eagain_retry(
+            lambda: subprocess.Popen(
+                cmd,
+                stdout=stdout_target,
+                stderr=subprocess.STDOUT,
+                cwd=str(cwd) if cwd else None,
+            )
         )
 
     def collect_result(
