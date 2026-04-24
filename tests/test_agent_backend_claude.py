@@ -246,3 +246,44 @@ class TestRunAsyncPreamble:
         assert "whilly agent preamble" in content
         assert "backend   : claude" in content
         popen_mock.assert_called_once()
+
+
+# ── EAGAIN retry on Popen ──────────────────────────────────────────────────
+
+
+class TestRunAsyncEagainRetry:
+    """Regression: one EAGAIN from fork/posix_spawn shouldn't kill the plan.
+
+    macOS raises ``BlockingIOError(errno=35)`` from ``subprocess.Popen`` when
+    RLIMIT_NPROC is momentarily exhausted. We retry with backoff instead of
+    propagating the first transient failure.
+    """
+
+    def test_retries_and_succeeds(self, tmp_path: Path, monkeypatch):
+        log = tmp_path / "log.txt"
+        monkeypatch.setattr("whilly.agents.base.time.sleep", lambda *_: None)
+
+        call_count = {"n": 0}
+
+        def fake_popen(*_args, **_kwargs):
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                raise BlockingIOError(35, "Resource temporarily unavailable")
+            return object()  # sentinel — base helper just returns this through
+
+        with patch("whilly.agents.claude.subprocess.Popen", side_effect=fake_popen):
+            ClaudeBackend().run_async("p", log_file=log)
+
+        assert call_count["n"] == 3
+
+    def test_reraises_after_all_retries(self, tmp_path: Path, monkeypatch):
+        log = tmp_path / "log.txt"
+        monkeypatch.setattr("whilly.agents.base.time.sleep", lambda *_: None)
+
+        def always_eagain(*_a, **_kw):
+            raise BlockingIOError(35, "Resource temporarily unavailable")
+
+        with patch("whilly.agents.claude.subprocess.Popen", side_effect=always_eagain):
+            with pytest.raises(BlockingIOError) as excinfo:
+                ClaudeBackend().run_async("p", log_file=log)
+        assert excinfo.value.errno == 35
