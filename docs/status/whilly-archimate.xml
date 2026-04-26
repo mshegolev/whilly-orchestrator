@@ -308,22 +308,388 @@
     <relationship identifier="r-tech-10" source="tech-jira-api" target="app-source-jira" xsi:type="Serving" />
     <relationship identifier="r-tech-11" source="tech-python" target="app-cli" xsi:type="Realization" />
     <relationship identifier="r-tech-12" source="tech-rich" target="app-dashboard" xsi:type="Realization" />
+
+    <!-- Extra relationships used to wire orphan nodes on the Application view -->
+    <relationship identifier="r-extra-tm-orch" source="app-task-manager" target="app-orchestrator" xsi:type="Flow" />
+    <relationship identifier="r-extra-ss-tm" source="app-state-store" target="app-task-manager" xsi:type="Serving" />
+    <relationship identifier="r-extra-rec-tm" source="app-recovery" target="app-task-manager" xsi:type="Serving" />
+    <relationship identifier="r-extra-cfg-orch" source="app-config" target="app-orchestrator" xsi:type="Serving" />
+    <relationship identifier="r-extra-ver-rep" source="app-verifier" target="app-reporter" xsi:type="Flow" />
+    <relationship identifier="r-extra-rep-dash" source="app-reporter" target="app-dashboard" xsi:type="Serving" />
+    <relationship identifier="r-extra-rep-notif" source="app-reporter" target="app-notifications" xsi:type="Flow" />
   </relationships>
 
   <views>
     <diagrams>
+
+      <!-- ============================================================
+           View 1: Application Layer
+           ============================================================ -->
       <view identifier="view-app" xsi:type="Diagram">
         <name xml:lang="en">Whilly — Application Layer</name>
-        <documentation xml:lang="en">High-level component map of the orchestrator package.</documentation>
+        <documentation xml:lang="en">High-level component map of the orchestrator package: sources → pre-flight → orchestrator core → runners → backends → verify/repair → sinks.</documentation>
+
+        <!-- Row 1: Sources (y=20) -->
+        <node identifier="n-app-s1" elementRef="app-source-gh-issues" xsi:type="Element" x="20" y="20" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-s2" elementRef="app-source-gh-projects" xsi:type="Element" x="195" y="20" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-s3" elementRef="app-source-jira" xsi:type="Element" x="370" y="20" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-prd" elementRef="app-prd-wizard" xsi:type="Element" x="545" y="20" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 2: Pre-flight (y=110) -->
+        <node identifier="n-app-triz" elementRef="app-triz" xsi:type="Element" x="20" y="110" w="155" h="55">
+          <style><fillColor r="255" g="224" b="178"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-gate" elementRef="app-decision-gate" xsi:type="Element" x="195" y="110" w="155" h="55">
+          <style><fillColor r="255" g="224" b="178"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-decomp" elementRef="app-decomposer" xsi:type="Element" x="370" y="110" w="155" h="55">
+          <style><fillColor r="255" g="224" b="178"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 3: Orchestrator data (y=200) -->
+        <node identifier="n-app-tm" elementRef="app-task-manager" xsi:type="Element" x="20" y="200" w="155" h="55">
+          <style><fillColor r="225" g="190" b="231"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-ss" elementRef="app-state-store" xsi:type="Element" x="195" y="200" w="155" h="55">
+          <style><fillColor r="225" g="190" b="231"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-rec" elementRef="app-recovery" xsi:type="Element" x="370" y="200" w="155" h="55">
+          <style><fillColor r="225" g="190" b="231"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-cfg" elementRef="app-config" xsi:type="Element" x="545" y="200" w="155" h="55">
+          <style><fillColor r="225" g="190" b="231"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 4: Plan/dispatch (y=290) -->
+        <node identifier="n-app-orch" elementRef="app-orchestrator" xsi:type="Element" x="195" y="290" w="155" h="55">
+          <style><fillColor r="225" g="190" b="231"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 5: Runners (y=380) -->
+        <node identifier="n-app-tmux" elementRef="app-tmux-runner" xsi:type="Element" x="20" y="380" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-wt" elementRef="app-worktree-runner" xsi:type="Element" x="195" y="380" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-ar" elementRef="app-agent-runner" xsi:type="Element" x="370" y="380" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 6: Backends (y=470) -->
+        <node identifier="n-app-bcl" elementRef="app-backend-claude" xsi:type="Element" x="20" y="470" w="155" h="55">
+          <style><fillColor r="248" g="187" b="208"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-boc" elementRef="app-backend-opencode" xsi:type="Element" x="195" y="470" w="155" h="55">
+          <style><fillColor r="248" g="187" b="208"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-bho" elementRef="app-backend-handoff" xsi:type="Element" x="370" y="470" w="155" h="55">
+          <style><fillColor r="248" g="187" b="208"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 7: Verify / Repair / Sinks (y=560) -->
+        <node identifier="n-app-ver" elementRef="app-verifier" xsi:type="Element" x="20" y="560" w="155" h="55">
+          <style><fillColor r="178" g="235" b="242"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-sh" elementRef="app-self-healing" xsi:type="Element" x="195" y="560" w="155" h="55">
+          <style><fillColor r="178" g="235" b="242"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-pr" elementRef="app-sink-pr" xsi:type="Element" x="370" y="560" w="155" h="55">
+          <style><fillColor r="178" g="235" b="242"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-ws" elementRef="app-workflow-sync" xsi:type="Element" x="545" y="560" w="155" h="55">
+          <style><fillColor r="178" g="235" b="242"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Row 8: Observability (y=650) -->
+        <node identifier="n-app-dash" elementRef="app-dashboard" xsi:type="Element" x="20" y="650" w="155" h="55">
+          <style><fillColor r="255" g="249" b="196"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-rep" elementRef="app-reporter" xsi:type="Element" x="195" y="650" w="155" h="55">
+          <style><fillColor r="255" g="249" b="196"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-app-notif" elementRef="app-notifications" xsi:type="Element" x="370" y="650" w="155" h="55">
+          <style><fillColor r="255" g="249" b="196"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Connections -->
+        <connection identifier="c-app-s1-tm" relationshipRef="r-src-1" source="n-app-s1" target="n-app-tm" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-s2-tm" relationshipRef="r-src-2" source="n-app-s2" target="n-app-tm" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-s3-tm" relationshipRef="r-src-3" source="n-app-s3" target="n-app-tm" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-prd-tm" relationshipRef="r-pre-4" source="n-app-prd" target="n-app-tm" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-orch-triz" relationshipRef="r-pre-1" source="n-app-orch" target="n-app-triz" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-orch-gate" relationshipRef="r-pre-2" source="n-app-orch" target="n-app-gate" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-orch-decomp" relationshipRef="r-pre-3" source="n-app-orch" target="n-app-decomp" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-orch-tmux" relationshipRef="r-run-1" source="n-app-orch" target="n-app-tmux" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-orch-wt" relationshipRef="r-run-2" source="n-app-orch" target="n-app-wt" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-tmux-ar" relationshipRef="r-run-3" source="n-app-tmux" target="n-app-ar" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-wt-ar" relationshipRef="r-run-4" source="n-app-wt" target="n-app-ar" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ar-bcl" relationshipRef="r-run-5" source="n-app-ar" target="n-app-bcl" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ar-boc" relationshipRef="r-run-6" source="n-app-ar" target="n-app-boc" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ar-bho" relationshipRef="r-run-7" source="n-app-ar" target="n-app-bho" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ar-ver" relationshipRef="r-post-1" source="n-app-ar" target="n-app-ver" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ver-sh" relationshipRef="r-post-2" source="n-app-ver" target="n-app-sh" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-sh-orch" relationshipRef="r-post-3" source="n-app-sh" target="n-app-orch" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ver-pr" relationshipRef="r-post-4" source="n-app-ver" target="n-app-pr" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-pr-ws" relationshipRef="r-post-5" source="n-app-pr" target="n-app-ws" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+
+        <!-- Wire previously-orphan nodes -->
+        <connection identifier="c-app-tm-orch" relationshipRef="r-extra-tm-orch" source="n-app-tm" target="n-app-orch" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ss-tm" relationshipRef="r-extra-ss-tm" source="n-app-ss" target="n-app-tm" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-rec-tm" relationshipRef="r-extra-rec-tm" source="n-app-rec" target="n-app-tm" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-cfg-orch" relationshipRef="r-extra-cfg-orch" source="n-app-cfg" target="n-app-orch" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-ver-rep" relationshipRef="r-extra-ver-rep" source="n-app-ver" target="n-app-rep" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-rep-dash" relationshipRef="r-extra-rep-dash" source="n-app-rep" target="n-app-dash" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-app-rep-notif" relationshipRef="r-extra-rep-notif" source="n-app-rep" target="n-app-notif" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
       </view>
+
+      <!-- ============================================================
+           View 2: Technology Layer
+           ============================================================ -->
       <view identifier="view-tech" xsi:type="Diagram">
         <name xml:lang="en">Whilly — Technology Layer</name>
-        <documentation xml:lang="en">External CLIs, runtimes, and OS-level dependencies.</documentation>
+        <documentation xml:lang="en">External CLIs, runtimes, and APIs that realize / are used by application components.</documentation>
+
+        <!-- Top row: external tech (y=20) -->
+        <node identifier="n-tech-claude" elementRef="tech-claude-cli" xsi:type="Element" x="20" y="20" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-oc" elementRef="tech-opencode-cli" xsi:type="Element" x="195" y="20" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-tmux" elementRef="tech-tmux" xsi:type="Element" x="370" y="20" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-git" elementRef="tech-git" xsi:type="Element" x="545" y="20" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-gh" elementRef="tech-gh-cli" xsi:type="Element" x="720" y="20" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-keyring" elementRef="tech-keyring" xsi:type="Element" x="895" y="20" w="200" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Middle row: technology services (y=120) -->
+        <node identifier="n-tech-gh-api" elementRef="tech-github-api" xsi:type="Element" x="720" y="120" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-jira-api" elementRef="tech-jira-api" xsi:type="Element" x="895" y="120" w="200" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-py" elementRef="tech-python" xsi:type="Element" x="20" y="120" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-rich" elementRef="tech-rich" xsi:type="Element" x="195" y="120" w="155" h="55">
+          <style><fillColor r="200" g="230" b="201"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Bottom row: app components (y=240) -->
+        <node identifier="n-tech-app-bcl" elementRef="app-backend-claude" xsi:type="Element" x="20" y="240" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-boc" elementRef="app-backend-opencode" xsi:type="Element" x="195" y="240" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-tmux" elementRef="app-tmux-runner" xsi:type="Element" x="370" y="240" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-wt" elementRef="app-worktree-runner" xsi:type="Element" x="545" y="240" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-pr" elementRef="app-sink-pr" xsi:type="Element" x="720" y="240" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-cfg" elementRef="app-config" xsi:type="Element" x="895" y="240" w="200" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-cli" elementRef="app-cli" xsi:type="Element" x="20" y="320" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-dash" elementRef="app-dashboard" xsi:type="Element" x="195" y="320" w="155" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-tech-app-jira" elementRef="app-source-jira" xsi:type="Element" x="895" y="320" w="200" h="55">
+          <style><fillColor r="153" g="204" b="255"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Tech connections (Realization / Serving) -->
+        <connection identifier="c-tech-1" relationshipRef="r-tech-1" source="n-tech-claude" target="n-tech-app-bcl" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-2" relationshipRef="r-tech-2" source="n-tech-oc" target="n-tech-app-boc" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-3" relationshipRef="r-tech-3" source="n-tech-tmux" target="n-tech-app-tmux" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-4" relationshipRef="r-tech-4" source="n-tech-git" target="n-tech-app-wt" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-7" relationshipRef="r-tech-7" source="n-tech-gh" target="n-tech-app-pr" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-8" relationshipRef="r-tech-8" source="n-tech-keyring" target="n-tech-app-cfg" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-9" relationshipRef="r-tech-9" source="n-tech-gh-api" target="n-tech-gh" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-10" relationshipRef="r-tech-10" source="n-tech-jira-api" target="n-tech-app-jira" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-11" relationshipRef="r-tech-11" source="n-tech-py" target="n-tech-app-cli" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-tech-12" relationshipRef="r-tech-12" source="n-tech-rich" target="n-tech-app-dash" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
       </view>
+
+      <!-- ============================================================
+           View 3: Pipeline (vNext / Forge)
+           ============================================================ -->
       <view identifier="view-pipeline" xsi:type="Diagram">
         <name xml:lang="en">Whilly — Pipeline (vNext / Forge)</name>
-        <documentation xml:lang="en">Issue → PR business pipeline (FR-1 … FR-11).</documentation>
+        <documentation xml:lang="en">Issue → PR business pipeline. Linear flow of 10 sub-processes (Intake → Timeline) under the parent "Issue → PR pipeline", driven by the Developer actor.</documentation>
+
+        <!-- Actor (top) -->
+        <node identifier="n-pipe-dev" elementRef="actor-developer" xsi:type="Element" x="20" y="20" w="155" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Parent process bar (full width) -->
+        <node identifier="n-pipe-parent" elementRef="proc-issue-to-pr" xsi:type="Element" x="20" y="110" w="1480" h="55">
+          <style><fillColor r="255" g="236" b="179"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="10"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Sub-processes (linear flow, y=200) -->
+        <node identifier="n-pipe-1" elementRef="proc-intake" xsi:type="Element" x="20" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-2" elementRef="proc-normalize" xsi:type="Element" x="170" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-3" elementRef="proc-readiness" xsi:type="Element" x="320" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-4" elementRef="proc-strategy" xsi:type="Element" x="470" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-5" elementRef="proc-plan" xsi:type="Element" x="620" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-6" elementRef="proc-execute" xsi:type="Element" x="770" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-7" elementRef="proc-verify" xsi:type="Element" x="920" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-8" elementRef="proc-repair" xsi:type="Element" x="1070" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-9" elementRef="proc-compose-pr" xsi:type="Element" x="1220" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+        <node identifier="n-pipe-10" elementRef="proc-timeline" xsi:type="Element" x="1370" y="200" w="140" h="55">
+          <style><fillColor r="255" g="255" b="181"/><lineColor r="92" g="92" b="92"/><font name="Segoe UI" size="9"><color r="0" g="0" b="0"/></font></style>
+        </node>
+
+        <!-- Actor → parent process (Assignment) -->
+        <connection identifier="c-pipe-actor" relationshipRef="r-actor" source="n-pipe-dev" target="n-pipe-parent" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+
+        <!-- Flow chain between sub-processes -->
+        <connection identifier="c-pipe-f1" relationshipRef="r-flow-1" source="n-pipe-1" target="n-pipe-2" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f2" relationshipRef="r-flow-2" source="n-pipe-2" target="n-pipe-3" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f3" relationshipRef="r-flow-3" source="n-pipe-3" target="n-pipe-4" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f4" relationshipRef="r-flow-4" source="n-pipe-4" target="n-pipe-5" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f5" relationshipRef="r-flow-5" source="n-pipe-5" target="n-pipe-6" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f6" relationshipRef="r-flow-6" source="n-pipe-6" target="n-pipe-7" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f7" relationshipRef="r-flow-7" source="n-pipe-7" target="n-pipe-8" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f8" relationshipRef="r-flow-8" source="n-pipe-8" target="n-pipe-9" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
+        <connection identifier="c-pipe-f9" relationshipRef="r-flow-9" source="n-pipe-9" target="n-pipe-10" xsi:type="Relationship">
+          <style><lineColor r="92" g="92" b="92"/></style>
+        </connection>
       </view>
+
     </diagrams>
   </views>
 
