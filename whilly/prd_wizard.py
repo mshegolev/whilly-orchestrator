@@ -282,7 +282,7 @@ class PrdWizard:
             f"Сохрани PRD в файл {prd_path}. Только markdown."
         )
 
-        cmd = ["claude", "--model", self._model, "--print", "--no-input", "-p", prompt]
+        cmd = ["claude", "--model", self._model, "--print", "-p", prompt]
 
         try:
             result = subprocess.run(

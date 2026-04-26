@@ -353,7 +353,7 @@ def format_challenge_report(report: ChallengeReport) -> str:
 
 def _call_claude(prompt: str, model: str) -> str:
     """Call Claude CLI and return response."""
-    cmd = ["claude", "--model", model, "--print", "--no-input", "-p", prompt]
+    cmd = ["claude", "--model", model, "--print", "-p", prompt]
     log.info("TRIZ analysis: calling Claude (%d chars prompt)...", len(prompt))
     t0 = time.time()
     try:
