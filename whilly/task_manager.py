@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -125,9 +126,30 @@ class TaskManager:
         self.reload()
 
     def reload(self) -> None:
-        """Reload tasks from file."""
-        self._data = json.loads(self.path.read_text(encoding="utf-8"))
-        self.tasks = [Task.from_dict(t) for t in self._data.get("tasks", [])]
+        """Reload tasks from file.
+
+        Tolerant of concurrent partial writes from non-atomic writers
+        (e.g. Claude CLI agent subprocesses editing the same tasks.json):
+        retries a few times on JSONDecodeError/OSError, then falls back to
+        the last good snapshot if one exists. On the very first load
+        (no prior snapshot) the error is re-raised so callers see real
+        problems instead of silently booting with an empty plan.
+        """
+        last_err: Exception | None = None
+        for attempt in range(5):
+            try:
+                raw = self.path.read_text(encoding="utf-8")
+                self._data = json.loads(raw)
+                self.tasks = [Task.from_dict(t) for t in self._data.get("tasks", [])]
+                return
+            except (json.JSONDecodeError, OSError) as e:
+                last_err = e
+                time.sleep(0.05 * (attempt + 1))
+        if self.tasks or self._data:
+            log.warning("TaskManager.reload(): %s — keeping last good snapshot", last_err)
+            return
+        assert last_err is not None
+        raise last_err
 
     def save(self) -> None:
         """Save tasks back to JSON file (atomic write via temp + rename)."""
