@@ -1,0 +1,79 @@
+%% Whilly Orchestrator — high-level architecture
+%% Render: mmdc -i whilly-architecture.mmd -o whilly-architecture.png -t default -b transparent
+%% Or paste into https://mermaid.live for a quick PNG.
+
+flowchart TB
+    subgraph SRC["📥 Sources — pull tasks"]
+        S1[GitHub Issues]
+        S2[GitHub Projects v2]
+        S3[Jira]
+        S4["tasks.json (local)"]
+        S5[PRD wizard]
+    end
+
+    subgraph PRE["🧠 Pre-flight thinking"]
+        P1[TRIZ analyzer]
+        P2[Decision Gate]
+        P3[Decomposer]
+    end
+
+    subgraph CORE["⚙️ Orchestrator — cli.run_plan"]
+        direction TB
+        TM["TaskManager<br/>atomic JSON"]
+        SS["StateStore<br/>--resume"]
+        REC["Recovery / doctor<br/>ghost-plan detector"]
+        BATCH["plan_batches<br/>non-overlapping key_files"]
+        DISP{Dispatcher}
+        GUARDS["Guards<br/>budget · deadlock · timeout"]
+        TM --> BATCH --> DISP
+        SS -.-> TM
+        REC -.-> TM
+        GUARDS -.-> DISP
+    end
+
+    subgraph RUN["🏃 Runners"]
+        R1[tmux_runner]
+        R2[worktree_runner]
+        R3["subprocess fallback"]
+    end
+
+    subgraph BACK["🤖 Agent backends — Protocol"]
+        B1[Claude CLI]
+        B2[OpenCode]
+        B3["claude_handoff<br/>human-in-the-loop"]
+    end
+
+    subgraph POST["✅ Verify → Repair → Compose"]
+        V1["verifier<br/>lint + tests"]
+        V2["self_healing<br/>NameError / Import / Type"]
+        V3["sinks/github_pr<br/>what · why · validation"]
+    end
+
+    subgraph OBS["📊 Observability + sync"]
+        O1["Dashboard (Rich TUI)"]
+        O2["Reporter (md + json)"]
+        O3["workflow/* — board sync<br/>Todo → In Progress → In Review → Done"]
+        O4[Notifications]
+    end
+
+    SRC --> PRE --> CORE
+    DISP --> RUN --> BACK
+    BACK -- "AgentResult<br/>&lt;promise&gt;COMPLETE&lt;/promise&gt;" --> POST
+    POST --> OBS
+    POST -. retry on fail .-> CORE
+
+    classDef src fill:#e3f2fd,stroke:#1976d2,color:#0d47a1
+    classDef pre fill:#fff3e0,stroke:#f57c00,color:#e65100
+    classDef core fill:#f3e5f5,stroke:#7b1fa2,color:#4a148c
+    classDef run fill:#e8f5e9,stroke:#388e3c,color:#1b5e20
+    classDef back fill:#fce4ec,stroke:#c2185b,color:#880e4f
+    classDef post fill:#e0f7fa,stroke:#0097a7,color:#006064
+    classDef obs fill:#fffde7,stroke:#f9a825,color:#f57f17
+
+    class S1,S2,S3,S4,S5 src
+    class P1,P2,P3 pre
+    class TM,SS,REC,BATCH,DISP,GUARDS core
+    class R1,R2,R3 run
+    class B1,B2,B3 back
+    class V1,V2,V3 post
+    class O1,O2,O3,O4 obs
