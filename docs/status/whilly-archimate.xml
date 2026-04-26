@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Whilly Orchestrator — ArchiMate 3.1 model
+  =========================================
+  Format: ArchiMate Model Exchange File Format (Open Exchange Format).
+  Import in Archi: File → Import → Open Exchange XML File.
+  Spec: https://www.opengroup.org/xsd/archimate/
+
+  Three layered views:
+    1) "Whilly — Application Layer"   — components, services, data
+    2) "Whilly — Technology Layer"    — external CLIs, runtime, OS
+    3) "Whilly — Pipeline (vNext)"    — Issue → PR business flow
+-->
+<model xmlns="http://www.opengroup.org/xsd/archimate/3.0/"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.opengroup.org/xsd/archimate/3.0/ http://www.opengroup.org/xsd/archimate/3.1/archimate3_Model.xsd"
+       identifier="whilly-orchestrator">
+
+  <name xml:lang="en">Whilly Orchestrator</name>
+  <documentation xml:lang="en">
+    Whilly Wiggum loop — Ralph's smarter brother technique for continuous AI agent loops.
+    Application + Technology architecture model. v3.3.0 snapshot (2026-04-25).
+  </documentation>
+
+  <elements>
+    <!-- ================ BUSINESS LAYER ================ -->
+    <element identifier="actor-developer" xsi:type="BusinessActor">
+      <name xml:lang="en">Developer</name>
+    </element>
+    <element identifier="proc-issue-to-pr" xsi:type="BusinessProcess">
+      <name xml:lang="en">Issue → PR pipeline</name>
+    </element>
+    <element identifier="proc-intake" xsi:type="BusinessProcess">
+      <name xml:lang="en">Intake</name>
+    </element>
+    <element identifier="proc-normalize" xsi:type="BusinessProcess">
+      <name xml:lang="en">Normalize (spec + classify)</name>
+    </element>
+    <element identifier="proc-readiness" xsi:type="BusinessProcess">
+      <name xml:lang="en">Readiness (Decision Gate)</name>
+    </element>
+    <element identifier="proc-strategy" xsi:type="BusinessProcess">
+      <name xml:lang="en">Strategy</name>
+    </element>
+    <element identifier="proc-plan" xsi:type="BusinessProcess">
+      <name xml:lang="en">Plan</name>
+    </element>
+    <element identifier="proc-execute" xsi:type="BusinessProcess">
+      <name xml:lang="en">Execute</name>
+    </element>
+    <element identifier="proc-verify" xsi:type="BusinessProcess">
+      <name xml:lang="en">Verify</name>
+    </element>
+    <element identifier="proc-repair" xsi:type="BusinessProcess">
+      <name xml:lang="en">Repair (self-heal)</name>
+    </element>
+    <element identifier="proc-compose-pr" xsi:type="BusinessProcess">
+      <name xml:lang="en">Compose PR</name>
+    </element>
+    <element identifier="proc-timeline" xsi:type="BusinessProcess">
+      <name xml:lang="en">Timeline (board sync)</name>
+    </element>
+
+    <!-- ================ APPLICATION LAYER — components ================ -->
+    <element identifier="app-cli" xsi:type="ApplicationComponent">
+      <name xml:lang="en">CLI / run_plan</name>
+      <documentation xml:lang="en">whilly/cli.py — main loop entry, batch dispatch, guards, cleanup.</documentation>
+    </element>
+    <element identifier="app-orchestrator" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Orchestrator</name>
+      <documentation xml:lang="en">whilly/orchestrator.py — plan_batches, key_file conflict resolution.</documentation>
+    </element>
+    <element identifier="app-task-manager" xsi:type="ApplicationComponent">
+      <name xml:lang="en">TaskManager</name>
+      <documentation xml:lang="en">whilly/task_manager.py — atomic JSON I/O, status transitions.</documentation>
+    </element>
+    <element identifier="app-state-store" xsi:type="ApplicationComponent">
+      <name xml:lang="en">StateStore</name>
+      <documentation xml:lang="en">whilly/state_store.py — crash-resume state.</documentation>
+    </element>
+    <element identifier="app-recovery" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Recovery / Doctor</name>
+      <documentation xml:lang="en">whilly/recovery.py + whilly/doctor.py — ghost-plan detector, status reconciliation.</documentation>
+    </element>
+    <element identifier="app-decomposer" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Decomposer</name>
+    </element>
+    <element identifier="app-triz" xsi:type="ApplicationComponent">
+      <name xml:lang="en">TRIZ analyzer</name>
+    </element>
+    <element identifier="app-decision-gate" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Decision Gate</name>
+    </element>
+    <element identifier="app-prd-wizard" xsi:type="ApplicationComponent">
+      <name xml:lang="en">PRD Wizard</name>
+    </element>
+    <element identifier="app-tmux-runner" xsi:type="ApplicationComponent">
+      <name xml:lang="en">tmux runner</name>
+    </element>
+    <element identifier="app-worktree-runner" xsi:type="ApplicationComponent">
+      <name xml:lang="en">git-worktree runner</name>
+    </element>
+    <element identifier="app-agent-runner" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Agent runner</name>
+      <documentation xml:lang="en">whilly/agent_runner.py — Claude CLI JSON parser, &lt;promise&gt;COMPLETE&lt;/promise&gt; check.</documentation>
+    </element>
+    <element identifier="app-backend-claude" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Backend: Claude CLI</name>
+    </element>
+    <element identifier="app-backend-opencode" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Backend: OpenCode</name>
+    </element>
+    <element identifier="app-backend-handoff" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Backend: claude_handoff (human)</name>
+    </element>
+    <element identifier="app-source-gh-issues" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Source: GitHub Issues</name>
+    </element>
+    <element identifier="app-source-gh-projects" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Source: GitHub Projects v2</name>
+    </element>
+    <element identifier="app-source-jira" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Source: Jira</name>
+    </element>
+    <element identifier="app-sink-pr" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Sink: GitHub PR composer</name>
+    </element>
+    <element identifier="app-workflow-sync" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Workflow sink (board sync)</name>
+    </element>
+    <element identifier="app-verifier" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Verifier</name>
+    </element>
+    <element identifier="app-self-healing" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Self-healing</name>
+    </element>
+    <element identifier="app-dashboard" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Dashboard (Rich TUI)</name>
+    </element>
+    <element identifier="app-reporter" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Reporter</name>
+    </element>
+    <element identifier="app-notifications" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Notifications</name>
+    </element>
+    <element identifier="app-config" xsi:type="ApplicationComponent">
+      <name xml:lang="en">Layered config</name>
+      <documentation xml:lang="en">whilly/config.py — TOML + .env + env vars + CLI flags + OS keyring.</documentation>
+    </element>
+
+    <!-- ================ APPLICATION LAYER — services ================ -->
+    <element identifier="svc-task-execution" xsi:type="ApplicationService">
+      <name xml:lang="en">Task execution service</name>
+    </element>
+    <element identifier="svc-board-sync" xsi:type="ApplicationService">
+      <name xml:lang="en">Board sync service</name>
+    </element>
+    <element identifier="svc-pr-composition" xsi:type="ApplicationService">
+      <name xml:lang="en">PR composition service</name>
+    </element>
+    <element identifier="svc-self-heal" xsi:type="ApplicationService">
+      <name xml:lang="en">Self-healing service</name>
+    </element>
+
+    <!-- ================ DATA OBJECTS ================ -->
+    <element identifier="data-tasks-json" xsi:type="DataObject">
+      <name xml:lang="en">tasks.json</name>
+    </element>
+    <element identifier="data-state-json" xsi:type="DataObject">
+      <name xml:lang="en">.whilly_state.json</name>
+    </element>
+    <element identifier="data-prd-md" xsi:type="DataObject">
+      <name xml:lang="en">PRD-*.md</name>
+    </element>
+    <element identifier="data-handoff" xsi:type="DataObject">
+      <name xml:lang="en">.whilly/handoff/&lt;id&gt;/</name>
+    </element>
+    <element identifier="data-logs" xsi:type="DataObject">
+      <name xml:lang="en">whilly_logs/ + events.jsonl</name>
+    </element>
+
+    <!-- ================ TECHNOLOGY LAYER ================ -->
+    <element identifier="tech-claude-cli" xsi:type="SystemSoftware">
+      <name xml:lang="en">Claude CLI</name>
+    </element>
+    <element identifier="tech-opencode-cli" xsi:type="SystemSoftware">
+      <name xml:lang="en">OpenCode CLI</name>
+    </element>
+    <element identifier="tech-tmux" xsi:type="SystemSoftware">
+      <name xml:lang="en">tmux</name>
+    </element>
+    <element identifier="tech-git" xsi:type="SystemSoftware">
+      <name xml:lang="en">git (worktree)</name>
+    </element>
+    <element identifier="tech-gh-cli" xsi:type="SystemSoftware">
+      <name xml:lang="en">gh CLI</name>
+    </element>
+    <element identifier="tech-keyring" xsi:type="SystemSoftware">
+      <name xml:lang="en">OS keyring (Keychain / libsecret / Win Credential Mgr)</name>
+    </element>
+    <element identifier="tech-github-api" xsi:type="TechnologyService">
+      <name xml:lang="en">GitHub REST + GraphQL API</name>
+    </element>
+    <element identifier="tech-jira-api" xsi:type="TechnologyService">
+      <name xml:lang="en">Jira Cloud REST API</name>
+    </element>
+    <element identifier="tech-python" xsi:type="SystemSoftware">
+      <name xml:lang="en">Python 3.10+ runtime</name>
+    </element>
+    <element identifier="tech-rich" xsi:type="SystemSoftware">
+      <name xml:lang="en">rich (TUI lib)</name>
+    </element>
+
+  </elements>
+
+  <relationships>
+    <!-- Business decomposition -->
+    <relationship identifier="r-bp-1" source="proc-issue-to-pr" target="proc-intake" xsi:type="Composition" />
+    <relationship identifier="r-bp-2" source="proc-issue-to-pr" target="proc-normalize" xsi:type="Composition" />
+    <relationship identifier="r-bp-3" source="proc-issue-to-pr" target="proc-readiness" xsi:type="Composition" />
+    <relationship identifier="r-bp-4" source="proc-issue-to-pr" target="proc-strategy" xsi:type="Composition" />
+    <relationship identifier="r-bp-5" source="proc-issue-to-pr" target="proc-plan" xsi:type="Composition" />
+    <relationship identifier="r-bp-6" source="proc-issue-to-pr" target="proc-execute" xsi:type="Composition" />
+    <relationship identifier="r-bp-7" source="proc-issue-to-pr" target="proc-verify" xsi:type="Composition" />
+    <relationship identifier="r-bp-8" source="proc-issue-to-pr" target="proc-repair" xsi:type="Composition" />
+    <relationship identifier="r-bp-9" source="proc-issue-to-pr" target="proc-compose-pr" xsi:type="Composition" />
+    <relationship identifier="r-bp-10" source="proc-issue-to-pr" target="proc-timeline" xsi:type="Composition" />
+
+    <!-- Business flows -->
+    <relationship identifier="r-flow-1" source="proc-intake" target="proc-normalize" xsi:type="Flow" />
+    <relationship identifier="r-flow-2" source="proc-normalize" target="proc-readiness" xsi:type="Flow" />
+    <relationship identifier="r-flow-3" source="proc-readiness" target="proc-strategy" xsi:type="Flow" />
+    <relationship identifier="r-flow-4" source="proc-strategy" target="proc-plan" xsi:type="Flow" />
+    <relationship identifier="r-flow-5" source="proc-plan" target="proc-execute" xsi:type="Flow" />
+    <relationship identifier="r-flow-6" source="proc-execute" target="proc-verify" xsi:type="Flow" />
+    <relationship identifier="r-flow-7" source="proc-verify" target="proc-repair" xsi:type="Flow" />
+    <relationship identifier="r-flow-8" source="proc-repair" target="proc-compose-pr" xsi:type="Flow" />
+    <relationship identifier="r-flow-9" source="proc-compose-pr" target="proc-timeline" xsi:type="Flow" />
+    <relationship identifier="r-actor" source="actor-developer" target="proc-issue-to-pr" xsi:type="Assignment" />
+
+    <!-- Application Services realised by components -->
+    <relationship identifier="r-svc-1" source="app-cli" target="svc-task-execution" xsi:type="Realization" />
+    <relationship identifier="r-svc-2" source="app-orchestrator" target="svc-task-execution" xsi:type="Realization" />
+    <relationship identifier="r-svc-3" source="app-workflow-sync" target="svc-board-sync" xsi:type="Realization" />
+    <relationship identifier="r-svc-4" source="app-sink-pr" target="svc-pr-composition" xsi:type="Realization" />
+    <relationship identifier="r-svc-5" source="app-self-healing" target="svc-self-heal" xsi:type="Realization" />
+
+    <!-- Application services serve business processes -->
+    <relationship identifier="r-srv-1" source="svc-task-execution" target="proc-execute" xsi:type="Serving" />
+    <relationship identifier="r-srv-2" source="svc-board-sync" target="proc-timeline" xsi:type="Serving" />
+    <relationship identifier="r-srv-3" source="svc-pr-composition" target="proc-compose-pr" xsi:type="Serving" />
+    <relationship identifier="r-srv-4" source="svc-self-heal" target="proc-repair" xsi:type="Serving" />
+
+    <!-- Composition: orchestrator owns sub-components -->
+    <relationship identifier="r-comp-1" source="app-cli" target="app-orchestrator" xsi:type="Composition" />
+    <relationship identifier="r-comp-2" source="app-cli" target="app-task-manager" xsi:type="Composition" />
+    <relationship identifier="r-comp-3" source="app-cli" target="app-state-store" xsi:type="Composition" />
+    <relationship identifier="r-comp-4" source="app-cli" target="app-recovery" xsi:type="Composition" />
+    <relationship identifier="r-comp-5" source="app-cli" target="app-config" xsi:type="Composition" />
+    <relationship identifier="r-comp-6" source="app-cli" target="app-dashboard" xsi:type="Composition" />
+    <relationship identifier="r-comp-7" source="app-cli" target="app-reporter" xsi:type="Composition" />
+    <relationship identifier="r-comp-8" source="app-cli" target="app-notifications" xsi:type="Composition" />
+
+    <!-- Pre-flight uses -->
+    <relationship identifier="r-pre-1" source="app-orchestrator" target="app-triz" xsi:type="Serving" />
+    <relationship identifier="r-pre-2" source="app-orchestrator" target="app-decision-gate" xsi:type="Serving" />
+    <relationship identifier="r-pre-3" source="app-orchestrator" target="app-decomposer" xsi:type="Serving" />
+    <relationship identifier="r-pre-4" source="app-prd-wizard" target="app-task-manager" xsi:type="Serving" />
+
+    <!-- Sources feed task manager -->
+    <relationship identifier="r-src-1" source="app-source-gh-issues" target="app-task-manager" xsi:type="Flow" />
+    <relationship identifier="r-src-2" source="app-source-gh-projects" target="app-task-manager" xsi:type="Flow" />
+    <relationship identifier="r-src-3" source="app-source-jira" target="app-task-manager" xsi:type="Flow" />
+
+    <!-- Runners use backends -->
+    <relationship identifier="r-run-1" source="app-orchestrator" target="app-tmux-runner" xsi:type="Serving" />
+    <relationship identifier="r-run-2" source="app-orchestrator" target="app-worktree-runner" xsi:type="Serving" />
+    <relationship identifier="r-run-3" source="app-tmux-runner" target="app-agent-runner" xsi:type="Serving" />
+    <relationship identifier="r-run-4" source="app-worktree-runner" target="app-agent-runner" xsi:type="Serving" />
+    <relationship identifier="r-run-5" source="app-agent-runner" target="app-backend-claude" xsi:type="Serving" />
+    <relationship identifier="r-run-6" source="app-agent-runner" target="app-backend-opencode" xsi:type="Serving" />
+    <relationship identifier="r-run-7" source="app-agent-runner" target="app-backend-handoff" xsi:type="Serving" />
+
+    <!-- Verify / repair / compose chain -->
+    <relationship identifier="r-post-1" source="app-agent-runner" target="app-verifier" xsi:type="Flow" />
+    <relationship identifier="r-post-2" source="app-verifier" target="app-self-healing" xsi:type="Flow" />
+    <relationship identifier="r-post-3" source="app-self-healing" target="app-orchestrator" xsi:type="Flow" />
+    <relationship identifier="r-post-4" source="app-verifier" target="app-sink-pr" xsi:type="Flow" />
+    <relationship identifier="r-post-5" source="app-sink-pr" target="app-workflow-sync" xsi:type="Flow" />
+
+    <!-- Data access -->
+    <relationship identifier="r-data-1" source="app-task-manager" target="data-tasks-json" xsi:type="Access" />
+    <relationship identifier="r-data-2" source="app-state-store" target="data-state-json" xsi:type="Access" />
+    <relationship identifier="r-data-3" source="app-prd-wizard" target="data-prd-md" xsi:type="Access" />
+    <relationship identifier="r-data-4" source="app-backend-handoff" target="data-handoff" xsi:type="Access" />
+    <relationship identifier="r-data-5" source="app-reporter" target="data-logs" xsi:type="Access" />
+
+    <!-- Technology realisations -->
+    <relationship identifier="r-tech-1" source="tech-claude-cli" target="app-backend-claude" xsi:type="Realization" />
+    <relationship identifier="r-tech-2" source="tech-opencode-cli" target="app-backend-opencode" xsi:type="Realization" />
+    <relationship identifier="r-tech-3" source="tech-tmux" target="app-tmux-runner" xsi:type="Realization" />
+    <relationship identifier="r-tech-4" source="tech-git" target="app-worktree-runner" xsi:type="Realization" />
+    <relationship identifier="r-tech-5" source="tech-gh-cli" target="app-source-gh-issues" xsi:type="Serving" />
+    <relationship identifier="r-tech-6" source="tech-gh-cli" target="app-source-gh-projects" xsi:type="Serving" />
+    <relationship identifier="r-tech-7" source="tech-gh-cli" target="app-sink-pr" xsi:type="Serving" />
+    <relationship identifier="r-tech-8" source="tech-keyring" target="app-config" xsi:type="Serving" />
+    <relationship identifier="r-tech-9" source="tech-github-api" target="tech-gh-cli" xsi:type="Serving" />
+    <relationship identifier="r-tech-10" source="tech-jira-api" target="app-source-jira" xsi:type="Serving" />
+    <relationship identifier="r-tech-11" source="tech-python" target="app-cli" xsi:type="Realization" />
+    <relationship identifier="r-tech-12" source="tech-rich" target="app-dashboard" xsi:type="Realization" />
+  </relationships>
+
+  <views>
+    <diagrams>
+      <view identifier="view-app" xsi:type="Diagram">
+        <name xml:lang="en">Whilly — Application Layer</name>
+        <documentation xml:lang="en">High-level component map of the orchestrator package.</documentation>
+      </view>
+      <view identifier="view-tech" xsi:type="Diagram">
+        <name xml:lang="en">Whilly — Technology Layer</name>
+        <documentation xml:lang="en">External CLIs, runtimes, and OS-level dependencies.</documentation>
+      </view>
+      <view identifier="view-pipeline" xsi:type="Diagram">
+        <name xml:lang="en">Whilly — Pipeline (vNext / Forge)</name>
+        <documentation xml:lang="en">Issue → PR business pipeline (FR-1 … FR-11).</documentation>
+      </view>
+    </diagrams>
+  </views>
+
+</model>
