@@ -19,15 +19,19 @@ from whilly.core.models import (
     WorkerHandle,
     WorkerId,
 )
+from whilly.core.state_machine import StateError, Transition, apply_transition
 
 __all__ = [
     "Event",
     "Plan",
     "PlanId",
     "Priority",
+    "StateError",
     "Task",
     "TaskId",
     "TaskStatus",
+    "Transition",
     "WorkerHandle",
     "WorkerId",
+    "apply_transition",
 ]
