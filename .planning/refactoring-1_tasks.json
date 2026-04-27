@@ -1,0 +1,941 @@
+{
+  "project": "Whilly v4.0 — Distributed Orchestrator Refactoring",
+  "prd_file": "/opt/develop/whilly-orchestrator/docs/PRD-refactoring-1.md",
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай PRD-refactoring-1.md полностью — особенно раздел Module structure и Success Criteria",
+      "Убедись что Python 3.12+ доступен (TC-1) и PostgreSQL 15+ можно поднять через docker-compose (TC-2, A-1)",
+      "Проверь что текущая ветка main актуальна: git fetch && git status",
+      "Не читай и не модифицируй legacy v3.x код в whilly/cli.py — это big-bang rewrite (TC-9)",
+      "Перед началом задачи проверь dependencies в tasks.json — все должны быть done"
+    ],
+    "during_work": [
+      "Следуй Hexagonal architecture (TC-8): whilly/core/ — pure domain, whilly/adapters/ — I/O",
+      "В whilly/core/ ЗАПРЕЩЕНЫ импорты asyncpg, httpx, subprocess, os.chdir (SC-6)",
+      "Используй frozen dataclasses для domain models, type hints везде (NFR-4)",
+      "SQL пиши руками через asyncpg, не используй ORM в core (TC-4)",
+      "Делай атомарные коммиты с conventional-commit prefix: feat(core), feat(adapters), test, docs, refactor",
+      "После каждого редактирования Python файла запускай: python3 -m ruff check --fix && python3 -m ruff format",
+      "mypy --strict обязателен для whilly/core/ (NFR-4)"
+    ],
+    "before_finish": [
+      "Запусти линтеры: python3 -m ruff check whilly/ tests/ && python3 -m ruff format --check whilly/ tests/",
+      "Запусти mypy --strict whilly/core/",
+      "Запусти pytest -q (все тесты должны проходить)",
+      "Для задач с testcontainers убедись что Docker запущен",
+      "Проверь acceptance_criteria — все ли пункты выполнены",
+      "Помечай <promise>COMPLETE</promise> только при полном выполнении AC",
+      "Отметь задачу done в tasks.json через TaskManager.mark_status"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "phase": "Day 1 — Skeleton",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Заморозить v3.x ветку: создать тег v3-final на текущем main, обновить README.md баннером 'v3.x is in maintenance mode. v4.0 (incompatible) is the new development line.', добавить EOL announcement",
+      "status": "done",
+      "dependencies": [],
+      "key_files": [
+        "README.md",
+        "docs/v3-EOL.md"
+      ],
+      "acceptance_criteria": [
+        "Тег v3-final создан и пушнут на origin",
+        "README.md содержит баннер о заморозке v3.x",
+        "Создан docs/v3-EOL.md с migration story (Appendix B PRD)"
+      ],
+      "test_steps": [
+        "git tag --list | grep v3-final",
+        "grep -i 'maintenance mode' README.md",
+        "test -f docs/v3-EOL.md"
+      ],
+      "prd_requirement": "R-2, Appendix B"
+    },
+    {
+      "id": "TASK-002",
+      "phase": "Day 1 — Skeleton",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Создать pyproject.toml для v4.0: Python 3.12+, dependencies (asyncpg, fastapi, httpx, uvicorn, alembic, rich, typer, pydantic), dev-deps (pytest, pytest-asyncio, testcontainers, ruff, mypy, import-linter, coverage). Настроить ruff (line-length 120, target py312), mypy --strict для whilly/core/, import-linter для проверки SC-6",
+      "status": "pending",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "key_files": [
+        "pyproject.toml",
+        ".importlinter"
+      ],
+      "acceptance_criteria": [
+        "pyproject.toml декларирует requires-python = '>=3.12'",
+        "Секция [tool.ruff] target-version = 'py312'",
+        "Секция [tool.mypy] strict = true с overrides для whilly.core",
+        "import-linter contract запрещает в whilly.core импорт asyncpg, httpx, subprocess, os.chdir",
+        "pip install -e '.[dev]' проходит без ошибок"
+      ],
+      "test_steps": [
+        "python3 -m pip install -e '.[dev]'",
+        "python3 -m ruff check pyproject.toml",
+        "python3 -m mypy --version",
+        "python3 -m import_linter --config .importlinter || python3 -c 'import importlinter'"
+      ],
+      "prd_requirement": "TC-1, NFR-4, SC-6"
+    },
+    {
+      "id": "TASK-003",
+      "phase": "Day 1 — Skeleton",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Создать docker-compose.yml для локального PostgreSQL 15 (порт 5432, volume для persistence), .env.example с WHILLY_DATABASE_URL, скрипт scripts/db-up.sh для запуска",
+      "status": "pending",
+      "dependencies": [
+        "TASK-002"
+      ],
+      "key_files": [
+        "docker-compose.yml",
+        ".env.example",
+        "scripts/db-up.sh"
+      ],
+      "acceptance_criteria": [
+        "docker-compose up -d поднимает postgres:15",
+        ".env.example содержит WHILLY_DATABASE_URL=postgresql://...",
+        "scripts/db-up.sh — исполняемый, проверяет docker и поднимает БД",
+        "psql подключается к localhost:5432"
+      ],
+      "test_steps": [
+        "docker compose config",
+        "test -x scripts/db-up.sh",
+        "grep WHILLY_DATABASE_URL .env.example"
+      ],
+      "prd_requirement": "TC-2, A-1"
+    },
+    {
+      "id": "TASK-004",
+      "phase": "Day 1 — Skeleton",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/core/models.py: frozen dataclasses Task, Plan, Event, WorkerHandle. Task содержит id, status (enum TaskStatus), dependencies, key_files, priority, description, acceptance_criteria, test_steps, prd_requirement, version. Все поля типизированы (PEP 484/585), no I/O, no asyncio",
+      "status": "pending",
+      "dependencies": [
+        "TASK-002"
+      ],
+      "key_files": [
+        "whilly/core/__init__.py",
+        "whilly/core/models.py"
+      ],
+      "acceptance_criteria": [
+        "TaskStatus — enum с PENDING, CLAIMED, IN_PROGRESS, DONE, FAILED, SKIPPED",
+        "Все dataclasses помечены frozen=True",
+        "Task.version: int — для optimistic locking",
+        "WorkerHandle содержит worker_id, hostname, last_heartbeat, token_hash",
+        "mypy --strict whilly/core/models.py проходит без ошибок"
+      ],
+      "test_steps": [
+        "python3 -m mypy --strict whilly/core/models.py",
+        "python3 -c 'from whilly.core.models import Task, Plan, Event, WorkerHandle, TaskStatus'",
+        "python3 -m ruff check whilly/core/models.py"
+      ],
+      "prd_requirement": "FR-2.2, NFR-4, Module structure"
+    },
+    {
+      "id": "TASK-005",
+      "phase": "Day 1 — Skeleton",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/core/state_machine.py: pure function apply_transition(task: Task, transition: Transition) -> Task | StateError. Enum Transition (CLAIM, START, COMPLETE, FAIL, SKIP, RELEASE). Невалидные переходы возвращают StateError с указанием from/to/reason",
+      "status": "pending",
+      "dependencies": [
+        "TASK-004"
+      ],
+      "key_files": [
+        "whilly/core/state_machine.py"
+      ],
+      "acceptance_criteria": [
+        "Transition enum: CLAIM, START, COMPLETE, FAIL, SKIP, RELEASE",
+        "apply_transition — pure (no I/O, no globals, deterministic)",
+        "Невалидные переходы (например DONE → CLAIMED) возвращают StateError",
+        "version инкрементируется при каждом переходе",
+        "mypy --strict проходит"
+      ],
+      "test_steps": [
+        "python3 -m mypy --strict whilly/core/state_machine.py",
+        "python3 -m ruff check whilly/core/state_machine.py"
+      ],
+      "prd_requirement": "FR-2.2, NFR-4"
+    },
+    {
+      "id": "TASK-006",
+      "phase": "Day 1 — Skeleton",
+      "category": "test",
+      "priority": "critical",
+      "description": "Написать tests/unit/test_state_machine.py: ≥20 тестов на все валидные/невалидные переходы. Покрыть: PENDING→CLAIMED→IN_PROGRESS→DONE, повторный CLAIM (ошибка), DONE→FAILED (ошибка), version increments, RELEASE из CLAIMED обратно в PENDING",
+      "status": "pending",
+      "dependencies": [
+        "TASK-005"
+      ],
+      "key_files": [
+        "tests/unit/test_state_machine.py",
+        "tests/__init__.py",
+        "tests/unit/__init__.py"
+      ],
+      "acceptance_criteria": [
+        "≥20 параметризованных тестов на переходы",
+        "pytest tests/unit/test_state_machine.py проходит",
+        "coverage для whilly/core/state_machine.py ≥ 95%",
+        "Покрыты все 6 Transition × валидность"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_state_machine.py -v",
+        "coverage run -m pytest tests/unit/test_state_machine.py && coverage report --include='whilly/core/state_machine.py'"
+      ],
+      "prd_requirement": "Day 1 deliverable, NFR-2"
+    },
+    {
+      "id": "TASK-007",
+      "phase": "Day 1 — Skeleton",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Инициализировать Alembic в whilly/adapters/db/migrations/, создать первую миграцию 001_initial_schema.sql: таблицы plans, tasks, events, workers. Tasks: id, plan_id, status, dependencies (jsonb), key_files (jsonb), priority, version, claimed_by, claimed_at, prd_requirement, ... Events: id, task_id, event_type, payload (jsonb), created_at. Workers: worker_id, hostname, last_heartbeat, token_hash",
+      "status": "pending",
+      "dependencies": [
+        "TASK-003",
+        "TASK-004"
+      ],
+      "key_files": [
+        "whilly/adapters/db/__init__.py",
+        "whilly/adapters/db/migrations/env.py",
+        "whilly/adapters/db/migrations/versions/001_initial_schema.py",
+        "whilly/adapters/db/schema.sql",
+        "alembic.ini"
+      ],
+      "acceptance_criteria": [
+        "alembic upgrade head создаёт все таблицы",
+        "Индексы на tasks(plan_id, status), events(task_id, created_at), workers(last_heartbeat)",
+        "version column на tasks с DEFAULT 0",
+        "schema.sql — reference DDL дублирует Alembic для удобства чтения"
+      ],
+      "test_steps": [
+        "alembic upgrade head",
+        "psql -h localhost -U whilly -d whilly -c '\\dt'",
+        "psql -h localhost -U whilly -d whilly -c 'SELECT version FROM tasks LIMIT 1' || true"
+      ],
+      "prd_requirement": "FR-2.1, FR-2.4"
+    },
+    {
+      "id": "TASK-008",
+      "phase": "Day 1 Integration",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase 1 Integration Test: smoke test проверяющий что core импортируется без I/O зависимостей, миграции применяются, базовые модели сериализуются. Запустить import-linter — SC-6 должен проходить",
+      "status": "pending",
+      "dependencies": [
+        "TASK-006",
+        "TASK-007"
+      ],
+      "key_files": [
+        "tests/integration/test_phase1_smoke.py",
+        "tests/integration/__init__.py"
+      ],
+      "acceptance_criteria": [
+        "import-linter проверка SC-6 проходит",
+        "Smoke test поднимает testcontainers postgres и применяет миграции",
+        "pytest tests/integration/test_phase1_smoke.py зелёный"
+      ],
+      "test_steps": [
+        "lint-imports",
+        "pytest tests/integration/test_phase1_smoke.py -v"
+      ],
+      "prd_requirement": "SC-6"
+    },
+    {
+      "id": "TASK-009",
+      "phase": "Day 2 — Postgres adapter",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/adapters/db/repository.py: async класс TaskRepository на asyncpg. Методы: claim_task(worker_id, plan_id) через SELECT ... FOR UPDATE SKIP LOCKED, complete_task(task_id, version) с optimistic locking, fail_task, release_stale_tasks (visibility timeout). Все операции — отдельные транзакции",
+      "status": "pending",
+      "dependencies": [
+        "TASK-007"
+      ],
+      "key_files": [
+        "whilly/adapters/db/repository.py",
+        "whilly/adapters/db/pool.py"
+      ],
+      "acceptance_criteria": [
+        "claim_task использует SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1",
+        "complete_task проверяет version (optimistic locking) — UPDATE ... WHERE version = $1",
+        "release_stale_tasks возвращает в PENDING задачи с claimed_at < NOW() - visibility_timeout",
+        "Каждая операция пишет запись в events",
+        "Pool управляется через asyncpg.create_pool"
+      ],
+      "test_steps": [
+        "python3 -m mypy whilly/adapters/db/repository.py",
+        "python3 -m ruff check whilly/adapters/db/repository.py"
+      ],
+      "prd_requirement": "FR-1.3, FR-1.4, FR-2.1, FR-2.3, FR-2.4"
+    },
+    {
+      "id": "TASK-010",
+      "phase": "Day 2 — Postgres adapter",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/adapters/filesystem/plan_io.py + CLI команда whilly plan import <tasks.json>: парсит JSON-план (новый v4 формат), валидирует ацикличность графа (через core/scheduler.detect_cycles), вставляет plan + tasks в БД одной транзакцией. Команда whilly plan export <plan_id> отдаёт JSON",
+      "status": "pending",
+      "dependencies": [
+        "TASK-009"
+      ],
+      "key_files": [
+        "whilly/adapters/filesystem/__init__.py",
+        "whilly/adapters/filesystem/plan_io.py",
+        "whilly/cli/__init__.py",
+        "whilly/cli/__main__.py",
+        "whilly/cli/plan.py"
+      ],
+      "acceptance_criteria": [
+        "whilly plan import tasks.json создаёт plan + tasks в БД",
+        "Цикл в зависимостях → ошибка с указанием цепочки",
+        "whilly plan export <id> возвращает JSON с теми же задачами",
+        "Round-trip import → export → import идемпотентен"
+      ],
+      "test_steps": [
+        "whilly plan import examples/sample_plan.json",
+        "whilly plan export <plan_id> > /tmp/exported.json",
+        "pytest tests/integration/test_plan_io.py"
+      ],
+      "prd_requirement": "FR-2.5, FR-3.1"
+    },
+    {
+      "id": "TASK-011",
+      "phase": "Day 2 — Postgres adapter",
+      "category": "test",
+      "priority": "critical",
+      "description": "Написать tests/integration/test_concurrent_claims.py с testcontainers: 100 параллельных claim_task в asyncio.gather, проверить что каждая задача взята ровно одним воркером (no duplicates, no losses). Это SC-1",
+      "status": "pending",
+      "dependencies": [
+        "TASK-009"
+      ],
+      "key_files": [
+        "tests/integration/test_concurrent_claims.py",
+        "tests/conftest.py"
+      ],
+      "acceptance_criteria": [
+        "Тест поднимает Postgres через testcontainers",
+        "100 worker'ов одновременно делают claim_task",
+        "Каждая из N задач взята ровно одним воркером (assert no duplicates)",
+        "Зелёный pytest — SC-1 выполнен"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_concurrent_claims.py -v",
+        "docker ps | grep postgres"
+      ],
+      "prd_requirement": "SC-1, NFR-1, NFR-2"
+    },
+    {
+      "id": "TASK-012",
+      "phase": "Day 2 Integration",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase 2 Integration Test: e2e сценарий — import plan → claim_task → complete_task → export plan. Проверить что events таблица содержит все переходы статуса",
+      "status": "pending",
+      "dependencies": [
+        "TASK-010",
+        "TASK-011"
+      ],
+      "key_files": [
+        "tests/integration/test_phase2_e2e.py"
+      ],
+      "acceptance_criteria": [
+        "End-to-end через testcontainers",
+        "events таблица содержит CLAIM, START, COMPLETE для каждой задачи",
+        "Финальный export показывает status=DONE"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_phase2_e2e.py -v"
+      ],
+      "prd_requirement": "FR-2.4, FR-2.5"
+    },
+    {
+      "id": "TASK-013",
+      "phase": "Day 3 — DAG scheduler",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/core/scheduler.py: pure функции topological_sort(plan: Plan) -> list[TaskId], detect_cycles(plan) -> list[list[TaskId]], next_ready(plan, in_progress: set[TaskId]) -> list[TaskId]. Учитывать priority внутри уровня DAG (critical > high > medium > low) и отказывать в параллельной выдаче задач с пересекающимися key_files",
+      "status": "pending",
+      "dependencies": [
+        "TASK-005"
+      ],
+      "key_files": [
+        "whilly/core/scheduler.py"
+      ],
+      "acceptance_criteria": [
+        "topological_sort — детерминирован, стабильный порядок",
+        "detect_cycles возвращает все найденные циклы (Kosaraju или Tarjan)",
+        "next_ready учитывает priority и key_files conflict",
+        "Все функции pure (no I/O), mypy --strict проходит",
+        "Не импортирует ничего из adapters/"
+      ],
+      "test_steps": [
+        "python3 -m mypy --strict whilly/core/scheduler.py",
+        "python3 -m ruff check whilly/core/scheduler.py"
+      ],
+      "prd_requirement": "FR-3.1, FR-3.3, FR-3.4"
+    },
+    {
+      "id": "TASK-014",
+      "phase": "Day 3 — DAG scheduler",
+      "category": "test",
+      "priority": "critical",
+      "description": "Написать tests/unit/test_scheduler.py: топологическая сортировка, обнаружение циклов (включая self-cycle и длинные цепочки), priority-ordering, key_files conflict resolution. ≥15 тестов",
+      "status": "pending",
+      "dependencies": [
+        "TASK-013"
+      ],
+      "key_files": [
+        "tests/unit/test_scheduler.py"
+      ],
+      "acceptance_criteria": [
+        "≥15 тестов",
+        "Тесты на цикл A→B→C→A — возвращает [[A,B,C]]",
+        "Тест на priority: critical задача выдаётся раньше medium",
+        "Тест на key_files conflict: две задачи с file 'x.py' не выдаются параллельно",
+        "Coverage scheduler.py ≥ 95%"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_scheduler.py -v",
+        "coverage run -m pytest tests/unit/test_scheduler.py && coverage report --include='whilly/core/scheduler.py'"
+      ],
+      "prd_requirement": "SC-4, NFR-2"
+    },
+    {
+      "id": "TASK-015",
+      "phase": "Day 3 — DAG scheduler",
+      "category": "functional",
+      "priority": "high",
+      "description": "Создать CLI команду whilly plan show <plan_id>: рисует ASCII-граф зависимостей (через rich или asciigraph), статусы подсвечены цветом (PENDING=серый, IN_PROGRESS=жёлтый, DONE=зелёный, FAILED=красный). Цикл → выводит сообщение с указанием цепочки и exit code 1",
+      "status": "pending",
+      "dependencies": [
+        "TASK-013",
+        "TASK-010"
+      ],
+      "key_files": [
+        "whilly/cli/plan.py"
+      ],
+      "acceptance_criteria": [
+        "whilly plan show <id> печатает ASCII-граф",
+        "Цвета через rich",
+        "Цикл → exit code 1 + сообщение 'Cycle detected: A → B → C → A'",
+        "snapshot test"
+      ],
+      "test_steps": [
+        "whilly plan show <plan_id>",
+        "pytest tests/integration/test_plan_show.py"
+      ],
+      "prd_requirement": "FR-3.2, SC-4"
+    },
+    {
+      "id": "TASK-016",
+      "phase": "Day 3 Integration",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase 3 Integration Test: импорт плана с циклом отвергается; импорт корректного плана + plan show рисует граф; в выдаче next_ready соблюдается приоритет",
+      "status": "pending",
+      "dependencies": [
+        "TASK-014",
+        "TASK-015"
+      ],
+      "key_files": [
+        "tests/integration/test_phase3_dag.py"
+      ],
+      "acceptance_criteria": [
+        "Тест на отказ при цикле",
+        "Тест на корректную визуализацию",
+        "Тест на priority в next_ready"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_phase3_dag.py -v"
+      ],
+      "prd_requirement": "FR-3.1, FR-3.2"
+    },
+    {
+      "id": "TASK-017",
+      "phase": "Day 4 — Local worker",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/adapters/runner/claude_cli.py: subprocess-обёртка над claude binary. Функция run_task(task: Task, prompt: str, model: str) -> AgentResult. Парсинг JSON output, обнаружение <promise>COMPLETE</promise>. AgentResult — frozen dataclass в whilly/adapters/runner/result_parser.py (pure)",
+      "status": "pending",
+      "dependencies": [
+        "TASK-009"
+      ],
+      "key_files": [
+        "whilly/adapters/runner/__init__.py",
+        "whilly/adapters/runner/claude_cli.py",
+        "whilly/adapters/runner/result_parser.py"
+      ],
+      "acceptance_criteria": [
+        "run_task запускает claude через asyncio.create_subprocess_exec",
+        "result_parser.parse_output — pure функция (тестируется без subprocess)",
+        "Обнаружение <promise>COMPLETE</promise> отмечает is_complete=True",
+        "Exponential backoff на API errors (5/10/20/40/60s)",
+        "CLAUDE_BIN env var override"
+      ],
+      "test_steps": [
+        "python3 -m mypy whilly/adapters/runner/",
+        "pytest tests/unit/test_result_parser.py"
+      ],
+      "prd_requirement": "TC-7, FR-1.6"
+    },
+    {
+      "id": "TASK-018",
+      "phase": "Day 4 — Local worker",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/core/prompts.py: pure функция build_task_prompt(task: Task, plan: Plan) -> str. Без cwd-magic, без чтения файлов. Промпт упоминает task.id, acceptance_criteria, test_steps, требует <promise>COMPLETE</promise>",
+      "status": "pending",
+      "dependencies": [
+        "TASK-004"
+      ],
+      "key_files": [
+        "whilly/core/prompts.py"
+      ],
+      "acceptance_criteria": [
+        "build_task_prompt — pure (deterministic, no I/O)",
+        "Включает task.id, description, acceptance_criteria, test_steps",
+        "Требует <promise>COMPLETE</promise> на финише",
+        "mypy --strict проходит"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_prompts.py",
+        "python3 -m mypy --strict whilly/core/prompts.py"
+      ],
+      "prd_requirement": "Module structure, FR-1.6"
+    },
+    {
+      "id": "TASK-019",
+      "phase": "Day 4 — Local worker",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/worker/main.py: async entry point. Цикл — claim_task → run_task → complete_task | fail_task. Heartbeat в БД каждые 30с. Команда whilly run встроенно запускает один local worker",
+      "status": "pending",
+      "dependencies": [
+        "TASK-017",
+        "TASK-018",
+        "TASK-013"
+      ],
+      "key_files": [
+        "whilly/worker/__init__.py",
+        "whilly/worker/main.py",
+        "whilly/worker/local.py",
+        "whilly/cli/run.py"
+      ],
+      "acceptance_criteria": [
+        "whilly run запускает local worker и обрабатывает задачи плана до конца",
+        "Heartbeat пишется в workers.last_heartbeat каждые 30с",
+        "При SIGTERM worker корректно отдаёт текущую задачу обратно в pool (RELEASE)"
+      ],
+      "test_steps": [
+        "whilly run --plan <id>",
+        "pytest tests/integration/test_local_worker.py"
+      ],
+      "prd_requirement": "FR-1.6, NFR-1"
+    },
+    {
+      "id": "TASK-020",
+      "phase": "Day 4 Integration",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase 4 Integration Test: e2e на синтетическом плане из 3 задач (mock Claude CLI через CLAUDE_BIN=tests/fixtures/fake_claude.sh). Все задачи переходят в DONE, events заполнены, exit code 0",
+      "status": "pending",
+      "dependencies": [
+        "TASK-019"
+      ],
+      "key_files": [
+        "tests/integration/test_phase4_e2e.py",
+        "tests/fixtures/fake_claude.sh"
+      ],
+      "acceptance_criteria": [
+        "fake_claude.sh — детерминированный stub возвращающий <promise>COMPLETE</promise>",
+        "3 задачи переходят PENDING → DONE",
+        "events содержит по 3 записи на задачу"
+      ],
+      "test_steps": [
+        "chmod +x tests/fixtures/fake_claude.sh",
+        "pytest tests/integration/test_phase4_e2e.py -v"
+      ],
+      "prd_requirement": "Day 4 deliverable"
+    },
+    {
+      "id": "TASK-021",
+      "phase": "Day 5 — Worker protocol",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/adapters/transport/server.py: FastAPI приложение с endpoints POST /workers/register (выдаёт worker_id, проверяет bootstrap token), POST /tasks/claim (long-polling до 30с), POST /tasks/{id}/complete, POST /tasks/{id}/fail, POST /workers/{id}/heartbeat. Аутентификация через Bearer token (WHILLY_WORKER_TOKEN)",
+      "status": "pending",
+      "dependencies": [
+        "TASK-009"
+      ],
+      "key_files": [
+        "whilly/adapters/transport/__init__.py",
+        "whilly/adapters/transport/server.py",
+        "whilly/adapters/transport/auth.py",
+        "whilly/adapters/transport/schemas.py"
+      ],
+      "acceptance_criteria": [
+        "FastAPI app с 5 endpoints",
+        "Bearer token проверяется на всех endpoints кроме /health",
+        "/tasks/claim — long-polling, держит соединение до 30с если нет задач",
+        "Все request/response schemas — pydantic models",
+        "OpenAPI docs доступен на /docs"
+      ],
+      "test_steps": [
+        "uvicorn whilly.adapters.transport.server:app --port 8000 &",
+        "curl http://localhost:8000/docs",
+        "pytest tests/integration/test_transport_server.py"
+      ],
+      "prd_requirement": "FR-1.1, FR-1.2, TC-6"
+    },
+    {
+      "id": "TASK-022",
+      "phase": "Day 5 — Worker protocol",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/adapters/transport/client.py: httpx-based async client для воркера. RemoteWorkerClient.register/claim/complete/fail/heartbeat. Retry с экспоненциальным backoff на network errors. Команда whilly-worker --connect <url> --token <t>",
+      "status": "pending",
+      "dependencies": [
+        "TASK-021",
+        "TASK-019"
+      ],
+      "key_files": [
+        "whilly/adapters/transport/client.py",
+        "whilly/worker/remote.py",
+        "whilly/cli/worker.py"
+      ],
+      "acceptance_criteria": [
+        "whilly-worker --connect http://control:8000 --token X начинает брать задачи",
+        "На network error — retry с backoff (1s, 2s, 4s, 8s)",
+        "Heartbeat каждые 30с",
+        "Graceful shutdown на SIGTERM (release current task)"
+      ],
+      "test_steps": [
+        "whilly-worker --connect http://localhost:8000 --token test --once",
+        "pytest tests/integration/test_remote_worker.py"
+      ],
+      "prd_requirement": "FR-1.1, FR-1.5, TC-6"
+    },
+    {
+      "id": "TASK-023",
+      "phase": "Day 5 — Worker protocol",
+      "category": "infra",
+      "priority": "high",
+      "description": "Создать отдельный пакет whilly-worker через pyproject.toml (либо отдельный whilly_worker_pkg/ либо optional install): pip install whilly-worker должен дать только worker-зависимости (httpx, asyncio) без FastAPI/asyncpg. Entry point whilly-worker = whilly.worker.remote:main",
+      "status": "pending",
+      "dependencies": [
+        "TASK-022"
+      ],
+      "key_files": [
+        "pyproject.toml",
+        "whilly_worker/pyproject.toml",
+        "whilly_worker/README.md"
+      ],
+      "acceptance_criteria": [
+        "pip install whilly-worker (или extras [worker]) ставит минимум зависимостей",
+        "whilly-worker entry point работает",
+        "README с примером использования"
+      ],
+      "test_steps": [
+        "pip install -e '.[worker]' || pip install -e ./whilly_worker",
+        "which whilly-worker"
+      ],
+      "prd_requirement": "FR-1.5, SC-3"
+    },
+    {
+      "id": "TASK-024",
+      "phase": "Day 5 Integration",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase 5 Integration Test: SC-3 demo — поднять control plane на :8000, отдельный процесс whilly-worker подключается с Bearer token и выполняет задачу. Скрипт docs/demo-remote-worker.sh для воспроизведения",
+      "status": "pending",
+      "dependencies": [
+        "TASK-023"
+      ],
+      "key_files": [
+        "tests/integration/test_phase5_remote.py",
+        "docs/demo-remote-worker.sh"
+      ],
+      "acceptance_criteria": [
+        "Тест поднимает control plane + worker в разных asyncio задачах",
+        "Worker регистрируется, claims задачу, completes её",
+        "docs/demo-remote-worker.sh — рабочий скрипт для воспроизведения на second VM"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_phase5_remote.py -v",
+        "bash docs/demo-remote-worker.sh"
+      ],
+      "prd_requirement": "SC-3"
+    },
+    {
+      "id": "TASK-025",
+      "phase": "Day 6 — Fault tolerance + dashboard",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Реализовать background задачу в control plane: каждые 60с вызывает release_stale_tasks (visibility_timeout default 15 минут). Также detection незалогиненных воркеров: если last_heartbeat > 2min — пометить worker offline, освободить его задачи",
+      "status": "pending",
+      "dependencies": [
+        "TASK-021"
+      ],
+      "key_files": [
+        "whilly/adapters/transport/server.py",
+        "whilly/adapters/db/repository.py"
+      ],
+      "acceptance_criteria": [
+        "FastAPI lifespan регистрирует periodic task через asyncio.TaskGroup",
+        "Stale tasks (claimed_at < NOW() - 15min) возвращаются в PENDING",
+        "Offline workers (last_heartbeat > 2min) → их IN_PROGRESS задачи освобождаются",
+        "Каждый release пишется в events с reason='visibility_timeout'"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_visibility_timeout.py"
+      ],
+      "prd_requirement": "FR-1.4, NFR-1, SC-2"
+    },
+    {
+      "id": "TASK-026",
+      "phase": "Day 6 — Fault tolerance + dashboard",
+      "category": "test",
+      "priority": "critical",
+      "description": "Написать tests/integration/test_worker_kill.py: запустить worker, дать ему claim задачу, kill -9, через ≤30с другой worker должен забрать ту же задачу. Это SC-2",
+      "status": "pending",
+      "dependencies": [
+        "TASK-025"
+      ],
+      "key_files": [
+        "tests/integration/test_worker_kill.py"
+      ],
+      "acceptance_criteria": [
+        "Тест убивает subprocess воркера через os.kill(SIGKILL)",
+        "Задача автоматически re-claimed другим воркером в течение 30с (с visibility_timeout=10s в тесте)",
+        "events содержит запись release с reason='visibility_timeout'",
+        "SC-2 demonstrated"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_worker_kill.py -v"
+      ],
+      "prd_requirement": "SC-2, NFR-1"
+    },
+    {
+      "id": "TASK-027",
+      "phase": "Day 6 — Fault tolerance + dashboard",
+      "category": "functional",
+      "priority": "high",
+      "description": "Создать whilly/cli/dashboard.py: Rich Live TUI читает текущее состояние из БД (polling 1с). Показывает таблицу: task_id, status, claimed_by, started_at, priority. Hotkeys: q=quit, r=refresh, p=pause polling. Команда whilly dashboard --plan <id>",
+      "status": "pending",
+      "dependencies": [
+        "TASK-009"
+      ],
+      "key_files": [
+        "whilly/cli/dashboard.py"
+      ],
+      "acceptance_criteria": [
+        "Rich Live с обновлением каждую секунду",
+        "Hotkeys q/r/p работают",
+        "Цвета статусов: PENDING=серый, CLAIMED=голубой, IN_PROGRESS=жёлтый, DONE=зелёный, FAILED=красный",
+        "Reads from DB only (не зависит от in-memory state)"
+      ],
+      "test_steps": [
+        "whilly dashboard --plan <id> &",
+        "pytest tests/integration/test_dashboard_db_read.py"
+      ],
+      "prd_requirement": "NFR-3, Module structure"
+    },
+    {
+      "id": "TASK-028",
+      "phase": "Day 6 Integration",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase 6 Integration Test: full e2e с 2 worker'ами (один из них убит mid-task), dashboard показывает корректный статус, все 5 задач завершены через выживший worker",
+      "status": "pending",
+      "dependencies": [
+        "TASK-026",
+        "TASK-027"
+      ],
+      "key_files": [
+        "tests/integration/test_phase6_resilience.py"
+      ],
+      "acceptance_criteria": [
+        "5 задач, 2 worker'а, один убит",
+        "Все задачи финально DONE",
+        "Dashboard корректно отображает статус в любой момент"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_phase6_resilience.py -v"
+      ],
+      "prd_requirement": "SC-2, NFR-1, NFR-3"
+    },
+    {
+      "id": "TASK-029",
+      "phase": "Day 7 — Polish",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Настроить import-linter contract в pyproject.toml: whilly.core НЕ может импортировать asyncpg, httpx, subprocess, fastapi, os.chdir. Запустить lint-imports — должен пройти. Это SC-6",
+      "status": "pending",
+      "dependencies": [
+        "TASK-028"
+      ],
+      "key_files": [
+        "pyproject.toml",
+        ".importlinter"
+      ],
+      "acceptance_criteria": [
+        "import-linter forbidden contract: whilly.core ↛ {asyncpg, httpx, subprocess, fastapi}",
+        "lint-imports завершается с exit 0",
+        "CI шаг lint-imports добавлен"
+      ],
+      "test_steps": [
+        "lint-imports",
+        "python3 -m importlinter.cli lint"
+      ],
+      "prd_requirement": "SC-6, TC-8"
+    },
+    {
+      "id": "TASK-030",
+      "phase": "Day 7 — Polish",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Добиться coverage ≥ 80% для whilly/core/. Запустить coverage report --include='whilly/core/*'. Если < 80% — добавить тесты на непокрытые branches. Это SC-5",
+      "status": "pending",
+      "dependencies": [
+        "TASK-028"
+      ],
+      "key_files": [
+        ".coveragerc",
+        "tests/unit/"
+      ],
+      "acceptance_criteria": [
+        "coverage report --include='whilly/core/*' показывает ≥ 80%",
+        ".coveragerc настроен исключать __init__.py",
+        "Все непокрытые ветки либо протестированы, либо помечены # pragma: no cover с обоснованием"
+      ],
+      "test_steps": [
+        "coverage run -m pytest tests/unit/ tests/integration/",
+        "coverage report --include='whilly/core/*' --fail-under=80"
+      ],
+      "prd_requirement": "SC-5, NFR-2"
+    },
+    {
+      "id": "TASK-031",
+      "phase": "Day 7 — Polish",
+      "category": "infra",
+      "priority": "high",
+      "description": "mypy --strict whilly/core/ должен проходить без ошибок. Добавить CI шаг. Зафиксировать в pyproject.toml [[tool.mypy.overrides]] для whilly.core с strict = true",
+      "status": "pending",
+      "dependencies": [
+        "TASK-028"
+      ],
+      "key_files": [
+        "pyproject.toml"
+      ],
+      "acceptance_criteria": [
+        "mypy --strict whilly/core/ проходит",
+        "В pyproject.toml явно strict для whilly.core.*",
+        "Документация в README о mypy strict для core"
+      ],
+      "test_steps": [
+        "python3 -m mypy --strict whilly/core/"
+      ],
+      "prd_requirement": "NFR-4"
+    },
+    {
+      "id": "TASK-032",
+      "phase": "Day 7 — Polish",
+      "category": "docs",
+      "priority": "high",
+      "description": "Обновить документацию: README.md (новый quickstart для v4.0), docs/Whilly-v4-Architecture.md (Hexagonal layout, диаграмма), docs/Whilly-v4-Migration-from-v3.md (Appendix B PRD), docs/Whilly-v4-Worker-Protocol.md (HTTP API spec), CHANGELOG.md с breaking changes",
+      "status": "pending",
+      "dependencies": [
+        "TASK-029",
+        "TASK-030",
+        "TASK-031"
+      ],
+      "key_files": [
+        "README.md",
+        "docs/Whilly-v4-Architecture.md",
+        "docs/Whilly-v4-Migration-from-v3.md",
+        "docs/Whilly-v4-Worker-Protocol.md",
+        "CHANGELOG.md"
+      ],
+      "acceptance_criteria": [
+        "README.md покрывает quickstart на 1 экран",
+        "Architecture doc описывает Hexagonal layout",
+        "Migration doc явно говорит 'no backwards compat, re-import tasks.json'",
+        "CHANGELOG секция [4.0.0] с breaking changes"
+      ],
+      "test_steps": [
+        "test -f docs/Whilly-v4-Architecture.md",
+        "test -f docs/Whilly-v4-Migration-from-v3.md",
+        "test -f docs/Whilly-v4-Worker-Protocol.md",
+        "grep -q '## \\[4.0.0\\]' CHANGELOG.md"
+      ],
+      "prd_requirement": "Appendix B, R-2, R-6"
+    },
+    {
+      "id": "TASK-033",
+      "phase": "Day 7 — Polish",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Bump version в whilly/__init__.py и pyproject.toml до 4.0.0. Создать git тег v4.0.0. Обновить .github/workflows/ci.yml с шагами lint-imports, mypy --strict core, coverage --fail-under=80",
+      "status": "pending",
+      "dependencies": [
+        "TASK-032"
+      ],
+      "key_files": [
+        "whilly/__init__.py",
+        "pyproject.toml",
+        ".github/workflows/ci.yml"
+      ],
+      "acceptance_criteria": [
+        "whilly/__init__.py: __version__ = '4.0.0'",
+        "pyproject.toml: version = '4.0.0'",
+        "CI workflow содержит шаги: ruff, mypy core, lint-imports, pytest, coverage --fail-under=80",
+        "Версии в init и pyproject совпадают"
+      ],
+      "test_steps": [
+        "grep \"__version__ = '4.0.0'\" whilly/__init__.py",
+        "grep 'version = \"4.0.0\"' pyproject.toml",
+        "python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'"
+      ],
+      "prd_requirement": "Day 7 deliverable"
+    },
+    {
+      "id": "TASK-034",
+      "phase": "Day 7 Integration",
+      "category": "test",
+      "priority": "critical",
+      "description": "Final smoke + Success Criteria verification: запустить полный набор integration тестов, проверить все 6 SC. Создать docs/v4.0-release-checklist.md с галочками SC-1..SC-6 и ссылками на тесты/демо",
+      "status": "pending",
+      "dependencies": [
+        "TASK-033"
+      ],
+      "key_files": [
+        "docs/v4.0-release-checklist.md",
+        "tests/integration/test_release_smoke.py"
+      ],
+      "acceptance_criteria": [
+        "SC-1: test_concurrent_claims зелёный",
+        "SC-2: test_worker_kill зелёный",
+        "SC-3: demo-remote-worker.sh работает",
+        "SC-4: plan show с циклом → exit 1",
+        "SC-5: coverage core ≥ 80%",
+        "SC-6: lint-imports проходит",
+        "Все 6 галочек в release-checklist.md проставлены"
+      ],
+      "test_steps": [
+        "pytest tests/integration/ -v",
+        "lint-imports",
+        "coverage report --include='whilly/core/*' --fail-under=80",
+        "bash docs/demo-remote-worker.sh",
+        "python3 -m mypy --strict whilly/core/"
+      ],
+      "prd_requirement": "SC-1, SC-2, SC-3, SC-4, SC-5, SC-6"
+    }
+  ]
+}
