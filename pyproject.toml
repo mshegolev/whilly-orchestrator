@@ -26,6 +26,9 @@ dependencies = [
     "httpx>=0.27",
     "uvicorn[standard]>=0.27",
     "alembic>=1.13",
+    # Alembic ships SQLAlchemy as a dep; the [asyncio] extra adds `greenlet`,
+    # which env.py needs to drive asyncpg from a sync Alembic context (TASK-007).
+    "sqlalchemy[asyncio]>=2.0",
     "rich>=13.0.0",
     "typer>=0.12",
     "pydantic>=2.6",
