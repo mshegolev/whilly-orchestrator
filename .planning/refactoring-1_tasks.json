@@ -387,7 +387,7 @@
       "category": "test",
       "priority": "critical",
       "description": "Написать tests/unit/test_scheduler.py: топологическая сортировка, обнаружение циклов (включая self-cycle и длинные цепочки), priority-ordering, key_files conflict resolution. ≥15 тестов",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-013"
       ],

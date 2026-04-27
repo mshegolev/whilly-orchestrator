@@ -1,4 +1,4 @@
-"""Postgres-backed task repository for Whilly v4.0 (PRD FR-1.3, FR-2.1, FR-2.3, FR-2.4).
+"""Postgres-backed task repository for Whilly v4.0 (PRD FR-1.3, FR-1.4, FR-2.1, FR-2.3, FR-2.4).
 
 This module owns the SQL that mutates the ``tasks`` table and writes audit
 rows to ``events``. It is the single I/O-side counterpart to the pure
@@ -6,13 +6,13 @@ state-machine in :mod:`whilly.core.state_machine`: callers operating against
 Postgres go through :class:`TaskRepository` instead of issuing SQL directly,
 so the at-least-once / atomicity invariants live in one place.
 
-Scope of TASK-009b / TASK-009c
-------------------------------
+Scope of TASK-009b / TASK-009c / TASK-009d
+------------------------------------------
 TASK-009b implemented :meth:`TaskRepository.claim_task` — atomic
 ``PENDING`` → ``CLAIMED`` transition via ``SELECT ... FOR UPDATE SKIP LOCKED``
 plus a CLAIM event in one transaction.
 
-TASK-009c (this commit) adds :meth:`TaskRepository.complete_task` and
+TASK-009c added :meth:`TaskRepository.complete_task` and
 :meth:`TaskRepository.fail_task` with optimistic locking on the
 ``tasks.version`` counter (PRD FR-2.4). Both methods filter the UPDATE by
 ``WHERE id = $1 AND version = $2 AND status IN (...)`` — no row locks are
@@ -21,8 +21,16 @@ counter: one wins, the other gets 0 rows affected and we surface a
 :class:`VersionConflictError` after a follow-up SELECT to differentiate
 "someone moved past me" from "task gone" (FK cascade) and "wrong status".
 
-``release_stale_tasks`` (TASK-009d) extends the same class and re-uses the
-helpers defined here.
+TASK-009d (this commit) adds :meth:`TaskRepository.release_stale_tasks` —
+the visibility-timeout sweep (PRD FR-1.4). It scans for ``CLAIMED`` or
+``IN_PROGRESS`` rows whose ``claimed_at`` predates ``NOW() - interval``,
+flips them back to ``PENDING`` (clearing ``claimed_by`` / ``claimed_at``,
+incrementing ``version``), and inserts a ``RELEASE`` event per row with
+``payload = {"reason": "visibility_timeout", "version": <new>}``. All
+mutations happen in a single ``WITH released AS (UPDATE ... RETURNING ...)
+INSERT INTO events ...`` round-trip so the audit log can never disagree
+with the tasks table — same atomicity contract as the per-row methods,
+batched.
 
 Why ``FOR UPDATE SKIP LOCKED`` for ``claim_task`` but **not** for
 complete/fail?
@@ -191,6 +199,46 @@ _PROBE_TASK_SQL: str = """
 SELECT status, version
 FROM tasks
 WHERE id = $1
+"""
+
+
+# Visibility-timeout sweep (PRD FR-1.4, TASK-009d). One statement does the
+# whole job: the CTE flips every CLAIMED / IN_PROGRESS row whose claim is
+# older than ``NOW() - $1 seconds`` back to PENDING (clearing claimed_by /
+# claimed_at, incrementing version), RETURNING the released ids+versions.
+# The outer INSERT then writes one RELEASE event per released row — same
+# transaction, same statement, so the audit log can never end up out of sync
+# with the tasks table even under network failure between the two writes.
+#
+# Why not ``FOR UPDATE`` on the inner UPDATE? UPDATE in Postgres already
+# acquires the row lock it needs, and the status filter naturally excludes
+# rows a worker has just flipped to DONE / FAILED via the optimistic-locking
+# path (TASK-009c). A worker's ``complete_task`` UPDATE and our sweep can't
+# both succeed against the same row: whichever commits first wins, the other
+# matches zero rows. This makes the sweep safe to run concurrently with
+# active workers without serialising them behind a FOR UPDATE scan.
+#
+# ``$1::int`` is the visibility timeout in seconds; we cast inside SQL so
+# asyncpg can pass a plain Python int without needing an interval converter.
+# ``make_interval(secs => ...)`` is preferred over string concatenation here
+# (no SQL-injection surface, no locale-dependent parsing).
+_RELEASE_STALE_SQL: str = """
+WITH released AS (
+    UPDATE tasks
+    SET status = 'PENDING',
+        claimed_by = NULL,
+        claimed_at = NULL,
+        version = tasks.version + 1,
+        updated_at = NOW()
+    WHERE status IN ('CLAIMED', 'IN_PROGRESS')
+      AND claimed_at IS NOT NULL
+      AND claimed_at < NOW() - make_interval(secs => $1::int)
+    RETURNING id, version
+)
+INSERT INTO events (task_id, event_type, payload)
+SELECT id, $2, jsonb_build_object('reason', $3::text, 'version', version)
+FROM released
+RETURNING task_id
 """
 
 
@@ -443,6 +491,76 @@ class TaskRepository:
                     reason,
                 )
                 return _row_to_task(row)
+
+    async def release_stale_tasks(self, visibility_timeout_seconds: int) -> int:
+        """Return ``CLAIMED`` / ``IN_PROGRESS`` tasks whose claim has aged out.
+
+        Implements the visibility-timeout sweep (PRD FR-1.4): any row whose
+        ``claimed_at`` predates ``NOW() - visibility_timeout_seconds`` is
+        flipped back to ``PENDING`` with ``claimed_by`` / ``claimed_at``
+        cleared, ``version`` incremented, and a ``RELEASE`` event row
+        appended carrying ``payload = {"reason": "visibility_timeout",
+        "version": <new>}``. Returns the number of rows released so the
+        background-task loop in TASK-025 can log / surface metrics.
+
+        Single round-trip: the UPDATE and the audit-event INSERT run as one
+        SQL statement (CTE + ``INSERT ... SELECT FROM released``). That's
+        important because the sweep operates on a *batch* of rows — looping
+        in Python would either need a transaction-wide lock (slow) or expose
+        a window where some rows are PENDING again but their RELEASE event
+        hasn't been written yet (audit drift).
+
+        Concurrency with active workers (PRD FR-2.4)
+        --------------------------------------------
+        The sweep does *not* take row locks (no ``FOR UPDATE``). It races
+        against worker mutations through the optimistic-locking lattice:
+
+        * If a worker's ``complete_task`` / ``fail_task`` commits first, the
+          row is no longer ``CLAIMED`` / ``IN_PROGRESS`` and our status
+          filter excludes it — the sweep silently skips it. This is the
+          desired outcome: the worker finished in time, no release needed.
+        * If the sweep commits first, the worker's UPDATE matches zero rows
+          (status flipped from ``IN_PROGRESS`` to ``PENDING``, version
+          advanced) and surfaces :class:`VersionConflictError` —
+          differentiated as "wrong status" via the probe, so the worker can
+          drop the result and re-claim cleanly.
+
+        Either way exactly one of the two writers wins; there is no path
+        where both succeed and produce a duplicate / inconsistent state.
+
+        Args:
+            visibility_timeout_seconds: Age threshold in seconds. Rows with
+                ``claimed_at < NOW() - this`` are released. Must be a
+                non-negative integer; ``0`` releases every active claim
+                (useful in tests with controlled clocks).
+
+        Returns:
+            Number of rows released (and corresponding RELEASE events
+            written). ``0`` is the normal "nothing stale" outcome, not an
+            error.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    _RELEASE_STALE_SQL,
+                    visibility_timeout_seconds,
+                    Transition.RELEASE.value,
+                    "visibility_timeout",
+                )
+                released = len(rows)
+                if released:
+                    logger.info(
+                        "release_stale_tasks: visibility_timeout=%ds released %d task(s): %s",
+                        visibility_timeout_seconds,
+                        released,
+                        [row["task_id"] for row in rows],
+                    )
+                else:
+                    logger.debug(
+                        "release_stale_tasks: visibility_timeout=%ds — no stale claims",
+                        visibility_timeout_seconds,
+                    )
+                return released
 
     async def _raise_version_conflict(
         self,
