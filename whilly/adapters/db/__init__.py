@@ -9,7 +9,7 @@ can read the contract without parsing migration scripts.
 from pathlib import Path
 
 from whilly.adapters.db.pool import close_pool, create_pool
-from whilly.adapters.db.repository import TaskRepository
+from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 
 # Anchor used by :mod:`whilly.adapters.db.migrations.env` to find the Alembic
 # script directory regardless of the caller's working directory. Exported here
@@ -18,4 +18,11 @@ from whilly.adapters.db.repository import TaskRepository
 MIGRATIONS_DIR: Path = Path(__file__).parent / "migrations"
 SCHEMA_SQL_PATH: Path = Path(__file__).parent / "schema.sql"
 
-__all__ = ["MIGRATIONS_DIR", "SCHEMA_SQL_PATH", "TaskRepository", "close_pool", "create_pool"]
+__all__ = [
+    "MIGRATIONS_DIR",
+    "SCHEMA_SQL_PATH",
+    "TaskRepository",
+    "VersionConflictError",
+    "close_pool",
+    "create_pool",
+]
