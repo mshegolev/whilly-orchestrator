@@ -1,0 +1,22 @@
+[importlinter]
+# Hexagonal architecture guard for Whilly v4.0 (PRD SC-6 / TC-8).
+# whilly.core is the pure domain layer — no I/O, no networking, no subprocess.
+# All side effects live in whilly.adapters.*.
+root_packages =
+    whilly
+
+[importlinter:contract:core-purity]
+name = whilly.core must not import I/O or transport modules
+type = forbidden
+source_modules =
+    whilly.core
+forbidden_modules =
+    asyncpg
+    httpx
+    subprocess
+    fastapi
+    uvicorn
+    alembic
+ignore_imports =
+    # whilly.core may use stdlib `os` for os.path utilities, but tests assert
+    # no os.chdir / os.getcwd call sites via grep in CI (see TASK-029).

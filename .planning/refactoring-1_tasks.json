@@ -59,7 +59,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Создать pyproject.toml для v4.0: Python 3.12+, dependencies (asyncpg, fastapi, httpx, uvicorn, alembic, rich, typer, pydantic), dev-deps (pytest, pytest-asyncio, testcontainers, ruff, mypy, import-linter, coverage). Настроить ruff (line-length 120, target py312), mypy --strict для whilly/core/, import-linter для проверки SC-6",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-001"
       ],

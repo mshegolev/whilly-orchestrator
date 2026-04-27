@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "whilly-orchestrator"
 version = "3.3.0"
-description = "Whilly Wiggum loop — Ralph's smarter brother technique for continuous AI agent loops: TRIZ analyzer, Decision Gate, PRD wizard, Rich TUI dashboard, tmux/git-worktree parallelism, self-healing system"
+description = "Whilly v4.0 — distributed orchestrator with Postgres-backed task queue, FastAPI control plane, and remote workers"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [{ name = "Mikhail Shchegolev", email = "mshegolev@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["whilly", "whilly-wiggum", "llm", "orchestrator", "agent-loop", "claude", "ai-agents"]
@@ -15,24 +15,35 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+    # v4.0 control plane + scheduler
+    "asyncpg>=0.29",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "uvicorn[standard]>=0.27",
+    "alembic>=1.13",
     "rich>=13.0.0",
-    "psutil>=5.9.0",           # System resource monitoring
-    "platformdirs>=4.0",       # OS-native user config / data directories
-    "tomli>=2.0; python_version<'3.11'",  # TOML parsing on 3.10 (stdlib tomllib on 3.11+)
-    "keyring>=24.0",           # OS secret store (macOS Keychain / libsecret / Windows Credential Manager)
+    "typer>=0.12",
+    "pydantic>=2.6",
+    # legacy v3.x runtime deps (kept until cli.py is removed in a later task)
+    "psutil>=5.9.0",
+    "platformdirs>=4.0",
+    "keyring>=24.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "testcontainers>=4.0",
     "ruff==0.11.5",
     "mypy>=1.8",
+    "import-linter>=2.0",
+    "coverage[toml]>=7.4",
 ]
 
 [project.urls]
@@ -54,8 +65,44 @@ whilly = ["py.typed"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+
+# Strict mypy for the pure domain layer (whilly.core.*) — see PRD NFR-4.
+# Replicates the per-module subset of `mypy --strict` so plain `mypy whilly/core/`
+# is strict; global-only flags (warn_redundant_casts, warn_unused_configs)
+# are set in [tool.mypy] above.
+[[tool.mypy.overrides]]
+module = "whilly.core.*"
+disallow_untyped_defs = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_return_any = true
+strict_equality = true
+extra_checks = true
+
+[tool.coverage.run]
+branch = true
+source = ["whilly"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
