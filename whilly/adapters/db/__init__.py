@@ -8,6 +8,8 @@ can read the contract without parsing migration scripts.
 
 from pathlib import Path
 
+from whilly.adapters.db.pool import close_pool, create_pool
+
 # Anchor used by :mod:`whilly.adapters.db.migrations.env` to find the Alembic
 # script directory regardless of the caller's working directory. Exported here
 # (rather than computed inline in env.py) so test fixtures and tooling can
@@ -15,4 +17,4 @@ from pathlib import Path
 MIGRATIONS_DIR: Path = Path(__file__).parent / "migrations"
 SCHEMA_SQL_PATH: Path = Path(__file__).parent / "schema.sql"
 
-__all__ = ["MIGRATIONS_DIR", "SCHEMA_SQL_PATH"]
+__all__ = ["MIGRATIONS_DIR", "SCHEMA_SQL_PATH", "close_pool", "create_pool"]
