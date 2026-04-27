@@ -7,8 +7,10 @@ only :mod:`whilly.core.models` and the standard library, and the
 ``.importlinter`` ``core-purity`` contract (PRD SC-6) keeps it that way.
 
 TASK-013a ships :func:`topological_sort` (Kahn's algorithm with deterministic
-tie-breaking). TASK-013b adds :func:`detect_cycles` (Tarjan's SCC). The final
-piece — :func:`next_ready` (TASK-013c) — is added next.
+tie-breaking). TASK-013b adds :func:`detect_cycles` (Tarjan's SCC). TASK-013c
+rounds out the surface with :func:`next_ready`, the dispatch-time picker the
+local and remote workers (TASK-019, TASK-022) call once per loop iteration to
+ask "what may I claim, considering priority and file-conflict guards?".
 
 Determinism
 -----------
@@ -28,9 +30,20 @@ from __future__ import annotations
 import heapq
 from collections.abc import Iterator
 
-from whilly.core.models import Plan, TaskId
+from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
 
-__all__ = ["CycleError", "detect_cycles", "topological_sort"]
+__all__ = ["CycleError", "detect_cycles", "next_ready", "topological_sort"]
+
+
+# Lower number == higher priority. Mirrors PRD FR-3.4 ranking
+# (critical > high > medium > low). Defined at module scope so the comparator
+# in :func:`next_ready` does not rebuild the table on every call.
+_PRIORITY_RANK: dict[Priority, int] = {
+    Priority.CRITICAL: 0,
+    Priority.HIGH: 1,
+    Priority.MEDIUM: 2,
+    Priority.LOW: 3,
+}
 
 
 class CycleError(ValueError):
@@ -227,3 +240,100 @@ def detect_cycles(plan: Plan) -> list[list[TaskId]]:
 
     cycles.sort()
     return cycles
+
+
+def next_ready(plan: Plan, in_progress: set[TaskId]) -> list[TaskId]:
+    """Return the task ids that are safe to dispatch right now.
+
+    A task is *ready* when all of the following hold:
+
+    * its ``status`` is :attr:`~whilly.core.models.TaskStatus.PENDING`. Tasks
+      that are already ``CLAIMED``/``IN_PROGRESS``/``DONE``/``FAILED``/
+      ``SKIPPED`` are excluded — the dispatcher only ever issues fresh work.
+    * every one of its in-plan ``dependencies`` references a task whose
+      ``status`` is :attr:`~whilly.core.models.TaskStatus.DONE`. A single
+      pending or failed dependency keeps the task off the ready list.
+    * its id is *not* in ``in_progress``. ``in_progress`` is the caller's
+      view of which task ids are currently being worked on — typically the
+      union of ``CLAIMED`` and ``IN_PROGRESS`` rows in the database, but the
+      function is agnostic about how that set is computed (the worker
+      protocol may expand the definition without touching the scheduler).
+    * none of its ``key_files`` overlap with the ``key_files`` of any task
+      already reserved this round — i.e. tasks named in ``in_progress`` *or*
+      a higher-priority ready task already chosen earlier in this same call.
+      This is the file-conflict guard from PRD FR-3.4: two agents may not
+      edit the same file in parallel.
+
+    Cross-plan dependency references and entries of ``in_progress`` whose ids
+    do not appear in ``plan.tasks`` are silently ignored — mirrors
+    :func:`topological_sort` and :func:`detect_cycles`. Stale ids in
+    ``in_progress`` therefore reserve *nothing*; this matches the worker
+    protocol where a heartbeat may name a task that has since been removed
+    from the plan.
+
+    Ordering and tie-breaking
+    -------------------------
+    Candidates are sorted by ``(priority_rank, task.id)`` where
+    ``priority_rank`` follows the PRD FR-3.4 ladder
+    (``critical`` < ``high`` < ``medium`` < ``low``). When two candidates
+    share a priority bucket, the lexicographically smaller ``task.id`` wins —
+    same tie-break Kahn's frontier and Tarjan's DFS use elsewhere in this
+    module so the scheduler speaks one consistent language. The greedy
+    file-conflict filter walks this sorted list once: a higher-priority task
+    always reserves its ``key_files`` first, so a lower-priority task whose
+    files overlap is dropped from this round even though it would have been
+    ready in isolation. It will surface again on the next call once the
+    higher-priority task moves out of ``in_progress``.
+
+    Determinism: two invocations with ``==``-equal ``plan`` and
+    ``in_progress`` produce ``==``-equal output lists, irrespective of dict
+    iteration order or set hash randomisation.
+
+    Pure: no I/O, no globals mutated, no side effects on inputs. ``plan`` is
+    a frozen dataclass and ``in_progress`` is read but never modified.
+
+    Duplicate task entries in ``plan.tasks`` collapse to a single dict entry
+    (last-write-wins, matching :func:`topological_sort`), so the result list
+    never contains the same id twice. Detecting on-disk duplicates is plan-
+    import's responsibility, not the scheduler's.
+    """
+    by_id: dict[TaskId, Task] = {task.id: task for task in plan.tasks}
+    in_plan: set[TaskId] = set(by_id)
+
+    # Files already locked by tasks the caller declares in-flight. Stale ids
+    # that do not exist in the plan are skipped — they cannot reserve files
+    # we do not know about.
+    reserved_files: set[str] = set()
+    for tid in in_progress:
+        task = by_id.get(tid)
+        if task is not None:
+            reserved_files.update(task.key_files)
+
+    # Iterate ``by_id.values()`` rather than ``plan.tasks`` so duplicate ids
+    # (last-write-wins) cannot produce duplicate candidates. dict preserves
+    # insertion order in Python 3.7+, so this is still deterministic.
+    candidates: list[Task] = []
+    for task in by_id.values():
+        if task.id in in_progress:
+            continue
+        if task.status != TaskStatus.PENDING:
+            continue
+        deps_done = all(by_id[dep].status == TaskStatus.DONE for dep in task.dependencies if dep in in_plan)
+        if not deps_done:
+            continue
+        candidates.append(task)
+
+    candidates.sort(key=lambda t: (_PRIORITY_RANK[t.priority], t.id))
+
+    # Greedy admission: walk highest-priority-first, admit a task only when
+    # its key_files do not collide with anything reserved so far. The chosen
+    # task then locks its own files for the rest of this round.
+    ready: list[TaskId] = []
+    for task in candidates:
+        files = set(task.key_files)
+        if files & reserved_files:
+            continue
+        ready.append(task.id)
+        reserved_files |= files
+
+    return ready
