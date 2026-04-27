@@ -1,5 +1,10 @@
 # Whilly Orchestrator
 
+> ⚠️ **v3.x is in maintenance mode.** v4.0 (incompatible, distributed rewrite) is the new development line.
+> The v3.x line is frozen at tag [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final);
+> only critical bugfixes will be backported. New features land in v4.0 — see [`docs/v3-EOL.md`](docs/v3-EOL.md)
+> for migration story and [`docs/PRD-refactoring-1.md`](docs/PRD-refactoring-1.md) for the v4.0 plan.
+
 [![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
