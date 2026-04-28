@@ -1,18 +1,22 @@
-"""``whilly plan`` subcommand surface (PRD FR-2.5, FR-3.1, TASK-010b / TASK-010c).
+"""``whilly plan`` subcommand surface (PRD FR-2.5, FR-3.1, TASK-010b / TASK-010c / TASK-015).
 
-Exposes the two halves of the plan-IO pair:
+Exposes the three halves of the plan-IO + visualisation surface:
 
 * ``whilly plan import <plan_file>`` (TASK-010b) — read a v4 plan JSON,
   reject cycles, and persist the plan + tasks to Postgres in a single
   transaction.
-* ``whilly plan export <plan_id>`` (TASK-010c, this commit) — fetch plan
-  + tasks from Postgres and emit canonical v4 JSON to stdout. Designed
-  to round-trip with ``import``: ``import → export → import`` is a no-op
+* ``whilly plan export <plan_id>`` (TASK-010c) — fetch plan + tasks
+  from Postgres and emit canonical v4 JSON to stdout. Designed to
+  round-trip with ``import``: ``import → export → import`` is a no-op
   because the export uses :func:`~whilly.adapters.filesystem.plan_io.serialize_plan`,
   which emits exactly the canonical fields :func:`parse_plan` consumes.
-
-``whilly plan show`` lands in TASK-015 and registers another subparser on
-the same :class:`argparse.ArgumentParser` built here.
+* ``whilly plan show <plan_id>`` (TASK-015, this commit) — fetch plan +
+  tasks from Postgres and render an ASCII dependency graph with colored
+  status badges to stdout. Cycles surface as ``Cycle detected: A → B →
+  C → A`` and exit ``1``. The renderer is a pure function
+  (:func:`render_plan_graph`) so a snapshot unit test can pin the layout
+  without booting Postgres; the CLI handler is the thin shell that
+  composes the SELECT path (shared with ``export``) with the renderer.
 
 Layering and side-effect surface
 --------------------------------
@@ -84,6 +88,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import json
 import logging
 import os
@@ -91,13 +96,14 @@ import sys
 from collections.abc import Iterable, Sequence
 
 import asyncpg
+from rich.console import Console
 
 from whilly.adapters.db import close_pool, create_pool
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
 from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
 
-__all__ = ["build_plan_parser", "run_plan_command"]
+__all__ = ["build_plan_parser", "render_plan_graph", "run_plan_command"]
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +230,26 @@ def build_plan_parser() -> argparse.ArgumentParser:
         "plan_id",
         help="Plan id to export (matches the 'plan_id' field in the original JSON).",
     )
+
+    # ── plan show ────────────────────────────────────────────────────────
+    # Visualisation counterpart to ``export``: same SELECT path, different
+    # output. ``--no-color`` is exposed so CI / pipe-to-file callers can
+    # request plain ASCII; the default auto-detects via
+    # :attr:`sys.stdout.isatty`. See :func:`render_plan_graph` for the
+    # layout contract that the snapshot test pins down.
+    p_show = sub.add_parser(
+        "show",
+        help="Print an ASCII dependency graph of a plan from Postgres (TASK-015).",
+    )
+    p_show.add_argument(
+        "plan_id",
+        help="Plan id to show (matches the 'plan_id' field in the original JSON).",
+    )
+    p_show.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Force plain ASCII output (default: auto-detect via isatty).",
+    )
     return parser
 
 
@@ -240,6 +266,8 @@ def run_plan_command(argv: Sequence[str]) -> int:
         return _run_import(args.plan_file)
     if args.action == "export":
         return _run_export(args.plan_id)
+    if args.action == "show":
+        return _run_show(args.plan_id, no_color=bool(args.no_color))
     # argparse's ``required=True`` already surfaces a 2-exit on missing
     # action; this branch is defensive for future subcommands added without
     # an explicit handler here.
@@ -556,3 +584,336 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         prd_requirement=row["prd_requirement"],
         version=row["version"],
     )
+
+
+# ── plan show ────────────────────────────────────────────────────────────
+#
+# Status → Rich color mapping. Lifted out of the renderer so a future
+# dashboard (TASK-027) can reuse the same palette without re-deriving it
+# from the AC text. The PRD-mandated colors are PENDING=grey,
+# IN_PROGRESS=yellow, DONE=green, FAILED=red. CLAIMED gets cyan to
+# distinguish "owned but not yet started" from PENDING (helpful when a
+# claim is wedged); SKIPPED is dim because it's a non-error terminal
+# state that shouldn't draw the eye like FAILED.
+_STATUS_COLOR: dict[TaskStatus, str] = {
+    TaskStatus.PENDING: "grey50",
+    TaskStatus.CLAIMED: "cyan",
+    TaskStatus.IN_PROGRESS: "yellow",
+    TaskStatus.DONE: "green",
+    TaskStatus.FAILED: "red",
+    TaskStatus.SKIPPED: "grey37",
+}
+
+
+def render_plan_graph(
+    plan: Plan,
+    tasks: Sequence[Task],
+    cycles: Sequence[Sequence[TaskId]],
+    *,
+    use_color: bool,
+) -> str:
+    """Return the ASCII dependency graph for ``plan`` as a single string.
+
+    Pure function: takes core models, returns text. No I/O, no DB, no
+    process state. The CLI handler in :func:`_run_show` composes this with
+    the SELECT path; the snapshot test in
+    :mod:`tests.integration.test_plan_show` pins the layout by passing
+    fabricated :class:`Plan` / :class:`Task` instances directly.
+
+    Layout
+    ------
+    The graph is rendered top-down, ordered by topological depth so a
+    reader's eye flows from "no deps" at the top to "depends on
+    everything" at the bottom. Within each depth bucket, tasks are sorted
+    by ``id`` (lexicographic) — same tie-break Kahn's frontier and
+    Tarjan's DFS use elsewhere in :mod:`whilly.core.scheduler`, so the
+    output is byte-identical across reruns.
+
+    Format::
+
+        Plan: <plan_id> — <project_name>
+        ─────────────────────────────────
+        [STATUS    ] task_id  (priority)
+            └─ depends on: dep1, dep2
+        ...
+
+        Summary: N tasks · PENDING=a · CLAIMED=b · IN_PROGRESS=c · DONE=d · FAILED=e · SKIPPED=f
+
+    The status badge is fixed-width (10 chars) so the dependency arrows
+    line up across rows of mixed status. Tasks with no dependencies omit
+    the ``└─`` arrow line entirely (less visual noise for leaf-level
+    tasks). Cycles are reported *above* the graph so they're the first
+    thing the operator sees, but the graph still renders so the operator
+    can see *where* the cycle is in context.
+
+    Determinism
+    -----------
+    Two invocations on equal inputs return ``==``-equal strings. The
+    topological depth bucketing falls back to ``len(plan.tasks) + 1`` for
+    nodes that participate in cycles (so they don't get omitted from the
+    output) — this is a stable sentinel because we always sort by
+    ``(depth, task.id)`` and depth alone never decides ordering inside a
+    cycle (the id tiebreaker takes over).
+
+    use_color
+    ---------
+    When ``True``, status badges are wrapped in Rich color tags
+    (``[green]DONE[/green]``) so the surrounding :class:`Console` paints
+    them in the operator's terminal. When ``False``, the badges are
+    plain text — that's the mode the snapshot test uses so the assertion
+    is a literal byte equality without ANSI escape gymnastics.
+    """
+    by_id: dict[TaskId, Task] = {task.id: task for task in tasks}
+    depth = _compute_topological_depth(tasks, by_id)
+    sentinel = max(depth.values(), default=0) + 1
+    ordered = sorted(tasks, key=lambda t: (depth.get(t.id, sentinel), t.id))
+
+    cycle_lines: list[str] = []
+    for cycle in cycles:
+        cycle_lines.append(f"Cycle detected: {_format_cycle(tuple(cycle))}")
+
+    title = f"Plan: {plan.id} — {plan.name}"
+    rule = "─" * max(len(title), 40)
+
+    body_lines: list[str] = [title, rule]
+
+    # Pre-compute the longest status label so the badge column width
+    # is uniform regardless of which statuses appear in the plan. We
+    # bound on the enum (not the actual rows) so the layout stays
+    # consistent across exports of small plans.
+    badge_width = max(len(s.value) for s in TaskStatus)
+
+    for task in ordered:
+        body_lines.append(_render_task_line(task, badge_width=badge_width, use_color=use_color))
+        if task.dependencies:
+            # Filter to in-plan deps only — cross-plan deps are silently
+            # ignored throughout the scheduler (see scheduler.py docstring
+            # on cross-plan refs); rendering them here would lie about the
+            # actual edges Postgres will respect.
+            in_plan_deps = [dep for dep in task.dependencies if dep in by_id]
+            if in_plan_deps:
+                body_lines.append(f"    └─ depends on: {', '.join(in_plan_deps)}")
+
+    summary_counts = _count_statuses(tasks)
+    summary = "Summary: " + " · ".join(
+        [f"{len(tasks)} tasks", *(f"{s.value}={summary_counts[s]}" for s in TaskStatus if summary_counts[s] > 0)]
+    )
+
+    parts: list[str] = []
+    if cycle_lines:
+        parts.extend(cycle_lines)
+        parts.append("")
+    parts.extend(body_lines)
+    parts.append("")
+    parts.append(summary)
+
+    raw = "\n".join(parts) + "\n"
+    if use_color:
+        return raw
+
+    # Strip Rich color tags when caller asked for plain text. The
+    # _render_task_line helper only embeds tags when ``use_color=True``,
+    # so this is a no-op on the plain branch — kept here as a guard for
+    # any future caller that flips the flag mid-render.
+    return raw
+
+
+def _render_task_line(task: Task, *, badge_width: int, use_color: bool) -> str:
+    """Format one ``[STATUS] task_id (priority)`` row.
+
+    The badge is left-padded to ``badge_width`` so the trailing ids and
+    priorities line up across rows. With ``use_color=True``, the badge
+    text is wrapped in Rich-tag markup (``[green]...[/green]``) — Rich
+    parses the tag at print time and applies the ANSI sequence. With
+    ``use_color=False`` the tag wrapping is omitted so the output is
+    pure ASCII (suitable for snapshots, log files, ``less -R``-less
+    pipes, etc.).
+    """
+    badge_text = task.status.value.ljust(badge_width)
+    if use_color:
+        color = _STATUS_COLOR[task.status]
+        badge = f"[{color}]{badge_text}[/{color}]"
+    else:
+        badge = badge_text
+    return f"[{badge}] {task.id}  ({task.priority.value})"
+
+
+def _compute_topological_depth(
+    tasks: Iterable[Task],
+    by_id: dict[TaskId, Task],
+) -> dict[TaskId, int]:
+    """Return ``{task_id: depth}`` where depth is longest-path distance from a root.
+
+    Tasks with no in-plan dependencies have depth ``0``. A task's depth is
+    ``1 + max(depth of in-plan deps)``. Tasks that participate in a cycle
+    cannot be assigned a finite depth — they are omitted from the result
+    so the caller can fall back to a sentinel (the renderer uses
+    ``max(depth) + 1`` so cycle members sort below all DAG nodes; the
+    cycle banner above the graph already names them, so listing them last
+    is the least confusing layout).
+
+    Implementation: memoised iterative DFS with a "visiting" marker to
+    detect back-edges. We don't reuse :func:`whilly.core.scheduler.topological_sort`
+    here because it returns a flat order, not depth — and because we
+    must remain robust against cycles (``topological_sort`` raises;
+    callers of the renderer have already detected and reported cycles
+    via :func:`detect_cycles`, so we skip those nodes silently rather
+    than re-raising).
+    """
+    depth: dict[TaskId, int] = {}
+    visiting: set[TaskId] = set()
+
+    def resolve(tid: TaskId) -> int | None:
+        """Compute depth of ``tid`` or return ``None`` if it's in a cycle."""
+        if tid in depth:
+            return depth[tid]
+        if tid in visiting:
+            return None
+        task = by_id.get(tid)
+        if task is None:
+            return 0
+        visiting.add(tid)
+        max_dep_depth = -1
+        cycle_seen = False
+        for dep in task.dependencies:
+            if dep not in by_id:
+                continue
+            sub = resolve(dep)
+            if sub is None:
+                cycle_seen = True
+                continue
+            if sub > max_dep_depth:
+                max_dep_depth = sub
+        visiting.discard(tid)
+        if cycle_seen:
+            # Don't memoise: the partial depth is meaningless without
+            # the dep we couldn't resolve. Caller's sentinel handles it.
+            return None
+        depth[tid] = max_dep_depth + 1
+        return depth[tid]
+
+    for task in tasks:
+        resolve(task.id)
+    return depth
+
+
+def _count_statuses(tasks: Iterable[Task]) -> dict[TaskStatus, int]:
+    """Tally ``tasks`` by status.
+
+    Returns a fully populated dict (every :class:`TaskStatus` member has
+    a key, default ``0``) so the renderer's summary line can iterate the
+    enum in declaration order without ``.get(..., 0)`` ceremony.
+    """
+    tally = dict.fromkeys(TaskStatus, 0)
+    for task in tasks:
+        tally[task.status] += 1
+    return tally
+
+
+def _run_show(plan_id: str, *, no_color: bool) -> int:
+    """Implement ``whilly plan show <plan_id>``.
+
+    Symmetric with :func:`_run_export`:
+
+    1. Read ``WHILLY_DATABASE_URL`` from the environment — missing →
+       ``EXIT_ENVIRONMENT_ERROR``.
+    2. Fetch ``(Plan, list[Task])`` via :func:`_async_export` — same
+       SELECT path so a future schema change (e.g. adding ``created_at``
+       to the projection) only needs to be made once.
+    3. Detect cycles on the in-memory plan via :func:`detect_cycles`.
+    4. Render via :func:`render_plan_graph` and print to stdout. The
+       Rich :class:`Console` decides whether to paint colors based on
+       ``--no-color`` and ``stdout.isatty()`` — so the same command
+       behaves correctly when piped to a file (no ANSI noise) or run
+       in an interactive terminal (full color).
+    5. If any cycle was detected, exit ``EXIT_VALIDATION_ERROR``
+       (PRD SC-4: cycles must surface as a non-zero exit even on the
+       read-only ``show`` path).
+
+    The graph is printed via Rich so the color tags in the rendered
+    string are interpreted at print time. Stdout becomes the canonical
+    transport — operator can ``> graph.txt``, ``| less``, etc.
+
+    Returns
+    -------
+    EXIT_OK
+        Plan exists, no cycles.
+    EXIT_VALIDATION_ERROR
+        Plan exists but contains a cycle.
+    EXIT_ENVIRONMENT_ERROR
+        DSN unset, or plan_id not found.
+    """
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan show: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    result = asyncio.run(_async_export(dsn, plan_id))
+    if result is None:
+        print(
+            f"whilly plan show: plan {plan_id!r} not found — check the id matches the "
+            "'plan_id' you used at import time.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    plan, tasks = result
+    cycles = detect_cycles(plan)
+    use_color = _should_use_color(no_color=no_color)
+    rendered = render_plan_graph(plan, tasks, cycles, use_color=use_color)
+
+    # Use a Rich Console so [green]...[/green] tags resolve to ANSI when
+    # color is enabled. ``soft_wrap=True`` keeps long task ids on a
+    # single line; ``highlight=False`` stops Rich from auto-colourising
+    # numbers / quoted strings (we want explicit colors only on the
+    # status badge).
+    console = Console(
+        file=sys.stdout,
+        force_terminal=use_color,
+        no_color=not use_color,
+        soft_wrap=True,
+        highlight=False,
+    )
+    console.print(rendered, end="")
+
+    if cycles:
+        # Cycles already surfaced inside the graph header; the exit code
+        # is the machine-readable channel. PRD SC-4 mandates a non-zero
+        # exit, AC says "Цикл → exit code 1".
+        return EXIT_VALIDATION_ERROR
+    return EXIT_OK
+
+
+def _should_use_color(*, no_color: bool) -> bool:
+    """Decide whether to emit ANSI color sequences.
+
+    Three signals, in priority order:
+
+    1. ``--no-color`` (``no_color=True``) → always plain.
+    2. ``NO_COLOR`` env var set (any value) → plain. Honors the
+       informal cross-tool convention at https://no-color.org so
+       operators don't have to special-case Whilly in their dotfiles.
+    3. Otherwise: ``sys.stdout.isatty()``. Pipe-to-file or pipe-to-less
+       gets plain ASCII; an interactive terminal gets color.
+
+    The :class:`io.TextIOBase` ``isatty`` check tolerates non-stream
+    stdouts (e.g. ``pytest``'s ``capsys`` substitutes a buffer that
+    doesn't always implement isatty); ``getattr`` with a falsy default
+    keeps us robust there.
+    """
+    if no_color:
+        return False
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    isatty = getattr(sys.stdout, "isatty", None)
+    if not callable(isatty):
+        return False
+    try:
+        return bool(isatty())
+    except (io.UnsupportedOperation, ValueError):
+        # Closed buffer / detached file descriptor.
+        return False
