@@ -6,17 +6,18 @@ piece of HTTP code that lives outside the FastAPI app — the worker package
 must stay a thin httpx + pydantic + ``whilly.core`` consumer (PRD FR-1.5),
 without dragging FastAPI into a process that doesn't need it.
 
-What lives here today (TASK-022a1)
-----------------------------------
+What lives here (TASK-022a1, TASK-022a2)
+----------------------------------------
 * :class:`RemoteWorkerClient` — owns an :class:`httpx.AsyncClient`, applies
   the bearer token to every request, and exposes a single private
   :meth:`_request` primitive that wraps the wire call with exponential
-  backoff on transient failures and fail-fast on 4xx. The high-level RPCs
-  (``register`` / ``claim`` / ``complete`` / ``fail`` / ``heartbeat``) land
-  in TASK-022a2 / TASK-022a3 on top of this scaffolding.
+  backoff on transient failures and fail-fast on 4xx. The
+  worker-bootstrap RPCs (:meth:`register`, :meth:`heartbeat`) sit on
+  top of that primitive (TASK-022a2); the task-lifecycle RPCs
+  (``claim`` / ``complete`` / ``fail``) land in TASK-022a3.
 * :class:`HTTPClientError` and its three subclasses (:class:`AuthError`,
   :class:`VersionConflictError`, :class:`ServerError`). They are the typed
-  surface that TASK-022a3's RPC methods raise so the worker's outer loop
+  surface that the RPC methods raise so the worker's outer loop
   (TASK-022b1) can ``except VersionConflictError: continue`` without
   parsing JSON detail strings.
 
@@ -75,9 +76,13 @@ outbound request. The bootstrap token is *separately* tracked because the
 ``POST /workers/register`` route is the only one gated by the cluster-
 wide bootstrap secret (per :mod:`whilly.adapters.transport.auth`); a
 worker that hasn't registered yet has no per-worker token to present.
-TASK-022a2 will surface a tiny ``register()`` method that swaps the
-bootstrap token in for that single call and stashes the response token
-on the client for everything else.
+:meth:`register` swaps the bootstrap token in for that single call via
+``_request(..., bootstrap=True)`` and returns the freshly-minted
+:class:`RegisterResponse` to the caller. It deliberately does **not**
+mutate ``self._token``: the AC for TASK-022a2 makes ``register`` a
+transport primitive, and a token-swap on the live client would conflate
+"transport" with "lifecycle owner". The supervisor loop (TASK-022b1)
+wires the registration step explicitly.
 
 Why the typed exceptions over httpx's own?
     :class:`httpx.HTTPStatusError` carries the response object but no
@@ -96,22 +101,68 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from types import TracebackType
-from typing import Any, Final, Self
+from typing import Any, Final, Self, TypeVar
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
-from whilly.adapters.transport.schemas import ErrorResponse
+from whilly.adapters.transport.schemas import (
+    ErrorResponse,
+    HeartbeatRequest,
+    HeartbeatResponse,
+    RegisterRequest,
+    RegisterResponse,
+)
 from whilly.core.models import TaskId, TaskStatus
 
 __all__ = [
     "DEFAULT_BACKOFF_SCHEDULE",
     "DEFAULT_TIMEOUT_SECONDS",
+    "REGISTER_PATH",
     "AuthError",
     "HTTPClientError",
     "RemoteWorkerClient",
     "ServerError",
     "VersionConflictError",
+    "heartbeat_path",
 ]
+
+#: Path of the cluster-join RPC on the control plane. Mirrors
+#: :data:`whilly.adapters.transport.server.REGISTER_PATH` — the constant is
+#: duplicated here on purpose because the ``client`` module cannot import
+#: from the FastAPI server module (the server pulls in ``fastapi``,
+#: ``asyncpg`` and the import-linter contract from PRD SC-6 forbids
+#: the worker-side dependency graph from dragging either in). Having the
+#: constant in two places is the cheap end of the trade-off; an integration
+#: test in :mod:`tests.integration.test_transport_workers` indirectly pins
+#: the parity by referencing the server's constant.
+REGISTER_PATH: Final[str] = "/workers/register"
+
+
+def heartbeat_path(worker_id: str) -> str:
+    """Return the heartbeat endpoint path for ``worker_id``.
+
+    The server route is ``/workers/{worker_id}/heartbeat`` (PRD FR-1.6).
+    Centralising the format here means a future change to the URL shape
+    (e.g. moving heartbeats to ``/v1/workers/{id}/ping``) lands in one
+    place rather than scattered across call sites; it also keeps the
+    f-string colocated with documentation explaining why no URL-encoding
+    is needed.
+
+    Worker ids are ``w-<urlsafe>`` (see
+    :func:`whilly.adapters.transport.server._generate_worker_id`) so the
+    suffix is already RFC 3986 *unreserved* — no
+    :func:`urllib.parse.quote` call required. If a misconfigured caller
+    passes a string with reserved characters the server's path matcher
+    will surface a 404, which is the diagnosis we want.
+    """
+    return f"/workers/{worker_id}/heartbeat"
+
+
+# ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
+# Bound to :class:`pydantic.BaseModel` rather than ``Any`` so mypy --strict refuses
+# accidental misuse of the helper with non-pydantic types.
+_TResp = TypeVar("_TResp", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
@@ -581,3 +632,167 @@ class RemoteWorkerClient:
             actual_status=envelope.actual_status if envelope else None,
             error_code=envelope.error if envelope else "version_conflict",
         )
+
+    @staticmethod
+    async def _parse_response(response: httpx.Response, schema: type[_TResp]) -> _TResp:
+        """Validate a 2xx response body against ``schema`` (PRD FR-1.5).
+
+        Centralised here so :meth:`register` / :meth:`heartbeat` (and the
+        TASK-022a3 RPCs) all surface schema drift the same way:
+
+        * a non-JSON body becomes :class:`ServerError` with the raw text
+          for the operator log,
+        * a JSON body that doesn't match the pydantic schema becomes
+          :class:`ServerError` with the validation error attached as
+          ``__cause__`` (mismatched fields, ``extra=forbid`` violations,
+          version skew between worker and control plane).
+
+        Both cases are *server-side* protocol failures, not retryable
+        transient faults: the server already returned 2xx and the
+        request itself is well-formed. Surfacing them as
+        :class:`ServerError` keeps the worker's outer-loop classifier
+        simple — the same exception type covers "5xx exhausted retries"
+        and "server returned a body we can't parse", because the
+        operational response (page, inspect, fix the server) is the
+        same for both.
+        """
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                f"server returned non-JSON body for {schema.__name__}: {body[:200]}",
+                status_code=response.status_code,
+                response_body=body,
+            ) from exc
+        try:
+            return schema.model_validate(payload)
+        except ValidationError as exc:
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                f"server response did not match {schema.__name__}: {exc.error_count()} "
+                f"validation error(s)",
+                status_code=response.status_code,
+                response_body=body,
+            ) from exc
+
+    async def register(self, hostname: str) -> RegisterResponse:
+        """Mint a new worker identity (``POST /workers/register``, PRD FR-1.1).
+
+        Sends the cluster-join secret (``bootstrap_token`` from the
+        constructor) instead of the per-worker bearer — the worker has
+        no per-worker credentials yet, by definition. The server returns
+        the freshly-minted ``worker_id`` plus the *plaintext* per-worker
+        bearer token (only the SHA-256 hash is persisted on the server,
+        per PRD NFR-3); the caller is responsible for routing that
+        token onto a fresh :class:`RemoteWorkerClient` (or a downstream
+        process) for every subsequent RPC. This method intentionally
+        does **not** mutate ``self._token``: the AC for TASK-022a2 says
+        "register uses bootstrap_token", and a token-swap on the live
+        client would conflate two responsibilities (transport primitive
+        vs. lifecycle owner). TASK-022b1's supervisor wires the
+        registration step explicitly.
+
+        Network errors (transient 5xx, ConnectError, TimeoutException)
+        flow through :meth:`_request`'s retry/backoff ladder unchanged;
+        4xx surfaces as the typed exceptions described on
+        :class:`HTTPClientError` (in particular, a wrong / rotated
+        bootstrap secret arrives here as :class:`AuthError`, not as a
+        silent retry).
+
+        Parameters
+        ----------
+        hostname:
+            Free-form string the worker self-reports to identify the box
+            it runs on. Empty strings are rejected at the schema layer
+            (``min_length=1`` on
+            :class:`whilly.adapters.transport.schemas.NonEmptyHostname`),
+            which surfaces as a :class:`pydantic.ValidationError` here
+            *before* the network call — that's the right tier for a
+            programmer error, not a wire-level 422.
+
+        Returns
+        -------
+        RegisterResponse
+            Validated wire payload carrying ``worker_id`` and ``token``.
+
+        Raises
+        ------
+        AuthError
+            Bootstrap token rejected (HTTP 401 / 403) — operator must
+            check ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` rotation.
+        HTTPClientError
+            Other 4xx (e.g. 422 from a future protocol-version
+            mismatch); the worker should crash rather than retry.
+        ServerError
+            5xx after the retry budget was exhausted, or a malformed
+            response that fails pydantic validation against
+            :class:`RegisterResponse`.
+        RuntimeError
+            If ``register`` is called outside the ``async with``
+            block, or if no ``bootstrap_token`` was supplied to the
+            constructor.
+        """
+        request = RegisterRequest(hostname=hostname)
+        response = await self._request(
+            "POST",
+            REGISTER_PATH,
+            json=request.model_dump(),
+            bootstrap=True,
+        )
+        return await self._parse_response(response, RegisterResponse)
+
+    async def heartbeat(self, worker_id: str) -> HeartbeatResponse:
+        """Refresh a worker's liveness clock (``POST /workers/{id}/heartbeat``, PRD FR-1.6).
+
+        Uses the per-worker bearer (already pinned on the long-lived
+        ``httpx.AsyncClient``) — the bootstrap secret would *not*
+        authenticate here, by design (PRD FR-1.2 token split, see
+        :func:`whilly.adapters.transport.auth.make_bearer_auth`).
+
+        Two outcomes the caller must distinguish:
+
+        * ``response.ok == True`` — server advanced
+          ``workers.last_heartbeat = NOW()``; the worker is healthy.
+        * ``response.ok == False`` — the ``worker_id`` is not (or no
+          longer) registered on the server. This is a *recoverable*
+          state per :class:`HeartbeatResponse`'s docstring: the
+          supervisor (TASK-022b2) should re-register and continue.
+          That's why we return a structured response here rather than
+          raising — a worker that hits a 4xx on every heartbeat would
+          spin its outer loop into a tight crash-restart cycle.
+
+        Parameters
+        ----------
+        worker_id:
+            The identifier returned by :meth:`register` on a previous
+            run. Empty strings are rejected at the schema layer
+            (`HeartbeatRequest.worker_id` has ``min_length=1``).
+
+        Returns
+        -------
+        HeartbeatResponse
+            Validated wire payload with ``ok`` indicating whether the
+            server matched the row.
+
+        Raises
+        ------
+        AuthError
+            Per-worker bearer rejected (token rotated or revoked).
+        HTTPClientError
+            Other 4xx (e.g. 400 from path/body mismatch — should never
+            happen since this method builds both from the same input).
+        ServerError
+            5xx after retries or schema-mismatched response.
+        RuntimeError
+            If called outside the ``async with`` block.
+        """
+        request = HeartbeatRequest(worker_id=worker_id)
+        response = await self._request(
+            "POST",
+            heartbeat_path(worker_id),
+            json=request.model_dump(),
+        )
+        return await self._parse_response(response, HeartbeatResponse)
