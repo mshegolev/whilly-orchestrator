@@ -10,16 +10,19 @@ Sub-modules
 * :mod:`whilly.worker.local` — TASK-019a, the bare-bones local async loop
   ``claim_task → start_task → run_task → complete_task | fail_task``. No
   heartbeat, no signals, no CLI.
+* :mod:`whilly.worker.main` — TASK-019b1, the local-worker composition root
+  that pairs :func:`local.run_local_worker` with a parallel heartbeat task
+  under one :class:`asyncio.TaskGroup`. SIGTERM/SIGINT plumbing extends this
+  in TASK-019b2.
 * (future) :mod:`whilly.worker.remote` — TASK-022b, the same shape but over
   the HTTP transport.
-* (future) :mod:`whilly.worker.main` — TASK-019b2, signal handling and
-  graceful shutdown.
 
 Re-exports
 ----------
-The local-worker public API is re-exported at this level so callers can
-``from whilly.worker import run_local_worker`` without remembering the
-sub-module path.
+The public APIs of both sub-modules are re-exported at this level so callers
+can ``from whilly.worker import run_local_worker`` /
+``from whilly.worker import run_worker`` without remembering sub-module
+paths. CLI entry points (TASK-019c) and tests use the package-level imports.
 """
 
 from whilly.worker.local import (
@@ -28,10 +31,18 @@ from whilly.worker.local import (
     WorkerStats,
     run_local_worker,
 )
+from whilly.worker.main import (
+    DEFAULT_HEARTBEAT_INTERVAL,
+    run_heartbeat_loop,
+    run_worker,
+)
 
 __all__ = [
+    "DEFAULT_HEARTBEAT_INTERVAL",
     "DEFAULT_IDLE_WAIT",
     "RunnerCallable",
     "WorkerStats",
+    "run_heartbeat_loop",
     "run_local_worker",
+    "run_worker",
 ]
