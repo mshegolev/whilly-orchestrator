@@ -59,7 +59,12 @@ def _emit_json(event: dict) -> None:
 
 
 def _log_event(log_dir: Path, event: str, **kwargs) -> None:
-    """Append a structured JSON event to whilly_events.jsonl."""
+    """Append a structured JSON event to whilly_events.jsonl.
+
+    When ``task_id`` is in ``kwargs``, additionally append the same line to
+    ``log_dir/tasks/{task_id}.events.jsonl`` so ``whilly logs <task_id>`` can
+    show a clean per-task timeline without grepping the global file.
+    """
     from datetime import datetime, timezone
 
     entry = {
@@ -67,9 +72,17 @@ def _log_event(log_dir: Path, event: str, **kwargs) -> None:
         "event": event,
         **kwargs,
     }
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
     events_file = log_dir / "whilly_events.jsonl"
     with open(events_file, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        f.write(line)
+
+    task_id = kwargs.get("task_id")
+    if task_id:
+        tasks_dir = log_dir / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        with open(tasks_dir / f"{task_id}.events.jsonl", "a", encoding="utf-8") as f:
+            f.write(line)
 
 
 # ── ANSI helpers ──────────────────────────────────────────────
@@ -1233,6 +1246,34 @@ def run_plan(
     log_dir = Path(config.LOG_DIR).resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Age-based cleanup of agent logs. Spares whilly.log* (RotatingFileHandler)
+    # and whilly_events.jsonl (global timeline). Disabled when LOG_TTL_DAYS<=0.
+    try:
+        from whilly.log_viewer import cleanup_old_logs
+
+        removed = cleanup_old_logs(log_dir, config.LOG_TTL_DAYS)
+        if removed:
+            _log_event(log_dir, "logs_cleanup", removed=removed, ttl_days=config.LOG_TTL_DAYS)
+    except Exception as exc:  # noqa: BLE001 — cleanup must never fail the run
+        log.warning("log cleanup skipped: %s", exc)
+
+    # Verbose / HTTP-trace: child Claude CLI subprocess inherits parent env, so
+    # exporting ANTHROPIC_LOG here is enough — no patches in agents/claude.py.
+    if config.TRACE_HTTP:
+        os.environ["ANTHROPIC_LOG"] = "debug"
+        trace_path = log_dir / "tasks" / "http_trace.jsonl"
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        os.environ["ANTHROPIC_LOG_FILE"] = str(trace_path)
+        _ansi(
+            f"{RD}{B}⚠ HTTP trace enabled.{R}{RD} "
+            f"http_trace.jsonl may contain API keys and full prompts. "
+            f"Treat the file as a secret.{R}"
+        )
+        _log_event(log_dir, "trace_enabled", level="debug", file=str(trace_path))
+    elif config.VERBOSE:
+        os.environ.setdefault("ANTHROPIC_LOG", "info")
+        _log_event(log_dir, "verbose_enabled", level="info")
+
     # Initialize resource monitor
     resource_monitor = None
     if config.RESOURCE_CHECK_ENABLED:
@@ -1992,6 +2033,16 @@ Usage: whilly [OPTIONS] [PLAN_FILE...]
                                     leftover tmux sessions). Read-only. Exit 1
                                     if any findings. Add --no-gh to skip the
                                     `gh issue view` lookup.
+  whilly logs --list              🆕 Table of tasks discovered in whilly_logs/
+                                    (status, duration, cost, last event).
+  whilly logs <task-id>           🆕 Show prompt + events timeline + stdout
+                                    for a single task in one view.
+  whilly logs --tail <task-id>    🆕 Live follow events + stdout (also -f).
+  whilly --verbose, -v            🆕 Set ANTHROPIC_LOG=info (HTTP request lines
+                                    from Claude CLI). Larger logs, no secrets.
+  whilly --trace                  🆕 Full HTTP body capture (ANTHROPIC_LOG=debug
+                                    + http_trace.jsonl). May contain API keys
+                                    and full prompts — use only for debugging.
   whilly -h, --help               Show this help
 
 Exit codes (headless mode):
@@ -2018,6 +2069,10 @@ Environment variables:
   WHILLY_MAX_TASK_RETRIES=N Max retries before skipping a task (default=5)
   WHILLY_HEADLESS=1/0       Headless/CI mode (default: auto-detect from TTY)
   WHILLY_TIMEOUT=N          Max wall time in seconds (0=unlimited)
+  WHILLY_VERBOSE=1          Same as --verbose: ANTHROPIC_LOG=info
+  WHILLY_TRACE_HTTP=1       Same as --trace: ANTHROPIC_LOG=debug + body capture
+  WHILLY_LOG_TTL_DAYS=N     Delete agent logs older than N days at run_plan start
+                            (default: 14, 0 = disabled)
 """
 
 
@@ -2096,6 +2151,13 @@ def main(argv: list[str] | None = None) -> int:
         return _run_handoff_show(task_id)
     if "--handoff-complete" in args:
         return _run_handoff_complete(args)
+
+    # `whilly logs ...` — read-only viewer for per-task artifacts. Skip banner.
+    # Recognised as first positional arg `logs` so users can do `whilly logs <id>`.
+    if args and args[0] == "logs":
+        from whilly.log_viewer import resolve_log_dir, run_logs_command
+
+        return run_logs_command(args[1:], resolve_log_dir())
 
     _show_startup_banner()
 
@@ -2772,6 +2834,15 @@ def main(argv: list[str] | None = None) -> int:
     if "--no-worktree" in args or "--no-workspace" in args:
         config.USE_WORKSPACE = False
         args = [a for a in args if a not in ("--no-worktree", "--no-workspace")]
+
+    # --verbose/-v: ANTHROPIC_LOG=info (HTTP request lines). --trace: full HTTP body capture.
+    # Either flag escalates ``run_plan`` to set the env vars before spawning Claude CLI.
+    if "--verbose" in args or "-v" in args:
+        config.VERBOSE = True
+        args = [a for a in args if a not in ("--verbose", "-v")]
+    if "--trace" in args:
+        config.TRACE_HTTP = True
+        args = [a for a in args if a != "--trace"]
 
     # --agent {claude,opencode}: override backend selection for this run (OC-111)
     if "--agent" in args:

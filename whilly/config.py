@@ -89,6 +89,11 @@ class WhillyConfig:
     WORKTREE: bool = False  # WHILLY_WORKTREE=1 — per-task git worktree (только при MAX_PARALLEL > 1)
     USE_WORKSPACE: bool = False  # WHILLY_USE_WORKSPACE=1 (или --workspace) — включить plan-level worktree
 
+    # Logging verbosity + retention
+    VERBOSE: bool = False  # WHILLY_VERBOSE=1 (или --verbose/-v) — Whilly debug + ANTHROPIC_LOG=info
+    TRACE_HTTP: bool = False  # WHILLY_TRACE_HTTP=1 (или --trace) — ANTHROPIC_LOG=debug + HTTP body capture
+    LOG_TTL_DAYS: int = 14  # WHILLY_LOG_TTL_DAYS — age-based cleanup of agent logs at run_plan start (0 = disabled)
+
     # Agent backend selection (OC-109) — drives whilly.agents.get_backend()
     AGENT_BACKEND: str = "claude"  # "claude" | "opencode"
     OPENCODE_BIN: str = "opencode"  # path to the opencode CLI binary
