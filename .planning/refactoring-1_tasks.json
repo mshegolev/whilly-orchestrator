@@ -1399,7 +1399,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Настроить import-linter contract в pyproject.toml: whilly.core НЕ может импортировать asyncpg, httpx, subprocess, fastapi, os.chdir. Запустить lint-imports — должен пройти. Это SC-6",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-028"
       ],
@@ -1416,7 +1416,8 @@
         "lint-imports",
         "python3 -m importlinter.cli lint"
       ],
-      "prd_requirement": "SC-6, TC-8"
+      "prd_requirement": "SC-6, TC-8",
+      "completion_notes": ".importlinter core-purity contract was declared in TASK-002 (commit 57fac30) with forbidden_modules = {asyncpg, httpx, subprocess, fastapi, uvicorn, alembic} and include_external_packages=True so transitive whilly.core -> X -> asyncpg edges are caught. TASK-029 closes the loop by adding a new GitHub Actions job \"arch-guard\" (.github/workflows/ci.yml) that runs after  and (1) calls  to verify the contract, (2) greps whilly/core/ for os.chdir / os.getcwd call sites — belt-and-suspenders for SC-6 since import-linter sees module imports but not stdlib  call sites, and a regression with os.chdir() inside the pure domain layer would break per-task workspace isolation flow. Verification: lint-imports -> 1 kept, 0 broken on 159 files / 764 dependencies; grep -rnE '\\bos\\.(chdir|getcwd)\\b' whilly/core/ -> no matches; YAML valid (4 jobs: lint, arch-guard, test, agent-backends). Why separate job rather than appending to : arch-guard needs full dev install so import-linter can graph transitive imports into asyncpg / fastapi / etc., while  only needs ruff — splitting keeps ruff fast (~30s) and isolates arch failures in the GitHub UI under their own check name. Unblocks TASK-032a (README quickstart) and approaches TASK-033b (CI workflow overhaul for v4 release)."
     },
     {
       "id": "TASK-030",
