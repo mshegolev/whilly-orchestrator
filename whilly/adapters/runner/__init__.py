@@ -16,6 +16,15 @@ encodes knowledge of an external system (the Claude CLI's JSON envelope) — but
 it stays subprocess-free so the I/O wrapper has a small, testable seam.
 """
 
+from whilly.adapters.runner.claude_cli import (
+    BACKOFF_SCHEDULE,
+    DEFAULT_BIN,
+    DEFAULT_MODEL,
+    EXIT_BINARY_NOT_FOUND,
+    EXIT_SPAWN_BLOCKED,
+    build_command,
+    run_task,
+)
 from whilly.adapters.runner.result_parser import (
     COMPLETION_MARKER,
     AgentResult,
@@ -23,4 +32,16 @@ from whilly.adapters.runner.result_parser import (
     parse_output,
 )
 
-__all__ = ["AgentResult", "AgentUsage", "COMPLETION_MARKER", "parse_output"]
+__all__ = [
+    "AgentResult",
+    "AgentUsage",
+    "BACKOFF_SCHEDULE",
+    "COMPLETION_MARKER",
+    "DEFAULT_BIN",
+    "DEFAULT_MODEL",
+    "EXIT_BINARY_NOT_FOUND",
+    "EXIT_SPAWN_BLOCKED",
+    "build_command",
+    "parse_output",
+    "run_task",
+]
