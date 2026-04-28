@@ -1,10 +1,12 @@
-"""Local worker composition root with heartbeat (TASK-019b1, PRD FR-1.6, NFR-1).
+"""Local worker composition root with heartbeat + signals (TASK-019b1/b2, PRD FR-1.6, NFR-1).
 
 This module is one notch up the composition stack from
 :mod:`whilly.worker.local`. ``local.run_local_worker`` is the bare claim →
 start → run → complete loop; the present module pairs it with a parallel
-heartbeat task under a single :class:`asyncio.TaskGroup` so the control
-plane can distinguish a busy worker from a crashed one.
+heartbeat task under a single :class:`asyncio.TaskGroup`, plus SIGTERM /
+SIGINT signal handlers (TASK-019b2) that flip a shared shutdown event so
+the worker releases its in-flight task back to ``PENDING`` and exits
+cleanly when the process supervisor kills it.
 
 Why a separate module rather than folding heartbeat into
 :mod:`whilly.worker.local`?
@@ -43,8 +45,32 @@ Why a stop event rather than ``heartbeat_task.cancel()``?
     cancellation request that should propagate. Using a stop event lets
     the heartbeat exit *normally* — the TaskGroup just awaits both
     children, sees clean returns, and unwinds without exception
-    plumbing. SIGTERM-driven shutdown (TASK-019b2) will set the same
-    event from a signal handler.
+    plumbing. The SIGTERM / SIGINT signal handlers (TASK-019b2) set the
+    same event from inside the asyncio loop via
+    ``loop.add_signal_handler``, so a ``kill -TERM`` arrives as ordinary
+    cooperative shutdown rather than a default-disposition process kill.
+
+Signal handling (TASK-019b2)
+----------------------------
+``run_worker`` installs handlers for SIGTERM and SIGINT via
+:meth:`asyncio.AbstractEventLoop.add_signal_handler`. Both flip the same
+``stop`` event the heartbeat / loop already use. The inner
+``run_local_worker`` races each runner call against ``stop`` and, on a
+mid-runner shutdown, calls :meth:`TaskRepository.release_task` to put the
+in-flight task back to ``PENDING`` before exiting. Net effect: a peer
+worker (or this worker on restart) re-claims it within one poll cycle, no
+work is lost, and the audit log carries a ``RELEASE`` event with
+``payload.reason = "shutdown"`` so post-mortems can tell signal-driven
+releases apart from visibility-timeout sweeps.
+
+Handlers are installed only on the main thread of an asyncio loop that
+supports them — Windows' ``ProactorEventLoop`` and any non-main thread
+raise :class:`NotImplementedError` from ``add_signal_handler``. We catch
+that and silently degrade: callers in those environments still get
+heartbeats and can shut down via ``max_iterations`` / outer cancellation.
+The ``install_signal_handlers=False`` parameter is the test-side toggle —
+pytest's own SIGINT handler must not be replaced by the worker's during
+unit tests.
 
 Failure isolation
 -----------------
@@ -60,6 +86,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
+from collections.abc import Callable
 from typing import Final
 
 from whilly.adapters.db.repository import TaskRepository
@@ -69,6 +97,16 @@ from whilly.worker.local import (
     RunnerCallable,
     WorkerStats,
     run_local_worker,
+)
+
+# Signals we install handlers for in :func:`run_worker`. SIGTERM is the
+# standard process-supervisor shutdown signal (Kubernetes, systemd, tmux
+# kill-window); SIGINT is the same path for ``Ctrl-C`` from an interactive
+# shell. Both must end with the in-flight task released to ``PENDING`` so a
+# peer can re-claim it.
+_SHUTDOWN_SIGNALS: Final[tuple[signal.Signals, ...]] = (
+    signal.SIGTERM,
+    signal.SIGINT,
 )
 
 log = logging.getLogger(__name__)
@@ -129,6 +167,90 @@ async def run_heartbeat_loop(
             continue
 
 
+def _install_signal_handlers(stop: asyncio.Event) -> list[signal.Signals]:
+    """Install SIGTERM / SIGINT handlers that flip ``stop`` (TASK-019b2).
+
+    Returns the list of signals whose handlers were actually installed —
+    the caller passes that list back to :func:`_remove_signal_handlers`
+    on exit so we don't leak handlers across sequential ``run_worker``
+    invocations or between tests.
+
+    Two layers of defensive degradation:
+
+    * ``loop.add_signal_handler`` raises :class:`NotImplementedError` on
+      Windows ``ProactorEventLoop`` and on any non-main thread. We catch
+      and skip — the worker stays functional, just without graceful
+      signal shutdown (callers can still use ``max_iterations`` or outer
+      cancellation).
+    * Anything else propagating out of ``add_signal_handler`` indicates a
+      genuinely broken loop; we let it surface so the worker fails fast
+      instead of pretending it's wired up.
+    """
+    loop = asyncio.get_running_loop()
+    installed: list[signal.Signals] = []
+    for sig in _SHUTDOWN_SIGNALS:
+        try:
+            loop.add_signal_handler(sig, _make_shutdown_handler(stop, sig))
+        except NotImplementedError:
+            log.debug(
+                "signal handler for %s not installable on this loop; skipping",
+                sig.name,
+            )
+            continue
+        installed.append(sig)
+    if installed:
+        log.info(
+            "worker signal handlers installed for %s",
+            ", ".join(s.name for s in installed),
+        )
+    return installed
+
+
+def _remove_signal_handlers(installed: list[signal.Signals]) -> None:
+    """Restore default signal disposition for handlers we installed.
+
+    Symmetric with :func:`_install_signal_handlers`. Errors during
+    teardown are logged but never raised — a failed cleanup must not
+    mask whatever exception the caller is unwinding through.
+    """
+    if not installed:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Loop already gone (called from an outer exception path with a
+        # shut-down loop); nothing left to clean up.
+        return
+    for sig in installed:
+        try:
+            loop.remove_signal_handler(sig)
+        except (NotImplementedError, ValueError, RuntimeError) as exc:
+            log.debug("could not remove signal handler for %s: %r", sig.name, exc)
+
+
+def _make_shutdown_handler(stop: asyncio.Event, sig: signal.Signals) -> Callable[[], None]:
+    """Build a thread-safe handler that flips ``stop`` and logs the signal.
+
+    The handler runs on the asyncio loop (because we registered it via
+    ``loop.add_signal_handler``), so calling :meth:`asyncio.Event.set`
+    from inside is safe — no cross-thread synchronization needed. We
+    keep the body trivial: flipping the event is sufficient, and the
+    rest of the shutdown logic lives in ``run_local_worker`` where the
+    state-transition context is.
+
+    Logging at INFO so a SIGTERM kill from kubectl / systemd / tmux
+    leaves an unambiguous breadcrumb in the worker journal — operators
+    investigating "why did this worker exit" can correlate with the
+    process supervisor's log without reading code.
+    """
+
+    def _handler() -> None:
+        log.info("received %s; requesting graceful shutdown", sig.name)
+        stop.set()
+
+    return _handler
+
+
 async def run_worker(
     repo: TaskRepository,
     runner: RunnerCallable,
@@ -138,25 +260,41 @@ async def run_worker(
     idle_wait: float = DEFAULT_IDLE_WAIT,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     max_iterations: int | None = None,
+    install_signal_handlers: bool = True,
+    stop: asyncio.Event | None = None,
 ) -> WorkerStats:
-    """Run :func:`run_local_worker` paired with a parallel heartbeat task.
+    """Run :func:`run_local_worker` paired with heartbeat + signal handlers.
 
     Both coroutines run under one :class:`asyncio.TaskGroup`. When the
-    main worker loop returns (production: cancelled by SIGTERM in
-    TASK-019b2; tests: ``max_iterations`` reached), it sets a shared
-    :class:`asyncio.Event`. The heartbeat coroutine wakes up, returns
-    cleanly, and the TaskGroup exits. No explicit cancellation, no
-    ``CancelledError`` plumbing — see module docstring.
-
-    Parameters mirror :func:`whilly.worker.local.run_local_worker` plus
-    one extra:
+    main worker loop returns — because ``max_iterations`` was reached
+    (tests), ``stop`` was set (production: SIGTERM, TASK-019b2), or an
+    outer cancellation propagated — the loop ``finally`` block sets the
+    shared :class:`asyncio.Event`. The heartbeat coroutine wakes up,
+    returns cleanly, and the TaskGroup exits. No explicit cancellation,
+    no ``CancelledError`` plumbing — see module docstring.
 
     Parameters
     ----------
+    repo, runner, plan, worker_id, idle_wait, max_iterations:
+        Forwarded to :func:`whilly.worker.local.run_local_worker`. See
+        that function for the full per-iteration contract.
     heartbeat_interval:
         Seconds between heartbeat ticks. Defaults to
         :data:`DEFAULT_HEARTBEAT_INTERVAL` (30s). Tests pass a small
         value so the heartbeat ticks observably during a short test run.
+    install_signal_handlers:
+        When ``True`` (production default), SIGTERM and SIGINT are
+        installed via :meth:`asyncio.AbstractEventLoop.add_signal_handler`
+        and flip the shared ``stop`` event. Tests pass ``False`` to
+        avoid clobbering pytest's own SIGINT handler (and to keep unit
+        tests deterministic across loop implementations).
+    stop:
+        Optional shared shutdown event. Callers that already own a
+        shutdown signal (CLI in TASK-019c, integration tests that drive
+        shutdown without sending real signals) pass it in; otherwise
+        ``run_worker`` allocates one internally. Either way the same
+        event is forwarded to ``run_local_worker`` and to the heartbeat
+        loop.
 
     Returns
     -------
@@ -164,9 +302,13 @@ async def run_worker(
         The :class:`whilly.worker.local.WorkerStats` returned by the
         inner loop — same fields, same semantics. The heartbeat is a
         side-effect on ``workers.last_heartbeat`` and does not show up
-        in the stats counters.
+        in the stats counters; signal-driven releases are surfaced via
+        ``WorkerStats.released_on_shutdown``.
     """
-    stop = asyncio.Event()
+    if stop is None:
+        stop = asyncio.Event()
+
+    installed = _install_signal_handlers(stop) if install_signal_handlers else []
 
     async def _worker_then_stop() -> WorkerStats:
         """Run the inner loop; signal heartbeat to stop on any exit path.
@@ -184,20 +326,24 @@ async def run_worker(
                 worker_id,
                 idle_wait=idle_wait,
                 max_iterations=max_iterations,
+                stop=stop,
             )
         finally:
             stop.set()
 
-    async with asyncio.TaskGroup() as tg:
-        tg.create_task(
-            run_heartbeat_loop(
-                repo,
-                worker_id,
-                interval=heartbeat_interval,
-                stop=stop,
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(
+                run_heartbeat_loop(
+                    repo,
+                    worker_id,
+                    interval=heartbeat_interval,
+                    stop=stop,
+                )
             )
-        )
-        worker_task = tg.create_task(_worker_then_stop())
+            worker_task = tg.create_task(_worker_then_stop())
+    finally:
+        _remove_signal_handlers(installed)
 
     # ``worker_task`` is guaranteed done after the TaskGroup exits.
     # ``.result()`` re-raises if the inner loop crashed (TaskGroup would

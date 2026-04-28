@@ -226,6 +226,44 @@ RETURNING
 """
 
 
+# Optimistic-locking RELEASE for a single task (PRD FR-2.2, FR-2.4,
+# TASK-019b2). Targeted release used by the worker on graceful shutdown to
+# put its in-flight task back in the pool — distinct from the batch
+# visibility-timeout sweep (``release_stale_tasks`` / ``_RELEASE_STALE_SQL``)
+# which scans for *any* aged-out claim. Both end up writing a RELEASE event
+# with the same shape; the difference is who fires (signal handler vs. sweep)
+# and how many rows are touched (one vs. many).
+#
+# Status filter mirrors :func:`whilly.core.state_machine.apply_transition`'s
+# RELEASE rule: allowed from both ``CLAIMED`` (worker received SIGTERM
+# between claim and start) and ``IN_PROGRESS`` (signal arrived mid-runner).
+# Version-filtered like ``complete_task`` so a sweep that already released
+# the row surfaces as :class:`VersionConflictError` — the worker should
+# treat that as "already released, nothing to do" and exit cleanly.
+_RELEASE_SQL: str = """
+UPDATE tasks
+SET status = 'PENDING',
+    claimed_by = NULL,
+    claimed_at = NULL,
+    version = tasks.version + 1,
+    updated_at = NOW()
+WHERE id = $1
+  AND version = $2
+  AND status IN ('CLAIMED', 'IN_PROGRESS')
+RETURNING
+    tasks.id,
+    tasks.status,
+    tasks.dependencies,
+    tasks.key_files,
+    tasks.priority,
+    tasks.description,
+    tasks.acceptance_criteria,
+    tasks.test_steps,
+    tasks.prd_requirement,
+    tasks.version
+"""
+
+
 # Heartbeat update for the worker liveness signal (PRD FR-1.6, NFR-1,
 # TASK-019b1). Stamps ``last_heartbeat = NOW()`` for the row keyed by
 # ``worker_id``. Single-row UPDATE — no transaction wrapper, no audit event:
@@ -585,6 +623,87 @@ class TaskRepository:
                 )
                 logger.info(
                     "fail_task: task=%s version=%d reason=%r → FAILED",
+                    row["id"],
+                    row["version"],
+                    reason,
+                )
+                return _row_to_task(row)
+
+    async def release_task(self, task_id: TaskId, version: int, reason: str) -> Task:
+        """Atomically transition ``task_id`` from ``CLAIMED`` | ``IN_PROGRESS`` → ``PENDING``.
+
+        Targeted single-task release used by the worker on graceful shutdown
+        (TASK-019b2): when the local worker receives SIGTERM / SIGINT mid-
+        runner, it cancels the agent and calls this method to put the task
+        back in the pool so a peer worker (or this worker on restart) can
+        pick it up cleanly. Distinct from :meth:`release_stale_tasks` —
+        which is the *batch* visibility-timeout sweep — by being targeted at
+        a single known row with the caller's expected ``version``.
+
+        On success the row's ``status`` flips to ``PENDING``,
+        ``claimed_by`` / ``claimed_at`` are cleared, ``version`` is
+        incremented, and a ``RELEASE`` event is appended carrying
+        ``payload = {"reason": <reason>, "version": <new>}`` — same shape
+        as the sweep's audit row so dashboards / post-mortems don't have
+        to special-case the source.
+
+        Concurrency contract (PRD FR-2.4)
+        ---------------------------------
+        Mirrors :meth:`complete_task`: the UPDATE filters by both
+        ``version`` and ``status``, RETURNING ships the post-update row,
+        and a 0-row result triggers :class:`VersionConflictError` after a
+        single follow-up SELECT to classify the cause:
+
+        * **lost update** — the visibility-timeout sweep released the row
+          first; ``actual_version`` is one ahead and ``actual_status`` is
+          ``PENDING``. The worker should treat this as "already released,
+          nothing to do" and exit.
+        * **wrong status** — the worker already finished / failed the task
+          before the signal handler reached this method (extremely
+          narrow race; not impossible). The terminal status wins.
+        * **task missing** — FK cascade in tests; same as the other
+          methods.
+
+        Args
+        ----
+        task_id:
+            The task to release. Must currently be ``CLAIMED`` or
+            ``IN_PROGRESS`` for the UPDATE to match.
+        version:
+            Caller's last-seen version (typically the value returned by
+            ``start_task`` / ``claim_task``). Used for optimistic locking.
+        reason:
+            Human-readable cause for the release. Persisted into the
+            ``RELEASE`` event payload — distinguishes
+            ``"shutdown"`` (this method) from ``"visibility_timeout"``
+            (the sweep) so the dashboard can show why a task bounced.
+
+        Returns
+        -------
+        Task
+            The post-update task with ``status = PENDING``,
+            ``version`` incremented.
+
+        Raises
+        ------
+        VersionConflictError
+            On a 0-row UPDATE — see classification above.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(_RELEASE_SQL, task_id, version)
+                if row is None:
+                    await self._raise_version_conflict(conn, task_id, version)
+
+                payload = json.dumps({"version": row["version"], "reason": reason})
+                await conn.execute(
+                    _INSERT_EVENT_SQL,
+                    row["id"],
+                    Transition.RELEASE.value,
+                    payload,
+                )
+                logger.info(
+                    "release_task: task=%s version=%d reason=%r → PENDING",
                     row["id"],
                     row["version"],
                     reason,
