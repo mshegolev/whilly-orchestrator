@@ -226,6 +226,26 @@ RETURNING
 """
 
 
+# Heartbeat update for the worker liveness signal (PRD FR-1.6, NFR-1,
+# TASK-019b1). Stamps ``last_heartbeat = NOW()`` for the row keyed by
+# ``worker_id``. Single-row UPDATE — no transaction wrapper, no audit event:
+# heartbeats fire every ~30s for the lifetime of every worker, so writing an
+# event row each tick would bloat ``events`` by orders of magnitude without
+# adding any audit value beyond the timestamp on ``workers``. The visibility-
+# timeout sweep (TASK-025) and the dashboard read ``workers.last_heartbeat``
+# directly; that one column is the canonical liveness signal.
+#
+# A missing ``worker_id`` (admin revoked the worker, FK row was deleted) is a
+# recoverable state for the caller — we surface "0 rows updated" via the
+# return-value bool rather than raising, so the heartbeat loop can log and
+# keep going without sprinkling try/except across the worker code.
+_UPDATE_HEARTBEAT_SQL: str = """
+UPDATE workers
+SET last_heartbeat = NOW()
+WHERE worker_id = $1
+"""
+
+
 # Probe used after an optimistic-lock UPDATE returns 0 rows: differentiates
 # "row vanished" (FK cascade or test bug) from "version moved" / "wrong
 # status". Cheaper than a second UPDATE attempt and gives us enough context
@@ -640,6 +660,51 @@ class TaskRepository:
                         visibility_timeout_seconds,
                     )
                 return released
+
+    async def update_heartbeat(self, worker_id: WorkerId) -> bool:
+        """Stamp ``workers.last_heartbeat = NOW()`` for ``worker_id``.
+
+        Called periodically by the worker (TASK-019b1 for local,
+        TASK-022b2 for remote) under :class:`asyncio.TaskGroup` so the
+        control plane can distinguish "still working" from "crashed and
+        the visibility-timeout sweep should reclaim its row" (PRD FR-1.4).
+
+        Returns ``True`` when a row matched and was updated, ``False``
+        when ``worker_id`` is not registered. The boolean lets the
+        heartbeat loop log a warning and keep ticking without coupling
+        the worker code to repository exception types — a missing worker
+        row (admin revoked, ON DELETE SET NULL after a cascade) is
+        recoverable, not fatal.
+
+        No transaction wrapper, no audit event. Heartbeats fire every
+        ~30s; logging each one would bloat ``events`` by orders of
+        magnitude with no extra audit value beyond the timestamp on
+        ``workers``. Concurrency-wise the UPDATE is a single-row
+        last-writer-wins on a non-primary-key column — safe under
+        contention without locking.
+
+        asyncpg returns the SQL command tag (``"UPDATE 1"`` /
+        ``"UPDATE 0"``) from ``Connection.execute``; we parse the row
+        count from that rather than running a follow-up SELECT.
+        """
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(_UPDATE_HEARTBEAT_SQL, worker_id)
+        # ``result`` is the asyncpg command tag, e.g. "UPDATE 1". Defensive
+        # parse: split on whitespace and take the trailing integer. A
+        # malformed tag (would indicate a driver-level bug, not user
+        # input) falls through to 0 → returns False.
+        try:
+            updated = int(result.rsplit(" ", 1)[-1])
+        except (ValueError, AttributeError):
+            updated = 0
+        if not updated:
+            logger.warning(
+                "update_heartbeat: worker %s not registered (no row updated)",
+                worker_id,
+            )
+            return False
+        logger.debug("update_heartbeat: worker %s last_heartbeat refreshed", worker_id)
+        return True
 
     async def _raise_version_conflict(
         self,
