@@ -195,6 +195,8 @@ __all__ = [
     "CLAIM_POLL_INTERVAL_DEFAULT",
     "HEALTH_PATH",
     "REGISTER_PATH",
+    "SWEEP_INTERVAL_DEFAULT_SECONDS",
+    "VISIBILITY_TIMEOUT_DEFAULT_SECONDS",
     "create_app",
 ]
 
@@ -237,6 +239,25 @@ CLAIM_LONG_POLL_TIMEOUT_DEFAULT: Final[float] = 30.0
 #: idle worker is well under the database's per-connection cost.
 CLAIM_POLL_INTERVAL_DEFAULT: Final[float] = 1.5
 
+#: Default visibility-timeout for the periodic stale-claim sweep (PRD
+#: FR-1.4, TASK-025a). 15 minutes is the PRD's reference value: long
+#: enough that a slow agent on a healthy worker doesn't spuriously lose
+#: its claim while the runner is mid-execution, short enough that a
+#: hard-killed worker's tasks come back into the queue inside one user-
+#: noticeable window. Tests override this via the
+#: ``visibility_timeout_seconds`` kwarg on :func:`create_app` so a
+#: stale CLAIMED row can be aged-out in milliseconds.
+VISIBILITY_TIMEOUT_DEFAULT_SECONDS: Final[int] = 15 * 60
+
+#: Default cadence (seconds) for the periodic visibility-timeout sweep
+#: (PRD FR-1.4, TASK-025a). 60s is the PRD's reference cadence: well
+#: under the timeout itself (so a stale row is reclaimed within at most
+#: timeout + interval seconds of going stale), and well above the
+#: per-tick query cost of :meth:`TaskRepository.release_stale_tasks`
+#: (one CTE round-trip — negligible). Tests pass a small value (e.g.
+#: 0.1s) so the sweep fires inside a sub-second test budget.
+SWEEP_INTERVAL_DEFAULT_SECONDS: Final[float] = 60.0
+
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
 #: where rainbow / dictionary attacks become irrelevant, so plain SHA-256
@@ -263,6 +284,88 @@ _WORKER_ID_PREFIX: Final[str] = "w-"
 #: to ``__version__``.
 _API_TITLE: Final[str] = "Whilly Control Plane"
 _API_VERSION: Final[str] = "4.0.0-dev"
+
+
+async def _visibility_sweep_loop(
+    repo: TaskRepository,
+    *,
+    sweep_interval: float,
+    visibility_timeout: int,
+    stop: asyncio.Event,
+) -> None:
+    """Periodic visibility-timeout sweep coroutine (PRD FR-1.4, TASK-025a).
+
+    Runs under :class:`asyncio.TaskGroup` inside :func:`create_app`'s
+    lifespan. Each iteration sleeps up to ``sweep_interval`` seconds; if
+    the sleep returns by *timeout* (rather than ``stop`` firing) we call
+    :meth:`TaskRepository.release_stale_tasks` once with the configured
+    ``visibility_timeout`` — that's the single SQL round-trip that flips
+    every aged-out ``CLAIMED`` / ``IN_PROGRESS`` row back to ``PENDING``
+    and writes one ``RELEASE`` event per row with ``payload['reason'] =
+    'visibility_timeout'`` (audit drift impossible — see the SQL in
+    :data:`whilly.adapters.db.repository._RELEASE_STALE_SQL`).
+
+    Why an :class:`asyncio.Event` instead of cancellation?
+        Mirrors :func:`whilly.worker.main.run_heartbeat_loop` /
+        :func:`whilly.worker.main.run_worker`: lifespan teardown sets
+        ``stop`` and the loop drops out of its current
+        :func:`asyncio.wait_for` cleanly without raising
+        :class:`asyncio.CancelledError`. This means the enclosing
+        :class:`asyncio.TaskGroup` exits without an exception group at
+        all on the happy shutdown path — fewer corner cases for the
+        FastAPI lifespan to catch and re-surface.
+
+    Why catch ``Exception`` per tick?
+        A transient asyncpg disconnect, a Postgres pgbouncer restart, or
+        a (pathological) FK violation on the audit insert must not kill
+        the sweep. The sweep is the *only* mechanism that recovers
+        claims orphaned by a hard-killed worker (PRD SC-2 fault
+        tolerance); silently turning it off because of one bad SQL
+        round-trip would defeat its whole purpose. We log via
+        ``logger.exception`` so the failure is visible, then sleep one
+        more interval and try again. ``BaseException`` (KeyboardInterrupt,
+        SystemExit) is *not* caught — those are signals to unwind the
+        process, not the sweep.
+
+    Args:
+        repo: The :class:`TaskRepository` bound to the app's pool.
+        sweep_interval: Seconds between sweep ticks. Must be > 0.
+        visibility_timeout: Age threshold (seconds) passed to
+            :meth:`TaskRepository.release_stale_tasks`.
+        stop: Lifespan-owned :class:`asyncio.Event`. Set by the lifespan
+            teardown to request a clean exit.
+    """
+    logger.info(
+        "visibility_timeout sweep started: interval=%.1fs, timeout=%ds",
+        sweep_interval,
+        visibility_timeout,
+    )
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=sweep_interval)
+            # ``stop`` fired during the wait: shutdown path, exit cleanly.
+            break
+        except TimeoutError:
+            # Interval elapsed without a stop — run the sweep tick.
+            pass
+        try:
+            released = await repo.release_stale_tasks(visibility_timeout)
+            if released:
+                logger.info(
+                    "visibility_timeout sweep released %d stale claim(s) (timeout=%ds)",
+                    released,
+                    visibility_timeout,
+                )
+        except Exception:
+            # Defensive: a single failed sweep tick must not take the
+            # loop down for the lifetime of the server. Log and retry
+            # on the next interval. See module docstring for the SC-2
+            # rationale.
+            logger.exception(
+                "visibility_timeout sweep tick failed; will retry in %.1fs",
+                sweep_interval,
+            )
+    logger.info("visibility_timeout sweep stopped")
 
 
 def _hash_token(plaintext: str) -> str:
@@ -336,6 +439,8 @@ def create_app(
     bootstrap_token: str | None = None,
     claim_long_poll_timeout: float = CLAIM_LONG_POLL_TIMEOUT_DEFAULT,
     claim_poll_interval: float = CLAIM_POLL_INTERVAL_DEFAULT,
+    visibility_timeout_seconds: int = VISIBILITY_TIMEOUT_DEFAULT_SECONDS,
+    sweep_interval_seconds: float = SWEEP_INTERVAL_DEFAULT_SECONDS,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -365,6 +470,22 @@ def create_app(
         loop. Defaults to :data:`CLAIM_POLL_INTERVAL_DEFAULT` (1.5s).
         Must be strictly positive — a zero / negative interval would
         spin a tight loop against Postgres and is rejected.
+    visibility_timeout_seconds:
+        Age threshold for the periodic stale-claim sweep (PRD FR-1.4,
+        TASK-025a). A ``CLAIMED`` / ``IN_PROGRESS`` row whose
+        ``claimed_at`` predates ``NOW() - this`` is flipped back to
+        ``PENDING`` by the next sweep tick. Defaults to
+        :data:`VISIBILITY_TIMEOUT_DEFAULT_SECONDS` (15 minutes — the
+        PRD's reference value). Tests override this with a small value
+        (e.g. ``1``) so they can age out a CLAIMED row in milliseconds.
+        Must be ``>= 0``; ``0`` releases every active claim on every
+        tick (only useful in tests with fully-controlled clocks).
+    sweep_interval_seconds:
+        Cadence of the visibility-timeout sweep loop (PRD FR-1.4,
+        TASK-025a). Defaults to :data:`SWEEP_INTERVAL_DEFAULT_SECONDS`
+        (60s — the PRD's reference cadence). Must be strictly positive
+        — a zero or negative interval would tight-loop the database
+        and defeat :func:`asyncio.wait_for` as a cancellation point.
 
     Returns
     -------
@@ -397,6 +518,21 @@ def create_app(
         )
     if claim_long_poll_timeout < 0:
         raise ValueError(f"create_app: claim_long_poll_timeout must be >= 0, got {claim_long_poll_timeout!r}.")
+    if sweep_interval_seconds <= 0:
+        # Same rationale as ``claim_poll_interval``: zero / negative would
+        # tight-loop on Postgres and defeat ``asyncio.wait_for`` as a
+        # shutdown rendezvous.
+        raise ValueError(
+            f"create_app: sweep_interval_seconds must be > 0, got {sweep_interval_seconds!r}; "
+            f"a zero or negative interval would tight-loop the database."
+        )
+    if visibility_timeout_seconds < 0:
+        # ``release_stale_tasks`` itself accepts ``0`` (release every
+        # active claim, useful in tests), so we only reject genuinely
+        # negative values — those would surface as a Postgres error
+        # later, but catching at construction time gives a better
+        # message.
+        raise ValueError(f"create_app: visibility_timeout_seconds must be >= 0, got {visibility_timeout_seconds!r}.")
     resolved_worker_token = _resolve_token(worker_token, WORKER_TOKEN_ENV)
     resolved_bootstrap_token = _resolve_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
     # Bind the auth dependencies *now*, at app-construction time, so a
@@ -426,8 +562,48 @@ def create_app(
         app.state.bearer_dep = bearer_dep
         app.state.bootstrap_dep = bootstrap_dep
         logger.info("Whilly control-plane app started")
+        # Background-task rendezvous (PRD FR-1.4, TASK-025a). The sweep
+        # loop checks this event between sleeps; lifespan teardown sets
+        # it to request a clean exit. Stashed on app.state so tests can
+        # observe it (e.g. assert it was set on shutdown) without
+        # reflective inspection.
+        sweep_stop = asyncio.Event()
+        app.state.sweep_stop = sweep_stop
         try:
-            yield
+            # ``asyncio.TaskGroup`` owns the periodic visibility-timeout
+            # sweep for the duration of the app's lifespan. The task is
+            # created on enter; on exit we set ``sweep_stop`` and the
+            # TaskGroup awaits the loop to drain its current tick. The
+            # loop never raises CancelledError on the happy path, so
+            # the TaskGroup exits without an exception group at all —
+            # the only way out is the ``stop`` event firing.
+            #
+            # If a future TASK-025b (offline-worker detector) lands as
+            # a second background coroutine, it joins this same group:
+            # one TaskGroup per lifespan keeps the supervision boundary
+            # explicit. See PRD R-1 / SC-2 for the fault-tolerance
+            # rationale.
+            async with asyncio.TaskGroup() as tg:
+                tg.create_task(
+                    _visibility_sweep_loop(
+                        repo,
+                        sweep_interval=sweep_interval_seconds,
+                        visibility_timeout=visibility_timeout_seconds,
+                        stop=sweep_stop,
+                    ),
+                    name="whilly-visibility-sweep",
+                )
+                try:
+                    yield
+                finally:
+                    # Signal the loop to stop. The TaskGroup's __aexit__
+                    # then awaits the now-draining sweep coroutine — if
+                    # it's currently mid-``release_stale_tasks`` we wait
+                    # for that single SQL round-trip to complete (no
+                    # half-flushed audit events). Setting the event is
+                    # idempotent; safe under normal-path and crash-path
+                    # exits alike.
+                    sweep_stop.set()
         finally:
             # Pool ownership is the caller's; we just drop our reference
             # so handlers don't keep a dangling pointer if the caller
@@ -435,6 +611,7 @@ def create_app(
             # harnesses that share a pool across multiple sub-apps).
             app.state.pool = None
             app.state.repo = None
+            app.state.sweep_stop = None
             logger.info("Whilly control-plane app stopped")
 
     app = FastAPI(
