@@ -337,7 +337,7 @@
       "category": "test",
       "priority": "high",
       "description": "Phase 2 Integration Test: e2e сценарий — import plan → claim_task → complete_task → export plan. Проверить что events таблица содержит все переходы статуса",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-010",
         "TASK-011"
@@ -353,7 +353,8 @@
       "test_steps": [
         "pytest tests/integration/test_phase2_e2e.py -v"
       ],
-      "prd_requirement": "FR-2.4, FR-2.5"
+      "prd_requirement": "FR-2.4, FR-2.5",
+      "completion_notes": "Phase 2 e2e gate test in tests/integration/test_phase2_e2e.py — 3 focused tests against a session-scoped testcontainers Postgres reuse the shared db_pool / postgres_dsn fixtures from tests/conftest.py (pytestmark = DOCKER_REQUIRED for clean Docker-less skips). Test A (test_phase2_e2e_emits_claim_start_complete_per_task) imports a 3-task plan via `whilly plan import`, plays one worker manually through TaskRepository.claim_task → start_task → complete_task for every task, then asserts the events table holds the full CLAIM/START/COMPLETE trio per task ordered by created_at, with payload version increments 1/2/3 and the CLAIM payload pinning worker_id. Test B (test_phase2_e2e_export_after_completion_shows_done) runs the same loop and asserts `whilly plan export` stdout shows status=DONE for every task plus version=3 (pin counter so a refactor that flips status without bumping version cannot pass silently). Test C (test_phase2_e2e_tasks_table_consistent_with_export) is a belt-and-braces cross-check: same loop, then SELECT directly from tasks vs. exported JSON — divergence on status/version means the SELECT path in _select_plan_with_tasks reads a stale projection. CLI handler invocation goes through asyncio.to_thread because run_plan_command internally calls asyncio.run, which Python refuses to nest under the test loop spawned by pytest-asyncio auto-mode; routing through to_thread parks the handler on a worker thread that owns its own loop and keeps capsys capture intact (verified — tests parse JSON from captured stdout). worker rows are seeded directly via raw SQL on the borrowed pool connection (same pattern as test_concurrent_claims._seed_workers) so this test has no dependency on the transport layer (TASK-021b). _drive_one_task_to_done helper threads version through claim → start → complete; a regression where any method drops the version bump surfaces as VersionConflictError from the next call before assertions even reach the database. Verification: ruff check + ruff format --check whilly/ tests/ clean (172 files); pytest tests/integration/test_phase2_e2e.py -v → 3 passed in 2.0s; full pytest -q → 1160 passed, 1 pre-existing CLAUDE_BIN env-leak failure in test_agent_backend_claude (unrelated, documented in TASK-022c notes — passes with env -u CLAUDE_BIN). Unblocks: TASK-016 (Phase 3 integration test) gains a working Phase 2 baseline to compose on top of."
     },
     {
       "id": "TASK-013",
