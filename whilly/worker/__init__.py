@@ -14,15 +14,17 @@ Sub-modules
   that pairs :func:`local.run_local_worker` with a parallel heartbeat task
   under one :class:`asyncio.TaskGroup`. SIGTERM/SIGINT plumbing extends this
   in TASK-019b2.
-* (future) :mod:`whilly.worker.remote` — TASK-022b, the same shape but over
-  the HTTP transport.
+* :mod:`whilly.worker.remote` — TASK-022b1, the same outer shape but over
+  the HTTP transport. Bare loop only (no heartbeat / signals — those land
+  in 022b2 / 022b3, mirroring the 019b1 / 019b2 slicing on the local side).
 
 Re-exports
 ----------
-The public APIs of both sub-modules are re-exported at this level so callers
+The public APIs of all sub-modules are re-exported at this level so callers
 can ``from whilly.worker import run_local_worker`` /
-``from whilly.worker import run_worker`` without remembering sub-module
-paths. CLI entry points (TASK-019c) and tests use the package-level imports.
+``from whilly.worker import run_worker`` / ``from whilly.worker import
+run_remote_worker`` without remembering sub-module paths. CLI entry points
+(TASK-019c, TASK-022c) and tests use the package-level imports.
 """
 
 from whilly.worker.local import (
@@ -36,13 +38,21 @@ from whilly.worker.main import (
     run_heartbeat_loop,
     run_worker,
 )
+from whilly.worker.remote import (
+    RemoteRunnerCallable,
+    RemoteWorkerStats,
+    run_remote_worker,
+)
 
 __all__ = [
     "DEFAULT_HEARTBEAT_INTERVAL",
     "DEFAULT_IDLE_WAIT",
+    "RemoteRunnerCallable",
+    "RemoteWorkerStats",
     "RunnerCallable",
     "WorkerStats",
     "run_heartbeat_loop",
     "run_local_worker",
+    "run_remote_worker",
     "run_worker",
 ]
