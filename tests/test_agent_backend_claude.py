@@ -67,7 +67,9 @@ class TestBuildCommand:
     def test_basic_shape(self):
         cmd = ClaudeBackend().build_command("hello")
         assert cmd[0] == "claude"
-        assert "--output-format" in cmd and "json" in cmd
+        # stream-json + --verbose: live JSONL events visible via `tail -f`.
+        assert "--output-format" in cmd and "stream-json" in cmd
+        assert "--verbose" in cmd
         assert "--model" in cmd
         assert "-p" in cmd
         assert cmd[-1] == "hello"
@@ -149,6 +151,75 @@ class TestParseOutput:
         assert text == "x"
         assert usage.input_tokens == 0
         assert usage.cost_usd == 0.0
+
+
+def _stream_payload(result_text: str = "ok", cost: float = 0.0042) -> str:
+    """Mimic real Claude CLI ``--output-format stream-json`` output (JSONL)."""
+    lines = [
+        {"type": "system", "subtype": "init", "session_id": "abc"},
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": result_text}]},
+            "session_id": "abc",
+        },
+        {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": result_text,
+            "total_cost_usd": cost,
+            "num_turns": 3,
+            "duration_ms": 12345,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 10,
+                "cache_creation_input_tokens": 5,
+            },
+        },
+    ]
+    return "\n".join(json.dumps(obj) for obj in lines) + "\n"
+
+
+class TestParseStreamJson:
+    """``--output-format stream-json`` produces JSONL with a final type=result event."""
+
+    def test_picks_final_result_event(self):
+        text, usage = ClaudeBackend().parse_output(_stream_payload("hello stream", cost=0.5))
+        assert text == "hello stream"
+        assert usage.cost_usd == pytest.approx(0.5)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 50
+        assert usage.cache_read_tokens == 10
+        assert usage.cache_create_tokens == 5
+        assert usage.num_turns == 3
+        assert usage.duration_ms == 12345
+
+    def test_ignores_non_result_events(self):
+        # Only system + assistant deltas, no result event yet (mid-stream).
+        partial = "\n".join(
+            [
+                json.dumps({"type": "system", "subtype": "init"}),
+                json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}),
+            ]
+        )
+        text, usage = ClaudeBackend().parse_output(partial)
+        # No result event → falls back to raw text + zero usage.
+        assert "system" in text  # raw stream returned verbatim
+        assert usage.cost_usd == 0.0
+
+    def test_blank_lines_in_stream_are_skipped(self):
+        payload = _stream_payload("ok") + "\n\n"
+        text, usage = ClaudeBackend().parse_output(payload)
+        assert text == "ok"
+        assert usage.cost_usd > 0.0
+
+    def test_garbage_lines_are_ignored(self):
+        payload = "garbage line\n" + _stream_payload("done", cost=0.1) + "more garbage\n"
+        text, usage = ClaudeBackend().parse_output(payload)
+        assert text == "done"
+        assert usage.cost_usd == pytest.approx(0.1)
 
 
 # ── Completion detection ─────────────────────────────────────────────────────
