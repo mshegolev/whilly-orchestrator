@@ -14,9 +14,12 @@ Sub-modules
   that pairs :func:`local.run_local_worker` with a parallel heartbeat task
   under one :class:`asyncio.TaskGroup`. SIGTERM/SIGINT plumbing extends this
   in TASK-019b2.
-* :mod:`whilly.worker.remote` — TASK-022b1, the same outer shape but over
-  the HTTP transport. Bare loop only (no heartbeat / signals — those land
-  in 022b2 / 022b3, mirroring the 019b1 / 019b2 slicing on the local side).
+* :mod:`whilly.worker.remote` — TASK-022b1 (bare loop) + TASK-022b2 (heartbeat
+  composition). Same outer shape as the local worker but over the HTTP
+  transport. Signal handling (TASK-022b3) lands in this module too,
+  mirroring the 019b1 / 019b2 slicing on the local side — the only
+  asymmetry is that the remote side colocates loop + supervisor in one
+  file rather than the local side's ``local.py`` + ``main.py`` split.
 
 Re-exports
 ----------
@@ -41,7 +44,9 @@ from whilly.worker.main import (
 from whilly.worker.remote import (
     RemoteRunnerCallable,
     RemoteWorkerStats,
+    run_remote_heartbeat_loop,
     run_remote_worker,
+    run_remote_worker_with_heartbeat,
 )
 
 __all__ = [
@@ -53,6 +58,8 @@ __all__ = [
     "WorkerStats",
     "run_heartbeat_loop",
     "run_local_worker",
+    "run_remote_heartbeat_loop",
     "run_remote_worker",
+    "run_remote_worker_with_heartbeat",
     "run_worker",
 ]
