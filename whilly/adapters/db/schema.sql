@@ -22,10 +22,21 @@ CREATE TABLE workers (
     hostname       TEXT NOT NULL,
     last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     token_hash     TEXT NOT NULL,
-    registered_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    registered_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Offline-worker recovery (TASK-025b, PRD FR-1.4 / NFR-1 / SC-2). The
+    -- offline-worker sweep flips this to 'offline' once last_heartbeat
+    -- ages past its threshold (2 min default) and releases the worker's
+    -- in-flight tasks back to PENDING.
+    status         TEXT NOT NULL DEFAULT 'online',
+    CONSTRAINT ck_workers_status_valid CHECK (status IN ('online', 'offline'))
 );
 
 CREATE INDEX ix_workers_last_heartbeat ON workers (last_heartbeat);
+-- Partial index keeps the offline-worker sweep cheap: only online rows
+-- are candidates, so the planner skips already-flipped workers without
+-- scanning them.
+CREATE INDEX ix_workers_status_online_heartbeat ON workers (last_heartbeat)
+    WHERE status = 'online';
 
 -- ─── plans ───────────────────────────────────────────────────────────────
 CREATE TABLE plans (
