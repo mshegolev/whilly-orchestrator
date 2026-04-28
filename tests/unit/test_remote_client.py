@@ -37,13 +37,19 @@ import pytest
 
 from whilly.adapters.transport.client import (
     DEFAULT_BACKOFF_SCHEDULE,
+    REGISTER_PATH,
     AuthError,
     HTTPClientError,
     RemoteWorkerClient,
     ServerError,
     VersionConflictError,
+    heartbeat_path,
 )
-from whilly.adapters.transport.schemas import ErrorResponse
+from whilly.adapters.transport.schemas import (
+    ErrorResponse,
+    HeartbeatResponse,
+    RegisterResponse,
+)
 from whilly.core.models import TaskStatus
 
 # ---------------------------------------------------------------------------
@@ -450,6 +456,350 @@ async def test_4xx_fail_fast(captured_sleeps: list[float]) -> None:
 
     assert handler_calls["n"] == 1
     assert captured_sleeps == []
+
+
+# ---------------------------------------------------------------------------
+# 2xx body passthrough — the response is returned unparsed
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# register / heartbeat — TASK-022a2
+# ---------------------------------------------------------------------------
+
+
+async def test_register_uses_bootstrap_token_and_register_path() -> None:
+    """``register(hostname)`` POSTs to /workers/register with the bootstrap header.
+
+    The AC's headline contract is the *split* between bootstrap and
+    per-worker tokens: the registration RPC must carry the bootstrap
+    secret, not the per-worker bearer. A regression here would break
+    the PRD FR-1.2 token-rotation story (bootstrap rotation must not
+    invalidate per-worker bearers, and vice-versa).
+
+    The test records the wire request — method, path, body, and the
+    Authorization header — and asserts each is what the AC pins.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(
+            201,
+            json={"worker_id": "w-abc", "token": "fresh-per-worker-token"},
+        )
+
+    async with _make_client(
+        handler,
+        token="placeholder-pre-register",
+        bootstrap_token="boot-secret",
+    ) as client:
+        response = await client.register(hostname="host-alpha")
+
+    assert isinstance(response, RegisterResponse)
+    assert response.worker_id == "w-abc"
+    assert response.token == "fresh-per-worker-token"
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == REGISTER_PATH
+    # The bootstrap header MUST be in place — not the per-worker token.
+    assert captured["auth"] == "Bearer boot-secret"
+    # Body round-trips the pydantic schema.
+    import json
+
+    assert json.loads(captured["body"]) == {"hostname": "host-alpha"}
+
+
+async def test_register_does_not_mutate_per_worker_token() -> None:
+    """``register`` is a transport primitive — it does not swap the bearer.
+
+    Pinned because the design rationale (in :meth:`register`'s docstring)
+    explicitly rejects token-mutation as a side effect: the caller
+    decides what to do with the freshly-issued token. A regression
+    that started overwriting ``self._token`` would silently change
+    the semantics for every subsequent RPC on the same client.
+
+    The handler branches on the URL path: ``register`` should arrive
+    with the bootstrap bearer, and an immediately-following
+    ``heartbeat`` on the same client must still see the *original*
+    per-worker bearer — proving no swap happened.
+    """
+    seen: dict[str, str | None] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        seen[path] = request.headers.get("Authorization")
+        if path == REGISTER_PATH:
+            return httpx.Response(201, json={"worker_id": "w-x", "token": "new-token"})
+        if path.endswith("/heartbeat"):
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(f"unexpected path {path}")
+
+    async with _make_client(
+        handler,
+        token="original-worker-token",
+        bootstrap_token="boot",
+    ) as client:
+        await client.register(hostname="host-beta")
+        await client.heartbeat(worker_id="w-x")
+
+    assert seen[REGISTER_PATH] == "Bearer boot"
+    assert seen[heartbeat_path("w-x")] == "Bearer original-worker-token"
+
+
+async def test_register_without_bootstrap_token_raises() -> None:
+    """A client constructed without ``bootstrap_token`` cannot call ``register``.
+
+    The error surfaces the missing constructor kwarg explicitly so an
+    operator can fix the supervisor-side wiring instead of chasing a
+    cryptic 401 from the server.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — never called
+        return httpx.Response(201, json={"worker_id": "w", "token": "t"})
+
+    async with _make_client(handler, bootstrap_token=None) as client:
+        with pytest.raises(RuntimeError, match="bootstrap_token"):
+            await client.register(hostname="host")
+
+
+async def test_register_propagates_auth_error_on_401() -> None:
+    """A wrong / rotated bootstrap token surfaces as :class:`AuthError`, not silent retry.
+
+    The retry policy must NOT cover 4xx — a flapping register loop
+    against a server with a rotated bootstrap secret would burn cycles
+    forever. This test pins that contract end-to-end through
+    ``register``.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    async with _make_client(handler, bootstrap_token="wrong") as client:
+        with pytest.raises(AuthError) as excinfo:
+            await client.register(hostname="host")
+
+    assert excinfo.value.status_code == 401
+
+
+async def test_register_rejects_empty_hostname_at_schema_layer() -> None:
+    """An empty hostname raises :class:`pydantic.ValidationError` *before* the network call.
+
+    The schema's ``min_length=1`` validation catches programmer errors
+    at the right tier — surfacing as a wire-level 422 would force the
+    operator to read a server log instead of a stack trace from the
+    worker process itself.
+    """
+    handler_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — never called
+        handler_calls["n"] += 1
+        return httpx.Response(201, json={"worker_id": "w", "token": "t"})
+
+    from pydantic import ValidationError
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        with pytest.raises(ValidationError):
+            await client.register(hostname="")
+
+    # The network was never touched — the schema caught it at the boundary.
+    assert handler_calls["n"] == 0
+
+
+async def test_register_surfaces_server_error_on_malformed_response() -> None:
+    """A 2xx response that doesn't match :class:`RegisterResponse` becomes :class:`ServerError`.
+
+    The schema-mismatch case is *not* retryable: the server already
+    succeeded HTTP-wise, the body is just wrong. Surfacing as
+    :class:`ServerError` keeps the worker's outer-loop classifier
+    simple — the same exception class covers "5xx exhausted retries"
+    and "server returned a body we can't validate".
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Missing the required ``token`` field — extra=forbid + min_length checks
+        # in :class:`RegisterResponse` mean validation fails.
+        return httpx.Response(201, json={"worker_id": "w-only"})
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        with pytest.raises(ServerError) as excinfo:
+            await client.register(hostname="host")
+
+    # The cause chain preserves the underlying ValidationError so a
+    # debugger can inspect which field failed.
+    from pydantic import ValidationError as PydanticValidationError
+
+    assert isinstance(excinfo.value.__cause__, PydanticValidationError)
+
+
+async def test_register_surfaces_server_error_on_non_json_body() -> None:
+    """A 2xx HTML/text body becomes :class:`ServerError` rather than crashing inside json().
+
+    A misbehaving proxy (e.g. an HTML 200 page from a captive portal)
+    would otherwise raise an opaque ``ValueError`` deep in httpx; the
+    typed surface here means the supervisor logs see a familiar shape.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, text="<html>not json</html>")
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        with pytest.raises(ServerError) as excinfo:
+            await client.register(hostname="host")
+
+    assert "non-JSON" in str(excinfo.value)
+
+
+async def test_register_retries_on_transient_5xx(captured_sleeps: list[float]) -> None:
+    """``register`` inherits :meth:`_request`'s retry ladder for transient 5xx.
+
+    The PRD allows registration to flake during a deploy; what it
+    forbids is silent retries on 4xx. A 503 → 503 → 201 sequence here
+    must succeed with the documented sleep ladder.
+    """
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            return httpx.Response(503, json={"status": "unavailable"})
+        return httpx.Response(201, json={"worker_id": "w", "token": "t"})
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        response = await client.register(hostname="host")
+
+    assert response.worker_id == "w"
+    assert attempts["n"] == 3
+    assert captured_sleeps == [1.0, 2.0]
+
+
+async def test_heartbeat_uses_bearer_and_dynamic_path() -> None:
+    """``heartbeat(worker_id)`` POSTs to /workers/{id}/heartbeat with the per-worker bearer.
+
+    The two load-bearing facts: (1) the dynamic path includes the
+    worker_id from the argument, (2) the per-worker bearer (NOT the
+    bootstrap secret) authenticates the call.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"ok": True})
+
+    async with _make_client(
+        handler,
+        token="bearer-tok",
+        bootstrap_token="boot-tok",
+    ) as client:
+        response = await client.heartbeat(worker_id="w-42")
+
+    assert isinstance(response, HeartbeatResponse)
+    assert response.ok is True
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/workers/w-42/heartbeat"
+    assert captured["path"] == heartbeat_path("w-42")
+    # Per-worker bearer, NOT the bootstrap token.
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {"worker_id": "w-42"}
+
+
+async def test_heartbeat_returns_ok_false_for_unknown_worker() -> None:
+    """``ok=False`` is a *recoverable* state — the method returns it, not raises.
+
+    The whole point of the AC's dichotomy "raises on 4xx, returns on
+    2xx" is that a worker whose row was admin-revoked sees
+    ``ok=False`` and re-registers in TASK-022b2's heartbeat loop. A
+    regression that started raising here would crash that loop and
+    make the worker unrecoverable.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": False})
+
+    async with _make_client(handler) as client:
+        response = await client.heartbeat(worker_id="w-revoked")
+
+    assert response.ok is False
+
+
+async def test_heartbeat_propagates_auth_error_on_401() -> None:
+    """A rotated per-worker bearer surfaces as :class:`AuthError` from heartbeat.
+
+    Mirrors :func:`test_register_propagates_auth_error_on_401` for the
+    per-worker bearer path. The supervisor's response is to re-register
+    (TASK-022b2) — but that's the supervisor's job, this RPC just
+    surfaces the typed signal.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    async with _make_client(handler, token="rotated-out") as client:
+        with pytest.raises(AuthError) as excinfo:
+            await client.heartbeat(worker_id="w-1")
+
+    assert excinfo.value.status_code == 401
+
+
+async def test_heartbeat_rejects_empty_worker_id_at_schema_layer() -> None:
+    """``heartbeat("")`` raises :class:`pydantic.ValidationError` before any wire call."""
+    handler_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — never called
+        handler_calls["n"] += 1
+        return httpx.Response(200, json={"ok": True})
+
+    from pydantic import ValidationError
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ValidationError):
+            await client.heartbeat(worker_id="")
+
+    assert handler_calls["n"] == 0
+
+
+async def test_heartbeat_surfaces_server_error_on_schema_drift() -> None:
+    """A 200 with a body that doesn't match :class:`HeartbeatResponse` becomes :class:`ServerError`."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Bogus field, no ``ok`` — extra=forbid + missing required.
+        return httpx.Response(200, json={"unknown_key": "value"})
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ServerError):
+            await client.heartbeat(worker_id="w-1")
+
+
+async def test_heartbeat_retries_on_transient_5xx(captured_sleeps: list[float]) -> None:
+    """``heartbeat`` inherits the retry ladder from :meth:`_request`.
+
+    Heartbeat blips during a control-plane deploy must not bring down
+    the worker — the supervisor's outer loop in TASK-022b2 already
+    catches exceptions, but transient 5xx should clear at the RPC tier.
+    """
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] < 2:
+            return httpx.Response(502, text="bad gateway")
+        return httpx.Response(200, json={"ok": True})
+
+    async with _make_client(handler) as client:
+        response = await client.heartbeat(worker_id="w-1")
+
+    assert response.ok is True
+    assert attempts["n"] == 2
+    assert captured_sleeps == [1.0]
 
 
 # ---------------------------------------------------------------------------
