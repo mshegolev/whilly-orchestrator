@@ -81,6 +81,13 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.run import run_run_command
 
         return run_run_command(args[1:])
+    if args and args[0] == "dashboard":
+        # Same lazy-import argument as the other v4 subcommands: the Rich
+        # Live runtime and asyncpg pool are only paid for by callers that
+        # actually want the dashboard. Owner: TASK-027.
+        from whilly.cli.dashboard import run_dashboard_command
+
+        return run_dashboard_command(args[1:])
     return _legacy_main(argv)
 
 
