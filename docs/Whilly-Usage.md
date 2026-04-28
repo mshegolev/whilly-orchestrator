@@ -105,6 +105,58 @@ whilly --ensure-board-statuses                 # create missing Projects v2 colu
 whilly --post-merge <plan.json>                # after an out-of-band merge: flush cards/tickets to Done
 ```
 
+## Inspecting task logs
+
+Every plan run writes per-task artifacts under `whilly_logs/`:
+
+| File                                  | Content                                                  |
+|---------------------------------------|----------------------------------------------------------|
+| `whilly_logs/{task_id}.log`           | Full stdout of the Claude CLI subprocess (or tmux pipe). |
+| `whilly_logs/{task_id}_prompt.txt`    | Final prompt sent to the agent.                          |
+| `whilly_logs/tasks/{task_id}.events.jsonl` | Per-task structured timeline (start, retries, complete, skip). |
+| `whilly_logs/whilly_events.jsonl`     | Global timeline (all tasks + plan-level events).         |
+| `whilly_logs/tasks/http_trace.jsonl`  | HTTP body capture (only with `--trace`).                 |
+| `whilly.log` (rotated 10 MB × 5)      | The orchestrator's own logger.                           |
+
+Three viewer subcommands sit in front of these files — no Rich, no extra deps:
+
+```bash
+whilly logs --list                   # table: task_id, status, duration, cost, last event
+whilly logs <task-id>                # prompt + events timeline + stdout for one task
+whilly logs --tail <task-id>         # live follow (also -f); Ctrl-C to exit
+```
+
+`whilly logs` is a read-only viewer — it does not run the startup banner, does not
+load a plan, and is safe to run while another Whilly is mid-flight in the same
+directory.
+
+### Verbose modes
+
+By default Whilly only captures the Claude CLI's stdout (the final JSON block).
+To see the HTTP traffic between Claude CLI and the Anthropic API, escalate:
+
+```bash
+whilly --verbose --tasks tasks.json   # ANTHROPIC_LOG=info — request lines, no bodies
+whilly --trace   --tasks tasks.json   # ANTHROPIC_LOG=debug + http_trace.jsonl (full bodies)
+```
+
+`--trace` is loud: bodies grow logs by ~10–50× and may contain API keys and full
+prompts. Use it for one-off debugging, not for routine runs. Whilly prints a red
+warning banner whenever `--trace` is on and tags the event in
+`whilly_events.jsonl` so you can audit the file's lineage later.
+
+### Cleanup
+
+`run_plan` runs an age-based cleanup at startup. Files older than
+`WHILLY_LOG_TTL_DAYS` (default `14`) are deleted from `whilly_logs/` and
+`whilly_logs/tasks/`. The global `whilly_events.jsonl` and the rotating
+`whilly.log*` are spared — they have their own retention policies.
+
+```bash
+WHILLY_LOG_TTL_DAYS=0 whilly --tasks tasks.json   # disable cleanup entirely
+WHILLY_LOG_TTL_DAYS=3 whilly --tasks tasks.json   # aggressive: keep last 3 days
+```
+
 ## Human-in-the-loop backend
 
 `claude_handoff` pauses each task and waits for an external operator (or an interactive Claude session) to do the work:
@@ -221,6 +273,9 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 | `WHILLY_USE_TMUX`                 | `0`                    | Run each agent in its own tmux session |
 | `WHILLY_USE_WORKSPACE`            | `0`                    | Plan-level git worktree workspace (off by default since v3.3.0; set `1` or use `--workspace` to enable) |
 | `WHILLY_LOG_DIR`                  | `whilly_logs`          | Directory for per-task logs |
+| `WHILLY_LOG_TTL_DAYS`             | `14`                   | Delete agent logs older than N days at run start (`0` = disabled) |
+| `WHILLY_VERBOSE`                  | `0`                    | Same as `--verbose`/`-v`: sets `ANTHROPIC_LOG=info` (HTTP request lines) |
+| `WHILLY_TRACE_HTTP`               | `0`                    | Same as `--trace`: `ANTHROPIC_LOG=debug` + `tasks/http_trace.jsonl` (full bodies) |
 | `WHILLY_ORCHESTRATOR`             | `file`                 | `file` (key-files collisions) or `llm` (LLM batching) |
 | `WHILLY_VOICE`                    | `1`                    | macOS voice notifications |
 | `WHILLY_HEADLESS`                 | `0`                    | JSON stdout, no TUI (auto when stdout is not a TTY) |
