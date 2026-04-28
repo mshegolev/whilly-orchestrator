@@ -84,7 +84,10 @@ _TRUTH_TABLE: dict[tuple[Transition, TaskStatus], TaskStatus | None] = {
     (Transition.START, TaskStatus.SKIPPED): None,
     # COMPLETE
     (Transition.COMPLETE, TaskStatus.PENDING): None,
-    (Transition.COMPLETE, TaskStatus.CLAIMED): None,
+    # CLAIMED → DONE is the remote-worker path (TASK-024a / SC-3): no
+    # /tasks/{id}/start endpoint exists today, so a remote worker's
+    # claim → run → complete sequence never visits IN_PROGRESS.
+    (Transition.COMPLETE, TaskStatus.CLAIMED): TaskStatus.DONE,
     (Transition.COMPLETE, TaskStatus.IN_PROGRESS): TaskStatus.DONE,
     (Transition.COMPLETE, TaskStatus.DONE): None,
     (Transition.COMPLETE, TaskStatus.FAILED): None,
@@ -128,9 +131,15 @@ def test_truth_table_covers_full_cartesian_product() -> None:
     assert len(_TRUTH_TABLE) == len(Transition) * len(TaskStatus) == 36
 
 
-def test_truth_table_has_ten_valid_edges() -> None:
-    assert len(_VALID_CASES) == 10
-    assert len(_INVALID_CASES) == 26
+def test_truth_table_has_eleven_valid_edges() -> None:
+    # 10 original edges (TASK-005) + 1 added in TASK-024a:
+    # (Transition.COMPLETE, TaskStatus.CLAIMED) → TaskStatus.DONE
+    # for the remote-worker shape (no /start RPC) — see state_machine.py
+    # docstring for the rationale.
+    assert len(_VALID_CASES) == 11
+    # 36 cartesian total - 11 valid = 25 invalid (TASK-024a flipped one
+    # cell from None to a destination, so invalid count drops by 1).
+    assert len(_INVALID_CASES) == 25
 
 
 # ---------------------------------------------------------------------------
