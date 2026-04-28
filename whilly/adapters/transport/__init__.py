@@ -25,6 +25,16 @@ Re-exports below give callers a stable surface
 to know which submodule a schema lives in.
 """
 
+from whilly.adapters.transport.auth import (
+    BOOTSTRAP_TOKEN_ENV,
+    WORKER_TOKEN_ENV,
+    AuthDependency,
+    bearer_auth,
+    bootstrap_auth,
+    make_bearer_auth,
+    make_bootstrap_auth,
+    reset_lazy_dependencies,
+)
 from whilly.adapters.transport.schemas import (
     ClaimRequest,
     ClaimResponse,
@@ -41,6 +51,9 @@ from whilly.adapters.transport.schemas import (
 )
 
 __all__ = [
+    "BOOTSTRAP_TOKEN_ENV",
+    "WORKER_TOKEN_ENV",
+    "AuthDependency",
     "ClaimRequest",
     "ClaimResponse",
     "CompleteRequest",
@@ -53,4 +66,9 @@ __all__ = [
     "RegisterRequest",
     "RegisterResponse",
     "TaskPayload",
+    "bearer_auth",
+    "bootstrap_auth",
+    "make_bearer_auth",
+    "make_bootstrap_auth",
+    "reset_lazy_dependencies",
 ]
