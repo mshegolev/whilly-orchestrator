@@ -16,7 +16,8 @@ Layout
 * :mod:`whilly.adapters.transport.auth` (TASK-021a2) — FastAPI bearer-auth
   dependency.
 * :mod:`whilly.adapters.transport.server` (TASK-021a3) — FastAPI app
-  factory and route handlers.
+  factory ``create_app(pool)`` and the unauthenticated ``/health`` probe.
+  Route handlers for workers / tasks land here in TASK-021b/c.
 * :mod:`whilly.adapters.transport.client` (TASK-022a) — httpx-based remote
   worker client.
 
@@ -49,9 +50,11 @@ from whilly.adapters.transport.schemas import (
     RegisterResponse,
     TaskPayload,
 )
+from whilly.adapters.transport.server import HEALTH_PATH, create_app
 
 __all__ = [
     "BOOTSTRAP_TOKEN_ENV",
+    "HEALTH_PATH",
     "WORKER_TOKEN_ENV",
     "AuthDependency",
     "ClaimRequest",
@@ -68,6 +71,7 @@ __all__ = [
     "TaskPayload",
     "bearer_auth",
     "bootstrap_auth",
+    "create_app",
     "make_bearer_auth",
     "make_bootstrap_auth",
     "reset_lazy_dependencies",
