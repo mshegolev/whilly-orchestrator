@@ -20,26 +20,48 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
-    # v4.0 control plane + scheduler
-    "asyncpg>=0.29",
-    "fastapi>=0.110",
-    "httpx>=0.27",
-    "uvicorn[standard]>=0.27",
-    "alembic>=1.13",
-    # Alembic ships SQLAlchemy as a dep; the [asyncio] extra adds `greenlet`,
-    # which env.py needs to drive asyncpg from a sync Alembic context (TASK-007).
-    "sqlalchemy[asyncio]>=2.0",
+    # Base closure — always installed. Covers `whilly.core` (zero external deps
+    # by design — see PRD SC-6) plus the bits of the CLI / TUI that are shared
+    # by both deployment shapes: rich for output, pydantic for the wire DTOs
+    # that whilly.adapters.transport.client and the FastAPI control plane both
+    # round-trip, typer for the v4 sub-CLI argument parser.
     "rich>=13.0.0",
-    "typer>=0.12",
     "pydantic>=2.6",
-    # legacy v3.x runtime deps (kept until cli.py is removed in a later task)
+    "typer>=0.12",
+    # Legacy v3.x runtime deps (kept until cli_legacy.py is removed in TASK-033+).
     "psutil>=5.9.0",
     "platformdirs>=4.0",
     "keyring>=24.0",
 ]
 
 [project.optional-dependencies]
+# Remote-worker dep closure (TASK-023, PRD FR-1.5, SC-6). Only httpx — the
+# whilly-worker console script's entire transitive import path is
+# whilly.core + whilly.adapters.transport.client + httpx + pydantic (the
+# last lives in base). The .importlinter contract (TASK-029) enforces that
+# this stays true; the extras split is the install-time guarantee that
+# `pip install whilly-orchestrator[worker]` on a worker VM never pulls
+# asyncpg / fastapi / sqlalchemy by accident.
+worker = [
+    "httpx>=0.27",
+]
+# Control-plane + scheduler stack. `pip install whilly-orchestrator[server]`
+# is what an operator runs on the box that hosts FastAPI + Postgres. Alembic
+# ships SQLAlchemy as a dep; the [asyncio] extra adds `greenlet`, which
+# env.py needs to drive asyncpg from a sync Alembic context (TASK-007).
+server = [
+    "asyncpg>=0.29",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "alembic>=1.13",
+    "sqlalchemy[asyncio]>=2.0",
+]
+# Convenience: install both deployment shapes in one go (e.g. for an
+# all-in-one demo or for CI that drives both the server and a remote
+# worker through the same venv).
+all = ["whilly-orchestrator[worker,server]"]
 dev = [
+    "whilly-orchestrator[worker,server]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "testcontainers>=4.0",
@@ -66,7 +88,7 @@ whilly-worker = "whilly.cli.worker:main"
 
 [tool.setuptools.packages.find]
 include = ["whilly", "whilly.*"]
-exclude = ["tests*"]
+exclude = ["tests*", "whilly_worker*"]
 
 [tool.setuptools.package-data]
 whilly = ["py.typed"]
