@@ -1,16 +1,16 @@
-"""FastAPI app factory for the worker ↔ control-plane HTTP API (TASK-021a3 / TASK-021b, PRD FR-1.1 / FR-1.2 / FR-1.6 / TC-6).
+"""FastAPI app factory for the worker ↔ control-plane HTTP API (TASK-021a3 / TASK-021b / TASK-021c1, PRD FR-1.1 / FR-1.2 / FR-1.3 / FR-1.6 / TC-6).
 
 This module is the *composition root* of the control-plane HTTP surface.
 :func:`create_app` wires the asyncpg pool, the auth dependencies from
 :mod:`whilly.adapters.transport.auth` and the wire schemas from
 :mod:`whilly.adapters.transport.schemas` into a single FastAPI app. The
-task-facing endpoints (``/tasks/claim``, ``/tasks/{id}/complete``,
-``/tasks/{id}/fail``) arrive in TASK-021c — they will be added in this
+remaining task-facing endpoints (``/tasks/{id}/complete``,
+``/tasks/{id}/fail``) arrive in TASK-021c2 — they will be added in this
 same module so route handlers stay co-located with the lifespan / state
 / auth plumbing they depend on.
 
-What lives here today (TASK-021a3 + TASK-021b)
-----------------------------------------------
+What lives here today (TASK-021a3 + TASK-021b + TASK-021c1)
+-----------------------------------------------------------
 * :func:`create_app(pool, *, worker_token, bootstrap_token)` — factory.
   Stores ``pool``, a :class:`TaskRepository` and the two pre-bound auth
   dependencies on ``app.state`` so handlers added in TASK-021c can reach
@@ -42,9 +42,45 @@ What lives here today (TASK-021a3 + TASK-021b)
   return as ``{"ok": ...}``. A 200 with ``ok=false`` (worker no longer
   registered) is the documented recoverable state — the caller should
   re-register and resume rather than crashing.
+* ``POST /tasks/claim`` — long-polled task acquisition (PRD FR-1.3).
+  Gated by the per-worker bearer dependency. Wraps
+  :meth:`TaskRepository.claim_task` in a *server-side* poll loop: the
+  request is held open for up to ``claim_long_poll_timeout`` seconds
+  (default 30s), with the repo polled every ``claim_poll_interval``
+  seconds (default 1.5s) until either a row transitions PENDING →
+  CLAIMED or the deadline expires. A successful claim returns 200 with
+  :class:`ClaimResponse` carrying the post-claim :class:`TaskPayload`;
+  the timeout returns 204 No Content (per AC). 204 (rather than 200
+  with a null task) keeps the wire small on the timeout path and lets
+  the remote worker (TASK-022b1) re-poll without redundant JSON
+  decoding. ``plan`` is intentionally left ``None`` here — the AC scope
+  is "Task | 204"; populating it is deferred to a future task that
+  needs the prompt context server-side.
 * OpenAPI docs at ``/docs`` (Swagger UI) and the spec at
   ``/openapi.json`` — both wired by FastAPI's defaults; we don't move
   them off the default paths because operators expect them there.
+
+Long-polling design (PRD FR-1.3)
+--------------------------------
+The repository call (:meth:`TaskRepository.claim_task`) is itself fast —
+a single SQL round-trip with ``FOR UPDATE SKIP LOCKED``. The long-poll
+budget exists because issuing the same query on a tight loop would
+slam Postgres for an empty plan; sleeping ``claim_poll_interval``
+between attempts caps the wasted query rate at ~67 qps per idle
+worker (well under what the database can absorb) without sacrificing
+latency on the warm path. ``asyncio.sleep`` is cancellation-friendly:
+if the HTTP client disconnects mid-poll, Starlette propagates
+:class:`asyncio.CancelledError` through the sleep and the handler
+unwinds cleanly without occupying a pool connection any longer than
+the in-flight ``claim_task`` round-trip itself.
+
+Deadline-based (``time.monotonic()``) rather than count-based
+(``range(int(timeout / interval))``) because :func:`asyncio.sleep` may
+overshoot the requested duration under event-loop pressure; the
+deadline guarantees the total wall-clock time never exceeds the
+budget. We do one final ``claim_task`` *without* sleeping when the
+loop falls through, so a task that lands in the very last interval
+window is still picked up before we return 204.
 
 Token hashing (PRD NFR-3)
 -------------------------
@@ -90,16 +126,18 @@ requests.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
 import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Final
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
 from whilly.adapters.db import TaskRepository
@@ -111,13 +149,19 @@ from whilly.adapters.transport.auth import (
     make_bootstrap_auth,
 )
 from whilly.adapters.transport.schemas import (
+    ClaimRequest,
+    ClaimResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     RegisterRequest,
     RegisterResponse,
+    TaskPayload,
 )
 
 __all__ = [
+    "CLAIM_LONG_POLL_TIMEOUT_DEFAULT",
+    "CLAIM_PATH",
+    "CLAIM_POLL_INTERVAL_DEFAULT",
     "HEALTH_PATH",
     "REGISTER_PATH",
     "create_app",
@@ -135,6 +179,32 @@ HEALTH_PATH: Final[str] = "/health"
 #: the same constant — a typo here would surface in CI rather than as a
 #: silent 404 in production.
 REGISTER_PATH: Final[str] = "/workers/register"
+
+#: Path of the task-claim RPC. Exported alongside :data:`REGISTER_PATH` so
+#: tests, the httpx client (TASK-022a) and any operator running ``curl``
+#: against the API land on the same string — a typo here would surface
+#: in CI as a 404 immediately rather than as silently-broken claims in
+#: production.
+CLAIM_PATH: Final[str] = "/tasks/claim"
+
+#: Default ``claim_long_poll_timeout`` (seconds) — the upper bound on how
+#: long ``POST /tasks/claim`` holds an idle request open before returning
+#: 204. 30s is the PRD's TASK-021c1 budget: long enough that a worker
+#: that just crashed and respawned doesn't issue 30 RPCs before the next
+#: PENDING row arrives, short enough that proxies / load-balancers /
+#: ``httpx`` don't hit their own connection-idle timeouts (typically
+#: 60-120s). Tests override this via the ``claim_long_poll_timeout``
+#: kwarg on :func:`create_app` so the suite stays fast.
+CLAIM_LONG_POLL_TIMEOUT_DEFAULT: Final[float] = 30.0
+
+#: Default ``claim_poll_interval`` (seconds) — how often the long-poll
+#: loop re-issues ``claim_task`` against the database while waiting for
+#: a PENDING row. 1.5s is a deliberate compromise: tighter (≤0.5s)
+#: amplifies query pressure on idle plans without meaningfully reducing
+#: latency on the warm path; looser (≥3s) leaves an unhappy-path tail
+#: where a task lands but waits seconds for the next poll. ~67 qps per
+#: idle worker is well under the database's per-connection cost.
+CLAIM_POLL_INTERVAL_DEFAULT: Final[float] = 1.5
 
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
@@ -233,6 +303,8 @@ def create_app(
     *,
     worker_token: str | None = None,
     bootstrap_token: str | None = None,
+    claim_long_poll_timeout: float = CLAIM_LONG_POLL_TIMEOUT_DEFAULT,
+    claim_poll_interval: float = CLAIM_POLL_INTERVAL_DEFAULT,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -251,13 +323,25 @@ def create_app(
         read from
         :data:`whilly.adapters.transport.auth.BOOTSTRAP_TOKEN_ENV`
         (i.e. ``WHILLY_WORKER_BOOTSTRAP_TOKEN``).
+    claim_long_poll_timeout:
+        Total seconds the ``POST /tasks/claim`` handler holds the
+        request open while polling for a PENDING task. Defaults to
+        :data:`CLAIM_LONG_POLL_TIMEOUT_DEFAULT` (30s — the PRD budget).
+        Tests pass a small value (e.g. 0.3s) so the suite isn't
+        dominated by the long-poll wait time.
+    claim_poll_interval:
+        Seconds between ``claim_task`` retries inside the long-poll
+        loop. Defaults to :data:`CLAIM_POLL_INTERVAL_DEFAULT` (1.5s).
+        Must be strictly positive — a zero / negative interval would
+        spin a tight loop against Postgres and is rejected.
 
     Returns
     -------
     FastAPI
-        Configured app with ``/health``, ``/docs``, ``/openapi.json``
-        already wired. TASK-021b/c add ``/workers/*`` and ``/tasks/*``
-        routes onto this same app instance.
+        Configured app with ``/health``, ``/docs``, ``/openapi.json``,
+        ``/workers/*`` and ``POST /tasks/claim`` wired. TASK-021c2 adds
+        ``POST /tasks/{id}/complete`` and ``POST /tasks/{id}/fail`` onto
+        this same app instance.
 
     Raises
     ------
@@ -265,7 +349,23 @@ def create_app(
         If a required token is missing both from kwargs and the
         environment. The error names the env var so operators don't
         have to grep the codebase to find what's missing.
+    ValueError
+        If ``claim_poll_interval`` is not strictly positive — a zero
+        or negative interval would spin a tight loop against
+        Postgres without yielding to the event loop.
     """
+    if claim_poll_interval <= 0:
+        # Catch the misconfiguration at construction time (loud) rather
+        # than spinning a CPU-bound poll loop in production (silent and
+        # disastrous). Negative or zero would also defeat ``asyncio.sleep``
+        # as a cancellation point, since ``sleep(0)`` does *not* yield in
+        # all event-loop implementations.
+        raise ValueError(
+            f"create_app: claim_poll_interval must be > 0, got {claim_poll_interval!r}; "
+            f"a zero or negative interval would tight-loop the database."
+        )
+    if claim_long_poll_timeout < 0:
+        raise ValueError(f"create_app: claim_long_poll_timeout must be >= 0, got {claim_long_poll_timeout!r}.")
     resolved_worker_token = _resolve_token(worker_token, WORKER_TOKEN_ENV)
     resolved_bootstrap_token = _resolve_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
     # Bind the auth dependencies *now*, at app-construction time, so a
@@ -445,5 +545,92 @@ def create_app(
             )
         ok = await repo.update_heartbeat(worker_id)
         return HeartbeatResponse(ok=ok)
+
+    @app.post(
+        CLAIM_PATH,
+        # The 200 path returns ClaimResponse; FastAPI will infer this
+        # from the type annotation and respect the explicit ``Response``
+        # we return on the 204 path. Declaring it explicitly here keeps
+        # /docs accurate (Swagger shows the success body shape).
+        response_model=ClaimResponse,
+        # Both 200 and 204 are documented success responses. Without
+        # this OpenAPI shows only the inferred 200, and a worker
+        # writing against the schema would think 204 is unexpected.
+        responses={
+            status.HTTP_200_OK: {"model": ClaimResponse, "description": "Task claimed"},
+            status.HTTP_204_NO_CONTENT: {
+                "description": "Long-poll timeout expired with no PENDING tasks; the worker should re-issue the claim.",
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def claim(payload: ClaimRequest) -> Response | ClaimResponse:
+        """Long-polled task acquisition (PRD FR-1.3).
+
+        Wraps :meth:`TaskRepository.claim_task` in a server-side poll
+        loop. The handler retries the claim every ``claim_poll_interval``
+        seconds until either:
+
+        * a row transitions PENDING → CLAIMED (return 200 + the post-
+          update :class:`TaskPayload`), or
+        * the cumulative wait time exceeds ``claim_long_poll_timeout``
+          (return 204 No Content per AC).
+
+        Why server-side long-polling rather than client-side retry?
+            The remote worker (TASK-022b1) would otherwise have to
+            implement its own back-off + reconnect ladder, multiplying
+            both the client complexity and the request rate against
+            the database. Holding a single connection open here lets
+            the worker's outer loop stay trivial: ``while True: claim();
+            run(); complete()``.
+
+        Cancellation
+            ``asyncio.sleep`` is cancellation-friendly: if the client
+            disconnects mid-poll, Starlette propagates
+            :class:`asyncio.CancelledError` through the sleep and the
+            handler unwinds without holding the asyncpg connection
+            longer than the in-flight ``claim_task`` round-trip itself.
+
+        Why one final attempt past the deadline?
+            ``asyncio.sleep`` overshoots under event-loop pressure;
+            using a deadline-based loop guarantees the wall-clock
+            budget but means the *last* sleep can put us past the
+            deadline before we've actually polled. We do one
+            unconditional final ``claim_task`` so a row that arrived
+            in the trailing window is still returned rather than 204'd.
+        """
+        deadline = time.monotonic() + claim_long_poll_timeout
+        while True:
+            claimed = await repo.claim_task(payload.worker_id, payload.plan_id)
+            if claimed is not None:
+                # Hot path: claim succeeded. Wrap the domain Task in
+                # the wire-format payload — ``plan`` is intentionally
+                # left ``None``: the AC scope is "Task | 204", and a
+                # plan-name lookup would expand the task footprint.
+                # TASK-022b1 / future work can populate it if needed.
+                logger.info(
+                    "claim: worker=%s plan=%s task=%s",
+                    payload.worker_id,
+                    payload.plan_id,
+                    claimed.id,
+                )
+                return ClaimResponse(task=TaskPayload.from_task(claimed))
+
+            now = time.monotonic()
+            if now >= deadline:
+                # Long-poll budget exhausted. 204 No Content is the AC
+                # contract: the worker should re-issue the claim
+                # immediately (TASK-022b1's behaviour on 204).
+                logger.debug(
+                    "claim: timeout (no PENDING tasks) worker=%s plan=%s",
+                    payload.worker_id,
+                    payload.plan_id,
+                )
+                return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+            # Cap the sleep at the time remaining to the deadline so
+            # the *total* wait time never exceeds ``claim_long_poll_timeout``
+            # — even when the interval doesn't divide the budget evenly.
+            await asyncio.sleep(min(claim_poll_interval, deadline - now))
 
     return app
