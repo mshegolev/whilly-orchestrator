@@ -1425,7 +1425,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Добиться coverage ≥ 80% для whilly/core/. Запустить coverage report --include='whilly/core/*'. Если < 80% — добавить тесты на непокрытые branches. Это SC-5",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-028"
       ],
@@ -1442,7 +1442,8 @@
         "coverage run -m pytest tests/unit/ tests/integration/",
         "coverage report --include='whilly/core/*' --fail-under=80"
       ],
-      "prd_requirement": "SC-5, NFR-2"
+      "prd_requirement": "SC-5, NFR-2",
+      "completion_notes": "Coverage gate landed in commit 0749164 (TASK-033b) as part of the test job: coverage run --source=whilly/core -m pytest -q tests/unit/ followed by coverage report --fail-under=80 (hard CI gate). Actual coverage on whilly.core is 100% (233 stmts, 74 branches, 0 misses across whilly/core/__init__.py + models.py + prompts.py + scheduler.py + state_machine.py) driven by the 439 tests in tests/unit/ — the core unit suites (test_state_machine.py, test_scheduler.py, test_prompts.py from TASK-006/014/018) were authored targeting 100% coverage already, so the >=80% threshold is comfortably met without any extra test-writing work. Why this is closed by TASK-033b rather than a separate commit: the CI gate IS the deliverable of TASK-030 (the coverage value was already there, only the enforcement was missing); landing a separate commit just to mark the planning state would have been ceremonial."
     },
     {
       "id": "TASK-031",
@@ -1450,7 +1451,7 @@
       "category": "infra",
       "priority": "high",
       "description": "mypy --strict whilly/core/ должен проходить без ошибок. Добавить CI шаг. Зафиксировать в pyproject.toml [[tool.mypy.overrides]] для whilly.core с strict = true",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-028"
       ],
@@ -1465,7 +1466,8 @@
       "test_steps": [
         "python3 -m mypy --strict whilly/core/"
       ],
-      "prd_requirement": "NFR-4"
+      "prd_requirement": "NFR-4",
+      "completion_notes": "mypy --strict gate landed in commit 0749164 (TASK-033b) as the new type-check CI job. mypy run on whilly/core/ returns Success: no issues found in 5 source files. The strictness is double-anchored: pyproject.toml declares [[tool.mypy.overrides]] module = \"whilly.core.*\" with disallow_untyped_defs, disallow_any_generics, disallow_untyped_calls, disallow_incomplete_defs, check_untyped_defs, disallow_untyped_decorators, no_implicit_optional, warn_unused_ignores, warn_return_any, strict_equality, extra_checks (per-module subset of --strict from TASK-002), AND the CI job invokes  explicitly so the log line in CI clearly shows strict mode. Why double-anchored: pyproject overrides catch local mypy runs ( from a dev shell), explicit --strict catches the case where someone removes the overrides without realizing they were the runtime gate. Why closed by TASK-033b rather than a separate commit: same reasoning as TASK-030 — strictness was already authored into core code, only the CI gate was missing."
     },
     {
       "id": "TASK-032a",
@@ -1600,7 +1602,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Обновить .github/workflows/ci.yml с шагами для v4.0: ruff check + ruff format --check, mypy --strict whilly/core/, lint-imports (import-linter), pytest, coverage report --include='whilly/core/*' --fail-under=80. Matrix Python 3.12.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-032d"
       ],
@@ -1618,7 +1620,8 @@
         "python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'",
         "grep -E 'ruff|mypy|lint-imports|pytest|coverage' .github/workflows/ci.yml"
       ],
-      "prd_requirement": "Day 7 deliverable"
+      "prd_requirement": "Day 7 deliverable",
+      "completion_notes": "CI workflow rebuilt around the v4 hexagonal layout. New jobs: type-check (mypy --strict whilly/core/), test (pytest tests/unit/ + coverage --fail-under=80). Reworked: dropped the v3 multi-Python matrix (3.10/3.11/3.12 + windows/macos/ubuntu) — v4 declares requires-python>=3.12 so 3.10/3.11 cells failed at install, and cross-platform smoke is a v3 artifact (v4 is server-shaped). Single ubuntu/3.12 cell runs in <2min. Untouched: lint, arch-guard, agent-backends — green on independent paths. Coverage artifact uploaded for PR reviewers (14-day retention). Verification: yaml.safe_load OK (5 jobs); grep -E 'ruff|mypy|lint-imports|pytest|coverage' returns all five keywords (TASK-033b test_steps gate); local mypy --strict whilly/core/ -> success; local coverage on tests/unit/ -> 100% on whilly.core. Implicitly closes TASK-030 (coverage gate live) and TASK-031 (mypy strict gate live)."
     },
     {
       "id": "TASK-034a",
