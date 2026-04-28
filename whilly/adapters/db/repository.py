@@ -284,6 +284,23 @@ WHERE worker_id = $1
 """
 
 
+# Worker registration insert (PRD FR-1.1, TASK-021b). Stores the server-issued
+# ``worker_id``, the worker-reported ``hostname`` and the *hash* of the
+# per-worker bearer token (NEVER the plaintext — PRD NFR-3). ``last_heartbeat``
+# and ``registered_at`` default to ``NOW()`` via the schema's server defaults
+# so the first heartbeat the worker sends genuinely advances the timestamp.
+#
+# No ``ON CONFLICT`` clause: ``register_worker`` is the cluster-join entry
+# point and a server-generated ``worker_id`` collision is astronomically
+# unlikely — see ``register_worker``'s docstring for the entropy budget. If
+# it ever does happen, the unique-violation surface lets the caller retry
+# with a fresh id rather than silently overwriting another worker's row.
+_INSERT_WORKER_SQL: str = """
+INSERT INTO workers (worker_id, hostname, token_hash)
+VALUES ($1, $2, $3)
+"""
+
+
 # Probe used after an optimistic-lock UPDATE returns 0 rows: differentiates
 # "row vanished" (FK cascade or test bug) from "version moved" / "wrong
 # status". Cheaper than a second UPDATE attempt and gives us enough context
@@ -779,6 +796,47 @@ class TaskRepository:
                         visibility_timeout_seconds,
                     )
                 return released
+
+    async def register_worker(
+        self,
+        worker_id: WorkerId,
+        hostname: str,
+        token_hash: str,
+    ) -> None:
+        """Insert a new row in ``workers`` for a freshly-registered worker (PRD FR-1.1).
+
+        Called by the ``POST /workers/register`` handler in
+        :mod:`whilly.adapters.transport.server` (TASK-021b) after the
+        bootstrap-token check passes and the server has minted a fresh
+        ``worker_id`` plus a per-worker bearer token. Only the *hash* of
+        the token reaches Postgres (PRD NFR-3) — the plaintext is returned
+        once in the HTTP response and then discarded by the server.
+
+        ``worker_id`` is generated server-side from
+        :func:`secrets.token_urlsafe`: 64+ bits of entropy is enough that
+        a unique-violation collision is effectively impossible across any
+        plausible cluster size, so we don't bother with ``ON CONFLICT``
+        retry logic — a (vanishingly rare) collision surfaces as
+        :class:`asyncpg.UniqueViolationError`, which the handler can
+        translate to a 500 and log for follow-up rather than silently
+        overwriting another worker's row.
+
+        Why no transaction wrapper?
+            One INSERT, no audit event, no follow-up read. The heartbeat /
+            registered_at columns default to ``NOW()`` via the schema's
+            server-side defaults, so the row is fully populated atomically
+            by the single statement. A transaction here would only inflate
+            the wire round-trips without adding any invariant.
+
+        Why no return value?
+            The caller already knows the ``worker_id`` (it generated it)
+            and the plaintext token (it generated that too). Returning
+            anything else would just leak the asyncpg row object into a
+            layer that doesn't need it.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash)
+        logger.info("register_worker: registered worker %s on %s", worker_id, hostname)
 
     async def update_heartbeat(self, worker_id: WorkerId) -> bool:
         """Stamp ``workers.last_heartbeat = NOW()`` for ``worker_id``.

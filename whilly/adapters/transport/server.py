@@ -1,19 +1,20 @@
-"""FastAPI app factory for the worker ↔ control-plane HTTP API (TASK-021a3, PRD FR-1.2 / TC-6).
+"""FastAPI app factory for the worker ↔ control-plane HTTP API (TASK-021a3 / TASK-021b, PRD FR-1.1 / FR-1.2 / FR-1.6 / TC-6).
 
 This module is the *composition root* of the control-plane HTTP surface.
 :func:`create_app` wires the asyncpg pool, the auth dependencies from
 :mod:`whilly.adapters.transport.auth` and the wire schemas from
 :mod:`whilly.adapters.transport.schemas` into a single FastAPI app. The
-worker- and task-facing endpoints arrive in TASK-021b and TASK-021c —
-they will be added in this same module so route handlers stay co-located
-with the lifespan / state / auth plumbing they depend on.
+task-facing endpoints (``/tasks/claim``, ``/tasks/{id}/complete``,
+``/tasks/{id}/fail``) arrive in TASK-021c — they will be added in this
+same module so route handlers stay co-located with the lifespan / state
+/ auth plumbing they depend on.
 
-What lives here today (TASK-021a3)
-----------------------------------
+What lives here today (TASK-021a3 + TASK-021b)
+----------------------------------------------
 * :func:`create_app(pool, *, worker_token, bootstrap_token)` — factory.
-  Stores ``pool`` and the two pre-bound auth dependencies on ``app.state``
-  so handlers added in TASK-021b/c can reach them via
-  ``request.app.state``. Tokens default to the values from the
+  Stores ``pool``, a :class:`TaskRepository` and the two pre-bound auth
+  dependencies on ``app.state`` so handlers added in TASK-021c can reach
+  them via ``request.app.state``. Tokens default to the values from the
   environment so production callers can ``create_app(pool)`` with no
   kwargs and still get a fail-fast error if the env is misconfigured.
   Tests pass tokens explicitly to avoid touching ``os.environ``.
@@ -25,9 +26,37 @@ What lives here today (TASK-021a3)
   :func:`whilly.adapters.db.create_pool`) and the operational win — early
   detection by Kubernetes liveness or an external uptime probe — is
   large.
+* ``POST /workers/register`` — cluster-join RPC (PRD FR-1.1). Gated by
+  the bootstrap-token dependency: a fresh worker has no per-worker
+  credentials yet, so the only secret it can prove possession of is the
+  cluster-wide bootstrap token. Server mints a fresh ``worker_id`` +
+  per-worker bearer token, hashes the token via SHA-256, and inserts the
+  ``workers`` row through :meth:`TaskRepository.register_worker`. The
+  *plaintext* token is returned exactly once in the response — the
+  server discards it after sending. PRD NFR-3 guarantees plaintext is
+  never persisted server-side.
+* ``POST /workers/{worker_id}/heartbeat`` — liveness ping (PRD FR-1.6).
+  Gated by the per-worker bearer dependency — the cluster's shared
+  ``WHILLY_WORKER_TOKEN`` proves the caller is a registered member.
+  Calls :meth:`TaskRepository.update_heartbeat` and surfaces the bool
+  return as ``{"ok": ...}``. A 200 with ``ok=false`` (worker no longer
+  registered) is the documented recoverable state — the caller should
+  re-register and resume rather than crashing.
 * OpenAPI docs at ``/docs`` (Swagger UI) and the spec at
   ``/openapi.json`` — both wired by FastAPI's defaults; we don't move
   them off the default paths because operators expect them there.
+
+Token hashing (PRD NFR-3)
+-------------------------
+Per-worker tokens are produced by :func:`secrets.token_urlsafe(32)` —
+~256 bits of entropy. Plain SHA-256 is correct here: with that much
+entropy there is no dictionary to attack, so the slow-hashing argument
+that motivates bcrypt for *passwords* doesn't apply. Constant-time hash
+verification is also the natural fit for the bearer-auth path — the
+heavy work-factor of bcrypt on every request would amplify trivially-
+abusable DoS vectors. We keep the hash format opaque (raw lowercase
+hex) so a future migration to argon2 / a salted scheme can land in
+:func:`_hash_token` without touching the routes.
 
 Why a factory, not a module-level ``app``
 -----------------------------------------
@@ -61,16 +90,19 @@ requests.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Final
 
 import asyncpg
-from fastapi import FastAPI, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 
+from whilly.adapters.db import TaskRepository
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
@@ -78,9 +110,16 @@ from whilly.adapters.transport.auth import (
     make_bearer_auth,
     make_bootstrap_auth,
 )
+from whilly.adapters.transport.schemas import (
+    HeartbeatRequest,
+    HeartbeatResponse,
+    RegisterRequest,
+    RegisterResponse,
+)
 
 __all__ = [
     "HEALTH_PATH",
+    "REGISTER_PATH",
     "create_app",
 ]
 
@@ -91,6 +130,30 @@ logger = logging.getLogger(__name__)
 #: the same string and a typo here surfaces in CI immediately.
 HEALTH_PATH: Final[str] = "/health"
 
+#: Path of the cluster-join RPC. Exported for symmetry with
+#: :data:`HEALTH_PATH` so tests and the httpx client (TASK-022a) point at
+#: the same constant — a typo here would surface in CI rather than as a
+#: silent 404 in production.
+REGISTER_PATH: Final[str] = "/workers/register"
+
+#: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
+#: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
+#: where rainbow / dictionary attacks become irrelevant, so plain SHA-256
+#: hashing of the result is sufficient (see module docstring).
+_TOKEN_ENTROPY_BYTES: Final[int] = 32
+
+#: Number of bytes of entropy used for the server-issued worker_id. 8 bytes
+#: ≈ 64 bits, giving ~10^9 collisions only after ~4 billion registrations
+#: per the birthday bound — orders of magnitude above any realistic cluster
+#: size, so the unique-violation surface in :class:`TaskRepository` is a
+#: defensive theoretical guard rather than a hot path.
+_WORKER_ID_ENTROPY_BYTES: Final[int] = 8
+
+#: Prefix for server-generated worker ids. ``w-`` keeps the IDs human-
+#: scannable in logs / dashboards (TASK-027) without limiting the entropy
+#: of the suffix.
+_WORKER_ID_PREFIX: Final[str] = "w-"
+
 #: API metadata exposed via ``/docs`` and ``/openapi.json``. ``version``
 #: is intentionally ``4.0.0-dev`` rather than reading
 #: :mod:`whilly.__version__` — the wire protocol version is independent
@@ -99,6 +162,34 @@ HEALTH_PATH: Final[str] = "/health"
 #: to ``__version__``.
 _API_TITLE: Final[str] = "Whilly Control Plane"
 _API_VERSION: Final[str] = "4.0.0-dev"
+
+
+def _hash_token(plaintext: str) -> str:
+    """Return the canonical hash of a per-worker bearer token (PRD NFR-3).
+
+    Plain SHA-256 over UTF-8 bytes, hex-encoded. The output is what lands
+    in ``workers.token_hash``; the plaintext token is returned to the
+    worker exactly once via :class:`RegisterResponse` and then discarded
+    by the server. See the module docstring for why bcrypt isn't the
+    right primitive for *random* bearer tokens.
+
+    Centralising the encoding here means a future migration to a salted
+    or KDF-based scheme (argon2 / scrypt) can change the hash format
+    without touching the route handlers — they call :func:`_hash_token`
+    and let this function decide what goes on disk.
+    """
+    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+def _generate_worker_id() -> str:
+    """Mint a fresh URL-safe ``worker_id`` for a newly-registered worker.
+
+    Format is ``w-<urlsafe>`` — the prefix keeps logs scannable and the
+    suffix carries the entropy. Uses :func:`secrets.token_urlsafe` so the
+    bytes come from the OS CSPRNG; collisions are vanishingly unlikely
+    across any plausible cluster size (see :data:`_WORKER_ID_ENTROPY_BYTES`).
+    """
+    return f"{_WORKER_ID_PREFIX}{secrets.token_urlsafe(_WORKER_ID_ENTROPY_BYTES)}"
 
 
 def _resolve_token(arg: str | None, env_name: str) -> str:
@@ -184,15 +275,23 @@ def create_app(
     # ``_resolve_token`` ever returning an empty string by accident.
     bearer_dep: AuthDependency = make_bearer_auth(resolved_worker_token)
     bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
+    # Construct the repository once at app build time. The repo is a
+    # thin wrapper around the pool, so reusing one instance across all
+    # requests is both correct and cheaper than instantiating per
+    # request. Stashed on app.state below so handlers added in
+    # TASK-021c reach the same instance via ``request.app.state``.
+    repo = TaskRepository(pool)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        # Stash pool + auth deps on app.state so handlers added in
-        # TASK-021b/c can reach them without closing over module globals.
-        # ``state`` is starlette's free-form attribute bag — typed as
-        # ``Any`` so we can't lean on mypy here; the integration tests
-        # in TASK-021b/c are what guarantee handlers find what they need.
+        # Stash pool + repo + auth deps on app.state so handlers added
+        # in TASK-021c can reach them without closing over module
+        # globals. ``state`` is starlette's free-form attribute bag —
+        # typed as ``Any`` so we can't lean on mypy here; the
+        # integration tests in TASK-021b/c are what guarantee handlers
+        # find what they need.
         app.state.pool = pool
+        app.state.repo = repo
         app.state.bearer_dep = bearer_dep
         app.state.bootstrap_dep = bootstrap_dep
         logger.info("Whilly control-plane app started")
@@ -204,6 +303,7 @@ def create_app(
             # closes the pool but reuses the app object (e.g. test
             # harnesses that share a pool across multiple sub-apps).
             app.state.pool = None
+            app.state.repo = None
             logger.info("Whilly control-plane app stopped")
 
     app = FastAPI(
@@ -260,5 +360,90 @@ def create_app(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return JSONResponse({"status": "ok"})
+
+    @app.post(
+        REGISTER_PATH,
+        response_model=RegisterResponse,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(bootstrap_dep)],
+    )
+    async def register_worker(payload: RegisterRequest) -> RegisterResponse:
+        """Mint a fresh worker identity and return its bearer token (PRD FR-1.1).
+
+        Gated by the *bootstrap* token (cluster-join secret) — the
+        worker has no per-worker credentials yet, so the only secret it
+        can present is the cluster-wide ``WHILLY_WORKER_BOOTSTRAP_TOKEN``.
+
+        The handler:
+
+        1. Generates a fresh ``worker_id`` (``w-<urlsafe>``) — server-
+           side so two workers can't pick the same id.
+        2. Generates a fresh per-worker bearer token via
+           :func:`secrets.token_urlsafe(32)` — ~256 bits of entropy.
+        3. Hashes the token via :func:`_hash_token` and stores only the
+           hash in ``workers.token_hash`` (PRD NFR-3 — plaintext is
+           never persisted).
+        4. Returns the *plaintext* token in the response. The worker is
+           expected to keep it in memory for the lifetime of the
+           process; if it crashes it must re-register.
+
+        201 (not 200) is the right status: a new resource (the worker
+        row) is created, and operators reading access logs can grep
+        ``201`` to count successful registrations. Returning ``RegisterResponse``
+        as a model means FastAPI handles validation + serialisation +
+        the OpenAPI spec automatically.
+        """
+        worker_id = _generate_worker_id()
+        plaintext_token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+        token_hash = _hash_token(plaintext_token)
+        try:
+            await repo.register_worker(worker_id, payload.hostname, token_hash)
+        except asyncpg.UniqueViolationError:
+            # Defensive: 64 bits of entropy makes this nearly impossible.
+            # If it does fire we surface a 500 rather than retrying with
+            # a fresh id — a collision is overwhelmingly likely to mean
+            # something is wrong with the entropy source / clock and a
+            # blind retry would just paper over it.
+            logger.exception("register_worker: worker_id collision on %s", worker_id)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="worker_id collision; retry registration",
+            ) from None
+        return RegisterResponse(worker_id=worker_id, token=plaintext_token)
+
+    @app.post(
+        "/workers/{worker_id}/heartbeat",
+        response_model=HeartbeatResponse,
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def heartbeat(worker_id: str, payload: HeartbeatRequest) -> HeartbeatResponse:
+        """Refresh ``workers.last_heartbeat`` for ``worker_id`` (PRD FR-1.6).
+
+        Gated by the per-worker bearer dependency — the cluster-shared
+        ``WHILLY_WORKER_TOKEN`` is what proves the caller is a registered
+        member of the cluster. The path parameter is the canonical
+        identity; the body's ``worker_id`` is a defence-in-depth echo
+        (per :class:`HeartbeatRequest`'s docstring) that we validate
+        against the path to surface mis-routed clients early.
+
+        ``ok=false`` with HTTP 200 is the documented recoverable state:
+        the worker_id is not (or no longer) registered. The caller's
+        right move is to re-register and continue, not to crash. Any
+        unrelated database failure surfaces as a 500 with the asyncpg
+        error in the body — see :class:`TaskRepository.update_heartbeat`.
+        """
+        if payload.worker_id != worker_id:
+            # Mismatch between path and body indicates a misrouted /
+            # mis-built client request. 400 is the right code: the
+            # request itself is malformed (the body contradicts the
+            # URL). 422 would be a pure schema violation; this is a
+            # cross-field validation that FastAPI can't catch via
+            # pydantic alone.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(f"worker_id in body does not match path: path={worker_id!r} body={payload.worker_id!r}"),
+            )
+        ok = await repo.update_heartbeat(worker_id)
+        return HeartbeatResponse(ok=ok)
 
     return app

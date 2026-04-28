@@ -50,11 +50,12 @@ from whilly.adapters.transport.schemas import (
     RegisterResponse,
     TaskPayload,
 )
-from whilly.adapters.transport.server import HEALTH_PATH, create_app
+from whilly.adapters.transport.server import HEALTH_PATH, REGISTER_PATH, create_app
 
 __all__ = [
     "BOOTSTRAP_TOKEN_ENV",
     "HEALTH_PATH",
+    "REGISTER_PATH",
     "WORKER_TOKEN_ENV",
     "AuthDependency",
     "ClaimRequest",
