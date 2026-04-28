@@ -273,13 +273,23 @@ RETURNING
 # timeout sweep (TASK-025) and the dashboard read ``workers.last_heartbeat``
 # directly; that one column is the canonical liveness signal.
 #
+# Also flips ``status`` back to ``'online'`` (TASK-025b): a worker that the
+# offline-worker sweep marked offline can recover transparently — its next
+# heartbeat returns it to the active pool. The flip is unconditional rather
+# than guarded on ``status = 'offline'`` because: (a) the noop case
+# ``'online' → 'online'`` is a single-column overwrite with no side effects,
+# (b) the canonical signal is still ``last_heartbeat``, so any future
+# observer reading ``status`` knows it's a derived flag that follows
+# heartbeat truth.
+#
 # A missing ``worker_id`` (admin revoked the worker, FK row was deleted) is a
 # recoverable state for the caller — we surface "0 rows updated" via the
 # return-value bool rather than raising, so the heartbeat loop can log and
 # keep going without sprinkling try/except across the worker code.
 _UPDATE_HEARTBEAT_SQL: str = """
 UPDATE workers
-SET last_heartbeat = NOW()
+SET last_heartbeat = NOW(),
+    status = 'online'
 WHERE worker_id = $1
 """
 
@@ -347,6 +357,76 @@ WITH released AS (
 )
 INSERT INTO events (task_id, event_type, payload)
 SELECT id, $2, jsonb_build_object('reason', $3::text, 'version', version)
+FROM released
+RETURNING task_id
+"""
+
+
+# Offline-worker sweep (PRD FR-1.4, NFR-1, SC-2, TASK-025b). Two-step CTE in
+# one round-trip: flip every still-``online`` worker whose last heartbeat
+# predates ``NOW() - $1 seconds`` to ``offline`` (RETURNING worker_id), then
+# join those ids back into ``tasks`` to release every CLAIMED / IN_PROGRESS
+# row that worker owned. The final INSERT writes one RELEASE event per
+# released task carrying ``payload = {"reason": "worker_offline", "version":
+# <new>, "worker_id": <wid>}`` so dashboards (TASK-027) and post-mortems can
+# surface *why* the bounce happened without joining ``events`` to ``workers``
+# at read time.
+#
+# Why the worker UPDATE *first*, not after the task release?
+#     If we released tasks first and then flipped workers, a heartbeat that
+#     arrived between the two writes (new worker process re-using the old
+#     ``worker_id``? unlikely but not impossible under cluster restart)
+#     would put the row back to ``online`` while we're still mid-release —
+#     and the audit log would carry ``worker_offline`` for a worker the
+#     workers row says is healthy. Doing the worker UPDATE first means the
+#     RETURNING set is the *committed-as-offline* cohort; the task release
+#     and audit insert reference exactly that cohort, by design.
+#
+# Why ``status = 'online'`` in the WHERE clause?
+#     Re-running the sweep against an already-offline worker would write a
+#     second batch of RELEASE events for tasks that are already PENDING (or
+#     have been re-claimed by another worker). Filtering on ``status =
+#     'online'`` makes the sweep idempotent — a worker that comes back to
+#     life will heartbeat itself back to online (TASK-019b1 / TASK-022b2)
+#     and the next stale window starts the cycle fresh.
+#
+# Concurrency with active workers (PRD FR-2.4)
+# --------------------------------------------
+# Same lock-free contract as :data:`_RELEASE_STALE_SQL`: the sweep does not
+# take row locks. A concurrent ``complete_task`` / ``fail_task`` from the
+# (mid-die) worker process either commits before our UPDATE matches the
+# row (status filter excludes it — we silently skip), or commits after
+# (the worker's UPDATE matches zero rows because we advanced the version,
+# and surfaces :class:`VersionConflictError`). Exactly one writer wins.
+#
+# ``$1::int`` is the heartbeat-staleness threshold in seconds (2 minutes by
+# default — well under the 15 min visibility timeout, so this is the
+# *primary* fault-tolerance signal and the visibility timeout is the
+# fallback for cases where a worker's heartbeat is somehow live but its
+# claim is genuinely stuck). ``$2`` is :data:`Transition.RELEASE.value`
+# (string), ``$3`` is ``"worker_offline"`` (the audit reason).
+_RELEASE_OFFLINE_WORKERS_SQL: str = """
+WITH offline_workers AS (
+    UPDATE workers
+    SET status = 'offline'
+    WHERE status = 'online'
+      AND last_heartbeat < NOW() - make_interval(secs => $1::int)
+    RETURNING worker_id
+),
+released AS (
+    UPDATE tasks
+    SET status = 'PENDING',
+        claimed_by = NULL,
+        claimed_at = NULL,
+        version = tasks.version + 1,
+        updated_at = NOW()
+    FROM offline_workers
+    WHERE tasks.claimed_by = offline_workers.worker_id
+      AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
+    RETURNING tasks.id, tasks.version, offline_workers.worker_id
+)
+INSERT INTO events (task_id, event_type, payload)
+SELECT id, $2, jsonb_build_object('reason', $3::text, 'version', version, 'worker_id', worker_id)
 FROM released
 RETURNING task_id
 """
@@ -794,6 +874,106 @@ class TaskRepository:
                     logger.debug(
                         "release_stale_tasks: visibility_timeout=%ds — no stale claims",
                         visibility_timeout_seconds,
+                    )
+                return released
+
+    async def release_offline_workers(self, heartbeat_timeout_seconds: int) -> int:
+        """Mark stale-heartbeat workers ``offline`` and release their in-flight tasks.
+
+        Implements the offline-worker recovery path (PRD FR-1.4, NFR-1,
+        SC-2, TASK-025b): every worker whose ``last_heartbeat`` predates
+        ``NOW() - heartbeat_timeout_seconds`` and is still ``online`` is
+        flipped to ``offline``; every ``CLAIMED`` / ``IN_PROGRESS`` task
+        owned by that cohort is flipped back to ``PENDING`` (clearing
+        ``claimed_by`` / ``claimed_at``, incrementing ``version``); and a
+        ``RELEASE`` event is appended per released task with ``payload =
+        {"reason": "worker_offline", "version": <new>, "worker_id":
+        <wid>}``. All three writes happen in a single SQL statement so
+        the audit log can never disagree with either the workers row or
+        the tasks row.
+
+        Why a separate sweep from :meth:`release_stale_tasks`?
+            Both eventually flip orphaned claims back to ``PENDING``, but
+            they run on different timing budgets and observe different
+            signals:
+
+            * :meth:`release_stale_tasks` (visibility timeout) fires on
+              ``claimed_at`` aging — 15 min by default. Catches the
+              edge case where a heartbeat is live but a task is
+              genuinely stuck (agent process hung mid-step but the
+              heartbeat coroutine still ticking).
+            * :meth:`release_offline_workers` (heartbeat staleness) fires
+              on ``last_heartbeat`` aging — 2 min by default. Catches
+              the *common* case: worker process killed (OOM, SIGKILL,
+              host reboot). 7.5x faster recovery means SC-2's "kill a
+              worker mid-task, peer worker picks up within seconds, not
+              minutes" lands without forcing the visibility timeout
+              down to 30s (which would risk releasing live work whose
+              heartbeat just got delayed under event-loop pressure).
+
+            Running both in the same lifespan TaskGroup keeps the
+            supervision boundary explicit; the two sweeps don't conflict
+            (the heartbeat sweep marks a worker offline first, so the
+            visibility-timeout sweep that follows wouldn't see those
+            tasks as still-CLAIMED — they're already PENDING).
+
+        Idempotency
+            The worker UPDATE filters on ``status = 'online'`` so a
+            re-run against a worker already flipped to ``offline`` is a
+            no-op — no double-RELEASE events, no spurious version
+            bumps. A worker that comes back to life heartbeats itself
+            back to online (TASK-019b1 for the local worker,
+            TASK-022b2 for the remote one) and the next stale window
+            starts cleanly.
+
+        Concurrency contract
+            Lock-free, same as :meth:`release_stale_tasks`: a worker
+            mid-die racing to commit ``complete_task`` / ``fail_task``
+            either wins (status filter excludes the row from our sweep
+            — we silently skip it) or loses (its UPDATE matches zero
+            rows because we advanced the version; the worker's
+            error path surfaces a :class:`VersionConflictError`
+            classified as "wrong status"). Exactly one writer wins;
+            no duplicate state.
+
+        Args:
+            heartbeat_timeout_seconds: Age threshold in seconds. Workers
+                with ``last_heartbeat < NOW() - this`` AND ``status =
+                'online'`` are flipped to ``offline``. Must be a
+                non-negative integer; ``0`` flips every still-online
+                worker on every call (only useful in tests with
+                controlled clocks).
+
+        Returns:
+            Number of *tasks* released (and corresponding RELEASE events
+            written). ``0`` is the normal "no offline workers, or no
+            offline workers had in-flight tasks" outcome — not an
+            error. The number of *workers* flipped to offline is *not*
+            returned because the sweep loop's primary signal is
+            tasks-released-per-tick (that's what the dashboard and
+            metrics will surface); callers that need worker counts can
+            ``SELECT COUNT(*) FROM workers WHERE status = 'offline'``.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    _RELEASE_OFFLINE_WORKERS_SQL,
+                    heartbeat_timeout_seconds,
+                    Transition.RELEASE.value,
+                    "worker_offline",
+                )
+                released = len(rows)
+                if released:
+                    logger.info(
+                        "release_offline_workers: heartbeat_timeout=%ds released %d task(s): %s",
+                        heartbeat_timeout_seconds,
+                        released,
+                        [row["task_id"] for row in rows],
+                    )
+                else:
+                    logger.debug(
+                        "release_offline_workers: heartbeat_timeout=%ds — no offline workers with in-flight tasks",
+                        heartbeat_timeout_seconds,
                     )
                 return released
 

@@ -194,6 +194,8 @@ __all__ = [
     "CLAIM_PATH",
     "CLAIM_POLL_INTERVAL_DEFAULT",
     "HEALTH_PATH",
+    "HEARTBEAT_TIMEOUT_DEFAULT_SECONDS",
+    "OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS",
     "REGISTER_PATH",
     "SWEEP_INTERVAL_DEFAULT_SECONDS",
     "VISIBILITY_TIMEOUT_DEFAULT_SECONDS",
@@ -257,6 +259,25 @@ VISIBILITY_TIMEOUT_DEFAULT_SECONDS: Final[int] = 15 * 60
 #: (one CTE round-trip — negligible). Tests pass a small value (e.g.
 #: 0.1s) so the sweep fires inside a sub-second test budget.
 SWEEP_INTERVAL_DEFAULT_SECONDS: Final[float] = 60.0
+
+#: Default heartbeat-staleness threshold for the offline-worker sweep
+#: (PRD FR-1.4, NFR-1, SC-2, TASK-025b). 120s = 2 min: long enough that a
+#: brief network blip or a busy event-loop doesn't spuriously demote a
+#: live worker, short enough that SC-2's "kill -9 a worker, peer takes
+#: over within seconds, not minutes" lands without forcing the
+#: visibility-timeout sweep down to a value that would risk releasing
+#: live work. The two sweeps are layered: heartbeat staleness is the
+#: primary fast signal; visibility timeout is the slower fallback for
+#: cases where the heartbeat is somehow live but the claim is stuck.
+HEARTBEAT_TIMEOUT_DEFAULT_SECONDS: Final[int] = 2 * 60
+
+#: Default cadence (seconds) for the offline-worker sweep itself
+#: (TASK-025b). 30s is the PRD's reference cadence — half the heartbeat
+#: interval (workers tick at ~30s; see TASK-019b1 / TASK-022b2), so a
+#: missed heartbeat is detected within at most ``threshold + interval``
+#: seconds of going stale. Tests override this to ~0.1s so the suite
+#: stays fast.
+OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS: Final[float] = 30.0
 
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
@@ -368,6 +389,84 @@ async def _visibility_sweep_loop(
     logger.info("visibility_timeout sweep stopped")
 
 
+async def _offline_worker_sweep_loop(
+    repo: TaskRepository,
+    *,
+    sweep_interval: float,
+    heartbeat_timeout: int,
+    stop: asyncio.Event,
+) -> None:
+    """Periodic offline-worker sweep coroutine (PRD FR-1.4 / NFR-1 / SC-2, TASK-025b).
+
+    Runs as a *second* coroutine inside the same lifespan
+    :class:`asyncio.TaskGroup` that supervises the visibility-timeout
+    sweep. Each iteration sleeps up to ``sweep_interval`` seconds; if the
+    sleep returns by *timeout* (rather than ``stop`` firing) we call
+    :meth:`TaskRepository.release_offline_workers` once with the
+    configured ``heartbeat_timeout`` — that's the single SQL round-trip
+    that flips every still-``online`` worker whose ``last_heartbeat``
+    predates the threshold to ``offline``, releases all their CLAIMED /
+    IN_PROGRESS tasks back to ``PENDING``, and writes one ``RELEASE``
+    event per released task with ``payload['reason'] = 'worker_offline'``.
+
+    Why a second loop instead of folding both sweeps into one?
+        The two sweeps observe different signals on different timing
+        budgets (see :meth:`TaskRepository.release_offline_workers`'s
+        docstring). Coupling them into a single coroutine would force
+        the slower ``visibility_timeout`` cadence on the offline sweep
+        and make SC-2's fast-recovery target hard to reach without
+        also tightening the visibility timeout (which risks spuriously
+        cancelling live work). Two coroutines on independent intervals
+        keep the policies decoupled. The shared :class:`asyncio.TaskGroup`
+        and :class:`asyncio.Event` keep the supervision boundary single.
+
+    Why the same ``stop`` event as the visibility sweep?
+        Lifespan teardown is "stop *all* background work" — splitting
+        the event would force the lifespan to set both with no behaviour
+        difference. One event is simpler and there's no scenario where
+        we'd want to stop one sweep without the other.
+
+    ``Exception`` is caught per tick for the same reason as the
+    visibility sweep: a transient asyncpg disconnect / pgbouncer restart
+    must not silently disable the only mechanism that recovers tasks
+    from a hard-killed worker. We log via ``logger.exception`` and try
+    again on the next interval. ``BaseException`` propagates.
+
+    Args:
+        repo: The :class:`TaskRepository` bound to the app's pool.
+        sweep_interval: Seconds between sweep ticks. Must be > 0.
+        heartbeat_timeout: Age threshold (seconds) passed to
+            :meth:`TaskRepository.release_offline_workers`.
+        stop: Lifespan-owned :class:`asyncio.Event`. Set by the lifespan
+            teardown to request a clean exit.
+    """
+    logger.info(
+        "offline_worker sweep started: interval=%.1fs, heartbeat_timeout=%ds",
+        sweep_interval,
+        heartbeat_timeout,
+    )
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=sweep_interval)
+            break
+        except TimeoutError:
+            pass
+        try:
+            released = await repo.release_offline_workers(heartbeat_timeout)
+            if released:
+                logger.info(
+                    "offline_worker sweep released %d task(s) from offline workers (heartbeat_timeout=%ds)",
+                    released,
+                    heartbeat_timeout,
+                )
+        except Exception:
+            logger.exception(
+                "offline_worker sweep tick failed; will retry in %.1fs",
+                sweep_interval,
+            )
+    logger.info("offline_worker sweep stopped")
+
+
 def _hash_token(plaintext: str) -> str:
     """Return the canonical hash of a per-worker bearer token (PRD NFR-3).
 
@@ -441,6 +540,8 @@ def create_app(
     claim_poll_interval: float = CLAIM_POLL_INTERVAL_DEFAULT,
     visibility_timeout_seconds: int = VISIBILITY_TIMEOUT_DEFAULT_SECONDS,
     sweep_interval_seconds: float = SWEEP_INTERVAL_DEFAULT_SECONDS,
+    heartbeat_timeout_seconds: int = HEARTBEAT_TIMEOUT_DEFAULT_SECONDS,
+    offline_worker_sweep_interval_seconds: float = OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -486,6 +587,24 @@ def create_app(
         (60s — the PRD's reference cadence). Must be strictly positive
         — a zero or negative interval would tight-loop the database
         and defeat :func:`asyncio.wait_for` as a cancellation point.
+    heartbeat_timeout_seconds:
+        Heartbeat-staleness threshold for the offline-worker sweep
+        (PRD FR-1.4 / NFR-1 / SC-2, TASK-025b). A worker whose
+        ``last_heartbeat`` predates ``NOW() - this`` and is still
+        ``status = 'online'`` is flipped to ``offline`` by the next
+        sweep tick, and all its CLAIMED / IN_PROGRESS tasks are
+        released. Defaults to
+        :data:`HEARTBEAT_TIMEOUT_DEFAULT_SECONDS` (2 min — well under
+        the visibility timeout, so the heartbeat sweep is the primary
+        fault-tolerance signal). Must be ``>= 0``; ``0`` flips every
+        online worker on every tick (only useful in tests).
+    offline_worker_sweep_interval_seconds:
+        Cadence of the offline-worker sweep loop (TASK-025b). Defaults
+        to :data:`OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS` (30s
+        — half the heartbeat interval, so a missed heartbeat is
+        detected within at most ``threshold + interval`` seconds).
+        Must be strictly positive for the same reason as
+        ``sweep_interval_seconds``.
 
     Returns
     -------
@@ -533,6 +652,20 @@ def create_app(
         # later, but catching at construction time gives a better
         # message.
         raise ValueError(f"create_app: visibility_timeout_seconds must be >= 0, got {visibility_timeout_seconds!r}.")
+    if offline_worker_sweep_interval_seconds <= 0:
+        # Same rationale as ``sweep_interval_seconds``: zero / negative
+        # would tight-loop on Postgres and defeat ``asyncio.wait_for``
+        # as the shutdown rendezvous.
+        raise ValueError(
+            f"create_app: offline_worker_sweep_interval_seconds must be > 0, "
+            f"got {offline_worker_sweep_interval_seconds!r}; a zero or negative "
+            f"interval would tight-loop the database."
+        )
+    if heartbeat_timeout_seconds < 0:
+        # Same asymmetry as ``visibility_timeout_seconds``: ``0`` is a
+        # legal test override (flips every online worker every tick);
+        # only genuinely negative values are rejected.
+        raise ValueError(f"create_app: heartbeat_timeout_seconds must be >= 0, got {heartbeat_timeout_seconds!r}.")
     resolved_worker_token = _resolve_token(worker_token, WORKER_TOKEN_ENV)
     resolved_bootstrap_token = _resolve_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
     # Bind the auth dependencies *now*, at app-construction time, so a
@@ -570,19 +703,26 @@ def create_app(
         sweep_stop = asyncio.Event()
         app.state.sweep_stop = sweep_stop
         try:
-            # ``asyncio.TaskGroup`` owns the periodic visibility-timeout
-            # sweep for the duration of the app's lifespan. The task is
-            # created on enter; on exit we set ``sweep_stop`` and the
-            # TaskGroup awaits the loop to drain its current tick. The
-            # loop never raises CancelledError on the happy path, so
-            # the TaskGroup exits without an exception group at all —
-            # the only way out is the ``stop`` event firing.
+            # ``asyncio.TaskGroup`` owns the periodic background sweeps
+            # for the duration of the app's lifespan. Tasks are created
+            # on enter; on exit we set ``sweep_stop`` (shared by both
+            # sweeps) and the TaskGroup awaits each loop to drain its
+            # current tick. Neither loop raises CancelledError on the
+            # happy path, so the TaskGroup exits without an exception
+            # group at all — the only way out is the ``stop`` event
+            # firing.
             #
-            # If a future TASK-025b (offline-worker detector) lands as
-            # a second background coroutine, it joins this same group:
-            # one TaskGroup per lifespan keeps the supervision boundary
-            # explicit. See PRD R-1 / SC-2 for the fault-tolerance
-            # rationale.
+            # Two coroutines, one supervision boundary (TASK-025a +
+            # TASK-025b):
+            #
+            # * ``whilly-visibility-sweep`` — visibility-timeout sweep
+            #   on ``claimed_at`` (PRD FR-1.4, slow fallback for tasks
+            #   stuck without a heartbeat signal).
+            # * ``whilly-offline-worker-sweep`` — offline-worker sweep
+            #   on ``last_heartbeat`` (PRD NFR-1 / SC-2, fast primary
+            #   fault-tolerance path).
+            #
+            # See PRD R-1 / SC-2 for the layered-recovery rationale.
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(
                     _visibility_sweep_loop(
@@ -593,16 +733,24 @@ def create_app(
                     ),
                     name="whilly-visibility-sweep",
                 )
+                tg.create_task(
+                    _offline_worker_sweep_loop(
+                        repo,
+                        sweep_interval=offline_worker_sweep_interval_seconds,
+                        heartbeat_timeout=heartbeat_timeout_seconds,
+                        stop=sweep_stop,
+                    ),
+                    name="whilly-offline-worker-sweep",
+                )
                 try:
                     yield
                 finally:
-                    # Signal the loop to stop. The TaskGroup's __aexit__
-                    # then awaits the now-draining sweep coroutine — if
-                    # it's currently mid-``release_stale_tasks`` we wait
-                    # for that single SQL round-trip to complete (no
-                    # half-flushed audit events). Setting the event is
-                    # idempotent; safe under normal-path and crash-path
-                    # exits alike.
+                    # Signal both loops to stop. The TaskGroup's
+                    # __aexit__ then awaits each draining sweep
+                    # coroutine — if either is mid-SQL we wait for that
+                    # single round-trip to complete (no half-flushed
+                    # audit events). Setting the event is idempotent;
+                    # safe under normal-path and crash-path exits alike.
                     sweep_stop.set()
         finally:
             # Pool ownership is the caller's; we just drop our reference
