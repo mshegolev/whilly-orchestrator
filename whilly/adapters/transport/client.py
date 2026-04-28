@@ -107,15 +107,22 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from whilly.adapters.transport.schemas import (
+    ClaimRequest,
+    ClaimResponse,
+    CompleteRequest,
+    CompleteResponse,
     ErrorResponse,
+    FailRequest,
+    FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     RegisterRequest,
     RegisterResponse,
 )
-from whilly.core.models import TaskId, TaskStatus
+from whilly.core.models import Task, TaskId, TaskStatus
 
 __all__ = [
+    "CLAIM_PATH",
     "DEFAULT_BACKOFF_SCHEDULE",
     "DEFAULT_TIMEOUT_SECONDS",
     "REGISTER_PATH",
@@ -124,6 +131,8 @@ __all__ = [
     "RemoteWorkerClient",
     "ServerError",
     "VersionConflictError",
+    "complete_path",
+    "fail_path",
     "heartbeat_path",
 ]
 
@@ -137,6 +146,14 @@ __all__ = [
 #: test in :mod:`tests.integration.test_transport_workers` indirectly pins
 #: the parity by referencing the server's constant.
 REGISTER_PATH: Final[str] = "/workers/register"
+
+#: Path of the long-polled task-claim RPC. Mirrors
+#: :data:`whilly.adapters.transport.server.CLAIM_PATH` — duplicated for
+#: the same reason as :data:`REGISTER_PATH` (the import-linter contract
+#: forbids the worker-side dependency graph from pulling FastAPI in via
+#: the server module). The server-side constant pins the parity with an
+#: integration test in :mod:`tests.integration.test_transport_claim`.
+CLAIM_PATH: Final[str] = "/tasks/claim"
 
 
 def heartbeat_path(worker_id: str) -> str:
@@ -157,6 +174,31 @@ def heartbeat_path(worker_id: str) -> str:
     will surface a 404, which is the diagnosis we want.
     """
     return f"/workers/{worker_id}/heartbeat"
+
+
+def complete_path(task_id: str) -> str:
+    """Return the task-completion endpoint path for ``task_id``.
+
+    The server route is ``/tasks/{task_id}/complete`` (PRD FR-2.4). Same
+    rationale as :func:`heartbeat_path`: ``task_id`` values used by the
+    orchestrator (``"TASK-022a3"`` and friends) are RFC 3986 *unreserved*,
+    so no :func:`urllib.parse.quote` call is required. A misconfigured
+    caller passing reserved characters would surface as a 404 from the
+    server's path matcher — exactly the diagnosis we want, rather than a
+    silently-encoded URL that hits the wrong row.
+    """
+    return f"/tasks/{task_id}/complete"
+
+
+def fail_path(task_id: str) -> str:
+    """Return the task-failure endpoint path for ``task_id``.
+
+    Symmetric counterpart to :func:`complete_path` — the server route is
+    ``/tasks/{task_id}/fail`` (PRD FR-2.4). Centralising the format here
+    keeps the wire shape in one place; a future move to ``/v1/tasks/...``
+    would land in this module rather than in every call site.
+    """
+    return f"/tasks/{task_id}/fail"
 
 
 # ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
@@ -796,3 +838,249 @@ class RemoteWorkerClient:
             json=request.model_dump(),
         )
         return await self._parse_response(response, HeartbeatResponse)
+
+    async def claim(self, worker_id: str, plan_id: str) -> Task | None:
+        """Long-poll for the next PENDING task in ``plan_id`` (``POST /tasks/claim``, PRD FR-1.3).
+
+        The server holds the request open for up to
+        :data:`whilly.adapters.transport.server.CLAIM_LONG_POLL_TIMEOUT_DEFAULT`
+        (30s) while no row is available. Two terminal outcomes:
+
+        * **200 + body** — a row transitioned ``PENDING`` → ``CLAIMED``
+          server-side; we project the wire :class:`TaskPayload` back to a
+          domain :class:`Task` (the worker loop in TASK-022b1 speaks pure
+          domain types) and return it.
+        * **204 No Content** — the long-poll budget expired with no
+          PENDING rows. We return ``None`` and explicitly do **not**
+          self-retry: the supervisor's outer loop owns the re-poll
+          decision so it can interleave heartbeats / shutdown checks
+          before re-issuing the claim. Self-retrying here would also
+          double the long-poll budget on the server (two 30s holds in a
+          row) without giving the worker a chance to react to a
+          shutdown signal in between.
+
+        Note on the timeout / budget interplay:
+            :data:`DEFAULT_TIMEOUT_SECONDS` (60s) is deliberately ~2x the
+            server long-poll budget so the network round-trip for the
+            204 / 200 itself fits inside a single httpx call without
+            tripping the per-request timeout. If a future operator
+            shortens the client timeout below the server budget the
+            symptom would be :class:`ServerError` from a
+            :class:`httpx.ReadTimeout` on every idle claim — surfaced
+            via :meth:`_request`'s retry path, *not* a silent miss.
+
+        Why does this method return ``Task`` and not ``ClaimResponse``?
+            The domain layer is the consumer (TASK-022b1's supervisor
+            loop), and projecting at the boundary keeps the worker free
+            of pydantic models. ``ClaimResponse`` itself is a thin
+            two-field envelope (``task`` + ``plan``) that's not
+            interesting to the caller beyond the embedded :class:`Task`.
+
+        Parameters
+        ----------
+        worker_id:
+            The registered worker identity (returned by :meth:`register`).
+            Echoed in the body alongside the bearer for defence-in-depth
+            and audit-log correlation. Empty strings are rejected at the
+            schema layer (``min_length=1`` on :class:`ClaimRequest`).
+        plan_id:
+            The plan the worker wants to draw from. Workers are scoped to
+            a single plan per process today — concurrent multi-plan
+            workers would warrant a separate API.
+
+        Returns
+        -------
+        Task | None
+            The newly-claimed domain task, or ``None`` if the long-poll
+            budget expired with no PENDING rows.
+
+        Raises
+        ------
+        AuthError
+            Per-worker bearer rejected (token rotated or revoked).
+        HTTPClientError
+            Other 4xx (e.g. 400 from a body / path mismatch — shouldn't
+            happen since both come from the same input on this method).
+        ServerError
+            5xx after the retry budget was exhausted, the response body
+            failed schema validation, or a transport-level failure on
+            the final attempt (see :meth:`_request`).
+        RuntimeError
+            If called outside the ``async with`` block.
+        """
+        request = ClaimRequest(worker_id=worker_id, plan_id=plan_id)
+        response = await self._request(
+            "POST",
+            CLAIM_PATH,
+            json=request.model_dump(),
+        )
+        # 204 No Content is the AC's "long-poll timeout" path: server
+        # held the connection for the budget and saw no PENDING rows.
+        # Returning None (rather than raising) lets the supervisor decide
+        # whether to re-poll, sleep, or shut down — a richer signal than
+        # an exception that would have to be caught immediately anyway.
+        if response.status_code == 204:
+            return None
+        parsed = await self._parse_response(response, ClaimResponse)
+        # ``parsed.task is None`` would also encode "no task" but the
+        # server never ships that on a 200 today (only 204 carries the
+        # empty-queue signal). We still tolerate it defensively rather
+        # than asserting — a future server might use 200 + ``task=None``
+        # to carry, say, queue-depth metadata, and the outer loop's
+        # contract (``None`` → re-poll) is the same either way.
+        if parsed.task is None:
+            return None
+        return parsed.task.to_task()
+
+    async def complete(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+    ) -> CompleteResponse:
+        """Mark ``task_id`` ``DONE`` (``POST /tasks/{task_id}/complete``, PRD FR-2.4).
+
+        Wraps the server-side optimistic-locking RPC. The matched 4xx
+        codes are the typed exceptions documented on
+        :class:`HTTPClientError`; in particular, **409 Conflict surfaces
+        as :class:`VersionConflictError`** with the structured fields
+        (``task_id``, ``expected_version``, ``actual_version``,
+        ``actual_status``) projected from the server's
+        :class:`ErrorResponse` envelope. That lets the supervisor branch
+        on the conflict cause without an extra SELECT round-trip — the
+        canonical idempotent-success pattern is::
+
+            try:
+                await client.complete(task_id, worker_id, version)
+            except VersionConflictError as exc:
+                if exc.actual_status == TaskStatus.DONE:
+                    # A previous attempt already completed; treat as success.
+                    continue
+                raise
+
+        Why does ``worker_id`` show up here even though the bearer
+        already authenticates the worker?
+            The body field is defence-in-depth — the server logs the
+            claimed identity alongside the actual repo call so an
+            operator triaging a 409 can correlate "which worker hit it"
+            against the bearer that authenticated. This matches the
+            existing schema (:class:`CompleteRequest`) and the rest of
+            the worker-side RPCs (claim, fail).
+
+        Parameters
+        ----------
+        task_id:
+            The task being marked DONE. Must be the same ID the worker
+            received on a previous :meth:`claim` call.
+        worker_id:
+            The registered worker identity (defence-in-depth echo).
+        version:
+            The optimistic-locking version the worker last observed.
+            The server's ``UPDATE ... WHERE version = $1`` filter only
+            advances if the row still matches; a mismatch raises 409.
+
+        Returns
+        -------
+        CompleteResponse
+            Validated wire envelope carrying the post-update
+            :class:`TaskPayload` (status ``DONE``, version incremented).
+            Returned as the wire envelope (rather than a domain
+            :class:`Task`) so the supervisor can log the
+            ``CompleteResponse.task.version`` directly without a
+            secondary projection.
+
+        Raises
+        ------
+        VersionConflictError
+            Server returned 409 — the row's version moved past
+            ``version``, the row's status disallowed the transition, or
+            the row no longer exists. The exception's structured fields
+            tell the caller which.
+        AuthError
+            Per-worker bearer rejected (token rotated or revoked).
+        HTTPClientError
+            Other 4xx (e.g. 400 / 422 from a misconstructed body —
+            shouldn't happen since this method builds the body from
+            typed inputs).
+        ServerError
+            5xx after retries, or a 2xx body that fails pydantic
+            validation against :class:`CompleteResponse`.
+        RuntimeError
+            If called outside the ``async with`` block.
+        """
+        request = CompleteRequest(worker_id=worker_id, version=version)
+        response = await self._request(
+            "POST",
+            complete_path(task_id),
+            json=request.model_dump(),
+        )
+        return await self._parse_response(response, CompleteResponse)
+
+    async def fail(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        reason: str,
+    ) -> FailResponse:
+        """Mark ``task_id`` ``FAILED`` (``POST /tasks/{task_id}/fail``, PRD FR-2.4).
+
+        Symmetric counterpart to :meth:`complete`. Same 4xx mapping
+        (in particular 409 → :class:`VersionConflictError` with the
+        structured envelope fields), same retry policy, same auth flow.
+        The only schema-level difference is the required ``reason``
+        string — it lands directly in ``events.payload`` on the server
+        side and surfaces in the dashboard / post-mortem queries, so an
+        empty value is rejected at the schema layer
+        (``NonEmptyReason`` on :class:`FailRequest`) *before* the
+        network call.
+
+        Idempotent-success pattern on a retried fail
+            Mirror of :meth:`complete`: if the supervisor sees
+            :class:`VersionConflictError` with ``actual_status ==
+            TaskStatus.FAILED`` and ``actual_version == expected_version
+            + 1``, the previous attempt already won and the worker can
+            move on without re-failing.
+
+        Parameters
+        ----------
+        task_id:
+            The task being marked FAILED.
+        worker_id:
+            Registered worker identity (defence-in-depth echo).
+        version:
+            Optimistic-locking version the worker last observed.
+        reason:
+            Free-form failure reason that lands in the audit log. Must
+            be non-empty (schema validation runs before the network
+            call); the worker typically passes a truncated tail of the
+            agent's stderr plus an exit-code prefix.
+
+        Returns
+        -------
+        FailResponse
+            Validated wire envelope carrying the post-update
+            :class:`TaskPayload` (status ``FAILED``, version
+            incremented).
+
+        Raises
+        ------
+        VersionConflictError
+            Server returned 409 — see :meth:`complete` for field
+            semantics.
+        AuthError
+            Per-worker bearer rejected.
+        HTTPClientError
+            Other 4xx.
+        ServerError
+            5xx after retries or schema-mismatched response.
+        RuntimeError
+            If called outside the ``async with`` block.
+        """
+        request = FailRequest(worker_id=worker_id, version=version, reason=reason)
+        response = await self._request(
+            "POST",
+            fail_path(task_id),
+            json=request.model_dump(),
+        )
+        return await self._parse_response(response, FailResponse)
