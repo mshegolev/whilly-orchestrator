@@ -161,35 +161,89 @@ jobs:
           fi
           echo "OK: no os.chdir / os.getcwd in whilly.core"
 
-  test:
-    name: Tests (Python ${{ matrix.python-version }} / ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    # Запускаем тесты только после успешного линтинга
+  type-check:
+    name: Type check (mypy --strict whilly.core)
+    runs-on: ubuntu-latest
+    # После lint, как и остальные jobs — чтобы auto-fix успел вмерджиться
+    # в head_ref до того как мы прогоним mypy на актуальном срезе.
     needs: lint
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12"]
-        include:
-          # Cross-platform smoke: exercise the config loader / path resolution
-          # on Windows and macOS for one Python version each.
-          - os: windows-latest
-            python-version: "3.12"
-          - os: macos-latest
-            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
         with:
-          # Получаем последние изменения (включая auto-commit от lint job)
           ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
       - name: Install dev deps
         run: pip install -e '.[dev]'
-      - name: Run pytest
-        run: pytest -q
+      - name: Run mypy --strict on whilly.core (PRD NFR-4 / TASK-031)
+        # whilly.core — pure domain layer без I/O, поэтому стоит держать
+        # его в strict-режиме типов: любая ошибка типизации в core
+        # каскадирует через все adapter-слои выше. mypy конфиг в
+        # pyproject.toml уже включает per-module strict-overrides для
+        # whilly.core.* (см. [[tool.mypy.overrides]] module = "whilly.core.*"),
+        # так что обычный `mypy whilly/core/` уже эквивалентен `--strict`.
+        # Явный --strict оставлен для читаемости: в логе CI сразу видно,
+        # что проверка строгая, без необходимости лезть в pyproject.
+        run: mypy --strict whilly/core/
+
+  test:
+    name: Tests (Python 3.12 / unit + coverage)
+    runs-on: ubuntu-latest
+    # После lint — чтобы auto-fix фикса (если был) уже отправился в
+    # head_ref. Без needs: lint мы могли бы прогонять тесты на грязном
+    # срезе и видеть лишние diff'ы между runs.
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # head_ref на PR подтягивает свежий коммит (включая auto-fix
+          # от lint job-а), на push — текущий ref. Тот же шаблон, что в
+          # arch-guard / agent-backends / type-check выше.
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev deps
+        # `[dev]` рекурсивно тянет `[worker, server]` (v4 split из TASK-023)
+        # плюс pytest + pytest-asyncio + testcontainers + ruff + mypy +
+        # import-linter + coverage. Asyncpg, fastapi, sqlalchemy и alembic
+        # приходят через server-extra и нужны: unit-тесты импортируют
+        # whilly.adapters.db / whilly.adapters.transport, которые тянут
+        # asyncpg / fastapi из base namespace.
+        run: pip install -e '.[dev]'
+      - name: Run unit tests with coverage on whilly.core
+        # `tests/unit/` — v4 unit suite (439 тестов на момент TASK-033b).
+        # tests/integration/ намеренно НЕ запускаются здесь — они требуют
+        # Postgres через testcontainers + Docker daemon, и это уровень
+        # release-smoke (TASK-034a), а не каждой PR-валидации.
+        # tests/test_*.py (v3 legacy в корне tests/) тоже не бегут —
+        # часть из них зависит от внешних бинарей (opencode) и от v3
+        # cli.py runtime, который заменён на cli_legacy.py + dispatcher.
+        # Subset нужный для backend registry прогоняется в `agent-backends`
+        # job-е ниже как явно перечисленные файлы.
+        #
+        # `coverage run --source=whilly/core -m pytest tests/unit/`
+        # измеряет покрытие ТОЛЬКО pure domain layer'а — этого достаточно
+        # для PRD NFR-4 / SC-6 / TASK-030. coverage report --fail-under=80
+        # — hard gate: regression < 80% покрытия в whilly.core должна
+        # ронять CI, потому что это либо новый необтестированный код в
+        # домене, либо удалённые тесты.
+        run: |
+          coverage run --source=whilly/core -m pytest -q tests/unit/
+          coverage report --fail-under=80
+      - name: Upload coverage artifact (for PR review)
+        # Артефакт с детальным отчётом нужен ревьюверу: процент по job'у
+        # видно на checks-странице, но per-file разбивка живёт только в
+        # XML/HTML, и без артефакта пришлось бы локально воспроизводить.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            .coverage
+          if-no-files-found: ignore
+          retention-days: 14
 
   agent-backends:
     name: Agent backends (OC-119)
