@@ -1,11 +1,15 @@
-"""Integration tests for the task-facing HTTP routes (TASK-021c1, PRD FR-1.1 / FR-1.3 / TC-6).
+"""Integration tests for the task-facing HTTP routes (TASK-021c1 / TASK-021c2, PRD FR-1.1 / FR-1.3 / FR-2.4 / TC-6).
 
-This module exercises ``POST /tasks/claim`` end-to-end against a real
-Postgres (testcontainers). The unit tests in
-:mod:`tests.unit.test_transport_server` already cover create_app's
-construction-time validation; this suite is the load-bearing contract
-that the long-poll loop really polls, the SQL really fires, and 204 is
-the canonical "no work right now" outcome.
+This module exercises ``POST /tasks/claim`` and the terminal-state
+``POST /tasks/{task_id}/complete`` / ``POST /tasks/{task_id}/fail``
+endpoints end-to-end against a real Postgres (testcontainers). The
+unit tests in :mod:`tests.unit.test_transport_server` already cover
+``create_app``'s construction-time validation; this suite is the
+load-bearing contract that the long-poll loop really polls, the SQL
+really fires, 204 is the canonical "no work right now" outcome,
+terminal-state RPCs flip the row in the database, and the 409
+``ErrorResponse`` envelope carries the full :class:`VersionConflictError`
+payload the remote worker (TASK-022a3 / 022b1) branches on.
 
 What's covered
 --------------
@@ -19,8 +23,17 @@ What's covered
   load-bearing case for TASK-022b1's "204 → re-poll" branch).
 * Long-polling really *polls* — when a task is seeded mid-poll, the
   same handler picks it up before the timeout fires.
-* Bearer token is required (401 without; 401 with the bootstrap
-  secret) — symmetric with the heartbeat tests' PRD FR-1.2 split.
+* Bearer token is required on every task RPC (401 without; 401 with
+  the bootstrap secret) — symmetric with the heartbeat tests' PRD
+  FR-1.2 split.
+* ``POST /tasks/{task_id}/complete`` flips an IN_PROGRESS row to
+  DONE, advances the version, and returns the post-update payload.
+* ``POST /tasks/{task_id}/fail`` accepts a ``reason``, flips a
+  CLAIMED *or* IN_PROGRESS row to FAILED, advances the version,
+  appends the reason to ``events.payload``.
+* :class:`whilly.adapters.db.VersionConflictError` maps to 409 with a
+  fully-populated :class:`ErrorResponse` envelope on stale-version
+  and wrong-status calls — the contract TASK-022a3 reads.
 * Empty / malformed body is rejected by pydantic (422).
 
 Why integration, not unit
@@ -335,6 +348,450 @@ async def test_claim_validates_request_body(
     response = await http_client.post(
         CLAIM_PATH,
         json={"worker_id": "", "plan_id": "PLAN-Y"},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Helpers — drive the full claim → start lattice through the repository
+# ---------------------------------------------------------------------------
+
+
+async def _claim_and_start(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+    *,
+    plan_id: str,
+    task_id: str,
+    hostname: str,
+) -> tuple[str, int]:
+    """Seed → register → claim → start, returning ``(worker_id, version)``.
+
+    The terminal-state tests need a row in ``IN_PROGRESS`` (for
+    ``complete``) or ``CLAIMED`` (for ``fail``'s pre-START path).
+    ``complete_task`` requires ``IN_PROGRESS`` per the SQL filter, so
+    we drive the row all the way through the state machine via the
+    existing endpoints + a single ``start_task`` repo call. Going
+    through ``/tasks/claim`` (rather than seeding the row directly as
+    CLAIMED) means a regression in the claim path surfaces here too.
+
+    Returns the registered ``worker_id`` and the *post-claim* version
+    so the caller can either use it directly (for the CLAIMED-state
+    fail tests) or advance one more hop with
+    :meth:`TaskRepository.start_task` (the complete tests do this
+    explicitly so the test reads top-down).
+    """
+    await _seed_task(db_pool, plan_id, task_id)
+    worker_id, _ = await _register(http_client, hostname)
+    response = await http_client.post(
+        CLAIM_PATH,
+        json={"worker_id": worker_id, "plan_id": plan_id},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 200, response.text
+    version = int(response.json()["task"]["version"])
+    return worker_id, version
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/complete — happy path
+# ---------------------------------------------------------------------------
+
+
+async def test_complete_transitions_in_progress_to_done(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A successful complete RPC flips IN_PROGRESS → DONE and bumps the version.
+
+    Drives the full lattice (seed → register → claim → start → complete)
+    so any regression in the upstream transitions surfaces in this test
+    rather than as a confusing 409 on the complete itself. We assert
+    the response body, the database row, and the audit row in a single
+    test because they are three projections of the same transaction —
+    splitting them would multiply the seeding cost without adding signal.
+    """
+    plan_id = "PLAN-COMPLETE-1"
+    task_id = "T-complete-1"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-complete-1"
+    )
+    # ``start_task`` is the missing hop between CLAIMED and IN_PROGRESS;
+    # we go through the repository directly because /tasks/start is not
+    # an HTTP endpoint (TASK-019a's local worker calls the repo straight).
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+    assert started.version == claim_version + 1
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/complete",
+        json={"worker_id": worker_id, "version": started.version},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["task"]["id"] == task_id
+    assert body["task"]["status"] == "DONE"
+    assert body["task"]["version"] == started.version + 1
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events = await conn.fetch(
+            "SELECT event_type FROM events WHERE task_id = $1 ORDER BY id",
+            task_id,
+        )
+    assert row is not None
+    assert row["status"] == "DONE"
+    assert row["version"] == started.version + 1
+    # Audit trail: CLAIM → START → COMPLETE in that order. We don't
+    # assert the payloads here (other tests do) — the contract this
+    # test pins is the *order* and the post-complete tail.
+    event_types = [r["event_type"] for r in events]
+    assert event_types[-1] == "COMPLETE", event_types
+    assert "START" in event_types
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/complete — version conflict (409)
+# ---------------------------------------------------------------------------
+
+
+async def test_complete_with_stale_version_returns_409_with_envelope(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A stale ``version`` triggers a 409 with the full :class:`ErrorResponse` envelope.
+
+    The lock-free contract is in :class:`VersionConflictError`'s
+    docstring; this test pins the *wire* contract — the remote worker
+    (TASK-022a3) maps the JSON body field-by-field, so any drift in
+    the envelope shape surfaces here.
+    """
+    plan_id = "PLAN-COMPLETE-CONFLICT"
+    task_id = "T-complete-conflict"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-complete-conflict"
+    )
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+
+    # Send the *pre-start* version: the row is now at
+    # ``started.version`` but the worker thinks it's still at
+    # ``claim_version``. This is the canonical "lost update" /
+    # split-brain scenario the optimistic lock catches.
+    stale_version = claim_version
+    response = await http_client.post(
+        f"/tasks/{task_id}/complete",
+        json={"worker_id": worker_id, "version": stale_version},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"] == "version_conflict"
+    assert body["task_id"] == task_id
+    assert body["expected_version"] == stale_version
+    assert body["actual_version"] == started.version
+    # Status is still IN_PROGRESS after the failed complete — the
+    # transaction rolled back without writing anything else.
+    assert body["actual_status"] == "IN_PROGRESS"
+    # Database state is untouched by the conflict path.
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+    assert row is not None
+    assert row["status"] == "IN_PROGRESS"
+    assert row["version"] == started.version
+
+
+async def test_complete_on_already_done_task_returns_409(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Completing a row that's already DONE returns 409 with ``actual_status='DONE'``.
+
+    The idempotent-retry case: a worker that completed a task,
+    crashed before its bookkeeping finished, and on restart re-issues
+    the complete. The server detects this via the ``status`` filter
+    rather than the ``version`` filter (versions match — status does
+    not), so the 409 envelope reports
+    ``actual_version == expected_version`` and a non-IN_PROGRESS
+    ``actual_status``. TASK-022a3's client treats this as success.
+    """
+    plan_id = "PLAN-COMPLETE-IDEMP"
+    task_id = "T-complete-idemp"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-complete-idemp"
+    )
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+    completed = await repo.complete_task(task_id, started.version)
+    assert completed.status.value == "DONE"
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/complete",
+        json={"worker_id": worker_id, "version": completed.version},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"] == "version_conflict"
+    assert body["expected_version"] == completed.version
+    assert body["actual_version"] == completed.version
+    assert body["actual_status"] == "DONE"
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/complete — auth + body validation
+# ---------------------------------------------------------------------------
+
+
+async def test_complete_without_authorization_header_returns_401(
+    http_client: AsyncClient,
+) -> None:
+    """No bearer header → 401 + WWW-Authenticate (RFC 6750)."""
+    response = await http_client.post(
+        "/tasks/T-x/complete",
+        json={"worker_id": "w-x", "version": 1},
+    )
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate", "").startswith("Bearer ")
+
+
+async def test_complete_with_bootstrap_token_returns_401(
+    http_client: AsyncClient,
+) -> None:
+    """The bootstrap secret does not authenticate the per-worker route (PRD FR-1.2)."""
+    response = await http_client.post(
+        "/tasks/T-x/complete",
+        json={"worker_id": "w-x", "version": 1},
+        headers={"Authorization": f"Bearer {_BOOTSTRAP_TOKEN}"},
+    )
+    assert response.status_code == 401
+
+
+async def test_complete_validates_request_body(
+    http_client: AsyncClient,
+) -> None:
+    """Negative / missing version is rejected at the schema layer (422)."""
+    response = await http_client.post(
+        "/tasks/T-x/complete",
+        json={"worker_id": "w-x", "version": -1},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/fail — happy path (CLAIMED → FAILED, no START hop needed)
+# ---------------------------------------------------------------------------
+
+
+async def test_fail_transitions_claimed_to_failed_with_reason(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A successful fail RPC flips a CLAIMED row directly to FAILED.
+
+    Pinned because :meth:`TaskRepository.fail_task`'s SQL accepts both
+    CLAIMED *and* IN_PROGRESS as source states — the worker may crash
+    before ``start_task`` ever fires. This test exercises the
+    pre-START fail path; ``test_fail_transitions_in_progress_to_failed``
+    below covers the post-START one. The reason is asserted on the
+    audit row because that's what the dashboard (TASK-027) reads.
+    """
+    plan_id = "PLAN-FAIL-CLAIMED"
+    task_id = "T-fail-claimed"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-fail-claimed"
+    )
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/fail",
+        json={
+            "worker_id": worker_id,
+            "version": claim_version,
+            "reason": "agent crashed before start",
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["task"]["id"] == task_id
+    assert body["task"]["status"] == "FAILED"
+    assert body["task"]["version"] == claim_version + 1
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        fail_event = await conn.fetchrow(
+            "SELECT event_type, payload FROM events "
+            "WHERE task_id = $1 AND event_type = 'FAIL' "
+            "ORDER BY id DESC LIMIT 1",
+            task_id,
+        )
+    assert row is not None
+    assert row["status"] == "FAILED"
+    assert row["version"] == claim_version + 1
+    assert fail_event is not None
+    # ``payload`` is JSON text on the wire; round-trip it for assertion
+    # rather than coupling the test to asyncpg's codec config.
+    import json as _json
+
+    payload = _json.loads(fail_event["payload"]) if isinstance(fail_event["payload"], str) else fail_event["payload"]
+    assert payload["reason"] == "agent crashed before start"
+    assert payload["version"] == claim_version + 1
+
+
+async def test_fail_transitions_in_progress_to_failed(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """The post-START fail path: IN_PROGRESS → FAILED with the reason persisted.
+
+    Symmetric with the CLAIMED case above — exercises the second
+    source state ``fail_task``'s SQL accepts. The two tests together
+    pin the full ``status IN ('CLAIMED','IN_PROGRESS')`` filter
+    contract.
+    """
+    plan_id = "PLAN-FAIL-IP"
+    task_id = "T-fail-ip"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-fail-ip"
+    )
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/fail",
+        json={
+            "worker_id": worker_id,
+            "version": started.version,
+            "reason": "exit_code=1; tests failed",
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["task"]["status"] == "FAILED"
+    assert body["task"]["version"] == started.version + 1
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/fail — version conflict (409)
+# ---------------------------------------------------------------------------
+
+
+async def test_fail_with_stale_version_returns_409_with_envelope(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A stale ``version`` on /fail produces the same 409 envelope as /complete.
+
+    Mirrors :func:`test_complete_with_stale_version_returns_409_with_envelope`
+    — the wire contract for the conflict envelope is shared between
+    both terminal-state RPCs (centralised in :func:`_conflict_response`),
+    so any drift on one route would break the other and TASK-022a3's
+    client mapper would have to special-case which.
+    """
+    plan_id = "PLAN-FAIL-CONFLICT"
+    task_id = "T-fail-conflict"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-fail-conflict"
+    )
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+    # Stale: send the pre-start version after the row has advanced.
+    stale_version = claim_version
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/fail",
+        json={
+            "worker_id": worker_id,
+            "version": stale_version,
+            "reason": "should-not-be-persisted",
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"] == "version_conflict"
+    assert body["task_id"] == task_id
+    assert body["expected_version"] == stale_version
+    assert body["actual_version"] == started.version
+    assert body["actual_status"] == "IN_PROGRESS"
+    # The reason from the failed call must NOT have leaked into the
+    # audit log — a 409 should leave the database completely
+    # untouched (the repo wraps the UPDATE + INSERT INTO events in a
+    # single transaction that rolls back on the version-conflict
+    # branch).
+    async with db_pool.acquire() as conn:
+        leaked = await conn.fetchval(
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND payload::text LIKE '%should-not-be-persisted%'",
+            task_id,
+        )
+    assert leaked == 0
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/fail — auth + body validation
+# ---------------------------------------------------------------------------
+
+
+async def test_fail_without_authorization_header_returns_401(
+    http_client: AsyncClient,
+) -> None:
+    """No bearer header → 401 (symmetric with /complete)."""
+    response = await http_client.post(
+        "/tasks/T-x/fail",
+        json={"worker_id": "w-x", "version": 1, "reason": "boom"},
+    )
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate", "").startswith("Bearer ")
+
+
+async def test_fail_with_bootstrap_token_returns_401(
+    http_client: AsyncClient,
+) -> None:
+    """Bootstrap secret does not authenticate /fail (PRD FR-1.2 split)."""
+    response = await http_client.post(
+        "/tasks/T-x/fail",
+        json={"worker_id": "w-x", "version": 1, "reason": "boom"},
+        headers={"Authorization": f"Bearer {_BOOTSTRAP_TOKEN}"},
+    )
+    assert response.status_code == 401
+
+
+async def test_fail_rejects_empty_reason(
+    http_client: AsyncClient,
+) -> None:
+    """An empty ``reason`` is rejected by the :class:`FailRequest` schema (422).
+
+    The audit row's whole point is the human-readable cause — a blank
+    reason would defeat the dashboard / post-mortem queries
+    (TASK-027). Pinning the rejection at the schema layer means the
+    database is never touched on a malformed fail.
+    """
+    response = await http_client.post(
+        "/tasks/T-x/fail",
+        json={"worker_id": "w-x", "version": 1, "reason": ""},
         headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
     )
     assert response.status_code == 422
