@@ -184,6 +184,8 @@ from whilly.adapters.transport.schemas import (
     HeartbeatResponse,
     RegisterRequest,
     RegisterResponse,
+    ReleaseRequest,
+    ReleaseResponse,
     TaskPayload,
 )
 
@@ -797,6 +799,81 @@ def create_app(
             payload.reason,
         )
         return FailResponse(task=TaskPayload.from_task(updated))
+
+    @app.post(
+        "/tasks/{task_id}/release",
+        response_model=ReleaseResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": ReleaseResponse,
+                "description": "Task transitioned CLAIMED|IN_PROGRESS → PENDING.",
+            },
+            status.HTTP_409_CONFLICT: {
+                "model": ErrorResponse,
+                "description": (
+                    "Optimistic-locking conflict — see the matching /tasks/{task_id}/complete description."
+                ),
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def release_task(task_id: str, payload: ReleaseRequest) -> ReleaseResponse | JSONResponse:
+        """Worker-driven release: CLAIMED | IN_PROGRESS → PENDING (TASK-022b3, PRD FR-1.6, NFR-1).
+
+        HTTP analogue of :meth:`TaskRepository.release_task` — wraps the
+        same SQL primitive the local worker calls directly on
+        SIGTERM / SIGINT (TASK-019b2). Mirrors :func:`fail_task`'s
+        shape because the request bodies are identical (worker_id +
+        version + non-empty reason); the only differences are the
+        terminal status (``PENDING`` rather than ``FAILED``) and the
+        event_type (``RELEASE`` rather than ``FAIL``).
+
+        Why a dedicated endpoint rather than reusing /fail with a
+        special reason?
+            ``fail_task`` flips the row to ``FAILED``, which would
+            require the visibility-timeout sweep to re-PENDING it
+            *and* would surface in the dashboard's "failed task"
+            counter for what is actually a clean cooperative
+            shutdown. A dedicated route keeps the audit log honest
+            and lets a peer worker re-claim the row within one poll
+            cycle instead of waiting up to 15 minutes for the sweep.
+
+        Same 409 contract as :func:`fail_task` — both routes share
+        :func:`_conflict_response`, so the wire envelope a remote
+        worker (TASK-022b3) reads on a lost race is identical
+        regardless of which terminal-state RPC the conflict surfaced
+        on. The repository's classification logic distinguishes the
+        three cases (lost-update / wrong-status / row-gone) so the
+        worker can branch cleanly:
+
+        * ``actual_status == PENDING`` — the visibility-timeout sweep
+          (or another worker's release) beat us to it; treat as
+          idempotent-success and exit.
+        * ``actual_status`` in (``DONE``, ``FAILED``, ``SKIPPED``) —
+          the worker actually finished the task before the signal
+          handler reached this RPC (extremely narrow race); the
+          terminal status wins.
+        """
+        try:
+            updated = await repo.release_task(task_id, payload.version, payload.reason)
+        except VersionConflictError as exc:
+            logger.info(
+                "release_task conflict: worker=%s task=%s expected_version=%d actual_version=%s actual_status=%s",
+                payload.worker_id,
+                exc.task_id,
+                exc.expected_version,
+                exc.actual_version,
+                exc.actual_status.value if exc.actual_status else None,
+            )
+            return _conflict_response(exc)
+        logger.info(
+            "release_task: worker=%s task=%s version=%d reason=%r → PENDING",
+            payload.worker_id,
+            updated.id,
+            updated.version,
+            payload.reason,
+        )
+        return ReleaseResponse(task=TaskPayload.from_task(updated))
 
     return app
 

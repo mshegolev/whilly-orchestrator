@@ -118,6 +118,8 @@ from whilly.adapters.transport.schemas import (
     HeartbeatResponse,
     RegisterRequest,
     RegisterResponse,
+    ReleaseRequest,
+    ReleaseResponse,
 )
 from whilly.core.models import Task, TaskId, TaskStatus
 
@@ -134,6 +136,7 @@ __all__ = [
     "complete_path",
     "fail_path",
     "heartbeat_path",
+    "release_path",
 ]
 
 #: Path of the cluster-join RPC on the control plane. Mirrors
@@ -199,6 +202,19 @@ def fail_path(task_id: str) -> str:
     would land in this module rather than in every call site.
     """
     return f"/tasks/{task_id}/fail"
+
+
+def release_path(task_id: str) -> str:
+    """Return the task-release endpoint path for ``task_id`` (TASK-022b3, PRD FR-1.6, NFR-1).
+
+    Server route is ``/tasks/{task_id}/release`` — the HTTP analogue of
+    :meth:`whilly.adapters.db.repository.TaskRepository.release_task`.
+    Same RFC 3986 unreserved-character rationale as :func:`complete_path`
+    / :func:`fail_path`: orchestrator-issued task ids never need
+    URL-encoding, so we don't pay :func:`urllib.parse.quote` on every
+    shutdown release.
+    """
+    return f"/tasks/{task_id}/release"
 
 
 # ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
@@ -1084,3 +1100,91 @@ class RemoteWorkerClient:
             json=request.model_dump(),
         )
         return await self._parse_response(response, FailResponse)
+
+    async def release(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        reason: str,
+    ) -> ReleaseResponse:
+        """Return ``task_id`` to the pool (``POST /tasks/{task_id}/release``, TASK-022b3, PRD FR-1.6, NFR-1).
+
+        HTTP analogue of :meth:`whilly.adapters.db.repository.TaskRepository.release_task`
+        — used by the remote worker on SIGTERM / SIGINT so a peer (or this
+        worker on restart) can pick the in-flight task back up within one
+        poll cycle instead of waiting out the visibility-timeout sweep
+        (default 15 minutes, PRD FR-1.4).
+
+        On success the server flips the row from ``CLAIMED`` |
+        ``IN_PROGRESS`` back to ``PENDING``, clears ``claimed_by`` /
+        ``claimed_at``, increments ``version``, and appends a ``RELEASE``
+        event with ``payload.reason`` set to whatever the caller passed
+        (typically :data:`whilly.worker.remote.SHUTDOWN_RELEASE_REASON`
+        — ``"shutdown"``). The reason is the discriminator that lets
+        dashboards distinguish worker-driven shutdowns from
+        sweep-driven reclaims; the wire-level :class:`ReleaseRequest`
+        rejects an empty string at the schema layer.
+
+        Same retry / auth / 4xx mapping as :meth:`complete` and
+        :meth:`fail` — in particular **409 Conflict surfaces as
+        :class:`VersionConflictError`** with the structured envelope
+        (``actual_version``, ``actual_status``). The canonical
+        idempotent-success pattern on shutdown is to treat
+        ``actual_status == TaskStatus.PENDING`` as a no-op (the
+        visibility-timeout sweep beat us to it):
+
+            try:
+                await client.release(task_id, worker_id, version, "shutdown")
+            except VersionConflictError as exc:
+                if exc.actual_status == TaskStatus.PENDING:
+                    # Sweep already released the row — nothing to do.
+                    pass
+                else:
+                    raise
+
+        Parameters
+        ----------
+        task_id:
+            The task being released. Must be ``CLAIMED`` or
+            ``IN_PROGRESS`` for the server-side UPDATE to match.
+        worker_id:
+            Registered worker identity (defence-in-depth echo, same as
+            :meth:`complete` and :meth:`fail`).
+        version:
+            Optimistic-locking version the worker last observed.
+        reason:
+            Free-form release reason that lands in the audit log.
+            ``"shutdown"`` for SIGTERM / SIGINT releases — empty
+            strings are rejected at the schema layer.
+
+        Returns
+        -------
+        ReleaseResponse
+            Validated wire envelope carrying the post-update
+            :class:`TaskPayload` (status ``PENDING``, version
+            incremented).
+
+        Raises
+        ------
+        VersionConflictError
+            Server returned 409 — see :meth:`complete` for field
+            semantics.
+        AuthError
+            Per-worker bearer rejected.
+        HTTPClientError
+            Other 4xx (e.g. 400 / 422 from a misconstructed body —
+            shouldn't happen since this method builds the body from
+            typed inputs).
+        ServerError
+            5xx after retries or schema-mismatched response.
+        RuntimeError
+            If called outside the ``async with`` block.
+        """
+        request = ReleaseRequest(worker_id=worker_id, version=version, reason=reason)
+        response = await self._request(
+            "POST",
+            release_path(task_id),
+            json=request.model_dump(),
+        )
+        return await self._parse_response(response, ReleaseResponse)

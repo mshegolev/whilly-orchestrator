@@ -359,6 +359,47 @@ class FailResponse(_FrozenModel):
 
 
 # ---------------------------------------------------------------------------
+# Release (TASK-022b3)
+# ---------------------------------------------------------------------------
+
+
+class ReleaseRequest(_FrozenModel):
+    """``POST /tasks/{task_id}/release`` request body (PRD FR-1.6, NFR-1).
+
+    Worker-driven release of an in-flight task back to ``PENDING`` —
+    the HTTP analogue of :meth:`whilly.adapters.db.repository.TaskRepository.release_task`.
+    Used by the remote worker (TASK-022b3) on SIGTERM / SIGINT so a peer
+    (or this worker on restart) can re-claim the task within one poll
+    cycle instead of waiting out the visibility-timeout sweep
+    (default 15 minutes, PRD FR-1.4).
+
+    Body shape is identical to :class:`FailRequest`: optimistic-locking
+    ``version`` and a non-empty ``reason``. The reason flows directly
+    into the ``RELEASE`` event payload — distinguishes shutdown
+    releases (``"shutdown"``) from sweep-driven releases
+    (``"visibility_timeout"``) so dashboards / post-mortems can attribute
+    the bounce without re-reading worker logs.
+    """
+
+    worker_id: NonEmptyShortStr
+    version: NonNegativeVersion
+    reason: NonEmptyReason
+
+
+class ReleaseResponse(_FrozenModel):
+    """``POST /tasks/{task_id}/release`` response body.
+
+    Carries the post-update :class:`TaskPayload` with status ``PENDING``
+    and the version incremented (the row's ``claimed_by`` /
+    ``claimed_at`` are also cleared on the server side, but they aren't
+    on the wire payload — the worker that asked to release it has no
+    use for them).
+    """
+
+    task: TaskPayload
+
+
+# ---------------------------------------------------------------------------
 # Heartbeat
 # ---------------------------------------------------------------------------
 
@@ -439,5 +480,7 @@ __all__ = [
     "PlanPayload",
     "RegisterRequest",
     "RegisterResponse",
+    "ReleaseRequest",
+    "ReleaseResponse",
     "TaskPayload",
 ]

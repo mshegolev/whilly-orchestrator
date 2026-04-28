@@ -1,4 +1,4 @@
-"""Remote worker async-loop for Whilly v4.0 (TASK-022b1 / TASK-022b2, PRD FR-1.1, FR-1.5, FR-1.6).
+"""Remote worker async-loop for Whilly v4.0 (TASK-022b1 / TASK-022b2 / TASK-022b3, PRD FR-1.1, FR-1.5, FR-1.6, NFR-1).
 
 Counterpart to :mod:`whilly.worker.local`: same outer state-machine pattern
 (``claim → run → complete | fail``), but every state-mutating step goes
@@ -11,13 +11,19 @@ import path inside this module by design (PRD SC-6).
 This module hosts two layered entry points:
 
 * :func:`run_remote_worker` — the bare loop (TASK-022b1). One concern:
-  ``claim → run → complete | fail`` over HTTP, no heartbeat, no signals.
+  ``claim → run → complete | fail`` over HTTP. ``stop`` is honoured at
+  iteration boundaries and during the runner call so SIGTERM / SIGINT
+  (TASK-022b3) returns the in-flight task to ``PENDING`` via
+  :meth:`RemoteWorkerClient.release` instead of either failing it or
+  waiting out the visibility-timeout sweep.
 * :func:`run_remote_worker_with_heartbeat` — the composition root
-  (TASK-022b2). Pairs the bare loop with a parallel heartbeat task under
-  one :class:`asyncio.TaskGroup` so the worker keeps
-  ``workers.last_heartbeat`` fresh while running. Mirrors the local-worker
-  ``run_worker`` from :mod:`whilly.worker.main`. Signal handling
-  (TASK-022b3) extends *this* layer the same way 019b2 extended 019b1.
+  (TASK-022b2 / 022b3). Pairs the bare loop with a parallel heartbeat
+  task under one :class:`asyncio.TaskGroup` *and* installs SIGTERM /
+  SIGINT signal handlers that flip the shared shutdown event so the
+  worker releases its in-flight task back to ``PENDING`` on a
+  cooperative kill from a process supervisor (Kubernetes, systemd,
+  tmux). Mirrors the local-worker ``run_worker`` from
+  :mod:`whilly.worker.main`.
 
 Loop contract (one iteration)
 -----------------------------
@@ -70,16 +76,21 @@ exercised regardless of the gap.
 
 Termination
 -----------
-Two exit paths only — TASK-022b1 is the "bare" loop (PRD AC: "без
-heartbeat и без сигналов"):
+Three exit paths:
 
+* ``stop`` event set (graceful shutdown — TASK-022b3): if the event
+  fires *between* iterations the loop exits cleanly without an
+  in-flight task to release; if it fires *during* the runner call the
+  runner is cancelled and the in-flight task is returned to
+  ``PENDING`` via :meth:`RemoteWorkerClient.release` so a peer (or
+  this worker on restart) can re-claim it within one poll cycle.
 * ``max_iterations`` (test-only) hard cap on outer iterations.
 * Outer :class:`asyncio.CancelledError` from the supervisor.
 
-The supervisor that wires SIGTERM / SIGINT and the parallel heartbeat
-landing in TASK-022b2 / 022b3 sits *above* this function — it cancels
-the loop's task to shut down. Mirrors the 019a → 019b1 → 019b2 slicing
-on the local side so each layered concern lands in its own commit.
+When ``stop`` is ``None`` (legacy callers, the heartbeat-composition
+root in 022b2 before signals were wired) the loop runs without the
+shutdown race — the original 022b1 codepath, untouched, so unit tests
+that pre-date 022b3 still exercise the bare contract.
 
 Concurrency note (PRD FR-2.4)
 -----------------------------
@@ -96,13 +107,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import HTTPClientError, RemoteWorkerClient, VersionConflictError
-from whilly.core.models import Plan, Task, WorkerId
+from whilly.core.models import Plan, Task, TaskStatus, WorkerId
 from whilly.core.prompts import build_task_prompt
 
 log = logging.getLogger(__name__)
@@ -128,15 +140,35 @@ _FAIL_REASON_OUTPUT_CAP: Final[int] = 500
 # callers can pass :func:`whilly.adapters.runner.run_task` to either.
 RemoteRunnerCallable = Callable[[Task, str], Awaitable[AgentResult]]
 
+# Reason string written into the RELEASE event payload when the worker
+# releases an in-flight task because of SIGTERM / SIGINT (TASK-022b3).
+# Mirrors :data:`whilly.worker.local.SHUTDOWN_RELEASE_REASON` so a single
+# dashboard query can attribute releases regardless of worker flavour —
+# both local and remote workers emit ``payload.reason = "shutdown"`` for
+# the cooperative-shutdown path, distinct from the visibility-timeout
+# sweep's ``"visibility_timeout"``.
+SHUTDOWN_RELEASE_REASON: Final[str] = "shutdown"
+
+# Signals we install handlers for in :func:`run_remote_worker_with_heartbeat`.
+# Same set as the local worker's :data:`whilly.worker.main._SHUTDOWN_SIGNALS`
+# — SIGTERM is the standard process-supervisor shutdown signal (Kubernetes,
+# systemd, tmux kill-window); SIGINT is the same path for ``Ctrl-C`` from
+# an interactive shell. Both must end with the in-flight task released to
+# ``PENDING`` on the server so a peer can re-claim it within one poll cycle.
+_SHUTDOWN_SIGNALS: Final[tuple[signal.Signals, ...]] = (
+    signal.SIGTERM,
+    signal.SIGINT,
+)
+
 
 @dataclass(frozen=True)
 class RemoteWorkerStats:
     """Counters returned by one :func:`run_remote_worker` invocation.
 
     Frozen so tests can assert on it without defensive copying. Fields
-    mirror :class:`whilly.worker.local.WorkerStats` minus
-    ``released_on_shutdown`` — shutdown plumbing is owned by TASK-022b3,
-    not 022b1.
+    mirror :class:`whilly.worker.local.WorkerStats` exactly so dashboards
+    and per-flavour tests can share assertion helpers without branching
+    on worker flavour.
 
     Attributes
     ----------
@@ -153,12 +185,19 @@ class RemoteWorkerStats:
         Iterations where ``client.claim`` returned ``None`` (server-side
         long-poll budget expired). The next iteration re-polls
         immediately — see module docstring for why no client-side sleep.
+    released_on_shutdown:
+        Tasks the worker put back to ``PENDING`` via
+        :meth:`RemoteWorkerClient.release` because a shutdown signal
+        arrived mid-runner (TASK-022b3). Always 0 in legacy non-stop
+        runs; at most 1 per :func:`run_remote_worker` invocation since
+        the loop ``break``s after releasing.
     """
 
     iterations: int = 0
     completed: int = 0
     failed: int = 0
     idle_polls: int = 0
+    released_on_shutdown: int = 0
 
 
 def _truncate_output(output: str) -> str:
@@ -188,6 +227,58 @@ def _build_fail_reason(result: AgentResult) -> str:
     return f"exit_code={result.exit_code}"
 
 
+async def _await_runner_or_stop(
+    runner_coro: Awaitable[AgentResult],
+    stop: asyncio.Event,
+) -> tuple[AgentResult | None, bool]:
+    """Race ``runner_coro`` against ``stop``; return ``(result, shutdown_requested)``.
+
+    Mirror of :func:`whilly.worker.local._await_runner_or_stop` — the
+    two helpers don't share an import because the local module's
+    ``_``-prefixed names are private and the helper is small enough to
+    duplicate without inviting drift. Returns ``(result, False)`` when
+    the runner finishes normally and ``(None, True)`` when ``stop``
+    fires first.
+
+    On the shutdown path the runner task is cancelled and awaited so
+    its underlying subprocess / sockets get a chance to tear down
+    before we report shutdown — without this, an in-flight httpx /
+    asyncpg connection inside the runner could leak past the test
+    boundary. We swallow the runner's :class:`asyncio.CancelledError`
+    (and any other exception it surfaces during teardown) rather than
+    re-raising: the point of the shutdown path is to release the task
+    atomically; a cancellation-time error from the runner is not a
+    worker bug, just the natural consequence of yanking the agent
+    mid-call.
+    """
+    runner_task: asyncio.Task[AgentResult] = asyncio.ensure_future(runner_coro)
+    stop_task: asyncio.Task[bool] = asyncio.ensure_future(stop.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {runner_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        runner_task.cancel()
+        stop_task.cancel()
+        raise
+
+    if stop_task in done:
+        runner_task.cancel()
+        try:
+            await runner_task
+        except (asyncio.CancelledError, Exception) as exc:
+            log.debug("remote runner cancelled during shutdown: %r", exc)
+        return None, True
+
+    stop_task.cancel()
+    try:
+        await stop_task
+    except asyncio.CancelledError:
+        pass
+    return runner_task.result(), False
+
+
 async def run_remote_worker(
     client: RemoteWorkerClient,
     runner: RemoteRunnerCallable,
@@ -195,13 +286,14 @@ async def run_remote_worker(
     worker_id: WorkerId,
     *,
     max_iterations: int | None = None,
+    stop: asyncio.Event | None = None,
 ) -> RemoteWorkerStats:
     """Run the remote worker loop against ``plan.id`` for ``worker_id``.
 
     See module docstring for the per-iteration contract. The loop exits
-    when ``max_iterations`` is reached (test-only) or when the outer
-    task is cancelled (production fallback once 022b3 wires SIGTERM /
-    SIGINT).
+    when ``stop`` is set (graceful shutdown — TASK-022b3),
+    ``max_iterations`` is reached (test-only), or when the outer task
+    is cancelled (production fallback).
 
     Parameters
     ----------
@@ -228,29 +320,53 @@ async def run_remote_worker(
         correlation.
     max_iterations:
         Hard cap on outer iterations. ``None`` (production default)
-        means loop forever — exit only on cancellation. Tests pass an
-        integer to make the loop terminable without forcing a
-        cancellation token through the AC's "bare" loop signature.
+        means loop forever — exit only on cancellation or ``stop``.
+        Tests pass an integer to make the loop terminable without
+        wiring a stop event through the bare loop signature.
+    stop:
+        Optional :class:`asyncio.Event` for cooperative graceful shutdown
+        (TASK-022b3). When set, the loop releases any in-flight task
+        back to ``PENDING`` via :meth:`RemoteWorkerClient.release` and
+        exits. Wired up by :func:`run_remote_worker_with_heartbeat` to
+        SIGTERM / SIGINT in production; tests set it directly to
+        exercise the shutdown path without sending real signals.
 
     Returns
     -------
     RemoteWorkerStats
-        Counters covering iterations, completions, failures and idle
-        polls observed during this invocation.
+        Counters covering iterations, completions, failures, idle polls
+        and shutdown releases observed during this invocation.
     """
     iterations = 0
     completed = 0
     failed = 0
     idle_polls = 0
+    released_on_shutdown = 0
 
     while max_iterations is None or iterations < max_iterations:
+        # Check ``stop`` *before* incrementing ``iterations`` so a
+        # shutdown at the boundary doesn't inflate the iteration count
+        # for tests. Mirrors :func:`whilly.worker.local.run_local_worker`.
+        if stop is not None and stop.is_set():
+            log.info(
+                "remote worker=%s plan=%s: shutdown requested, exiting loop cleanly",
+                worker_id,
+                plan.id,
+            )
+            break
+
         iterations += 1
 
         claimed = await client.claim(worker_id, plan.id)
         if claimed is None:
             # 204 No Content: the server's long-poll already absorbed the
             # idle-wait budget. Re-poll immediately — adding a sleep here
-            # would double the wait on every empty-queue iteration.
+            # would double the wait on every empty-queue iteration. The
+            # stop check at the top of the next iteration is the
+            # shutdown wake-up: a SIGTERM during an idle long-poll is
+            # bounded by the server-side ``CLAIM_LONG_POLL_TIMEOUT_DEFAULT``
+            # (30s), and the next iteration will see ``stop.is_set()``
+            # and exit before re-polling.
             idle_polls += 1
             log.debug(
                 "remote worker=%s plan=%s: 204 (no PENDING tasks), re-polling immediately",
@@ -260,7 +376,72 @@ async def run_remote_worker(
             continue
 
         prompt = build_task_prompt(claimed, plan)
-        result = await runner(claimed, prompt)
+
+        # Race the runner against ``stop`` so SIGTERM mid-runner doesn't
+        # have to wait for an arbitrarily long agent call before we can
+        # release the task. When ``stop`` is None (legacy callers, the
+        # 022b1 contract before signals were wired) we just await the
+        # runner directly — the original codepath, untouched.
+        if stop is None:
+            result: AgentResult | None = await runner(claimed, prompt)
+            shutdown_during_run = False
+        else:
+            result, shutdown_during_run = await _await_runner_or_stop(runner(claimed, prompt), stop)
+
+        if shutdown_during_run:
+            log.info(
+                "remote worker=%s task=%s: shutdown mid-runner, releasing claim",
+                worker_id,
+                claimed.id,
+            )
+            try:
+                await client.release(
+                    claimed.id,
+                    worker_id,
+                    claimed.version,
+                    SHUTDOWN_RELEASE_REASON,
+                )
+                released_on_shutdown += 1
+            except VersionConflictError as exc:
+                # 409 on release: the visibility-timeout sweep beat us
+                # to it (status already PENDING) or — extremely narrow
+                # window — the worker actually finished the task
+                # between the stop event firing and this RPC reaching
+                # the server. Either way, the row is in a terminal-or-
+                # better state without our help; treat as success and
+                # exit cleanly. ``actual_status == PENDING`` is the
+                # canonical "already released" signal.
+                if exc.actual_status == TaskStatus.PENDING:
+                    log.warning(
+                        "remote release lost the race: task=%s expected_version=%d actual_version=%s — already PENDING",
+                        claimed.id,
+                        claimed.version,
+                        exc.actual_version,
+                    )
+                else:
+                    log.warning(
+                        "remote release lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+                        claimed.id,
+                        claimed.version,
+                        exc.actual_version,
+                        exc.actual_status.value if exc.actual_status else None,
+                    )
+            except HTTPClientError as exc:
+                # Auth / generic 4xx during shutdown release is best-
+                # effort: the visibility-timeout sweep is the safety net
+                # if we can't reach the server right now. Log loudly so
+                # operators see the dropped release in the journal, but
+                # don't raise — the supervisor is already unwinding.
+                log.warning(
+                    "remote release HTTP error during shutdown: task=%s worker=%s exc=%s",
+                    claimed.id,
+                    worker_id,
+                    exc,
+                )
+            break
+
+        # ``shutdown_during_run`` was False, so ``result`` is set.
+        assert result is not None  # for mypy; helper contract guarantees this
 
         if result.is_complete and result.exit_code == 0:
             try:
@@ -307,6 +488,7 @@ async def run_remote_worker(
         completed=completed,
         failed=failed,
         idle_polls=idle_polls,
+        released_on_shutdown=released_on_shutdown,
     )
 
 
@@ -444,6 +626,92 @@ async def run_remote_heartbeat_loop(
             continue
 
 
+def _install_signal_handlers(stop: asyncio.Event) -> list[signal.Signals]:
+    """Install SIGTERM / SIGINT handlers that flip ``stop`` (TASK-022b3).
+
+    Mirror of :func:`whilly.worker.main._install_signal_handlers` for the
+    remote-worker side of the house. Returns the list of signals whose
+    handlers were actually installed — the caller passes that list back
+    to :func:`_remove_signal_handlers` on exit so we don't leak handlers
+    across sequential :func:`run_remote_worker_with_heartbeat` invocations
+    (or between tests).
+
+    Two layers of defensive degradation:
+
+    * ``loop.add_signal_handler`` raises :class:`NotImplementedError` on
+      Windows ``ProactorEventLoop`` and on any non-main thread. We catch
+      and skip — the worker stays functional, just without graceful
+      signal shutdown (callers can still use ``max_iterations`` or outer
+      cancellation).
+    * Anything else propagating out of ``add_signal_handler`` indicates a
+      genuinely broken loop; we let it surface so the worker fails fast
+      instead of pretending it's wired up.
+    """
+    loop = asyncio.get_running_loop()
+    installed: list[signal.Signals] = []
+    for sig in _SHUTDOWN_SIGNALS:
+        try:
+            loop.add_signal_handler(sig, _make_shutdown_handler(stop, sig))
+        except NotImplementedError:
+            log.debug(
+                "remote worker signal handler for %s not installable on this loop; skipping",
+                sig.name,
+            )
+            continue
+        installed.append(sig)
+    if installed:
+        log.info(
+            "remote worker signal handlers installed for %s",
+            ", ".join(s.name for s in installed),
+        )
+    return installed
+
+
+def _remove_signal_handlers(installed: list[signal.Signals]) -> None:
+    """Restore default signal disposition for handlers we installed.
+
+    Symmetric with :func:`_install_signal_handlers`. Errors during
+    teardown are logged at DEBUG but never raised — a failed cleanup
+    must not mask whatever exception the caller is unwinding through.
+    """
+    if not installed:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # Loop already gone (called from an outer exception path with a
+        # shut-down loop); nothing left to clean up.
+        return
+    for sig in installed:
+        try:
+            loop.remove_signal_handler(sig)
+        except (NotImplementedError, ValueError, RuntimeError) as exc:
+            log.debug("could not remove remote-worker signal handler for %s: %r", sig.name, exc)
+
+
+def _make_shutdown_handler(stop: asyncio.Event, sig: signal.Signals) -> Callable[[], None]:
+    """Build a thread-safe handler that flips ``stop`` and logs the signal.
+
+    The handler runs on the asyncio loop (because we registered it via
+    ``loop.add_signal_handler``), so calling :meth:`asyncio.Event.set`
+    from inside is safe — no cross-thread synchronization needed. We
+    keep the body trivial: flipping the event is sufficient, and the
+    rest of the shutdown logic lives in :func:`run_remote_worker` where
+    the state-transition context is.
+
+    Logging at INFO so a SIGTERM kill from kubectl / systemd / tmux
+    leaves an unambiguous breadcrumb in the worker journal — operators
+    investigating "why did this remote worker exit" can correlate with
+    the process supervisor's log without reading code.
+    """
+
+    def _handler() -> None:
+        log.info("remote worker received %s; requesting graceful shutdown", sig.name)
+        stop.set()
+
+    return _handler
+
+
 async def run_remote_worker_with_heartbeat(
     client: RemoteWorkerClient,
     runner: RemoteRunnerCallable,
@@ -452,6 +720,7 @@ async def run_remote_worker_with_heartbeat(
     *,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     max_iterations: int | None = None,
+    install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
 ) -> RemoteWorkerStats:
     """Run :func:`run_remote_worker` paired with :func:`run_remote_heartbeat_loop`.
@@ -460,11 +729,36 @@ async def run_remote_worker_with_heartbeat(
     :func:`whilly.worker.main.run_worker` on the local side. Both
     coroutines run under one :class:`asyncio.TaskGroup`; when the main
     worker loop returns (``max_iterations`` reached in tests, outer
-    cancellation propagated, or — once TASK-022b3 lands — a SIGTERM-
-    flipped ``stop`` event) the inner closure's ``finally`` block sets
-    the shared :class:`asyncio.Event`, the heartbeat coroutine wakes
-    from its ``wait_for(stop, interval)`` and returns cleanly, and the
+    cancellation propagated, or a SIGTERM / SIGINT -flipped ``stop``
+    event in production) the inner closure's ``finally`` block sets the
+    shared :class:`asyncio.Event`, the heartbeat coroutine wakes from
+    its ``wait_for(stop, interval)`` and returns cleanly, and the
     TaskGroup unwinds without :class:`asyncio.CancelledError` plumbing.
+
+    Signal handling (TASK-022b3)
+    ----------------------------
+    When ``install_signal_handlers=True`` (production default),
+    :func:`run_remote_worker_with_heartbeat` installs handlers for
+    SIGTERM and SIGINT via :meth:`asyncio.AbstractEventLoop.add_signal_handler`.
+    Both flip the same ``stop`` event the heartbeat / loop already use.
+    The inner :func:`run_remote_worker` races each runner call against
+    ``stop`` and, on a mid-runner shutdown, calls
+    :meth:`RemoteWorkerClient.release` to put the in-flight task back to
+    ``PENDING`` before exiting. Net effect: a peer worker (or this
+    worker on restart) re-claims it within one poll cycle, no work is
+    lost, and the audit log carries a ``RELEASE`` event with
+    ``payload.reason = "shutdown"`` so post-mortems can tell signal-
+    driven releases apart from visibility-timeout sweeps.
+
+    Handlers are installed only on the main thread of an asyncio loop
+    that supports them — Windows' ``ProactorEventLoop`` and any non-
+    main thread raise :class:`NotImplementedError` from
+    ``add_signal_handler``. We catch that and silently degrade: callers
+    in those environments still get heartbeats and can shut down via
+    ``max_iterations`` / outer cancellation. The
+    ``install_signal_handlers=False`` parameter is the test-side toggle
+    — pytest's own SIGINT handler must not be replaced by the worker's
+    during unit tests.
 
     Why a stop event rather than ``heartbeat_task.cancel()``?
         Same rationale as :mod:`whilly.worker.main`: explicit
@@ -472,8 +766,8 @@ async def run_remote_worker_with_heartbeat(
         the cancelled task that :class:`asyncio.TaskGroup` treats as a
         propagatable error. Using a stop event lets the heartbeat exit
         *normally* — the TaskGroup just awaits both children, sees
-        clean returns, and drops out. TASK-022b3's signal handlers
-        will set the same event from inside the asyncio loop via
+        clean returns, and drops out. The signal handlers set the same
+        event from inside the asyncio loop via
         ``loop.add_signal_handler``, so a ``kill -TERM`` arrives as
         ordinary cooperative shutdown.
 
@@ -491,22 +785,28 @@ async def run_remote_worker_with_heartbeat(
         The plan whose tasks the worker draws from. Forwarded.
     worker_id:
         Registered worker identity. Used by both the main loop
-        (claim/complete/fail bodies) and the heartbeat task.
+        (claim/complete/fail/release bodies) and the heartbeat task.
     heartbeat_interval:
         Seconds between heartbeat ticks. Defaults to
         :data:`DEFAULT_HEARTBEAT_INTERVAL` (30s).
     max_iterations:
         Hard cap on outer iterations of the main loop. ``None`` means
-        loop until cancellation. Tests pass an integer to make the
-        composition terminable without wiring a cancellation token
-        through the bare loop's signature.
+        loop until cancellation or shutdown. Tests pass an integer to
+        make the composition terminable without wiring a cancellation
+        token through the bare loop's signature.
+    install_signal_handlers:
+        When ``True`` (production default), SIGTERM and SIGINT are
+        installed via :meth:`asyncio.AbstractEventLoop.add_signal_handler`
+        and flip the shared ``stop`` event. Tests pass ``False`` to
+        avoid clobbering pytest's own SIGINT handler (and to keep unit
+        tests deterministic across loop implementations).
     stop:
         Optional shared shutdown event. Callers that already own a
         shutdown signal (CLI in TASK-022c, integration tests that
         drive shutdown without sending real signals) pass it in;
         otherwise we allocate one internally. Either way the same
-        event drives both the heartbeat termination and (once 022b3
-        lands) the main-loop release-on-shutdown path.
+        event drives the heartbeat termination, the main-loop
+        release-on-shutdown path, and the signal handlers.
 
     Returns
     -------
@@ -514,11 +814,14 @@ async def run_remote_worker_with_heartbeat(
         Counters returned by the inner :func:`run_remote_worker`. The
         heartbeat is a side-effect on the server (and on
         ``workers.last_heartbeat`` once it lands in Postgres) and
-        does not contribute to any counter — same convention as the
-        local-worker composition.
+        does not contribute to any counter; signal-driven releases
+        surface via ``RemoteWorkerStats.released_on_shutdown`` — same
+        convention as the local-worker composition.
     """
     if stop is None:
         stop = asyncio.Event()
+
+    installed = _install_signal_handlers(stop) if install_signal_handlers else []
 
     async def _worker_then_stop() -> RemoteWorkerStats:
         """Run the inner loop; signal heartbeat to stop on any exit path.
@@ -535,20 +838,24 @@ async def run_remote_worker_with_heartbeat(
                 plan,
                 worker_id,
                 max_iterations=max_iterations,
+                stop=stop,
             )
         finally:
             stop.set()
 
-    async with asyncio.TaskGroup() as tg:
-        tg.create_task(
-            run_remote_heartbeat_loop(
-                client,
-                worker_id,
-                interval=heartbeat_interval,
-                stop=stop,
+    try:
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(
+                run_remote_heartbeat_loop(
+                    client,
+                    worker_id,
+                    interval=heartbeat_interval,
+                    stop=stop,
+                )
             )
-        )
-        worker_task = tg.create_task(_worker_then_stop())
+            worker_task = tg.create_task(_worker_then_stop())
+    finally:
+        _remove_signal_handlers(installed)
 
     # ``worker_task`` is guaranteed done after the TaskGroup exits.
     # ``.result()`` re-raises whatever the inner loop raised (TaskGroup
@@ -560,6 +867,7 @@ async def run_remote_worker_with_heartbeat(
 
 __all__ = [
     "DEFAULT_HEARTBEAT_INTERVAL",
+    "SHUTDOWN_RELEASE_REASON",
     "RemoteRunnerCallable",
     "RemoteWorkerStats",
     "run_remote_heartbeat_loop",
