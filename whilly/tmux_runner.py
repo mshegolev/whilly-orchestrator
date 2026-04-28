@@ -36,7 +36,17 @@ class TmuxAgent:
     def is_running(self) -> bool:
         if not TMUX:
             return False
-        r = _tmux_run([TMUX, "has-session", "-t", self.session_name], capture_output=True)
+        try:
+            r = _tmux_run([TMUX, "has-session", "-t", self.session_name], capture_output=True)
+        except BlockingIOError:
+            # System is fork-saturated (RLIMIT_NPROC). The agent itself is
+            # almost certainly still running inside its tmux pane — we just
+            # can't spawn a tmux client to verify right now. Treat the
+            # check as "still alive" and let the next poll succeed when
+            # other processes free up; better than killing the entire plan
+            # run on a transient host condition.
+            log.warning("EAGAIN on tmux has-session — assuming %s still running", self.session_name)
+            return True
         return r.returncode == 0
 
     def capture_output(self, lines: int = 20) -> str:
