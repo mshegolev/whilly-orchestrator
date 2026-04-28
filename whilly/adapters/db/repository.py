@@ -136,6 +136,41 @@ VALUES ($1, $2, $3::jsonb)
 """
 
 
+# Optimistic-locking START: ``CLAIMED`` → ``IN_PROGRESS``. Bridges the
+# claim-side and complete-side of the worker loop (TASK-019a): a worker that
+# just won ``claim_task`` calls this immediately so the eventual
+# ``complete_task`` passes its ``status = 'IN_PROGRESS'`` filter. Mirrors the
+# ``Transition.START`` rule from :func:`whilly.core.state_machine.apply_transition`.
+#
+# Why a separate transition rather than collapsing CLAIMED/IN_PROGRESS?
+#     The two states encode different operational facts: CLAIMED means
+#     "ownership taken, agent not yet spawned" and IN_PROGRESS means "agent
+#     running". Heartbeat/visibility-timeout policy (PRD FR-1.4) and the
+#     dashboard (TASK-027) care about the distinction. Keeping them separate
+#     also lets ``fail_task`` accept both — a worker that crashes between
+#     claim and start still gets a clean FAILED audit row.
+_START_SQL: str = """
+UPDATE tasks
+SET status = 'IN_PROGRESS',
+    version = tasks.version + 1,
+    updated_at = NOW()
+WHERE id = $1
+  AND version = $2
+  AND status = 'CLAIMED'
+RETURNING
+    tasks.id,
+    tasks.status,
+    tasks.dependencies,
+    tasks.key_files,
+    tasks.priority,
+    tasks.description,
+    tasks.acceptance_criteria,
+    tasks.test_steps,
+    tasks.prd_requirement,
+    tasks.version
+"""
+
+
 # Optimistic-locking COMPLETE: only flips ``IN_PROGRESS`` → ``DONE`` when the
 # caller's expected version matches the row's current version. The status
 # filter mirrors the state-machine rule from
@@ -402,6 +437,50 @@ class TaskRepository:
                     worker_id,
                     row["id"],
                     plan_id,
+                    row["version"],
+                )
+                return _row_to_task(row)
+
+    async def start_task(self, task_id: TaskId, version: int) -> Task:
+        """Atomically transition ``task_id`` from ``CLAIMED`` → ``IN_PROGRESS``.
+
+        Called by the local worker (TASK-019a) immediately after a successful
+        ``claim_task`` and before invoking the agent runner. Two reasons it's
+        a separate round-trip rather than folded into ``claim_task``:
+
+        * It marks the moment the worker actually starts running the agent,
+          not the moment it took ownership. The visibility-timeout sweep
+          (PRD FR-1.4) treats ``CLAIMED`` and ``IN_PROGRESS`` identically for
+          aging, but heartbeats (TASK-019b1) and the dashboard (TASK-027)
+          care about the distinction.
+        * It fits the optimistic-locking lattice: ``complete_task`` requires
+          ``status = 'IN_PROGRESS'``, so without this hop the happy path
+          would have to relax that filter and lose its strong contract.
+
+        Same lock-free contract as :meth:`complete_task`: the UPDATE filters
+        on ``version`` and ``status``, RETURNING ships the post-update row,
+        and a 0-row result triggers :class:`VersionConflictError` after a
+        single follow-up SELECT to classify the cause (lost update vs. wrong
+        status vs. row missing). A ``START`` event row is appended in the
+        same transaction so the audit log can never disagree with the tasks
+        table.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(_START_SQL, task_id, version)
+                if row is None:
+                    await self._raise_version_conflict(conn, task_id, version)
+
+                payload = json.dumps({"version": row["version"]})
+                await conn.execute(
+                    _INSERT_EVENT_SQL,
+                    row["id"],
+                    Transition.START.value,
+                    payload,
+                )
+                logger.info(
+                    "start_task: task=%s version=%d → IN_PROGRESS",
+                    row["id"],
                     row["version"],
                 )
                 return _row_to_task(row)
