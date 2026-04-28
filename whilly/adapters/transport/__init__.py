@@ -18,8 +18,11 @@ Layout
 * :mod:`whilly.adapters.transport.server` (TASK-021a3) — FastAPI app
   factory ``create_app(pool)`` and the unauthenticated ``/health`` probe.
   Route handlers for workers / tasks land here in TASK-021b/c.
-* :mod:`whilly.adapters.transport.client` (TASK-022a) — httpx-based remote
-  worker client.
+* :mod:`whilly.adapters.transport.client` (TASK-022a1) — httpx-based
+  :class:`RemoteWorkerClient` with retry / fail-fast wire handling and the
+  typed exception hierarchy (:class:`HTTPClientError`,
+  :class:`AuthError`, :class:`VersionConflictError`,
+  :class:`ServerError`). High-level RPC methods land in TASK-022a2 / a3.
 
 Re-exports below give callers a stable surface
 (``from whilly.adapters.transport import RegisterRequest``) without needing
@@ -35,6 +38,15 @@ from whilly.adapters.transport.auth import (
     make_bearer_auth,
     make_bootstrap_auth,
     reset_lazy_dependencies,
+)
+from whilly.adapters.transport.client import (
+    DEFAULT_BACKOFF_SCHEDULE,
+    DEFAULT_TIMEOUT_SECONDS,
+    AuthError,
+    HTTPClientError,
+    RemoteWorkerClient,
+    ServerError,
+    VersionConflictError,
 )
 from whilly.adapters.transport.schemas import (
     ClaimRequest,
@@ -64,10 +76,13 @@ __all__ = [
     "CLAIM_LONG_POLL_TIMEOUT_DEFAULT",
     "CLAIM_PATH",
     "CLAIM_POLL_INTERVAL_DEFAULT",
+    "DEFAULT_BACKOFF_SCHEDULE",
+    "DEFAULT_TIMEOUT_SECONDS",
     "HEALTH_PATH",
     "REGISTER_PATH",
     "WORKER_TOKEN_ENV",
     "AuthDependency",
+    "AuthError",
     "ClaimRequest",
     "ClaimResponse",
     "CompleteRequest",
@@ -75,11 +90,15 @@ __all__ = [
     "ErrorResponse",
     "FailRequest",
     "FailResponse",
+    "HTTPClientError",
     "HeartbeatRequest",
     "HeartbeatResponse",
     "RegisterRequest",
     "RegisterResponse",
+    "RemoteWorkerClient",
+    "ServerError",
     "TaskPayload",
+    "VersionConflictError",
     "bearer_auth",
     "bootstrap_auth",
     "create_app",
