@@ -100,8 +100,10 @@ def launch_agent(
     prefix_argv = argv[:-1]
     prefix_cmd = " ".join(shlex.quote(a) for a in prefix_argv)
 
-    # Preamble: пишем сразу чтобы tail -f / TUI сразу видели активность,
-    # т.к. --format/--output-format json пишет результат только в конце.
+    # Preamble: пишем сразу чтобы tail -f / TUI сразу видели активность ещё
+    # до первого события агента. С --output-format stream-json Claude CLI
+    # пишет JSONL events инкрементально — preamble просто гарантирует, что
+    # файл существует и непустой даже на холодном старте.
     backend_name = getattr(backend, "name", "claude")
     preamble_cmd = (
         f'printf "# whilly agent preamble\\n'
@@ -111,7 +113,7 @@ def launch_agent(
         f"# backend   : {backend_name}\\n"
         f"# model     : {model}\\n"
         f"# cwd       : {cwd or 'inherited'}\\n"
-        f"# note      : агент пишет результат в КОНЦЕ работы\\n"
+        f"# note      : stream-json: events JSONL появляются live, tail -f покажет прогресс\\n"
         f'# ---\\n" > "{log_file}"; '
     )
     wrapper = (
