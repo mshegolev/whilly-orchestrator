@@ -1,16 +1,15 @@
-"""FastAPI app factory for the worker ↔ control-plane HTTP API (TASK-021a3 / TASK-021b / TASK-021c1, PRD FR-1.1 / FR-1.2 / FR-1.3 / FR-1.6 / TC-6).
+"""FastAPI app factory for the worker ↔ control-plane HTTP API (TASK-021a3 / TASK-021b / TASK-021c1 / TASK-021c2, PRD FR-1.1 / FR-1.2 / FR-1.3 / FR-1.6 / TC-6).
 
 This module is the *composition root* of the control-plane HTTP surface.
 :func:`create_app` wires the asyncpg pool, the auth dependencies from
 :mod:`whilly.adapters.transport.auth` and the wire schemas from
 :mod:`whilly.adapters.transport.schemas` into a single FastAPI app. The
-remaining task-facing endpoints (``/tasks/{id}/complete``,
-``/tasks/{id}/fail``) arrive in TASK-021c2 — they will be added in this
-same module so route handlers stay co-located with the lifespan / state
-/ auth plumbing they depend on.
+task-facing terminal endpoints (``/tasks/{id}/complete``,
+``/tasks/{id}/fail``) live alongside ``/tasks/claim`` so route handlers
+stay co-located with the lifespan / state / auth plumbing they depend on.
 
-What lives here today (TASK-021a3 + TASK-021b + TASK-021c1)
------------------------------------------------------------
+What lives here today (TASK-021a3 + TASK-021b + TASK-021c1 + TASK-021c2)
+------------------------------------------------------------------------
 * :func:`create_app(pool, *, worker_token, bootstrap_token)` — factory.
   Stores ``pool``, a :class:`TaskRepository` and the two pre-bound auth
   dependencies on ``app.state`` so handlers added in TASK-021c can reach
@@ -56,6 +55,31 @@ What lives here today (TASK-021a3 + TASK-021b + TASK-021c1)
   decoding. ``plan`` is intentionally left ``None`` here — the AC scope
   is "Task | 204"; populating it is deferred to a future task that
   needs the prompt context server-side.
+* ``POST /tasks/{task_id}/complete`` — terminal-state RPC (PRD FR-1.1
+  / FR-2.4). Gated by the per-worker bearer dependency. Thin wrapper
+  over :meth:`TaskRepository.complete_task`: the worker sends the
+  ``version`` it last observed (from the claim response or its own
+  heartbeat) and the server's UPDATE filter (``WHERE id = $1 AND
+  version = $2 AND status = 'IN_PROGRESS'``) provides the optimistic
+  lock. Success returns 200 + :class:`CompleteResponse` carrying the
+  post-update :class:`TaskPayload` (status ``DONE``, version + 1).
+  :class:`whilly.adapters.db.VersionConflictError` maps to 409 + an
+  :class:`ErrorResponse` envelope carrying the full conflict tuple
+  (``task_id``, ``expected_version``, ``actual_version``,
+  ``actual_status``) — the remote worker (TASK-022a3 / 022b1) reads
+  those fields directly to decide retry vs drop vs surface, instead
+  of running its own follow-up SELECT. The 409 body shape is a
+  contract: any change here must land in lock-step with TASK-022a3's
+  client-side error mapper.
+* ``POST /tasks/{task_id}/fail`` — symmetric terminal-state RPC.
+  Same shape as ``complete`` but accepts a non-empty ``reason`` in the
+  body — the value flows straight into ``events.payload`` so the
+  dashboard (TASK-027) and post-mortem queries can surface a human-
+  readable cause without re-scanning logs. Same 409 contract on
+  conflict. ``fail_task``'s SQL accepts both ``CLAIMED`` and
+  ``IN_PROGRESS`` source states (a worker can crash before
+  :meth:`TaskRepository.start_task` has even fired) — the route
+  surfaces this faithfully without filtering further.
 * OpenAPI docs at ``/docs`` (Swagger UI) and the spec at
   ``/openapi.json`` — both wired by FastAPI's defaults; we don't move
   them off the default paths because operators expect them there.
@@ -140,7 +164,7 @@ import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 
-from whilly.adapters.db import TaskRepository
+from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
@@ -151,6 +175,11 @@ from whilly.adapters.transport.auth import (
 from whilly.adapters.transport.schemas import (
     ClaimRequest,
     ClaimResponse,
+    CompleteRequest,
+    CompleteResponse,
+    ErrorResponse,
+    FailRequest,
+    FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
     RegisterRequest,
@@ -633,4 +662,177 @@ def create_app(
             # — even when the interval doesn't divide the budget evenly.
             await asyncio.sleep(min(claim_poll_interval, deadline - now))
 
+    @app.post(
+        "/tasks/{task_id}/complete",
+        response_model=CompleteResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": CompleteResponse,
+                "description": "Task transitioned IN_PROGRESS → DONE.",
+            },
+            status.HTTP_409_CONFLICT: {
+                "model": ErrorResponse,
+                "description": (
+                    "Optimistic-locking conflict: another writer advanced the "
+                    "version, the row's status disallows the transition, or the "
+                    "task no longer exists."
+                ),
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def complete_task(task_id: str, payload: CompleteRequest) -> CompleteResponse | JSONResponse:
+        """Terminal-state RPC: IN_PROGRESS → DONE (PRD FR-1.1, FR-2.4).
+
+        Thin wrapper over :meth:`TaskRepository.complete_task`. The
+        ``task_id`` lives on the URL (it identifies the resource being
+        mutated, so it belongs in the path); ``version`` and
+        ``worker_id`` come from the body. The ``worker_id`` echo is
+        defence-in-depth — the bearer token already authenticates the
+        worker, but logging the claimed identity alongside the actual
+        repo call lets operators correlate a 409 with the *worker*
+        that hit it, not just the request id.
+
+        409 mapping
+            :class:`VersionConflictError` carries ``task_id``,
+            ``expected_version``, ``actual_version``, and
+            ``actual_status``. We project them into the
+            :class:`ErrorResponse` envelope so a remote worker
+            (TASK-022a3) can branch on the actual conflict cause
+            without an extra SELECT round-trip:
+
+            * ``actual_status is None`` and ``actual_version is None`` →
+              the row is gone (FK cascade in tests, mis-routed worker);
+            * ``actual_version != expected_version`` → another writer
+              advanced the counter first (lost-update / re-claim);
+            * ``actual_version == expected_version`` and ``actual_status``
+              is ``DONE`` / ``FAILED`` / ``SKIPPED`` → idempotent retry,
+              the worker can treat it as success and move on.
+
+            The error code string is ``"version_conflict"`` — a stable
+            machine-readable identifier the client maps onto its own
+            retry policy, mirrored in TASK-022a3's mapper.
+
+        Why a JSONResponse for 409 instead of HTTPException?
+            ``HTTPException(detail=...)`` only fills the ``detail``
+            field of FastAPI's default error envelope; it cannot
+            populate the structured fields (``task_id``,
+            ``expected_version``, etc.) that :class:`ErrorResponse`
+            promises. Returning a typed :class:`JSONResponse` lets us
+            ship the full envelope while still honouring the
+            ``responses`` map declared on the route, so /docs shows
+            the correct shape on the conflict path.
+        """
+        try:
+            updated = await repo.complete_task(task_id, payload.version)
+        except VersionConflictError as exc:
+            logger.info(
+                "complete_task conflict: worker=%s task=%s expected_version=%d actual_version=%s actual_status=%s",
+                payload.worker_id,
+                exc.task_id,
+                exc.expected_version,
+                exc.actual_version,
+                exc.actual_status.value if exc.actual_status else None,
+            )
+            return _conflict_response(exc)
+        logger.info(
+            "complete_task: worker=%s task=%s version=%d → DONE",
+            payload.worker_id,
+            updated.id,
+            updated.version,
+        )
+        return CompleteResponse(task=TaskPayload.from_task(updated))
+
+    @app.post(
+        "/tasks/{task_id}/fail",
+        response_model=FailResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": FailResponse,
+                "description": "Task transitioned CLAIMED|IN_PROGRESS → FAILED.",
+            },
+            status.HTTP_409_CONFLICT: {
+                "model": ErrorResponse,
+                "description": (
+                    "Optimistic-locking conflict — see the matching /tasks/{task_id}/complete description."
+                ),
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def fail_task(task_id: str, payload: FailRequest) -> FailResponse | JSONResponse:
+        """Terminal-state RPC: CLAIMED | IN_PROGRESS → FAILED (PRD FR-1.1, FR-2.4).
+
+        Mirrors :func:`complete_task` exactly except for the extra
+        ``reason`` field, which lands in the ``events.payload`` audit
+        row alongside the post-update version. ``reason`` is required
+        and non-empty (enforced by :class:`FailRequest`'s
+        :data:`NonEmptyReason` constraint) — a blank reason would
+        defeat the dashboard's whole point.
+
+        ``fail_task``'s repository SQL accepts both ``CLAIMED`` *and*
+        ``IN_PROGRESS`` as valid source states (a worker may crash
+        before :meth:`TaskRepository.start_task` has fired), so this
+        route does not pre-filter on the source status — the repo
+        owns that policy and the 409 envelope surfaces the actual
+        status when the transition is rejected.
+        """
+        try:
+            updated = await repo.fail_task(task_id, payload.version, payload.reason)
+        except VersionConflictError as exc:
+            logger.info(
+                "fail_task conflict: worker=%s task=%s expected_version=%d actual_version=%s actual_status=%s",
+                payload.worker_id,
+                exc.task_id,
+                exc.expected_version,
+                exc.actual_version,
+                exc.actual_status.value if exc.actual_status else None,
+            )
+            return _conflict_response(exc)
+        logger.info(
+            "fail_task: worker=%s task=%s version=%d reason=%r → FAILED",
+            payload.worker_id,
+            updated.id,
+            updated.version,
+            payload.reason,
+        )
+        return FailResponse(task=TaskPayload.from_task(updated))
+
     return app
+
+
+def _conflict_response(exc: VersionConflictError) -> JSONResponse:
+    """Project a :class:`VersionConflictError` onto a 409 :class:`ErrorResponse`.
+
+    Centralised because both ``complete_task`` and ``fail_task`` map
+    the same exception with the same shape — and a future
+    ``release_task`` HTTP endpoint will reuse it. Keeping the
+    projection in one place means the wire contract for
+    ``"version_conflict"`` lives in exactly one location, so a future
+    schema change (extra fields, alternate error codes) lands without
+    touching the routes.
+
+    The ``error`` code is the stable machine-readable token; the
+    ``detail`` is :func:`str(exc)`'s human-readable message — the same
+    text that appears in server logs, which keeps debugging cheap when
+    a remote worker reports a 409 from production.
+    """
+    body = ErrorResponse(
+        error="version_conflict",
+        detail=str(exc),
+        task_id=exc.task_id,
+        expected_version=exc.expected_version,
+        actual_version=exc.actual_version,
+        actual_status=exc.actual_status,
+    )
+    # ``mode="json"`` so enums (e.g. ``actual_status``) are serialised
+    # as their string values rather than the bare Enum instance, which
+    # the default JSON encoder would reject. ``exclude_none=False`` is
+    # the default but stated for emphasis: ``ErrorResponse`` clients
+    # rely on the ``None`` markers to distinguish "field not
+    # applicable to this error" from "field absent because the server
+    # forgot to populate it".
+    return JSONResponse(
+        body.model_dump(mode="json"),
+        status_code=status.HTTP_409_CONFLICT,
+    )
