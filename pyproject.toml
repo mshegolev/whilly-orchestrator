@@ -58,6 +58,11 @@ Changelog = "https://github.com/mshegolev/whilly-orchestrator/blob/main/CHANGELO
 
 [project.scripts]
 whilly = "whilly.cli:main"
+# Standalone remote-worker entry (TASK-022c, PRD FR-1.5/TC-6). Separate
+# binary so an operator can deploy a worker box without invoking the v3
+# legacy parser, and so the worker process never needs the asyncpg /
+# FastAPI import path (PRD SC-6, enforced via .importlinter).
+whilly-worker = "whilly.cli.worker:main"
 
 [tool.setuptools.packages.find]
 include = ["whilly", "whilly.*"]

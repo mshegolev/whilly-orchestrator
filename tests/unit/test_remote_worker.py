@@ -594,3 +594,187 @@ async def test_max_iterations_zero_is_a_noop(fake_sleep: list[float]) -> None:
 
     assert stats == RemoteWorkerStats()
     assert client.claim_calls == []
+
+
+# --------------------------------------------------------------------------- #
+# max_processed cap (TASK-022c — wires --once)
+# --------------------------------------------------------------------------- #
+
+
+async def test_max_processed_one_exits_after_first_completed(fake_sleep: list[float]) -> None:
+    """``max_processed=1`` exits the loop right after one successful complete.
+
+    AC for TASK-022c (--once flag). The loop scripts two PENDING tasks
+    but the second claim must never be issued because the cap fires
+    after the first complete. Idle polls are still possible *before* the
+    first task arrives (handled by the next test) but here we get the
+    happy single-task path.
+    """
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    claimed = _make_task("T-once", status=TaskStatus.CLAIMED, version=1)
+    done = replace(claimed, status=TaskStatus.DONE, version=2)
+    extra = _make_task("T-extra", status=TaskStatus.CLAIMED, version=1)
+
+    client.claim_results.extend([claimed, extra])
+    client.complete_results.append(done)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_processed=1,
+    )
+
+    assert stats == RemoteWorkerStats(iterations=1, completed=1, failed=0, idle_polls=0)
+    # Crucial: the second pending claim must not have been issued.
+    assert client.claim_calls == [(WORKER_ID, PLAN_ID)]
+    assert len(client.claim_results) == 1, "second scripted claim must remain unconsumed"
+
+
+async def test_max_processed_one_exits_after_first_failed(fake_sleep: list[float]) -> None:
+    """``max_processed=1`` honours fails too — completed + failed >= 1 wins.
+
+    Symmetric with the completed test above; pinning fail-counts means a
+    refactor that only checked ``completed`` would surface here. The AC
+    for --once reads "одна задача" (one task) — terminal status counts
+    regardless of which terminal status it landed in.
+    """
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    claimed = _make_task("T-fail-once", status=TaskStatus.CLAIMED, version=1)
+    failed_terminal = replace(claimed, status=TaskStatus.FAILED, version=2)
+
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed_terminal)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="boom", exit_code=1, is_complete=False)
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_processed=1,
+    )
+
+    assert stats == RemoteWorkerStats(iterations=1, completed=0, failed=1, idle_polls=0)
+    assert len(client.fail_calls) == 1
+
+
+async def test_max_processed_skips_idle_polls(fake_sleep: list[float]) -> None:
+    """Idle polls do NOT count against ``max_processed``.
+
+    A --once worker against an empty queue must keep polling until it
+    actually owns a task — pinning this means the cap is "completed +
+    failed" semantics, not "iterations". Without the test, a refactor
+    that incremented the processed counter on idle polls would silently
+    turn --once into "exit on the first 204".
+    """
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    # First two claims return None (idle), third returns a task. The
+    # cap is 1, so we need to reach the third iteration before exit.
+    claimed = _make_task("T-after-idles", status=TaskStatus.CLAIMED, version=3)
+    done = replace(claimed, status=TaskStatus.DONE, version=4)
+    client.claim_results.extend([None, None, claimed])
+    client.complete_results.append(done)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_processed=1,
+    )
+
+    assert stats == RemoteWorkerStats(iterations=3, completed=1, failed=0, idle_polls=2)
+    assert len(client.claim_calls) == 3
+
+
+async def test_max_processed_skips_lost_race_409(fake_sleep: list[float]) -> None:
+    """A 409 lost race does NOT count as processed — the cap keeps trying.
+
+    Pin the AC's "терминальный статус" semantics: only an actual write
+    that the server accepted (complete or fail without 409) advances
+    the cap. A 409 means another writer beat us; the worker must
+    keep going until it owns a real outcome.
+    """
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    first = _make_task("T-conflict", status=TaskStatus.CLAIMED, version=1)
+    second = _make_task("T-success", status=TaskStatus.CLAIMED, version=1)
+    second_done = replace(second, status=TaskStatus.DONE, version=2)
+
+    client.claim_results.extend([first, second])
+    # First complete loses the race; second succeeds.
+    client.complete_results.extend(
+        [
+            _make_conflict(
+                task_id=first.id,
+                expected_version=1,
+                actual_version=2,
+                actual_status=TaskStatus.DONE,
+            ),
+            second_done,
+        ]
+    )
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_processed=1,
+    )
+
+    assert stats == RemoteWorkerStats(iterations=2, completed=1, failed=0, idle_polls=0)
+    assert client.complete_calls == [(first.id, WORKER_ID, 1), (second.id, WORKER_ID, 1)]
+
+
+async def test_max_processed_none_is_uncapped(fake_sleep: list[float]) -> None:
+    """``max_processed=None`` (default) keeps the loop running past N completions.
+
+    Defends against a default-flip regression where ``None`` accidentally
+    behaves like ``1`` (e.g. if someone wrote ``max_processed or 1``).
+    Two tasks complete; only ``max_iterations=2`` ends the loop.
+    """
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    a = _make_task("T-a", status=TaskStatus.CLAIMED, version=1)
+    a_done = replace(a, status=TaskStatus.DONE, version=2)
+    b = _make_task("T-b", status=TaskStatus.CLAIMED, version=1)
+    b_done = replace(b, status=TaskStatus.DONE, version=2)
+
+    client.claim_results.extend([a, b])
+    client.complete_results.extend([a_done, b_done])
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=2,
+        max_processed=None,
+    )
+
+    assert stats == RemoteWorkerStats(iterations=2, completed=2, failed=0, idle_polls=0)

@@ -286,14 +286,16 @@ async def run_remote_worker(
     worker_id: WorkerId,
     *,
     max_iterations: int | None = None,
+    max_processed: int | None = None,
     stop: asyncio.Event | None = None,
 ) -> RemoteWorkerStats:
     """Run the remote worker loop against ``plan.id`` for ``worker_id``.
 
     See module docstring for the per-iteration contract. The loop exits
     when ``stop`` is set (graceful shutdown — TASK-022b3),
-    ``max_iterations`` is reached (test-only), or when the outer task
-    is cancelled (production fallback).
+    ``max_iterations`` is reached (test-only), ``max_processed`` is
+    reached (the ``--once`` CLI flag from TASK-022c), or when the outer
+    task is cancelled (production fallback).
 
     Parameters
     ----------
@@ -323,6 +325,18 @@ async def run_remote_worker(
         means loop forever — exit only on cancellation or ``stop``.
         Tests pass an integer to make the loop terminable without
         wiring a stop event through the bare loop signature.
+    max_processed:
+        Hard cap on the number of tasks successfully passed to either
+        ``client.complete`` or ``client.fail`` during this invocation.
+        ``None`` (production default) means uncapped — completed and
+        failed tasks accrue until ``stop`` / ``max_iterations`` /
+        cancellation. ``1`` is the ``--once`` CLI flag's wire (TASK-022c):
+        the loop runs until it processes (completes or fails) one
+        task, then exits cleanly without releasing anything. Idle
+        polls (204 from the server) and 409 lost-race iterations do
+        **not** count as processed — they don't change the row's
+        terminal status, so a ``--once`` worker fights through an
+        empty queue or version skew until it actually owns a task.
     stop:
         Optional :class:`asyncio.Event` for cooperative graceful shutdown
         (TASK-022b3). When set, the loop releases any in-flight task
@@ -482,6 +496,20 @@ async def run_remote_worker(
                 continue
             failed += 1
             log.info("remote worker=%s task=%s → FAILED (%s)", worker_id, claimed.id, reason)
+
+        # ``max_processed`` honours --once (TASK-022c): exit cleanly after
+        # the first task whose terminal status was successfully written
+        # to the server. Lost-race 409s ``continue`` above before this
+        # check, so they never satisfy the cap — a --once worker keeps
+        # trying until it owns a real outcome.
+        if max_processed is not None and (completed + failed) >= max_processed:
+            log.info(
+                "remote worker=%s plan=%s: reached max_processed=%d, exiting loop cleanly",
+                worker_id,
+                plan.id,
+                max_processed,
+            )
+            break
 
     return RemoteWorkerStats(
         iterations=iterations,
@@ -720,6 +748,7 @@ async def run_remote_worker_with_heartbeat(
     *,
     heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
     max_iterations: int | None = None,
+    max_processed: int | None = None,
     install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
 ) -> RemoteWorkerStats:
@@ -794,6 +823,11 @@ async def run_remote_worker_with_heartbeat(
         loop until cancellation or shutdown. Tests pass an integer to
         make the composition terminable without wiring a cancellation
         token through the bare loop's signature.
+    max_processed:
+        Hard cap on completed + failed tasks. ``None`` means uncapped;
+        ``1`` is the wire for the ``whilly-worker --once`` CLI flag
+        (TASK-022c). Forwarded to :func:`run_remote_worker` unchanged
+        — the bare loop owns the bookkeeping and the exit condition.
     install_signal_handlers:
         When ``True`` (production default), SIGTERM and SIGINT are
         installed via :meth:`asyncio.AbstractEventLoop.add_signal_handler`
@@ -838,6 +872,7 @@ async def run_remote_worker_with_heartbeat(
                 plan,
                 worker_id,
                 max_iterations=max_iterations,
+                max_processed=max_processed,
                 stop=stop,
             )
         finally:
