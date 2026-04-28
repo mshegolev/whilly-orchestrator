@@ -1196,7 +1196,7 @@
       "category": "infra",
       "priority": "high",
       "description": "Создать отдельный пакет whilly-worker через pyproject.toml (либо отдельный whilly_worker_pkg/ либо optional install): pip install whilly-worker должен дать только worker-зависимости (httpx, asyncio) без FastAPI/asyncpg. Entry point whilly-worker = whilly.worker.remote:main",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-022c"
       ],
@@ -1214,7 +1214,8 @@
         "pip install -e '.[worker]' || pip install -e ./whilly_worker",
         "which whilly-worker"
       ],
-      "prd_requirement": "FR-1.5, SC-3"
+      "prd_requirement": "FR-1.5, SC-3",
+      "completion_notes": "Worker / server dep closures split into [worker] (httpx) and [server] (asyncpg + fastapi + uvicorn + alembic + sqlalchemy[asyncio]) extras in pyproject.toml; base closure shrunk to rich + pydantic + typer + legacy v3 runtime (psutil + platformdirs + keyring). New whilly_worker/ meta-package (pyproject.toml + README.md) makes \"pip install whilly-worker\" resolve to \"whilly-orchestrator[worker]==3.3.0\" — same dep tree, same whilly-worker console script, name-matches-role for Docker images. Pinned to exact orchestrator version because RemoteWorkerClient <-> FastAPI is one release train. Verification: tomllib parse OK on both files; pip install --no-deps -e . re-registers whilly-worker entry; whilly-worker --help shows full v4 arg parser with no asyncpg import; pytest -q --ignore=tests/integration -> 1112 passed in 31.30s; ruff clean across 184 files. Implementation lives on workspace branch whilly/workspace/whilly-v4-0-distributed-orchestrator-refactoring (commit 5dca582). Why split now and not at TASK-033a release: TASK-029 will enforce SC-6 statically via import-linter, but the extras split is the install-time guarantee that a worker box never has fastapi on disk -- two different defenses, both wanted, easier to land separately."
     },
     {
       "id": "TASK-024a",
