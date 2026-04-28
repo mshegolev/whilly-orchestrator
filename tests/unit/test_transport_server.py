@@ -425,6 +425,69 @@ def test_create_app_rejects_explicit_blank_bootstrap_token(healthy_pool: _FakePo
 
 
 # ---------------------------------------------------------------------------
+# Claim long-poll knobs — fail fast at construction time on bad values
+# ---------------------------------------------------------------------------
+
+
+def test_create_app_rejects_zero_claim_poll_interval(healthy_pool: _FakePool) -> None:
+    """A zero interval would tight-loop the database — fail fast at construction time.
+
+    ``asyncio.sleep(0)`` is not a guaranteed yield in every event-
+    loop implementation, so a zero interval would also defeat the
+    cancellation contract the route relies on. We surface this at
+    create_app time (loud, immediate) rather than letting it manifest
+    as runaway DB load (silent, disastrous).
+    """
+    with pytest.raises(ValueError) as excinfo:
+        create_app(
+            _as_pool(healthy_pool),
+            worker_token="w",
+            bootstrap_token="b",
+            claim_poll_interval=0.0,
+        )
+    assert "claim_poll_interval" in str(excinfo.value)
+
+
+def test_create_app_rejects_negative_claim_poll_interval(healthy_pool: _FakePool) -> None:
+    """Negative interval — same reasoning as the zero case."""
+    with pytest.raises(ValueError):
+        create_app(
+            _as_pool(healthy_pool),
+            worker_token="w",
+            bootstrap_token="b",
+            claim_poll_interval=-0.5,
+        )
+
+
+def test_create_app_rejects_negative_claim_long_poll_timeout(healthy_pool: _FakePool) -> None:
+    """A negative budget makes the loop nonsensical (deadline is in the past)."""
+    with pytest.raises(ValueError) as excinfo:
+        create_app(
+            _as_pool(healthy_pool),
+            worker_token="w",
+            bootstrap_token="b",
+            claim_long_poll_timeout=-1.0,
+        )
+    assert "claim_long_poll_timeout" in str(excinfo.value)
+
+
+def test_create_app_accepts_zero_claim_long_poll_timeout(healthy_pool: _FakePool) -> None:
+    """A zero budget is legal — degenerate case where the loop polls exactly once.
+
+    Useful for tests that want the immediate-204-on-empty-queue
+    behaviour without burning real wall-clock time. ``create_app``
+    must not reject this; only the strictly-negative case is invalid.
+    """
+    app = create_app(
+        _as_pool(healthy_pool),
+        worker_token="w",
+        bootstrap_token="b",
+        claim_long_poll_timeout=0.0,
+    )
+    assert isinstance(app, FastAPI)
+
+
+# ---------------------------------------------------------------------------
 # Lifespan / app.state wiring
 # ---------------------------------------------------------------------------
 
