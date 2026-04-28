@@ -1,0 +1,246 @@
+"""Shared pytest fixtures for Whilly v4.0 integration tests (TASK-011 / SC-1).
+
+Centralises the bits every integration test needs: Docker availability
+detection, ``DOCKER_HOST`` resolution for macOS multi-context setups
+(colima / Rancher Desktop / Docker Desktop), the testcontainers
+Postgres bootstrap with Alembic migrations applied, and per-test
+asyncpg pool + :class:`TaskRepository` fixtures with table truncation.
+
+Why session-scope the container, function-scope the pool?
+    Booting ``postgres:15-alpine`` and applying ``alembic upgrade head``
+    costs several seconds even on a warm laptop. Per-test reboot would
+    dominate the suite runtime once we have more than a couple of
+    integration tests. The pool, on the other hand, is cheap to open
+    and close, and using a fresh one per test side-steps the
+    "leftover prepared statements / aborted transactions" surface
+    that breaks reuse across tests using ``asyncpg``'s caching.
+
+Why TRUNCATE at fixture *setup* and not teardown?
+    Setup-side TRUNCATE means each test inherits whatever state the
+    previous test left behind only for the brief window between
+    teardown of the previous fixture and setup of the next — and the
+    next test wipes that state before yielding. Doing it at teardown
+    instead would mean a failing test corrupts the database for
+    introspection (developers would have to re-run to inspect the
+    final state), and it also wastes work for the very last test in
+    the session. Setup-side is the canonical pytest pattern.
+
+Skip plumbing
+-------------
+``DOCKER_REQUIRED`` is the public skipif marker; tests can apply it
+either at module level (``pytestmark = DOCKER_REQUIRED``) or per-test.
+The :func:`postgres_dsn` fixture also calls :func:`pytest.skip` on
+demand so direct callers without the marker still get a clean skip
+rather than an obscure testcontainers error.
+
+Coexistence with TASK-008's smoke test
+--------------------------------------
+``tests/integration/test_phase1_smoke.py`` (TASK-008) defines its own
+module-scoped ``postgres_dsn`` fixture — pytest fixture resolution
+picks the closer scope, so that file keeps using its own container.
+This conftest module is the source of truth for any *new*
+integration test (TASK-011 onwards). Refactoring phase1_smoke to use
+the shared fixture is intentionally deferred to keep TASK-011 within
+its declared footprint.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from collections.abc import AsyncIterator, Iterator
+
+import asyncpg
+import pytest
+from alembic import command
+from alembic.config import Config
+
+from whilly.adapters.db import MIGRATIONS_DIR, TaskRepository, close_pool, create_pool
+
+try:
+    from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
+
+    HAS_TESTCONTAINERS: bool = True
+except ImportError:  # pragma: no cover — testcontainers is in [dev]; defensive
+    HAS_TESTCONTAINERS = False
+
+
+def docker_available() -> bool:
+    """Return True iff a Docker daemon is reachable.
+
+    ``shutil.which`` checks the binary; ``docker info`` is the
+    authoritative daemon-reachable check (cheap; ~30ms on a warm CLI).
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return result.returncode == 0
+
+
+def resolve_docker_host() -> str | None:
+    """Resolve the active Docker context's socket for the Python SDK.
+
+    The Python ``docker`` library defaults to ``/var/run/docker.sock``
+    and ignores Docker CLI contexts. On macOS multi-context setups
+    (colima / Rancher / Docker Desktop), ``/var/run/docker.sock`` is
+    often a stale symlink to whichever flavour installed itself last,
+    while the CLI routes via ``docker context use``. Returning the
+    active context's endpoint lets us set ``DOCKER_HOST`` so
+    testcontainers (which wraps the Python SDK) finds the same
+    daemon the CLI does.
+
+    Returns ``None`` if context detection fails — caller falls back
+    to whatever ``docker.from_env`` picks.
+    """
+    if shutil.which("docker") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    host = result.stdout.strip()
+    return host or None
+
+
+# Public skipif marker — tests apply it as ``pytestmark = DOCKER_REQUIRED``
+# at module level, or per-test, or rely on the fixture's internal
+# pytest.skip() call. The session-scoped fixture also skips on demand,
+# so module-level decoration is optional but makes the intent explicit.
+DOCKER_REQUIRED = pytest.mark.skipif(
+    not (HAS_TESTCONTAINERS and docker_available()),
+    reason="Docker daemon not reachable; testcontainers cannot boot Postgres",
+)
+
+
+def _build_alembic_config(dsn: str) -> Config:
+    """Build an Alembic :class:`Config` pointing at the project's migrations.
+
+    Mirrors the pattern in TASK-008's smoke test: absolute
+    ``script_location`` so the test is cwd-independent, DSN both via
+    ``WHILLY_DATABASE_URL`` (which env.py reads first) and
+    ``sqlalchemy.url`` as a belt-and-braces fallback.
+    """
+    cfg = Config()
+    cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
+    cfg.set_main_option("version_path_separator", "os")
+    cfg.set_main_option("sqlalchemy.url", dsn)
+    return cfg
+
+
+@pytest.fixture(scope="session")
+def postgres_dsn() -> Iterator[str]:
+    """Boot ``postgres:15-alpine`` once per session and yield a migrated DSN.
+
+    Steps:
+      1. Detect Docker availability; ``pytest.skip`` if absent.
+      2. Bridge ``DOCKER_HOST`` from CLI context to Python SDK if not
+         already set (macOS multi-context fix).
+      3. Disable testcontainers' ``ryuk`` reaper — it bind-mounts the
+         host docker socket which colima rejects, and the
+         ``with PostgresContainer(...)`` context manager already tears
+         down deterministically.
+      4. Boot the container, strip the ``+psycopg2`` driver suffix from
+         the DSN so asyncpg + Alembic env.py both accept it.
+      5. ``alembic upgrade head`` applies the schema once. Subsequent
+         tests inherit the same migrated DB.
+      6. Yield the DSN, restore env vars on teardown.
+
+    The container survives the entire pytest session; per-test
+    isolation is provided by :func:`db_pool` truncating tables.
+    """
+    if not (HAS_TESTCONTAINERS and docker_available()):
+        pytest.skip("Docker daemon not reachable; testcontainers cannot boot Postgres")
+
+    prior_docker_host = os.environ.get("DOCKER_HOST")
+    if prior_docker_host is None:
+        resolved = resolve_docker_host()
+        if resolved is not None:
+            os.environ["DOCKER_HOST"] = resolved
+
+    prior_ryuk = os.environ.get("TESTCONTAINERS_RYUK_DISABLED")
+    if prior_ryuk is None:
+        os.environ["TESTCONTAINERS_RYUK_DISABLED"] = "true"
+
+    prior_db_url = os.environ.get("WHILLY_DATABASE_URL")
+
+    try:
+        with PostgresContainer("postgres:15-alpine") as pg:
+            raw = pg.get_connection_url()
+            # testcontainers ships ``postgresql+psycopg2://`` by default; rip
+            # back to plain ``postgresql://`` so env.py's own asyncpg coercion
+            # path is exercised (and asyncpg itself doesn't choke on the
+            # SQLAlchemy driver suffix).
+            dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
+
+            os.environ["WHILLY_DATABASE_URL"] = dsn
+            command.upgrade(_build_alembic_config(dsn), "head")
+
+            yield dsn
+    finally:
+        if prior_docker_host is None:
+            os.environ.pop("DOCKER_HOST", None)
+        else:
+            os.environ["DOCKER_HOST"] = prior_docker_host
+        if prior_ryuk is None:
+            os.environ.pop("TESTCONTAINERS_RYUK_DISABLED", None)
+        else:
+            os.environ["TESTCONTAINERS_RYUK_DISABLED"] = prior_ryuk
+        if prior_db_url is None:
+            os.environ.pop("WHILLY_DATABASE_URL", None)
+        else:
+            os.environ["WHILLY_DATABASE_URL"] = prior_db_url
+
+
+@pytest.fixture
+async def db_pool(postgres_dsn: str) -> AsyncIterator[asyncpg.Pool]:
+    """Per-test asyncpg pool against the migrated session-scoped DB.
+
+    ``max_size`` is bumped to 20 (vs the runtime default of 10) so
+    SC-1's 100-concurrent-claims test gets meaningful in-flight
+    parallelism on the wire — with 10 connections the test still
+    passes (correctness is independent of pool size), but the SQL
+    contention pattern is artificially serialised by the pool's own
+    queue rather than by Postgres' SKIP LOCKED, defeating the point
+    of the test.
+
+    Truncation happens at *setup* (CASCADE so the events FK doesn't
+    block, RESTART IDENTITY so the BIGSERIAL events.id sequence
+    starts fresh) — see module docstring for the rationale.
+    """
+    pool = await create_pool(postgres_dsn, min_size=2, max_size=20)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute("TRUNCATE events, tasks, plans, workers RESTART IDENTITY CASCADE")
+        yield pool
+    finally:
+        await close_pool(pool)
+
+
+@pytest.fixture
+async def task_repo(db_pool: asyncpg.Pool) -> TaskRepository:
+    """Per-test :class:`TaskRepository` wrapping the per-test pool.
+
+    Splitting pool from repo keeps the seeding helpers (which need
+    raw SQL via the pool) decoupled from the system-under-test (the
+    repository methods). Tests that only care about the repo can
+    request just ``task_repo``; tests that also need to seed plans /
+    tasks / workers request both.
+    """
+    return TaskRepository(db_pool)

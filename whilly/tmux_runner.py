@@ -6,9 +6,23 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from whilly.agents.base import spawn_with_eagain_retry
+
 log = logging.getLogger("whilly")
 
 TMUX = shutil.which("tmux")
+
+
+def _tmux_run(*args, **kwargs):
+    """``subprocess.run`` wrapped with EAGAIN retry.
+
+    macOS ``RLIMIT_NPROC`` (default 5333) can transiently fork-deny the
+    ``tmux has-session`` polls inside the wait-loop while parallel agent
+    trees are spinning up — see #213 for the original symptom in
+    ``agents/claude.py``. The same retry helper is reused here so the
+    orchestrator never dies on a transient EAGAIN during tmux polling.
+    """
+    return spawn_with_eagain_retry(lambda: subprocess.run(*args, **kwargs))
 
 
 @dataclass
@@ -22,14 +36,24 @@ class TmuxAgent:
     def is_running(self) -> bool:
         if not TMUX:
             return False
-        r = subprocess.run([TMUX, "has-session", "-t", self.session_name], capture_output=True)
+        try:
+            r = _tmux_run([TMUX, "has-session", "-t", self.session_name], capture_output=True)
+        except BlockingIOError:
+            # System is fork-saturated (RLIMIT_NPROC). The agent itself is
+            # almost certainly still running inside its tmux pane — we just
+            # can't spawn a tmux client to verify right now. Treat the
+            # check as "still alive" and let the next poll succeed when
+            # other processes free up; better than killing the entire plan
+            # run on a transient host condition.
+            log.warning("EAGAIN on tmux has-session — assuming %s still running", self.session_name)
+            return True
         return r.returncode == 0
 
     def capture_output(self, lines: int = 20) -> str:
         """Capture last N lines from tmux pane (live output)."""
         if not TMUX:
             return ""
-        r = subprocess.run(
+        r = _tmux_run(
             [TMUX, "capture-pane", "-t", self.session_name, "-p", "-S", f"-{lines}"],
             capture_output=True,
             text=True,
@@ -38,7 +62,7 @@ class TmuxAgent:
 
     def kill(self) -> None:
         if TMUX:
-            subprocess.run([TMUX, "kill-session", "-t", self.session_name], capture_output=True)
+            _tmux_run([TMUX, "kill-session", "-t", self.session_name], capture_output=True)
 
 
 def tmux_available() -> bool:
@@ -80,7 +104,7 @@ def launch_agent(
     log_file = log_dir / f"{task_id}.log"
     session_name = f"whilly-{task_id}"
 
-    subprocess.run([TMUX, "kill-session", "-t", session_name], capture_output=True)
+    _tmux_run([TMUX, "kill-session", "-t", session_name], capture_output=True)
 
     prompt_file = log_dir / f"{task_id}_prompt.txt"
     prompt_file.write_text(prompt)
@@ -125,7 +149,7 @@ def launch_agent(
     )
 
     # zsh -ic sources ~/.zshrc so user-defined functions (e.g. claudeproxy wrappers) resolve.
-    subprocess.run(
+    _tmux_run(
         [TMUX, "new-session", "-d", "-s", session_name, "zsh", "-ic", wrapper],
         check=True,
     )
@@ -156,10 +180,10 @@ def kill_all_whilly_sessions() -> None:
     """Kill all tmux sessions starting with 'whilly-'."""
     if not TMUX:
         return
-    r = subprocess.run([TMUX, "list-sessions", "-F", "#{session_name}"], capture_output=True, text=True)
+    r = _tmux_run([TMUX, "list-sessions", "-F", "#{session_name}"], capture_output=True, text=True)
     if r.returncode != 0:
         return
     for name in r.stdout.strip().splitlines():
         if name.startswith("whilly-"):
-            subprocess.run([TMUX, "kill-session", "-t", name], capture_output=True)
+            _tmux_run([TMUX, "kill-session", "-t", name], capture_output=True)
             log.info("Killed tmux session %s", name)
