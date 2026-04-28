@@ -88,7 +88,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Создать docker-compose.yml для локального PostgreSQL 15 (порт 5432, volume для persistence), .env.example с WHILLY_DATABASE_URL, скрипт scripts/db-up.sh для запуска",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-002"
       ],
@@ -116,7 +116,7 @@
       "category": "functional",
       "priority": "critical",
       "description": "Создать whilly/core/models.py: frozen dataclasses Task, Plan, Event, WorkerHandle. Task содержит id, status (enum TaskStatus), dependencies, key_files, priority, description, acceptance_criteria, test_steps, prd_requirement, version. Все поля типизированы (PEP 484/585), no I/O, no asyncio",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-002"
       ],
@@ -144,7 +144,7 @@
       "category": "functional",
       "priority": "critical",
       "description": "Создать whilly/core/state_machine.py: pure function apply_transition(task: Task, transition: Transition) -> Task | StateError. Enum Transition (CLAIM, START, COMPLETE, FAIL, SKIP, RELEASE). Невалидные переходы возвращают StateError с указанием from/to/reason",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-004"
       ],
@@ -170,7 +170,7 @@
       "category": "test",
       "priority": "critical",
       "description": "Написать tests/unit/test_state_machine.py: ≥20 тестов на все валидные/невалидные переходы. Покрыть: PENDING→CLAIMED→IN_PROGRESS→DONE, повторный CLAIM (ошибка), DONE→FAILED (ошибка), version increments, RELEASE из CLAIMED обратно в PENDING",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-005"
       ],
@@ -197,7 +197,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Инициализировать Alembic в whilly/adapters/db/migrations/, создать первую миграцию 001_initial_schema.sql: таблицы plans, tasks, events, workers. Tasks: id, plan_id, status, dependencies (jsonb), key_files (jsonb), priority, version, claimed_by, claimed_at, prd_requirement, ... Events: id, task_id, event_type, payload (jsonb), created_at. Workers: worker_id, hostname, last_heartbeat, token_hash",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-003",
         "TASK-004"
@@ -228,7 +228,7 @@
       "category": "test",
       "priority": "high",
       "description": "Phase 1 Integration Test: smoke test проверяющий что core импортируется без I/O зависимостей, миграции применяются, базовые модели сериализуются. Запустить import-linter — SC-6 должен проходить",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-006",
         "TASK-007"
@@ -254,7 +254,7 @@
       "category": "functional",
       "priority": "critical",
       "description": "Создать whilly/adapters/db/repository.py: async класс TaskRepository на asyncpg. Методы: claim_task(worker_id, plan_id) через SELECT ... FOR UPDATE SKIP LOCKED, complete_task(task_id, version) с optimistic locking, fail_task, release_stale_tasks (visibility timeout). Все операции — отдельные транзакции",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-007"
       ],
@@ -281,7 +281,7 @@
       "category": "functional",
       "priority": "critical",
       "description": "Создать whilly/adapters/filesystem/plan_io.py + CLI команда whilly plan import <tasks.json>: парсит JSON-план (новый v4 формат), валидирует ацикличность графа (через core/scheduler.detect_cycles), вставляет plan + tasks в БД одной транзакцией. Команда whilly plan export <plan_id> отдаёт JSON",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-009"
       ],
@@ -311,7 +311,7 @@
       "category": "test",
       "priority": "critical",
       "description": "Написать tests/integration/test_concurrent_claims.py с testcontainers: 100 параллельных claim_task в asyncio.gather, проверить что каждая задача взята ровно одним воркером (no duplicates, no losses). Это SC-1",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-009"
       ],
@@ -361,7 +361,7 @@
       "category": "functional",
       "priority": "critical",
       "description": "Создать whilly/core/scheduler.py: pure функции topological_sort(plan: Plan) -> list[TaskId], detect_cycles(plan) -> list[list[TaskId]], next_ready(plan, in_progress: set[TaskId]) -> list[TaskId]. Учитывать priority внутри уровня DAG (critical > high > medium > low) и отказывать в параллельной выдаче задач с пересекающимися key_files",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-005"
       ],
@@ -491,7 +491,7 @@
       "category": "functional",
       "priority": "critical",
       "description": "Создать whilly/core/prompts.py: pure функция build_task_prompt(task: Task, plan: Plan) -> str. Без cwd-magic, без чтения файлов. Промпт упоминает task.id, acceptance_criteria, test_steps, требует <promise>COMPLETE</promise>",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-004"
       ],
