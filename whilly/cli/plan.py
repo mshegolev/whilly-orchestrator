@@ -1,10 +1,18 @@
-"""``whilly plan`` subcommand surface (PRD FR-2.5, FR-3.1, TASK-010b).
+"""``whilly plan`` subcommand surface (PRD FR-2.5, FR-3.1, TASK-010b / TASK-010c).
 
-Currently exposes ``whilly plan import <plan_file>``: read a v4 plan JSON,
-reject cycles, and persist the plan + tasks to Postgres in a single
-transaction. ``whilly plan export`` lands in TASK-010c and
-``whilly plan show`` in TASK-015 — both will register additional subparsers
-on the same :class:`argparse.ArgumentParser` built here.
+Exposes the two halves of the plan-IO pair:
+
+* ``whilly plan import <plan_file>`` (TASK-010b) — read a v4 plan JSON,
+  reject cycles, and persist the plan + tasks to Postgres in a single
+  transaction.
+* ``whilly plan export <plan_id>`` (TASK-010c, this commit) — fetch plan
+  + tasks from Postgres and emit canonical v4 JSON to stdout. Designed
+  to round-trip with ``import``: ``import → export → import`` is a no-op
+  because the export uses :func:`~whilly.adapters.filesystem.plan_io.serialize_plan`,
+  which emits exactly the canonical fields :func:`parse_plan` consumes.
+
+``whilly plan show`` lands in TASK-015 and registers another subparser on
+the same :class:`argparse.ArgumentParser` built here.
 
 Layering and side-effect surface
 --------------------------------
@@ -57,15 +65,19 @@ Exit codes
 The CLI follows the conventional 0/1/2 split, mirroring the legacy
 :mod:`whilly.cli_legacy` and the rest of the v4 CLI tasks:
 
-* ``0`` — success (plan + N tasks committed).
+* ``0`` — success (plan + N tasks committed; or canonical JSON printed).
 * ``1`` — validation failure: malformed JSON, missing required field,
   cycle in dependency graph. ``argparse`` errors also surface as ``2``
   (its own convention) but the *plan-level* validation we do explicitly
   uses ``1`` so cycle detection has a stable, testable exit code (PRD
   SC-4: "Цикл в зависимостях → exit code 1 с указанием цепочки").
 * ``2`` — environment failure: ``WHILLY_DATABASE_URL`` unset, file not
-  found. Distinguishable from ``1`` so the AC for TASK-010c
-  ("Несуществующий plan_id → exit 2") can share the same scheme.
+  found, **or plan_id missing in the database** (TASK-010c AC:
+  "Несуществующий plan_id → exit 2"). Treating "missing plan" as an
+  environment failure (rather than validation) matches the AC verbatim
+  and keeps the export path symmetric with the import path's
+  "DSN missing → exit 2": both are "the world isn't set up the way the
+  CLI expected", as opposed to "the input shape was wrong".
 """
 
 from __future__ import annotations
@@ -81,8 +93,8 @@ from collections.abc import Iterable, Sequence
 import asyncpg
 
 from whilly.adapters.db import close_pool, create_pool
-from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan
-from whilly.core.models import Plan, Task, TaskId
+from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
+from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
 
 __all__ = ["build_plan_parser", "run_plan_command"]
@@ -140,6 +152,42 @@ ON CONFLICT (id) DO NOTHING
 """
 
 
+# Symmetric counterparts of the INSERT statements above (TASK-010c). Pulled
+# out of :func:`_async_export` for the same reason the INSERTs are constants:
+# every operator-visible SQL string lives in module-scope so a schema review
+# can ``grep`` for table names without descending into function bodies.
+_SELECT_PLAN_SQL: str = """
+SELECT id, name
+FROM plans
+WHERE id = $1
+"""
+
+
+# Stable order: ``id`` ASC. The export must be deterministic so the
+# round-trip ``import → export → import`` test in test_plan_io.py compares
+# ``Plan == Plan`` without sort-order noise. The schema does not record
+# original insertion order (no ``position`` column) and a v4 plan's tasks
+# are a *DAG*, not a sequence — sorting by id is the canonical
+# tiebreaker the rest of the v4 codebase already uses (see
+# ``_CLAIM_SQL``'s ``ORDER BY ..., id`` in repository.py).
+_SELECT_TASKS_SQL: str = """
+SELECT
+    id,
+    status,
+    dependencies,
+    key_files,
+    priority,
+    description,
+    acceptance_criteria,
+    test_steps,
+    prd_requirement,
+    version
+FROM tasks
+WHERE plan_id = $1
+ORDER BY id
+"""
+
+
 def build_plan_parser() -> argparse.ArgumentParser:
     """Build (but do not parse) the ``whilly plan ...`` argparse tree.
 
@@ -163,6 +211,19 @@ def build_plan_parser() -> argparse.ArgumentParser:
         "plan_file",
         help="Path to a v4 plan JSON file (see examples/sample_plan.json).",
     )
+
+    # ── plan export ──────────────────────────────────────────────────────
+    # Inverse of ``plan import``. The output is canonical v4 JSON
+    # (whatever :func:`serialize_plan` emits), so the round-trip
+    # ``import → export → import`` is a no-op.
+    p_export = sub.add_parser(
+        "export",
+        help="Export a plan + tasks from Postgres as canonical v4 JSON to stdout.",
+    )
+    p_export.add_argument(
+        "plan_id",
+        help="Plan id to export (matches the 'plan_id' field in the original JSON).",
+    )
     return parser
 
 
@@ -177,6 +238,8 @@ def run_plan_command(argv: Sequence[str]) -> int:
     args = parser.parse_args(list(argv))
     if args.action == "import":
         return _run_import(args.plan_file)
+    if args.action == "export":
+        return _run_export(args.plan_id)
     # argparse's ``required=True`` already surfaces a 2-exit on missing
     # action; this branch is defensive for future subcommands added without
     # an explicit handler here.
@@ -318,3 +381,178 @@ async def _insert_plan_and_tasks(
         )
         inserted += 1
     logger.info("plan import: inserted plan %s with %d task(s)", plan.id, inserted)
+
+
+def _run_export(plan_id: str) -> int:
+    """Implement ``whilly plan export <plan_id>``.
+
+    Symmetric with :func:`_run_import`:
+
+    1. Read ``WHILLY_DATABASE_URL`` from the environment — missing →
+       ``EXIT_ENVIRONMENT_ERROR``.
+    2. Hand the ``plan_id`` to :func:`_async_export`, which owns the pool
+       lifecycle and the SELECT round-trip.
+    3. ``None`` result → plan absent → ``EXIT_ENVIRONMENT_ERROR`` with a
+       message that names the missing id (PRD AC for TASK-010c:
+       "Несуществующий plan_id → exit 2 с понятным сообщением").
+    4. Otherwise serialise via :func:`serialize_plan` (same writer the
+       round-trip test compares against) and print to stdout.
+
+    The success path writes to ``stdout`` so callers can pipe the output
+    (``> /tmp/exported.json``); the message line stays on ``stderr`` —
+    redirecting stdout to a file then importing the result must not pick
+    up any "imported N tasks" preamble.
+    """
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan export: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    result = asyncio.run(_async_export(dsn, plan_id))
+    if result is None:
+        print(
+            f"whilly plan export: plan {plan_id!r} not found — check the id matches the "
+            "'plan_id' you used at import time.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    plan, tasks = result
+    payload = serialize_plan(plan, tasks)
+    # ``sort_keys=True`` + ``indent=2`` keeps the output deterministic
+    # *and* human-readable. Determinism matters for the round-trip test
+    # (two consecutive exports must be byte-identical) and for ``diff``-ing
+    # exports across DB snapshots in operations.
+    json.dump(payload, sys.stdout, indent=2, sort_keys=True, ensure_ascii=False)
+    sys.stdout.write("\n")
+    print(
+        f"whilly plan export: exported plan {plan.id!r} ({len(tasks)} task(s)).",
+        file=sys.stderr,
+    )
+    return EXIT_OK
+
+
+async def _async_export(dsn: str, plan_id: str) -> tuple[Plan, list[Task]] | None:
+    """Open a pool, SELECT plan + tasks, return them as core models or ``None``.
+
+    Mirrors :func:`_async_import` lifecycle: short-lived pool, ``SELECT 1``
+    health check on construction, ``finally`` always closes. We deliberately
+    do **not** wrap the SELECTs in an explicit transaction:
+
+    * Postgres puts every individual statement in an implicit transaction
+      anyway, so the plan SELECT and tasks SELECT each see a consistent
+      snapshot internally.
+    * A multi-statement transaction would be marginally stronger (the plan
+      and tasks SELECTs would share one MVCC snapshot, ruling out a race
+      where a parallel import inserts a task between the two SELECTs and
+      we miss it). But the export command is a one-shot CLI invocation —
+      the operational scenarios that care about consistency (CI snapshot
+      capture, debugging) all pause writes anyway. The simpler code path
+      pays for itself in less SQL noise.
+
+    Returns ``None`` when the plan row is absent so the caller can map that
+    to a clean ``EXIT_ENVIRONMENT_ERROR`` without raising. We intentionally
+    do *not* check task count: a plan with zero tasks is legitimate (an
+    empty plan still has an entry in the ``plans`` table after import) and
+    must round-trip cleanly.
+    """
+    pool = await create_pool(dsn)
+    try:
+        async with pool.acquire() as conn:
+            return await _select_plan_with_tasks(conn, plan_id)
+    finally:
+        await close_pool(pool)
+
+
+async def _select_plan_with_tasks(
+    conn: asyncpg.Connection,
+    plan_id: str,
+) -> tuple[Plan, list[Task]] | None:
+    """SELECT one plan + its tasks; return ``(Plan, list[Task])`` or ``None``.
+
+    Pulled out of :func:`_async_export` for the same reason
+    :func:`_insert_plan_and_tasks` is pulled out of :func:`_async_import`:
+    integration tests holding a pre-existing pool / connection (e.g. the
+    testcontainers ``db_pool`` fixture in ``tests/conftest.py``) can drive
+    the same code path without re-opening the pool just to export.
+
+    The mapping from ``tasks`` rows to :class:`Task` value objects is
+    inlined here rather than imported from
+    :mod:`whilly.adapters.db.repository`. The repository's ``_row_to_task``
+    is a private helper tied to the claim/complete/fail SQL there; copying
+    the eight-line conversion keeps the export path self-contained next to
+    its symmetric INSERT counterpart in this file. JSONB columns come back
+    as ``str`` (raw JSON text) by default — ``_decode_jsonb`` parses with
+    stdlib :mod:`json` so this code works whether or not a future codec is
+    registered on the pool.
+    """
+    plan_row = await conn.fetchrow(_SELECT_PLAN_SQL, plan_id)
+    if plan_row is None:
+        return None
+
+    task_rows = await conn.fetch(_SELECT_TASKS_SQL, plan_id)
+    tasks = [_row_to_task(row) for row in task_rows]
+    plan = Plan(id=plan_row["id"], name=plan_row["name"], tasks=tuple(tasks))
+    logger.info("plan export: fetched plan %s with %d task(s)", plan.id, len(tasks))
+    return plan, tasks
+
+
+def _decode_jsonb(raw: object) -> list[str]:
+    """Return ``raw`` (a JSONB column value from asyncpg) as a list of strings.
+
+    asyncpg returns JSONB as ``str`` (raw JSON text) unless a codec has been
+    registered on the connection — :mod:`whilly.adapters.db.pool` deliberately
+    does not register one (TASK-009a). We parse with stdlib :mod:`json` here
+    so the export path stays decoupled from that decision.
+
+    All four JSONB columns we read (``dependencies``, ``key_files``,
+    ``acceptance_criteria``, ``test_steps``) are arrays of strings by
+    convention (the schema's ``DEFAULT '[]'::jsonb`` is the canonical empty
+    value). A non-list value would mean someone bypassed the import path —
+    we surface a :class:`TypeError` rather than silently returning ``[]`` so
+    that data corruption is loud.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        decoded: list[object] = raw
+    elif isinstance(raw, str):
+        decoded_any = json.loads(raw)
+        if not isinstance(decoded_any, list):
+            raise TypeError(f"expected JSONB array, got {type(decoded_any).__name__}: {decoded_any!r}")
+        decoded = decoded_any
+    else:
+        raise TypeError(f"unexpected JSONB column type {type(raw).__name__}: {raw!r}")
+    out: list[str] = []
+    for item in decoded:
+        if not isinstance(item, str):
+            raise TypeError(f"JSONB array contains non-string element {item!r}")
+        out.append(item)
+    return out
+
+
+def _row_to_task(row: asyncpg.Record) -> Task:
+    """Map one ``tasks`` row to the immutable :class:`Task` value object.
+
+    Local mirror of :func:`whilly.adapters.db.repository._row_to_task` —
+    intentionally duplicated rather than imported from a private symbol so
+    the export pipeline in this file stays paired with its symmetric INSERT
+    counterpart. Empty / missing JSONB arrays normalise to ``()`` so
+    :func:`serialize_plan` emits ``[]`` deterministically.
+    """
+    return Task(
+        id=row["id"],
+        status=TaskStatus(row["status"]),
+        dependencies=tuple(_decode_jsonb(row["dependencies"])),
+        key_files=tuple(_decode_jsonb(row["key_files"])),
+        priority=Priority(row["priority"]),
+        description=row["description"],
+        acceptance_criteria=tuple(_decode_jsonb(row["acceptance_criteria"])),
+        test_steps=tuple(_decode_jsonb(row["test_steps"])),
+        prd_requirement=row["prd_requirement"],
+        version=row["version"],
+    )
