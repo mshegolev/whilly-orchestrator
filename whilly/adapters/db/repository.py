@@ -185,7 +185,14 @@ SET status = 'DONE',
     updated_at = NOW()
 WHERE id = $1
   AND version = $2
-  AND status = 'IN_PROGRESS'
+  -- CLAIMED is allowed alongside IN_PROGRESS to support the remote-worker
+  -- shape (TASK-024a / SC-3): the HTTP transport doesn't expose a /start
+  -- endpoint today, so a remote worker's claim → run → complete sequence
+  -- never visits IN_PROGRESS. Mirrors the
+  -- (Transition.COMPLETE, TaskStatus.CLAIMED) edge in
+  -- whilly.core.state_machine. The local worker still goes through
+  -- IN_PROGRESS because its runner emits a START audit row.
+  AND status IN ('CLAIMED', 'IN_PROGRESS')
 RETURNING
     tasks.id,
     tasks.status,

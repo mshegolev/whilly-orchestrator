@@ -21,10 +21,22 @@ The valid edges in the lifecycle DAG are:
 
 * ``CLAIM``    : ``PENDING``     → ``CLAIMED``
 * ``START``    : ``CLAIMED``     → ``IN_PROGRESS``
-* ``COMPLETE`` : ``IN_PROGRESS`` → ``DONE``
+* ``COMPLETE`` : ``CLAIMED`` | ``IN_PROGRESS`` → ``DONE``
 * ``FAIL``     : ``CLAIMED`` | ``IN_PROGRESS`` → ``FAILED``
 * ``SKIP``     : ``PENDING`` | ``CLAIMED`` | ``IN_PROGRESS`` → ``SKIPPED``
 * ``RELEASE``  : ``CLAIMED`` | ``IN_PROGRESS`` → ``PENDING``
+
+``COMPLETE`` from ``CLAIMED`` covers the *remote* worker shape (TASK-024a /
+SC-3): the HTTP transport doesn't expose a dedicated ``/tasks/{id}/start``
+endpoint today, so a remote worker's ``claim → run → complete`` sequence
+never visits ``IN_PROGRESS``. Allowing ``CLAIMED → DONE`` here keeps the
+state-machine an honest specification of the lifecycle observable on disk:
+forbidding it would force the remote worker to call a no-op start RPC just
+to satisfy a write-only invariant in the SQL filter, with no observable
+benefit. The local worker still goes through ``IN_PROGRESS`` because its
+runner needs the start row in the audit log to time the agent invocation;
+the remote worker has no such timing concern (the runner's wall-clock
+contribution is invisible from the control plane's vantage point).
 
 ``DONE``, ``FAILED`` and ``SKIPPED`` are terminal — every transition out of
 them is rejected with a :class:`StateError`. ``FAIL`` from ``CLAIMED`` covers
@@ -79,6 +91,9 @@ class StateError:
 _VALID_TRANSITIONS: dict[tuple[Transition, TaskStatus], TaskStatus] = {
     (Transition.CLAIM, TaskStatus.PENDING): TaskStatus.CLAIMED,
     (Transition.START, TaskStatus.CLAIMED): TaskStatus.IN_PROGRESS,
+    # COMPLETE from CLAIMED is the remote-worker path (no /start RPC) —
+    # see module docstring for the rationale.
+    (Transition.COMPLETE, TaskStatus.CLAIMED): TaskStatus.DONE,
     (Transition.COMPLETE, TaskStatus.IN_PROGRESS): TaskStatus.DONE,
     (Transition.FAIL, TaskStatus.CLAIMED): TaskStatus.FAILED,
     (Transition.FAIL, TaskStatus.IN_PROGRESS): TaskStatus.FAILED,
