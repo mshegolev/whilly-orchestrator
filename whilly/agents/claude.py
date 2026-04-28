@@ -1,11 +1,15 @@
 """Claude CLI backend (the original whilly agent backend).
 
-Wraps ``claude --output-format json -p "<prompt>"`` and parses the final JSON
-summary into :class:`AgentResult`. Extracted into a dedicated class so
-OpenCode and future backends can live beside it behind the same Protocol.
+Wraps ``claude --output-format stream-json --verbose -p "<prompt>"`` and parses
+the JSONL stream into :class:`AgentResult`. Each line of stdout is one JSON
+event (system/init, assistant deltas, tool_use, rate_limit_event, final result),
+so ``tail -f`` shows live progress instead of waiting for one big blob at the end.
 
-Matches the behaviour previously inlined into ``whilly.agent_runner``; that
-module is kept as a compat shim so existing imports continue to work.
+The final ``{"type":"result"...}`` event carries the same shape that the legacy
+``--output-format json`` produced, so the parser still extracts ``result``,
+``total_cost_usd`` and ``usage`` from a single record. ``parse_output`` also
+accepts a single JSON object as a fallback so existing ``collect_result_from_file``
+callers and tests keep working.
 """
 
 from __future__ import annotations
@@ -73,11 +77,15 @@ class ClaudeBackend:
         safe_mode: bool | None = None,
     ) -> list[str]:
         resolved = self.normalize_model(model or self.default_model())
+        # stream-json + --verbose: Claude CLI writes JSONL incrementally so
+        # ``tail -f {task_id}.log`` shows live progress. ``--verbose`` is
+        # required by the CLI when stream-json is paired with ``-p``.
         return [
             self._claude_bin(),
             *self._permission_args(safe_mode=safe_mode),
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--model",
             resolved,
             "-p",
@@ -90,44 +98,80 @@ class ClaudeBackend:
     # ── Parsing ────────────────────────────────────────────────────────────
 
     def parse_output(self, raw: str) -> tuple[str, AgentUsage]:
-        """Parse the final JSON summary from Claude CLI.
+        """Parse stdout from Claude CLI into ``(result_text, usage)``.
 
-        Expected shape (abridged)::
+        Two accepted shapes:
 
-            {
-              "result": "...",
-              "total_cost_usd": 0.0042,
-              "num_turns": 3,
-              "duration_ms": 12345,
-              "usage": {
-                 "input_tokens": 100,
-                 "output_tokens": 50,
-                 "cache_read_input_tokens": 0,
-                 "cache_creation_input_tokens": 0
-              }
-            }
+        * **stream-json** (current default): JSONL with one JSON object per
+          line — ``system``/``init``, ``assistant`` messages with usage,
+          ``tool_use``, ``rate_limit_event``, and a final ``result`` event
+          carrying the full summary. We pick the last ``type=="result"`` record.
+        * **single object** (legacy ``--output-format json``): one JSON object
+          with ``result``/``total_cost_usd``/``usage`` at the top level.
 
-        Malformed input falls back to an empty AgentUsage + the raw text.
+        Falls back to ``(raw, AgentUsage())`` when both parses fail — this
+        matches the prior contract for unparseable subprocess output.
         """
         if not raw:
             return "", AgentUsage()
-        try:
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
+
+        result_obj = self._extract_result_record(raw)
+        if result_obj is None:
             return raw, AgentUsage()
 
-        result_text = data.get("result", "") or ""
-        usage_data = data.get("usage") or {}
+        result_text = result_obj.get("result", "") or ""
+        usage_data = result_obj.get("usage") or {}
         usage = AgentUsage(
             input_tokens=usage_data.get("input_tokens", 0) or 0,
             output_tokens=usage_data.get("output_tokens", 0) or 0,
             cache_read_tokens=usage_data.get("cache_read_input_tokens", 0) or 0,
             cache_create_tokens=usage_data.get("cache_creation_input_tokens", 0) or 0,
-            cost_usd=data.get("total_cost_usd", 0.0) or 0.0,
-            num_turns=data.get("num_turns", 0) or 0,
-            duration_ms=data.get("duration_ms", 0) or 0,
+            cost_usd=result_obj.get("total_cost_usd", 0.0) or 0.0,
+            num_turns=result_obj.get("num_turns", 0) or 0,
+            duration_ms=result_obj.get("duration_ms", 0) or 0,
         )
         return result_text, usage
+
+    @staticmethod
+    def _extract_result_record(raw: str) -> dict | None:
+        """Return the result-bearing dict from raw stdout, or ``None``.
+
+        Tries (1) JSONL stream — last line with ``type == "result"``,
+        (2) single JSON object as a fallback. Returning ``None`` signals the
+        caller to fall back to the raw text.
+        """
+        # Fast path: legacy single-object JSON. Try first because it's cheap.
+        stripped = raw.strip()
+        if stripped.startswith("{") and stripped.endswith("}") and "\n" not in stripped:
+            try:
+                obj = json.loads(stripped)
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if isinstance(obj, dict):
+                return obj
+            return None
+
+        # Stream-json path: scan from the end so we hit the final result fast.
+        lines = [line for line in raw.splitlines() if line.strip()]
+        for line in reversed(lines):
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(obj, dict) and obj.get("type") == "result":
+                return obj
+
+        # Some recorded transcripts only have a single line that *is* the result
+        # but lacks ``type``. Try once more, top-down.
+        for line in lines:
+            try:
+                obj = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(obj, dict) and "result" in obj:
+                return obj
+
+        return None
 
     # ── Runners ────────────────────────────────────────────────────────────
 
@@ -195,8 +239,9 @@ class ClaudeBackend:
 
         Writes a preamble block (timestamp, cwd, model, cmd shape) into
         *log_file* BEFORE spawning the subprocess so a ``tail -f`` or the
-        dashboard ``l`` hotkey shows something immediately. Claude CLI only
-        writes its big JSON at the end (``--output-format json``).
+        dashboard ``l`` hotkey shows something immediately. With stream-json
+        format Claude CLI also writes JSONL events live — events appear in the
+        log as soon as the model produces them, not only at the end.
         """
         cmd = self.build_command(prompt, model=model)
 
@@ -211,7 +256,7 @@ class ClaudeBackend:
                 f"# model     : {model or self.default_model()}\n"
                 f"# cwd       : {cwd or 'inherited'}\n"
                 f"# cmd       : {' '.join(cmd[:2])} ... -p <prompt {len(prompt)} chars>\n"
-                "# note      : claude --output-format json пишет результат в КОНЦЕ.\n"
+                "# note      : claude --output-format stream-json пишет JSONL events live (tail -f работает).\n"
                 "# ---\n"
             )
             stdout_target.write(preamble)
