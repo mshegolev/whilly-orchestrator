@@ -31,6 +31,12 @@ What's covered
 * ``POST /tasks/{task_id}/fail`` accepts a ``reason``, flips a
   CLAIMED *or* IN_PROGRESS row to FAILED, advances the version,
   appends the reason to ``events.payload``.
+* ``POST /tasks/{task_id}/release`` (TASK-022b3, PRD FR-1.6, NFR-1)
+  flips a CLAIMED *or* IN_PROGRESS row back to PENDING, clears
+  ``claimed_by`` / ``claimed_at``, advances the version, and writes
+  a ``RELEASE`` event with the worker-supplied reason — the HTTP
+  analogue of :meth:`TaskRepository.release_task` used by the remote
+  worker on graceful shutdown.
 * :class:`whilly.adapters.db.VersionConflictError` maps to 409 with a
   fully-populated :class:`ErrorResponse` envelope on stale-version
   and wrong-status calls — the contract TASK-022a3 reads.
@@ -791,6 +797,196 @@ async def test_fail_rejects_empty_reason(
     """
     response = await http_client.post(
         "/tasks/T-x/fail",
+        json={"worker_id": "w-x", "version": 1, "reason": ""},
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# /tasks/{task_id}/release — happy path (TASK-022b3, PRD FR-1.6, NFR-1)
+# ---------------------------------------------------------------------------
+
+
+async def test_release_transitions_claimed_back_to_pending(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A successful release RPC flips a CLAIMED row back to PENDING.
+
+    This is the canonical TASK-022b3 server-side acceptance test. A
+    failure here would mean a remote worker on SIGTERM cannot put its
+    in-flight task back in the pool — peers would have to wait for the
+    visibility-timeout sweep (default 15 minutes, PRD FR-1.4) instead
+    of re-claiming within one poll cycle. We assert the row's status,
+    ``claimed_by``, ``claimed_at`` and version, and the audit event,
+    in a single test because they're three projections of the same
+    transaction.
+    """
+    plan_id = "PLAN-RELEASE-CLAIMED"
+    task_id = "T-release-claimed"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-release-claimed"
+    )
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/release",
+        json={
+            "worker_id": worker_id,
+            "version": claim_version,
+            "reason": "shutdown",
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["task"]["id"] == task_id
+    assert body["task"]["status"] == "PENDING"
+    assert body["task"]["version"] == claim_version + 1
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, claimed_by, claimed_at, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        release_event = await conn.fetchrow(
+            "SELECT event_type, payload FROM events "
+            "WHERE task_id = $1 AND event_type = 'RELEASE' "
+            "ORDER BY id DESC LIMIT 1",
+            task_id,
+        )
+    assert row is not None
+    assert row["status"] == "PENDING"
+    assert row["claimed_by"] is None, "claimed_by must be cleared on release so a peer can re-claim"
+    assert row["claimed_at"] is None
+    assert row["version"] == claim_version + 1
+    assert release_event is not None
+    import json as _json
+
+    payload = (
+        _json.loads(release_event["payload"]) if isinstance(release_event["payload"], str) else release_event["payload"]
+    )
+    assert payload["reason"] == "shutdown"
+    assert payload["version"] == claim_version + 1
+
+
+async def test_release_transitions_in_progress_back_to_pending(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """The post-START release path: IN_PROGRESS → PENDING.
+
+    Symmetric with :func:`test_release_transitions_claimed_back_to_pending` —
+    exercises the second source state ``release_task``'s SQL accepts.
+    The two tests together pin the full
+    ``status IN ('CLAIMED','IN_PROGRESS')`` filter contract that lets a
+    worker release a task whether the signal arrived before or after
+    :meth:`TaskRepository.start_task` ran.
+    """
+    plan_id = "PLAN-RELEASE-IP"
+    task_id = "T-release-ip"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-release-ip"
+    )
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/release",
+        json={
+            "worker_id": worker_id,
+            "version": started.version,
+            "reason": "shutdown",
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["task"]["status"] == "PENDING"
+    assert body["task"]["version"] == started.version + 1
+
+
+async def test_release_with_stale_version_returns_409_with_envelope(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A stale ``version`` on /release produces the same 409 envelope as /complete and /fail.
+
+    Mirrors :func:`test_complete_with_stale_version_returns_409_with_envelope`
+    and its /fail twin — the wire contract for the conflict envelope
+    is shared between all three terminal-state RPCs (centralised in
+    :func:`_conflict_response`), so any drift on one route would break
+    the others and the remote-worker client mapper would have to
+    special-case which route surfaced the conflict.
+    """
+    plan_id = "PLAN-RELEASE-CONFLICT"
+    task_id = "T-release-conflict"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-release-conflict"
+    )
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    started = await repo.start_task(task_id, claim_version)
+    stale_version = claim_version
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/release",
+        json={
+            "worker_id": worker_id,
+            "version": stale_version,
+            "reason": "shutdown",
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"] == "version_conflict"
+    assert body["task_id"] == task_id
+    assert body["expected_version"] == stale_version
+    assert body["actual_version"] == started.version
+    assert body["actual_status"] == "IN_PROGRESS"
+
+
+async def test_release_without_authorization_header_returns_401(
+    http_client: AsyncClient,
+) -> None:
+    """No bearer header → 401 (symmetric with /complete and /fail)."""
+    response = await http_client.post(
+        "/tasks/T-x/release",
+        json={"worker_id": "w-x", "version": 1, "reason": "shutdown"},
+    )
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate", "").startswith("Bearer ")
+
+
+async def test_release_with_bootstrap_token_returns_401(
+    http_client: AsyncClient,
+) -> None:
+    """Bootstrap secret does not authenticate /release (PRD FR-1.2 split)."""
+    response = await http_client.post(
+        "/tasks/T-x/release",
+        json={"worker_id": "w-x", "version": 1, "reason": "shutdown"},
+        headers={"Authorization": f"Bearer {_BOOTSTRAP_TOKEN}"},
+    )
+    assert response.status_code == 401
+
+
+async def test_release_rejects_empty_reason(
+    http_client: AsyncClient,
+) -> None:
+    """An empty ``reason`` is rejected by the :class:`ReleaseRequest` schema (422).
+
+    Symmetric with the :class:`FailRequest` reason rule: the audit row's
+    whole point is to distinguish ``"shutdown"`` from
+    ``"visibility_timeout"`` so a blank value would defeat the
+    dashboard's ability to attribute the bounce. Pinned at the schema
+    layer means the database is never touched on a malformed release.
+    """
+    response = await http_client.post(
+        "/tasks/T-x/release",
         json={"worker_id": "w-x", "version": 1, "reason": ""},
         headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
     )
