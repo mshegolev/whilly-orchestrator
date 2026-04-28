@@ -36,6 +36,7 @@ import httpx
 import pytest
 
 from whilly.adapters.transport.client import (
+    CLAIM_PATH,
     DEFAULT_BACKOFF_SCHEDULE,
     REGISTER_PATH,
     AuthError,
@@ -43,14 +44,19 @@ from whilly.adapters.transport.client import (
     RemoteWorkerClient,
     ServerError,
     VersionConflictError,
+    complete_path,
+    fail_path,
     heartbeat_path,
 )
 from whilly.adapters.transport.schemas import (
+    CompleteResponse,
     ErrorResponse,
+    FailResponse,
     HeartbeatResponse,
     RegisterResponse,
+    TaskPayload,
 )
-from whilly.core.models import TaskStatus
+from whilly.core.models import Priority, Task, TaskStatus
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -827,3 +833,460 @@ async def test_2xx_response_is_returned_unparsed() -> None:
 
     assert response.status_code == 200
     assert response.json() == body
+
+
+# ---------------------------------------------------------------------------
+# claim / complete / fail — TASK-022a3
+# ---------------------------------------------------------------------------
+#
+# The AC's headline behaviours pinned below:
+#
+# * ``claim`` returns ``None`` on a 204 *without* self-retrying — the
+#   server's long-poll budget already covered the wait; an extra round of
+#   client-side retries would double the queue latency the operator sees
+#   on an idle plan.
+# * ``complete`` / ``fail`` translate a 409 + :class:`ErrorResponse`
+#   envelope into a :class:`VersionConflictError` with the structured
+#   conflict tuple projected onto attributes — the supervisor's
+#   idempotent-success branch must work without re-parsing JSON.
+# * All three RPCs use the per-worker bearer (NOT the bootstrap secret),
+#   POST to the documented paths, and round-trip the pydantic schemas.
+#
+# The test names ``test_claim``, ``test_complete``, ``test_fail`` are the
+# exact identifiers in the AC's ``test_steps`` so a future audit can grep
+# the file and find the canonical assertions in one place.
+
+
+def _sample_task_payload(*, version: int = 1, status: TaskStatus = TaskStatus.CLAIMED) -> TaskPayload:
+    """Build a deterministic :class:`TaskPayload` for the claim/complete/fail tests.
+
+    Centralising the fixture means a future change to required Task
+    fields lands in one place rather than scattered through every test
+    body. The default ``status`` is :data:`TaskStatus.CLAIMED` so the
+    claim-tests can return the payload directly; complete/fail tests
+    override it to ``DONE`` / ``FAILED`` to mirror the post-update row.
+    """
+    return TaskPayload(
+        id="TASK-022a3",
+        status=status,
+        dependencies=["TASK-022a2"],
+        key_files=["whilly/adapters/transport/client.py"],
+        priority=Priority.CRITICAL,
+        description="Add claim/complete/fail RPCs to RemoteWorkerClient",
+        acceptance_criteria=[],
+        test_steps=[],
+        prd_requirement="FR-1.3, FR-1.5, TC-6",
+        version=version,
+    )
+
+
+# ---------------------------------------------------------------------------
+# claim
+# ---------------------------------------------------------------------------
+
+
+async def test_claim() -> None:
+    """AC anchor: ``claim`` POSTs to /tasks/claim and projects the wire payload to a domain Task.
+
+    Pins three load-bearing facts on the happy path:
+
+    1. The HTTP method, path, and Authorization header are exactly what
+       the server expects (per-worker bearer, not bootstrap).
+    2. The request body round-trips :class:`ClaimRequest` cleanly — no
+       missing or stray fields that would 422 against ``extra="forbid"``.
+    3. The 200 + :class:`ClaimResponse` body is projected onto a domain
+       :class:`Task`, including the tuple/list translation in
+       :meth:`TaskPayload.to_task`. The worker's outer loop in TASK-022b1
+       speaks pure-domain types, so this projection is what makes the
+       transport layer transparent to the supervisor.
+    """
+    captured: dict[str, Any] = {}
+    payload = _sample_task_payload()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        # Wire envelope: ``task`` populated, ``plan`` left None (the AC for
+        # TASK-021c1 confirms that plan is not required on the response).
+        return httpx.Response(200, json={"task": payload.model_dump(mode="json"), "plan": None})
+
+    async with _make_client(handler, token="bearer-tok", bootstrap_token="boot-tok") as client:
+        task = await client.claim(worker_id="w-1", plan_id="plan-A")
+
+    assert isinstance(task, Task)
+    assert task.id == "TASK-022a3"
+    assert task.status == TaskStatus.CLAIMED
+    assert task.version == 1
+    # Tuple semantics on the domain side — the projection MUST translate
+    # the wire list back to the immutable tuple expected by the dataclass.
+    assert task.dependencies == ("TASK-022a2",)
+    assert task.key_files == ("whilly/adapters/transport/client.py",)
+    assert task.priority == Priority.CRITICAL
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == CLAIM_PATH
+    # Per-worker bearer — bootstrap token must NOT show up here.
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {"worker_id": "w-1", "plan_id": "plan-A"}
+
+
+async def test_claim_returns_none_on_204_without_self_retry(captured_sleeps: list[float]) -> None:
+    """A 204 No Content surfaces as ``None`` and does NOT trigger a client-side retry.
+
+    The AC is explicit: "Long-polling таймаут на сервере 30с — клиент
+    держит соединение, не делает self-retry на 204". A regression that
+    started looping on 204 would either double the long-poll budget on
+    the server (two 30s holds back-to-back from the same worker) or
+    spin a tight loop if the server reverted to immediate 204s.
+
+    The handler counts invocations to pin "exactly one HTTP call" and
+    we re-use the ``captured_sleeps`` fixture to assert "no sleep at
+    all" — both conditions together rule out any self-retry path.
+    """
+    handler_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        handler_calls["n"] += 1
+        # 204 must have an empty body per RFC 7231 §6.3.5; httpx
+        # tolerates ``json=`` here only because the MockTransport doesn't
+        # enforce the rule, but we keep the body empty to match what
+        # the production server returns.
+        return httpx.Response(204)
+
+    async with _make_client(handler) as client:
+        result = await client.claim(worker_id="w-1", plan_id="plan-A")
+
+    assert result is None
+    assert handler_calls["n"] == 1
+    assert captured_sleeps == []
+
+
+async def test_claim_returns_none_when_response_task_field_is_null() -> None:
+    """A 200 with ``task=None`` defensively maps to ``None`` (forward-compatibility).
+
+    The current server only signals "no task" via 204, so this path is
+    purely defensive against a future server that uses 200 + ``task=null``
+    to ship metadata (e.g. queue depth, suggested back-off) alongside an
+    empty claim. The supervisor's contract is "None → re-poll", so the
+    method must not surface a half-broken Task.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"task": None, "plan": None})
+
+    async with _make_client(handler) as client:
+        result = await client.claim(worker_id="w-1", plan_id="plan-A")
+
+    assert result is None
+
+
+async def test_claim_propagates_auth_error_on_401(captured_sleeps: list[float]) -> None:
+    """A rotated per-worker bearer surfaces as :class:`AuthError`, no retries.
+
+    Mirrors the heartbeat / register patterns: 4xx is fail-fast, the
+    supervisor decides whether to re-register or page the operator.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    async with _make_client(handler, token="rotated-out") as client:
+        with pytest.raises(AuthError) as excinfo:
+            await client.claim(worker_id="w-1", plan_id="plan-A")
+
+    assert excinfo.value.status_code == 401
+    assert captured_sleeps == []
+
+
+async def test_claim_rejects_empty_inputs_at_schema_layer() -> None:
+    """Empty ``worker_id`` / ``plan_id`` raise :class:`pydantic.ValidationError` before the wire call.
+
+    Schema-layer validation catches programmer errors at the right tier
+    — surfacing as a wire-level 422 would force the operator to read a
+    server log instead of a stack trace from the worker process itself.
+    """
+    handler_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — never called
+        handler_calls["n"] += 1
+        return httpx.Response(204)
+
+    from pydantic import ValidationError
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ValidationError):
+            await client.claim(worker_id="", plan_id="plan-A")
+        with pytest.raises(ValidationError):
+            await client.claim(worker_id="w-1", plan_id="")
+
+    assert handler_calls["n"] == 0
+
+
+async def test_claim_retries_on_transient_5xx(captured_sleeps: list[float]) -> None:
+    """``claim`` inherits :meth:`_request`'s retry ladder for transient 5xx.
+
+    A control-plane deploy that flaps 503 → 503 → 200 must transparently
+    succeed — the worker shouldn't see the deploy unless the retry
+    budget is exhausted.
+    """
+    attempts = {"n": 0}
+    payload = _sample_task_payload()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            return httpx.Response(503, json={"status": "unavailable"})
+        return httpx.Response(200, json={"task": payload.model_dump(mode="json"), "plan": None})
+
+    async with _make_client(handler) as client:
+        task = await client.claim(worker_id="w-1", plan_id="plan-A")
+
+    assert task is not None
+    assert task.id == "TASK-022a3"
+    assert attempts["n"] == 3
+    assert captured_sleeps == [1.0, 2.0]
+
+
+# ---------------------------------------------------------------------------
+# complete
+# ---------------------------------------------------------------------------
+
+
+async def test_complete() -> None:
+    """AC anchor: ``complete`` POSTs to /tasks/{id}/complete and surfaces 409 as VersionConflictError.
+
+    The single test bundles the two load-bearing AC clauses:
+
+    1. **Happy path** — 200 + :class:`CompleteResponse` body round-trips
+       cleanly; the wire envelope's :attr:`task.version` reflects the
+       post-update counter (1 → 2).
+    2. **409 mapping** — a follow-up call against the same client gets
+       a 409 with an :class:`ErrorResponse` envelope, and we assert the
+       typed exception's structured fields (``actual_status``,
+       ``actual_version``, ``error_code``) are projected verbatim. The
+       supervisor's idempotent-success branch reads these fields, so a
+       regression in the projection would silently break the
+       "already-DONE → continue" pattern.
+    """
+    captured: dict[str, Any] = {}
+    post_update = _sample_task_payload(version=2, status=TaskStatus.DONE)
+
+    # Phase 1: handler returns 200 with the post-update payload.
+    def happy_handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"task": post_update.model_dump(mode="json")})
+
+    async with _make_client(happy_handler, token="bearer-tok", bootstrap_token="boot-tok") as client:
+        response = await client.complete(task_id="TASK-022a3", worker_id="w-1", version=1)
+
+    assert isinstance(response, CompleteResponse)
+    assert response.task.id == "TASK-022a3"
+    assert response.task.status == TaskStatus.DONE
+    assert response.task.version == 2
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == complete_path("TASK-022a3")
+    assert captured["path"] == "/tasks/TASK-022a3/complete"
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {"worker_id": "w-1", "version": 1}
+
+    # Phase 2: handler returns 409 with the structured envelope. The
+    # version skew here mirrors the canonical "another writer won the
+    # race" case — the actual_status is DONE (the row already advanced
+    # to DONE under us), which is the exact branch the supervisor
+    # treats as idempotent-success.
+    envelope = ErrorResponse(
+        error="version_conflict",
+        detail="version moved past expected 1; current is 2",
+        task_id="TASK-022a3",
+        expected_version=1,
+        actual_version=2,
+        actual_status=TaskStatus.DONE,
+    )
+
+    def conflict_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json=envelope.model_dump(mode="json"))
+
+    async with _make_client(conflict_handler) as client:
+        with pytest.raises(VersionConflictError) as excinfo:
+            await client.complete(task_id="TASK-022a3", worker_id="w-1", version=1)
+
+    exc = excinfo.value
+    assert exc.status_code == 409
+    assert exc.task_id == "TASK-022a3"
+    assert exc.expected_version == 1
+    assert exc.actual_version == 2
+    # The whole point of the structured projection: callers can read
+    # ``actual_status`` directly and treat DONE as idempotent success.
+    assert exc.actual_status == TaskStatus.DONE
+    assert exc.error_code == "version_conflict"
+
+
+async def test_complete_propagates_auth_error_on_403(captured_sleeps: list[float]) -> None:
+    """A 403 from the per-worker bearer surfaces as :class:`AuthError`, no retry.
+
+    403 is the "operator revoked the worker" path; the supervisor must
+    not silently retry against a deactivated identity.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": "forbidden"})
+
+    async with _make_client(handler) as client:
+        with pytest.raises(AuthError) as excinfo:
+            await client.complete(task_id="TASK-x", worker_id="w-1", version=0)
+
+    assert excinfo.value.status_code == 403
+    assert captured_sleeps == []
+
+
+async def test_complete_surfaces_server_error_on_schema_drift() -> None:
+    """A 200 with a body that doesn't match :class:`CompleteResponse` becomes :class:`ServerError`.
+
+    The schema-mismatch case is *not* retryable: the server already
+    succeeded HTTP-wise, the body is just wrong. A 200 with the
+    ``task`` field omitted would be the canonical case — caught here
+    before the supervisor sees it and would otherwise crash on a
+    missing attribute.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Missing the required ``task`` field.
+        return httpx.Response(200, json={})
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ServerError):
+            await client.complete(task_id="TASK-x", worker_id="w-1", version=0)
+
+
+# ---------------------------------------------------------------------------
+# fail
+# ---------------------------------------------------------------------------
+
+
+async def test_fail() -> None:
+    """AC anchor: ``fail`` POSTs to /tasks/{id}/fail with reason and maps 409 to VersionConflictError.
+
+    Symmetric to :func:`test_complete`. The reason field is the
+    distinguishing feature: it MUST be passed through verbatim because
+    it lands in the ``events.payload`` audit row that the dashboard
+    surfaces. A regression that dropped or truncated the reason would
+    leave operators with blank failure rows.
+    """
+    captured: dict[str, Any] = {}
+    post_update = _sample_task_payload(version=2, status=TaskStatus.FAILED)
+
+    def happy_handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"task": post_update.model_dump(mode="json")})
+
+    async with _make_client(happy_handler, token="bearer-tok", bootstrap_token="boot-tok") as client:
+        response = await client.fail(
+            task_id="TASK-022a3",
+            worker_id="w-1",
+            version=1,
+            reason="agent exited 137 (OOM)",
+        )
+
+    assert isinstance(response, FailResponse)
+    assert response.task.status == TaskStatus.FAILED
+    assert response.task.version == 2
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == fail_path("TASK-022a3")
+    assert captured["path"] == "/tasks/TASK-022a3/fail"
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "version": 1,
+        "reason": "agent exited 137 (OOM)",
+    }
+
+    # 409 path — the actual_status here is FAILED (idempotent retry
+    # after a previous fail won the race), the second canonical
+    # idempotent-success branch.
+    envelope = ErrorResponse(
+        error="version_conflict",
+        detail="version moved past expected 1; current is 2",
+        task_id="TASK-022a3",
+        expected_version=1,
+        actual_version=2,
+        actual_status=TaskStatus.FAILED,
+    )
+
+    def conflict_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json=envelope.model_dump(mode="json"))
+
+    async with _make_client(conflict_handler) as client:
+        with pytest.raises(VersionConflictError) as excinfo:
+            await client.fail(
+                task_id="TASK-022a3",
+                worker_id="w-1",
+                version=1,
+                reason="duplicate failure",
+            )
+
+    exc = excinfo.value
+    assert exc.status_code == 409
+    assert exc.actual_version == 2
+    assert exc.actual_status == TaskStatus.FAILED
+    assert exc.error_code == "version_conflict"
+
+
+async def test_fail_rejects_empty_reason_at_schema_layer() -> None:
+    """An empty ``reason`` raises :class:`pydantic.ValidationError` before the wire call.
+
+    The audit log's whole point is the per-failure rationale. Schema
+    validation catches the misuse at the worker process tier so an
+    operator sees a stack trace rather than a blank row in the
+    dashboard.
+    """
+    handler_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — never called
+        handler_calls["n"] += 1
+        return httpx.Response(200, json={})
+
+    from pydantic import ValidationError
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ValidationError):
+            await client.fail(task_id="TASK-x", worker_id="w-1", version=0, reason="")
+
+    assert handler_calls["n"] == 0
+
+
+async def test_fail_propagates_other_4xx_as_http_client_error(captured_sleeps: list[float]) -> None:
+    """A 422 (e.g. server-side schema rejection) surfaces as :class:`HTTPClientError`.
+
+    The catch-all 4xx bucket. Failing-fast here means the supervisor
+    sees the bug instantly rather than after the retry budget — the
+    same fix needed at the worker (re-build the request) wouldn't
+    benefit from waiting 7s.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"detail": "bad payload"})
+
+    async with _make_client(handler) as client:
+        with pytest.raises(HTTPClientError) as excinfo:
+            await client.fail(task_id="TASK-x", worker_id="w-1", version=0, reason="r")
+
+    assert excinfo.value.status_code == 422
+    # Not a more-specific subclass — 422 isn't auth or conflict.
+    assert not isinstance(excinfo.value, (AuthError, VersionConflictError))
+    assert captured_sleeps == []
