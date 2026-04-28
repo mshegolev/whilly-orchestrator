@@ -74,6 +74,13 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.plan import run_plan_command
 
         return run_plan_command(args[1:])
+    if args and args[0] == "run":
+        # Same lazy-import argument as ``plan`` above: ``whilly.cli.run`` pulls
+        # asyncpg + the worker stack; legacy ``whilly --resume`` invocations
+        # shouldn't pay that import cost. Owner: TASK-019c.
+        from whilly.cli.run import run_run_command
+
+        return run_run_command(args[1:])
     return _legacy_main(argv)
 
 
