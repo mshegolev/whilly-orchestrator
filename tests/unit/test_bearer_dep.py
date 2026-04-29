@@ -60,6 +60,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import HTTPException
@@ -71,6 +73,19 @@ from whilly.adapters.transport.auth import (
     make_db_bearer_auth,
     reset_legacy_warning_state,
 )
+
+
+def _request_stub() -> Any:
+    """Build a stand-in for :class:`fastapi.Request`.
+
+    :func:`make_db_bearer_auth` reads / writes only ``request.state``
+    (Starlette's free-form attribute bag), so a :class:`SimpleNamespace`
+    carrying its own nested ``state`` namespace is functionally
+    identical to the real Starlette ``State`` object for our purposes.
+    Avoids constructing a full Starlette ``Request`` (which needs an
+    ASGI ``scope`` dict that would add no signal here).
+    """
+    return SimpleNamespace(state=SimpleNamespace())
 
 
 class _FakeTaskRepository:
@@ -127,10 +142,16 @@ async def test_db_bearer_auth_accepts_registered_token() -> None:
     repo.register("plaintext-A", "w-alpha")
 
     dep = make_db_bearer_auth(repo)
-    result = await dep("Bearer plaintext-A")
+    request = _request_stub()
+    result = await dep(request, "Bearer plaintext-A")
 
     assert result is None
     assert repo.hits == 1, "DB lookup should have run exactly once"
+    # Identity-binding contract (TASK-101 scrutiny round-1 fix):
+    # successful per-worker hash hit stashes worker_id on request.state
+    # so the route handler's ``_require_token_owner`` check can compare
+    # against the body / path identity (see VAL-AUTH-024).
+    assert request.state.authenticated_worker_id == "w-alpha"
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +167,7 @@ async def test_db_bearer_auth_rejects_unknown_token() -> None:
 
     dep = make_db_bearer_auth(repo)
     with pytest.raises(HTTPException) as exc_info:
-        await dep("Bearer some-other-bearer")
+        await dep(_request_stub(), "Bearer some-other-bearer")
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "invalid token"
@@ -162,7 +183,7 @@ async def test_db_bearer_auth_rejects_missing_header_without_db_lookup() -> None
 
     dep = make_db_bearer_auth(repo)
     with pytest.raises(HTTPException) as exc_info:
-        await dep(None)
+        await dep(_request_stub(), None)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "missing bearer token"
@@ -182,7 +203,7 @@ async def test_db_bearer_auth_rejects_non_bearer_scheme_without_db_lookup() -> N
 
     dep = make_db_bearer_auth(repo)
     with pytest.raises(HTTPException) as exc_info:
-        await dep("Basic dXNlcjpwYXNz")
+        await dep(_request_stub(), "Basic dXNlcjpwYXNz")
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "invalid authorization scheme"
@@ -196,7 +217,7 @@ async def test_db_bearer_auth_rejects_empty_token_after_prefix() -> None:
 
     dep = make_db_bearer_auth(repo)
     with pytest.raises(HTTPException) as exc_info:
-        await dep("Bearer    ")
+        await dep(_request_stub(), "Bearer    ")
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "empty bearer token"
@@ -217,9 +238,13 @@ async def test_db_bearer_auth_legacy_match_emits_deprecation_warning(
     dep = make_db_bearer_auth(repo, legacy_token="shared-xyz")
 
     with caplog.at_level(logging.WARNING, logger="whilly.adapters.transport.auth"):
-        result = await dep("Bearer shared-xyz")
+        request = _request_stub()
+        result = await dep(request, "Bearer shared-xyz")
 
     assert result is None
+    # Legacy fallback explicitly stamps identity as None — the shared
+    # cluster bearer cannot identify a specific worker.
+    assert request.state.authenticated_worker_id is None
     deprecation_records = [rec for rec in caplog.records if "deprecated" in rec.getMessage().lower()]
     assert len(deprecation_records) == 1, "exactly one WARNING should mention 'deprecated'"
     assert deprecation_records[0].levelno == logging.WARNING
@@ -234,8 +259,8 @@ async def test_db_bearer_auth_legacy_warning_is_one_shot(
     dep = make_db_bearer_auth(repo, legacy_token="shared-xyz")
 
     with caplog.at_level(logging.WARNING, logger="whilly.adapters.transport.auth"):
-        await dep("Bearer shared-xyz")
-        await dep("Bearer shared-xyz")
+        await dep(_request_stub(), "Bearer shared-xyz")
+        await dep(_request_stub(), "Bearer shared-xyz")
 
     deprecation_records = [rec for rec in caplog.records if "deprecated" in rec.getMessage().lower()]
     assert len(deprecation_records) == 1, "the deprecation warning must be emitted at most once per process"
@@ -257,7 +282,7 @@ async def test_db_bearer_auth_legacy_warning_suppressed_by_env(
     dep = make_db_bearer_auth(repo, legacy_token="shared-xyz")
 
     with caplog.at_level(logging.WARNING, logger="whilly.adapters.transport.auth"):
-        result = await dep("Bearer shared-xyz")
+        result = await dep(_request_stub(), "Bearer shared-xyz")
 
     assert result is None
     deprecation_records = [rec for rec in caplog.records if "deprecated" in rec.getMessage().lower()]
@@ -271,7 +296,7 @@ async def test_db_bearer_auth_legacy_disabled_when_token_is_none() -> None:
     dep = make_db_bearer_auth(repo, legacy_token=None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await dep("Bearer would-have-matched-shared-token")
+        await dep(_request_stub(), "Bearer would-have-matched-shared-token")
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "invalid token"
@@ -295,9 +320,13 @@ async def test_db_bearer_auth_per_worker_takes_precedence_over_legacy(
     dep = make_db_bearer_auth(repo, legacy_token="plaintext-A")
 
     with caplog.at_level(logging.WARNING, logger="whilly.adapters.transport.auth"):
-        result = await dep("Bearer plaintext-A")
+        request = _request_stub()
+        result = await dep(request, "Bearer plaintext-A")
 
     assert result is None
+    # Per-worker precedence: identity stamped to the resolved worker_id,
+    # NOT to None (which would have indicated a legacy fallback hit).
+    assert request.state.authenticated_worker_id == "w-alpha"
     deprecation_records = [rec for rec in caplog.records if "deprecated" in rec.getMessage().lower()]
     assert deprecation_records == [], "per-worker authentication must NOT trigger the legacy deprecation log"
 
@@ -315,7 +344,7 @@ async def test_db_bearer_auth_legacy_token_constant_time_compare() -> None:
     dep = make_db_bearer_auth(repo, legacy_token="shared-xyz")
 
     with pytest.raises(HTTPException) as exc_info:
-        await dep("Bearer shared-xy")  # one char short
+        await dep(_request_stub(), "Bearer shared-xy")  # one char short
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "invalid token"
@@ -380,11 +409,11 @@ async def test_reset_legacy_warning_state_re_arms_warning(
     dep = make_db_bearer_auth(repo, legacy_token="shared-xyz")
 
     with caplog.at_level(logging.WARNING, logger="whilly.adapters.transport.auth"):
-        await dep("Bearer shared-xyz")
-        await dep("Bearer shared-xyz")  # second hit — flag set, no log
+        await dep(_request_stub(), "Bearer shared-xyz")
+        await dep(_request_stub(), "Bearer shared-xyz")  # second hit — flag set, no log
 
         reset_legacy_warning_state()
-        await dep("Bearer shared-xyz")  # third hit — flag cleared, log fires
+        await dep(_request_stub(), "Bearer shared-xyz")  # third hit — flag cleared, log fires
 
     deprecation_records = [rec for rec in caplog.records if "deprecated" in rec.getMessage().lower()]
     assert len(deprecation_records) == 2, "reset_legacy_warning_state should re-arm the one-shot guard"

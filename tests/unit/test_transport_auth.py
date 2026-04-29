@@ -25,7 +25,8 @@ load-bearing. These tests exercise the AC for TASK-021a2:
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import cast
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
@@ -37,9 +38,12 @@ from whilly.adapters.transport.auth import (
     WORKER_TOKEN_ENV,
     bearer_auth,
     bootstrap_auth,
+    hash_bearer_token,
     make_bearer_auth,
     make_bootstrap_auth,
+    make_db_bearer_auth,
     reset_lazy_dependencies,
+    reset_legacy_warning_state,
 )
 
 # ---------------------------------------------------------------------------
@@ -376,3 +380,99 @@ def test_dependency_factory_returns_callable() -> None:
     """
     dep = cast(object, make_bearer_auth("s3cr3t"))
     assert callable(dep)
+
+
+# ---------------------------------------------------------------------------
+# make_db_bearer_auth — identity binding (TASK-101 scrutiny round-1 fix)
+# ---------------------------------------------------------------------------
+#
+# Unit-level coverage of the request.state contract. The full
+# integration tests (cross-worker bearer → 403) live in
+# tests/integration/test_per_worker_auth.py and exercise the same
+# behaviour via a real Postgres + httpx round-trip; these unit tests
+# pin the contract narrowly so a regression in the dep itself is
+# caught without needing testcontainers.
+
+
+class _FakeRepo:
+    """Minimal fake of ``TaskRepository.get_worker_id_by_token_hash``.
+
+    Maps known hashes → worker_id, returns ``None`` for the rest. Only
+    the one method exists because :func:`make_db_bearer_auth` only
+    calls that one method (see auth.py docstring: "the only method
+    the dep calls — keeps the auth surface narrow and easy to fake in
+    tests").
+    """
+
+    def __init__(self, mapping: dict[str, str]) -> None:
+        self._mapping = mapping
+
+    async def get_worker_id_by_token_hash(self, token_hash: str) -> str | None:
+        return self._mapping.get(token_hash)
+
+
+def _make_request_stub() -> Any:
+    """Build a stand-in for :class:`fastapi.Request`.
+
+    The dep only touches ``request.state`` (Starlette's free-form
+    attribute bag), so a :class:`SimpleNamespace` carrying its own
+    nested ``state`` namespace is functionally identical to the real
+    Starlette ``State`` object for our purposes — and avoids the
+    starlette/Request constructor's scope-dict requirement that adds
+    no signal here.
+    """
+    return SimpleNamespace(state=SimpleNamespace())
+
+
+@pytest.mark.asyncio
+async def test_db_bearer_auth_stashes_worker_id_on_request_state() -> None:
+    """Per-worker hash hit → request.state.authenticated_worker_id == resolved id."""
+    plaintext = "per-worker-token-known"
+    known_hash = hash_bearer_token(plaintext)
+    repo = _FakeRepo({known_hash: "w-known"})
+    dep = make_db_bearer_auth(cast(Any, repo))
+
+    request = _make_request_stub()
+    result = await dep(request, f"Bearer {plaintext}")
+
+    assert result is None  # gate-keeping shape preserved
+    assert request.state.authenticated_worker_id == "w-known"
+
+
+@pytest.mark.asyncio
+async def test_db_bearer_auth_legacy_fallback_sets_identity_none() -> None:
+    """Legacy ``WHILLY_WORKER_TOKEN`` match (no DB hash) → request.state.authenticated_worker_id is None.
+
+    The shared cluster bearer cannot identify a specific worker, so
+    the dep marks the identity as unknown. ``server._require_token_owner``
+    treats ``None`` as a no-op, preserving the one-minor-version
+    legacy compat window (VAL-AUTH-030/031/034).
+    """
+    reset_legacy_warning_state()
+    legacy_plaintext = "legacy-shared-bearer-xyz"
+    # Repo returns None for every hash — only the legacy fallback can hit.
+    repo = _FakeRepo({})
+    dep = make_db_bearer_auth(cast(Any, repo), legacy_token=legacy_plaintext)
+
+    request = _make_request_stub()
+    result = await dep(request, f"Bearer {legacy_plaintext}")
+
+    assert result is None
+    # Sentinel is exactly None (not "absent" — the dep must explicitly
+    # write None on the legacy path so a stray earlier write to
+    # request.state can't survive into the route handler).
+    assert hasattr(request.state, "authenticated_worker_id")
+    assert request.state.authenticated_worker_id is None
+
+
+@pytest.mark.asyncio
+async def test_db_bearer_auth_unknown_token_raises_401_without_state_write() -> None:
+    """Invalid bearer → 401 + request.state untouched (handler never runs)."""
+    repo = _FakeRepo({})
+    dep = make_db_bearer_auth(cast(Any, repo))
+
+    request = _make_request_stub()
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(request, "Bearer totally-unknown-token")
+    assert exc_info.value.status_code == 401
+    assert not hasattr(request.state, "authenticated_worker_id")
