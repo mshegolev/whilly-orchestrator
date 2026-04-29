@@ -1,0 +1,326 @@
+{
+  "project": "Whilly v4.1 — Out-of-scope items from v4.0 release",
+  "prd_file": "docs/v4.0-release-checklist.md",
+  "description": "Backlog задач, явно отложенных из v4.0 в секцию 'Out of scope for v4.0' release-checklist'а. Не баги, а сознательные scope-cuts: per-worker bearer rotation, budget guards, --reset, миграция v3 фич (PRD wizard / TRIZ analyzer / Decision Gate), удаление cli_legacy, file-based audit mirror, cross-platform smoke, Forge pipeline. Каждая задача связана с конкретной строкой docs/v4.0-release-checklist.md секции Out-of-scope-for-v40.",
+  "tasks": [
+    {
+      "id": "TASK-101",
+      "title": "Per-worker bearer rotation",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/adapters/transport/auth.py",
+        "whilly/adapters/transport/server.py",
+        "whilly/adapters/db/repository.py",
+        "tests/integration/test_transport_workers.py"
+      ],
+      "description": "Заменить cluster-shared WHILLY_WORKER_TOKEN на per-worker bearer, который мином мин в /workers/register и валидируется server'ом против workers.token_hash через SHA-256 compare. Текущий flow — один разделяемый токен на все воркеры; следствие — ротация требует одновременного перезапуска всего флота. На v4.1 каждый воркер должен иметь свой individual bearer, и server должен уметь отзывать токен на одного worker'а через UPDATE workers SET token_hash='REVOKED' (или подобное). Совместимость: shared-bearer fallback через env var оставить на одну минорную версию для плавной миграции.",
+      "acceptance_criteria": [
+        "POST /workers/register возвращает RegisterResponse с уникальным token, хешированным в workers.token_hash",
+        "bearer_dep валидирует Authorization: Bearer X против workers.token_hash для всех steady-state RPC (heartbeat, claim, complete, fail, release)",
+        "Отзыв одного воркера: UPDATE workers SET token_hash=NULL WHERE worker_id=X — следующий RPC от этого воркера получает 401",
+        "Backwards-compat: если WHILLY_WORKER_TOKEN env установлен, shared-bearer flow работает как сейчас, но логирует deprecation warning",
+        "tests/integration/test_transport_workers.py покрывает оба flow"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_transport_workers.py -v",
+        "pytest tests/unit/test_transport_auth.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Per-worker bearer rotation'"
+    },
+    {
+      "id": "TASK-102",
+      "title": "Budget guards (WHILLY_BUDGET_USD)",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/worker/local.py",
+        "whilly/worker/remote.py",
+        "whilly/adapters/runner/result_parser.py",
+        "tests/integration/test_budget_guards.py"
+      ],
+      "description": "В v3 был WHILLY_BUDGET_USD — Whilly останавливался когда сумма затрат на токены упиралась в потолок. На v4 пока не реализовано. Нужно: (1) парсить usage info из AgentResult (Claude CLI выдаёт input_tokens/output_tokens/cost в JSON envelope), (2) аккумулировать total_cost per plan_id в Postgres (новая колонка plans.spent_usd?), (3) перед каждым claim проверять spent_usd vs budget_usd; если превышен — voluntarily decline (возвращать 204 / NoBudget exception), (4) логировать в audit события BUDGET_WARNING (80%) и BUDGET_EXCEEDED (100%).",
+      "acceptance_criteria": [
+        "plans table расширена колонкой budget_usd и spent_usd",
+        "AgentResult.usage парсится в run_local_worker / run_remote_worker и аккумулируется через repo.add_spend(plan_id, delta)",
+        "Worker отказывается claim'ить если spent_usd >= budget_usd",
+        "events таблица содержит BUDGET_WARNING и BUDGET_EXCEEDED rows",
+        "WHILLY_BUDGET_USD env var опционально override'ит budget_usd на уровне plan import"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_budget_guards.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Budget guards'"
+    },
+    {
+      "id": "TASK-103",
+      "title": "whilly plan reset PLAN_ID",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/cli/plan.py",
+        "whilly/adapters/db/repository.py",
+        "tests/integration/test_plan_reset.py"
+      ],
+      "description": "Сейчас reset плана требует ручного DELETE FROM tasks/events/plans WHERE plan_id=X через psql — это unfriendly и легко забыть про cascade. Добавить subcommand `whilly plan reset <plan_id>` с двумя режимами: --keep-tasks (только сбросить status в PENDING + почистить events) и --hard (DROP + reimport). Confirmation prompt перед выполнением (--yes для скриптов).",
+      "acceptance_criteria": [
+        "whilly plan reset <plan_id> работает в обоих режимах",
+        "Без --yes — interactive y/N confirmation",
+        "С --keep-tasks: tasks.status='PENDING', claimed_by=NULL, version+=1; events для этого plan_id удалены",
+        "С --hard: DELETE FROM tasks/events/plans WHERE plan_id=X (CASCADE)",
+        "Audit row RESET добавляется в events с reason='manual_reset'"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_plan_reset.py -v",
+        "whilly plan reset test-plan --keep-tasks --yes"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'whilly --reset PLAN.json equivalent'"
+    },
+    {
+      "id": "TASK-104a",
+      "title": "Port PRD wizard to v4 — interactive `whilly init`",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/cli/init.py",
+        "whilly/prd_wizard.py",
+        "whilly/prd_launcher.py",
+        "tests/integration/test_prd_wizard_v4.py"
+      ],
+      "description": "В v3 был интерактивный flow: whilly --init 'описание' -> Claude задаёт уточняющие вопросы -> формируется PRD-документ -> tasks.json. На v4 этот flow нужно адаптировать под Postgres-плановую модель: PRD сохраняется как файл (как и сейчас), но список задач напрямую идёт в БД через repo.import_plan() вместо записи в tasks.json. cli_legacy.prd_wizard / prd_launcher переиспользуются, новый wrapper в whilly/cli/init.py делает glue.",
+      "acceptance_criteria": [
+        "whilly init 'описание задачи' запускает Claude CLI в interactive режиме с master prompt'ом из prd_wizard",
+        "По завершении — PRD сохраняется в docs/PRD-<slug>.md, tasks записываются в Postgres (plan_id = slug)",
+        "После создания плана — печатает 'whilly run --plan <slug>' и 'whilly plan show <slug>' для следующего шага",
+        "--non-interactive флаг прокидывает описание в Claude CLI без вопросов (для скриптов)"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_prd_wizard_v4.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'PRD wizard / whilly --init / TRIZ analyzer'"
+    },
+    {
+      "id": "TASK-104b",
+      "title": "Port TRIZ analyzer to v4 — pre-claim contradiction check",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a"
+      ],
+      "key_files": [
+        "whilly/triz_analyzer.py",
+        "whilly/core/prompts.py",
+        "whilly/worker/local.py",
+        "tests/integration/test_triz_v4.py"
+      ],
+      "description": "TRIZ analyzer в v3 анализировал task'у на технические противоречия перед запуском Claude. На v4 это должно стать опциональным фильтром в worker loop'е: после claim'а, перед run'ом, прогнать описание задачи через triz_analyzer; если найдено противоречие — пометить FAILED с reason='triz_contradiction' и понятным explanation. Включается через WHILLY_TRIZ_ENABLED env var (default off — фича не для всех).",
+      "acceptance_criteria": [
+        "WHILLY_TRIZ_ENABLED=1 включает TRIZ-проверку в run_local_worker / run_remote_worker",
+        "Найденное противоречие — task FAILED с events.payload.reason='triz_contradiction' и payload.contradiction_type",
+        "WHILLY_TRIZ_ENABLED unset / 0 — TRIZ-проверка не запускается, ноль overhead",
+        "Тест на synthetic task с явным противоречием — должна отлететь с triz_contradiction"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_triz_v4.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'PRD wizard / whilly --init / TRIZ analyzer'"
+    },
+    {
+      "id": "TASK-104c",
+      "title": "Port Decision Gate to v4 — pre-claim spec quality check",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a"
+      ],
+      "key_files": [
+        "whilly/decision_gate.py",
+        "whilly/core/scheduler.py",
+        "whilly/cli/plan.py",
+        "tests/integration/test_decision_gate_v4.py"
+      ],
+      "description": "Decision Gate в v3 проверял качество спецификации задачи (есть ли acceptance_criteria, есть ли test_steps, не слишком ли расплывчато описание) и отказывал в запуске недоуточнённых задач. На v4 это должно стать (1) частью whilly plan import (отказ до записи в БД, если задача не проходит gate) и (2) опциональным фильтром в worker (skip с reason='decision_gate' для задач, которые залезли в БД до того как gate был включён).",
+      "acceptance_criteria": [
+        "whilly plan import --strict отклоняет план с любой задачей, не прошедшей Decision Gate",
+        "WHILLY_DECISION_GATE_ENABLED=1 включает runtime-проверку: задача SKIPPED с events.payload.reason='decision_gate_failed' и список missing requirements",
+        "Decision Gate evaluator pure — лежит в whilly.core.scheduler или whilly.core.gates",
+        "Тесты на synthetic task без acceptance_criteria / без test_steps — должны отлетать"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_decision_gate_v4.py -v",
+        "pytest tests/unit/test_decision_gate_pure.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'PRD wizard / whilly --init / TRIZ analyzer'"
+    },
+    {
+      "id": "TASK-105",
+      "title": "Remove whilly/cli_legacy.py + v3 README cleanup",
+      "category": "chore",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a",
+        "TASK-104b",
+        "TASK-104c"
+      ],
+      "key_files": [
+        "whilly/cli_legacy.py",
+        "whilly/cli/__init__.py",
+        "README.md",
+        "docs/Whilly-Usage.md",
+        "docs/Getting-Started.md"
+      ],
+      "description": "После того как PRD wizard / TRIZ / Decision Gate портированы на v4 (TASK-104a/b/c), legacy CLI больше не нужен — никаких v3-only фич не остаётся. Удалить whilly/cli_legacy.py целиком, убрать legacy fallback из dispatcher (whilly/cli/__init__.py), переписать README/Whilly-Usage/Getting-Started под v4 surface. Удалить упоминания tmux runner / plan-level workspace / --workspace флага / .whilly_state.json — это всё ушло.",
+      "acceptance_criteria": [
+        "whilly/cli_legacy.py удалён",
+        "whilly/cli/__init__.py main() больше не имеет legacy-fallback ветки",
+        "README.md описывает только v4 surface (никаких 'preserved for reference' блоков)",
+        "docs/Whilly-Usage.md и docs/Getting-Started.md переписаны под v4",
+        "Все ссылки на cli_legacy в docstrings и комментариях вычищены",
+        "ruff check + format clean, pytest -q зелёный"
+      ],
+      "test_steps": [
+        "test ! -f whilly/cli_legacy.py",
+        "grep -r 'cli_legacy' whilly/ docs/ || echo 'no references'",
+        "pytest -q --ignore=tests/integration",
+        "ruff check whilly/ tests/"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Removal of whilly/cli_legacy.py'"
+    },
+    {
+      "id": "TASK-106",
+      "title": "File-based audit log mirror",
+      "category": "feat",
+      "priority": "low",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/adapters/db/repository.py",
+        "whilly/server/audit_writer.py",
+        "tests/integration/test_audit_mirror.py"
+      ],
+      "description": "Аудит-лог сейчас живёт только в Postgres events таблице. Operational triage без psql невозможен (логин на сервер -> docker exec -> psql -> SELECT). На v4.1 — добавить background-task в FastAPI lifespan, который читает CDC-style новые events rows и пишет их в whilly_logs/whilly_events.jsonl (тот же формат что v3). Это даёт `tail -f whilly_logs/whilly_events.jsonl` для оперативного дебага. Файл — append-only, ротация через logrotate / systemd-tmpfiles.",
+      "acceptance_criteria": [
+        "FastAPI lifespan стартует audit_writer task",
+        "Новые events записи появляются в whilly_logs/whilly_events.jsonl в том же JSONL формате что v3",
+        "Writer переживает рестарт (ловит up-from last seen events.id)",
+        "Бенчмарк: writer не лагает на 1000 events/sec"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_audit_mirror.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'File-based audit log mirror of events table'"
+    },
+    {
+      "id": "TASK-107",
+      "title": "Cross-platform smoke tests (windows / macOS)",
+      "category": "test",
+      "priority": "low",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        ".github/workflows/ci.yml",
+        "tests/integration/test_phase1_smoke.py"
+      ],
+      "description": "v3 имел cross-platform CI (windows-latest + macos-latest на 3.12). Я выпилил это в TASK-033b как v3-наследие. На v4.1 — вернуть smoke-уровневую проверку для не-Linux: проверить что pip install -e .[worker] работает + whilly-worker --help + базовый Postgres connect via testcontainers (где это возможно). Полный test suite на windows/macOS гонять не надо — это дорого и почти ничего не валидирует для серверного оркестратора. Цель — поймать обвалы на Windows path separators и macOS-specific subprocess gotchas.",
+      "acceptance_criteria": [
+        ".github/workflows/ci.yml имеет smoke job на windows-latest и macos-latest (3.12)",
+        "Smoke job проверяет: pip install, whilly --help, whilly-worker --help",
+        "Job не блокирует merge при failure (continue-on-error: true) — это canary, не gate"
+      ],
+      "test_steps": [
+        "yamllint .github/workflows/ci.yml",
+        "Проверить что smoke job появляется в gh pr checks list"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Cross-platform smoke (windows/macOS)'"
+    },
+    {
+      "id": "TASK-108a",
+      "title": "Forge pipeline — Issue → Plan stage (whilly/forge/intake)",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a"
+      ],
+      "key_files": [
+        "whilly/forge/__init__.py",
+        "whilly/forge/intake.py",
+        "tests/integration/test_forge_intake.py"
+      ],
+      "description": "Forge — это Issue → PR pipeline из vNext-плана v3 README. На v4 выделим в свой пакет whilly/forge/. Stage 1 — Intake: взять GitHub Issue (title + body + comments), нормализовать в Whilly plan (через PRD wizard из TASK-104a), записать в Postgres. По сути обёртка вокруг whilly init с GitHub-aware preprocessing.",
+      "acceptance_criteria": [
+        "whilly forge intake owner/repo/123 → создаёт plan в БД",
+        "Plan attribute содержит github_issue_id для back-reference",
+        "GitHub issue label transition: 'whilly-pending' → 'whilly-in-progress'",
+        "Тест с фейковым GitHub issue payload"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_forge_intake.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Forge pipeline (Issue → PR autonomous flow)'"
+    },
+    {
+      "id": "TASK-108b",
+      "title": "Forge pipeline — Plan → PR stage (whilly/forge/compose)",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-108a"
+      ],
+      "key_files": [
+        "whilly/forge/compose.py",
+        "tests/integration/test_forge_compose.py"
+      ],
+      "description": "Stage 2 — после того как все задачи плана в DONE, агрегируем результаты, формируем branch, открываем PR с body вида 'what / why / validation', синхронизируем GitHub issue label на 'whilly-in-review'. Реюзаем gh CLI через whilly.adapters.github (новый sub-package; пока что-то простое через subprocess + gh).",
+      "acceptance_criteria": [
+        "whilly forge compose <plan_id> → открывает PR на GitHub",
+        "Branch имя: whilly/issue-<N>-<slug>",
+        "PR body: structured what/why/validation, ссылки на done tasks из плана",
+        "GitHub issue label 'whilly-in-progress' → 'whilly-in-review'",
+        "Test с моком gh CLI"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_forge_compose.py -v"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Forge pipeline'"
+    },
+    {
+      "id": "TASK-108c",
+      "title": "Forge pipeline — README + docs/Forge.md",
+      "category": "docs",
+      "priority": "low",
+      "status": "pending",
+      "dependencies": [
+        "TASK-108a",
+        "TASK-108b"
+      ],
+      "key_files": [
+        "docs/Forge.md",
+        "README.md"
+      ],
+      "description": "Документация Forge pipeline. End-to-end пример: 'вот issue, вот команды, вот PR'. Описать как label-transitions устроены, какие env vars нужны (GITHUB_TOKEN с repo:write scope), как форкать pipeline на свой стек.",
+      "acceptance_criteria": [
+        "docs/Forge.md покрывает весь flow от Issue до PR",
+        "README имеет секцию про Forge с указателем на docs/Forge.md",
+        "Есть рабочий пример whilly forge intake + compose"
+      ],
+      "test_steps": [
+        "test -f docs/Forge.md",
+        "grep -q 'Forge' README.md"
+      ],
+      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Forge pipeline'"
+    }
+  ]
+}
