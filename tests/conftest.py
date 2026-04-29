@@ -46,10 +46,13 @@ its declared footprint.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator, Iterator
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import TypeVar
 
 import asyncpg
 import pytest
@@ -57,6 +60,126 @@ from alembic import command
 from alembic.config import Config
 
 from whilly.adapters.db import MIGRATIONS_DIR, TaskRepository, close_pool, create_pool
+
+# ─── Colima/testcontainers port-forwarding flake mitigation ───────────────
+#
+# Local Docker (colima/Rancher Desktop on macOS) intermittently wedges
+# port-forwarding once a single pytest session has churned through ~5–10
+# ephemeral testcontainer Postgres instances. Symptom: the next container's
+# port probe — or the first ``asyncpg.create_pool`` against a freshly-booted
+# container — fails with ``ConnectionRefusedError`` /
+# ``OSError: [Errno 61] Connect call failed ('127.0.0.1', 32xxx)`` even though
+# Postgres inside the container is healthy. Root cause is in the colima/lima
+# vsock proxy, not in the test code.
+#
+# A tight 3-attempt retry with exponential backoff (0.5 s, 1.0 s, 2.0 s) is
+# enough to ride out the transient wedge in nearly every observed case. On
+# *full* failure we re-raise the underlying exception with a pytest-friendly
+# wrapper that calls out the canonical remediation: ``colima restart``.
+_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
+_TC_REMEDIATION_HINT: str = (
+    "Hint: this is the documented colima/testcontainers port-forwarding flake "
+    "(see AGENTS.md → 'Known pre-existing issues'). Run `colima restart` and "
+    "retry. If running headless CI, increase Docker memory or pin the "
+    "container to a long-lived session-scoped fixture."
+)
+_TC_LOG = logging.getLogger("whilly.tests.colima_retry")
+
+_T = TypeVar("_T")
+
+
+def _retry_colima_flake(
+    fn: Callable[[], _T],
+    *,
+    op: str,
+    backoffs: tuple[float, ...] = _TC_RETRY_BACKOFFS,
+) -> _T:
+    """Run ``fn`` with 3-attempt exponential backoff against colima flake.
+
+    Sleeps from :data:`_TC_RETRY_BACKOFFS` (default 0.5 s, 1.0 s, 2.0 s)
+    *between* attempts: 4 attempts total (1 initial + len(backoffs) retries).
+    Re-raises the *last* exception wrapped in :class:`RuntimeError` whose
+    message names the operation and the ``colima restart`` remediation, so
+    the failure message in the pytest report points the operator straight
+    at the fix instead of an opaque ``ConnectionRefusedError``.
+
+    Designed for narrow use around two known-flaky surfaces:
+
+    1. ``PostgresContainer`` start (`__enter__` / `start()`).
+    2. ``asyncpg.create_pool`` (whilly's wrapper does a ``SELECT 1`` health
+       check inside ``acquire()`` — that is where the flake actually
+       surfaces, *not* during pool object construction).
+    """
+    last_exc: BaseException | None = None
+    attempts = 1 + len(backoffs)
+    for attempt_idx in range(attempts):
+        try:
+            return fn()
+        except BaseException as exc:  # noqa: BLE001 — we re-raise below
+            last_exc = exc
+            if attempt_idx == attempts - 1:
+                break
+            sleep_s = backoffs[attempt_idx]
+            _TC_LOG.warning(
+                "%s failed on attempt %d/%d (%s: %s); retrying after %.1fs",
+                op,
+                attempt_idx + 1,
+                attempts,
+                type(exc).__name__,
+                exc,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+    assert last_exc is not None  # narrow the type for mypy
+    raise RuntimeError(
+        f"{op} failed after {attempts} attempts (backoffs={list(backoffs)}). "
+        f"Last error: {type(last_exc).__name__}: {last_exc}. {_TC_REMEDIATION_HINT}"
+    ) from last_exc
+
+
+async def _retry_create_pool_async(
+    dsn: str,
+    *,
+    min_size: int,
+    max_size: int,
+    op: str = "asyncpg.create_pool",
+    backoffs: tuple[float, ...] = _TC_RETRY_BACKOFFS,
+) -> asyncpg.Pool:
+    """Async sibling of :func:`_retry_colima_flake` for ``create_pool``.
+
+    Mirrors the same 3-attempt exponential-backoff policy. We can't use the
+    sync helper here because ``await create_pool(...)`` must yield to the
+    event loop, and ``time.sleep`` would block it. Uses ``asyncio.sleep``
+    instead.
+    """
+    import asyncio
+
+    last_exc: BaseException | None = None
+    attempts = 1 + len(backoffs)
+    for attempt_idx in range(attempts):
+        try:
+            return await create_pool(dsn, min_size=min_size, max_size=max_size)
+        except BaseException as exc:  # noqa: BLE001 — we re-raise below
+            last_exc = exc
+            if attempt_idx == attempts - 1:
+                break
+            sleep_s = backoffs[attempt_idx]
+            _TC_LOG.warning(
+                "%s failed on attempt %d/%d (%s: %s); retrying after %.1fs",
+                op,
+                attempt_idx + 1,
+                attempts,
+                type(exc).__name__,
+                exc,
+                sleep_s,
+            )
+            await asyncio.sleep(sleep_s)
+    assert last_exc is not None  # narrow the type for mypy
+    raise RuntimeError(
+        f"{op} failed after {attempts} attempts (backoffs={list(backoffs)}). "
+        f"Last error: {type(last_exc).__name__}: {last_exc}. {_TC_REMEDIATION_HINT}"
+    ) from last_exc
+
 
 try:
     from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
@@ -180,20 +303,39 @@ def postgres_dsn() -> Iterator[str]:
 
     prior_db_url = os.environ.get("WHILLY_DATABASE_URL")
 
+    # Wrap the testcontainers Postgres start in a 3-attempt exponential-backoff
+    # retry loop (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
+    # port-forwarding flake documented in AGENTS.md. The container is started
+    # imperatively (not via ``with``) so we can retry; cleanup is in the outer
+    # ``finally`` block.
+    pg = PostgresContainer("postgres:15-alpine")
+    started = False
     try:
-        with PostgresContainer("postgres:15-alpine") as pg:
-            raw = pg.get_connection_url()
-            # testcontainers ships ``postgresql+psycopg2://`` by default; rip
-            # back to plain ``postgresql://`` so env.py's own asyncpg coercion
-            # path is exercised (and asyncpg itself doesn't choke on the
-            # SQLAlchemy driver suffix).
-            dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
+        _retry_colima_flake(pg.start, op="PostgresContainer('postgres:15-alpine').start()")
+        started = True
+        raw = pg.get_connection_url()
+        # testcontainers ships ``postgresql+psycopg2://`` by default; rip
+        # back to plain ``postgresql://`` so env.py's own asyncpg coercion
+        # path is exercised (and asyncpg itself doesn't choke on the
+        # SQLAlchemy driver suffix).
+        dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
 
-            os.environ["WHILLY_DATABASE_URL"] = dsn
-            command.upgrade(_build_alembic_config(dsn), "head")
+        os.environ["WHILLY_DATABASE_URL"] = dsn
+        # Alembic's first SQL contact also rides through colima's port-forward
+        # — same flake surface as the container start above. Retry with the
+        # same 3-attempt exponential backoff.
+        _retry_colima_flake(
+            lambda: command.upgrade(_build_alembic_config(dsn), "head"),
+            op="alembic.command.upgrade(head)",
+        )
 
-            yield dsn
+        yield dsn
     finally:
+        if started:
+            try:
+                pg.stop()
+            except Exception:  # noqa: BLE001 — teardown best effort
+                _TC_LOG.warning("PostgresContainer.stop() raised during teardown", exc_info=True)
         if prior_docker_host is None:
             os.environ.pop("DOCKER_HOST", None)
         else:
@@ -223,8 +365,17 @@ async def db_pool(postgres_dsn: str) -> AsyncIterator[asyncpg.Pool]:
     Truncation happens at *setup* (CASCADE so the events FK doesn't
     block, RESTART IDENTITY so the BIGSERIAL events.id sequence
     starts fresh) — see module docstring for the rationale.
+
+    Pool creation is wrapped in a 3-attempt exponential-backoff retry
+    (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
+    port-forwarding flake documented in AGENTS.md — the symptom
+    surfaces here as ``OSError: [Errno 61] Connect call failed`` from
+    ``pool.acquire()``'s ``SELECT 1`` health check inside whilly's
+    :func:`whilly.adapters.db.create_pool` wrapper. On full failure
+    the helper raises a :class:`RuntimeError` mentioning
+    ``colima restart`` as remediation.
     """
-    pool = await create_pool(postgres_dsn, min_size=2, max_size=20)
+    pool = await _retry_create_pool_async(postgres_dsn, min_size=2, max_size=20)
     try:
         async with pool.acquire() as conn:
             await conn.execute("TRUNCATE events, tasks, plans, workers RESTART IDENTITY CASCADE")
