@@ -838,6 +838,70 @@
         "grep -q 'Forge' README.md"
       ],
       "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'Forge pipeline'"
+    },
+    {
+      "id": "TASK-110",
+      "title": "docs/Whilly-Workstation-Bootstrap.md — onboard a second machine to a shared v4.1 plan",
+      "category": "docs",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "docs/Whilly-Workstation-Bootstrap.md",
+        "scripts/db-up.sh",
+        "whilly/cli/worker.py"
+      ],
+      "description": "Onboard a second physical machine (laptop / VM / другой комп) так, чтобы оно claim'ало v4.1 sub-tasks из того же Postgres-плана, что и primary workstation. Документировать в docs/Whilly-Workstation-Bootstrap.md step-by-step: (1) git clone + checkout main + python3.12 venv + pip install -e '.[dev]'; (2) три варианта Postgres reach (локальный docker compose через scripts/db-up.sh + alembic upgrade head; SSH reverse-tunnel к whilly-postgres на primary; Tailscale/WireGuard для статического internal-IP); (3) WHILLY_DATABASE_URL для каждого режима; (4) Claude CLI на PATH + WHILLY_CLAUDE_PROXY_URL (TASK-109) если нужен proxy; (5) smoke-test: whilly plan show <plan_id> возвращает тот же 29-task граф что primary; (6) whilly worker local --once успешно claim'ает pending task без collision с primary worker. Если TASK-111 (whilly-share.sh tunnel) уже landed — упростить секцию (3) до одной команды.",
+      "acceptance_criteria": [
+        "docs/Whilly-Workstation-Bootstrap.md создан со step-by-step инструкцией",
+        "Документированы 3 варианта Postgres reach: docker-compose / SSH-tunnel / Tailscale",
+        "На machine B по runbook'у: whilly plan show 'Whilly v4.1 — Out-of-scope items from v4.0 release' возвращает граф из 29+ задач",
+        "На machine B: whilly worker local --once завершает pending task без race с primary",
+        "Документирован Claude CLI bootstrap (auth, proxy через TASK-109)",
+        "Раздел 'Security caveats' покрывает: shared bearer tokens, anonymous tunnel risks (если используется TASK-111), DB credential rotation"
+      ],
+      "test_steps": [
+        "На machine B (manual): следовать docs/Whilly-Workstation-Bootstrap.md от 0 до зелёного worker --once",
+        "whilly plan show 'Whilly v4.1 — Out-of-scope items from v4.0 release' (matches primary)",
+        "whilly worker local --once  # claim + complete без primary-side errors",
+        "На primary: whilly plan show ... — статусы не сломаны"
+      ],
+      "prd_requirement": "ad-hoc operational task — закрывает gap в docs/ (no per-machine bootstrap doc сейчас существует). Связан с TASK-111 (tunnel feature упрощает шаг 'Postgres reach')."
+    },
+    {
+      "id": "TASK-111",
+      "title": "scripts/whilly-share.sh — expose control plane via free SSH tunnel for cross-host workers",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-101"
+      ],
+      "key_files": [
+        "scripts/whilly-share.sh",
+        "docs/Whilly-Cross-Host-Worker-Guide.md",
+        "whilly/cli/worker.py",
+        "whilly/adapters/transport/auth.py"
+      ],
+      "description": "Адаптировать pattern из interview-tool/bin/start-interview.sh:60-103 (ssh -R 80:localhost:$PORT nokey@localhost.run с fallback на serveo.net) для Whilly cross-host scenario: primary host запускает control plane (uvicorn whilly.adapters.transport.api:app) + параллельно SSH reverse-tunnel → публичный HTTPS URL (*.lhr.life / *.serveo.net). Secondary host подключается через whilly-worker --connect <tunnel-url> --token X --plan Y и забирает pending tasks. Без VPN/Tailscale/static IP. SSH-туннель работает через corporate firewalls которые блокируют raw HTTPS к ngrok. Поддержать TUNNEL=ssh (default, anonymous, throwaway) и TUNNEL=cloudflared (production-grade: named subdomain, auth, без rate-limit). trap INT/TERM убивает оба процесса. Зависит от TASK-101 (per-worker bearer rotation) — без неё public exposure = leak bearer = full plan-write access.",
+      "acceptance_criteria": [
+        "scripts/whilly-share.sh запускает control plane + tunnel одной командой",
+        "Печатает публичный URL + ready-to-paste команду 'whilly-worker --connect <url> --token <X> --plan <id>'",
+        "Поддержка TUNNEL=ssh (anonymous via localhost.run + serveo.net fallback)",
+        "Поддержка TUNNEL=cloudflared (если cloudflared установлен и WHILLY_CLOUDFLARE_TUNNEL_NAME задан)",
+        "trap INT/TERM убивает control plane PID + tunnel PID без orphan процессов",
+        "docs/Whilly-Cross-Host-Worker-Guide.md покрывает: пример use case, security caveats (bearer rotation, anonymous services log URLs, when NOT to use), Cloudflare Tunnel setup",
+        "SC: на secondary host (другая сеть) whilly-worker --connect <tunnel-url> --token X claim'ает pending task и завершает её"
+      ],
+      "test_steps": [
+        "bash scripts/whilly-share.sh  # на primary",
+        "Извлечь URL + token из output, скопировать на secondary host",
+        "На secondary: whilly-worker --connect <url> --token <X> --plan <plan-id> --once",
+        "psql -c \"SELECT id, status, claimed_by FROM tasks WHERE claimed_by IS NOT NULL\"  # видеть claim от secondary worker",
+        "kill -INT %1  # на primary — оба процесса умерли",
+        "ps aux | grep -E 'uvicorn|ssh.*localhost.run|cloudflared'  # zero results"
+      ],
+      "prd_requirement": "ad-hoc feature — opens path to true distributed v4 execution без инфраструктурных требований. Pattern reference: /opt/develop/interview-tool/bin/start-interview.sh:60-103. Зависит от TASK-101 (per-worker bearer rotation) для безопасного public exposure."
     }
   ]
 }
