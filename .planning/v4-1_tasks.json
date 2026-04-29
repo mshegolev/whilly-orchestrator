@@ -8,7 +8,7 @@
       "title": "Claude proxy / SSH-tunnel integration (epic)",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-109-1",
         "TASK-109-2",
@@ -31,7 +31,8 @@
       "test_steps": [
         "pytest tests/unit/test_claude_proxy_helpers.py tests/unit/test_claude_proxy_probe.py tests/unit/test_claude_subprocess_env.py tests/unit/test_cli_init_proxy.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-claude-proxy.md (SC-1..SC-5)"
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md (SC-1..SC-5)",
+      "completion_notes": "Epic закрыт. Все 5 sub-task в done: TASK-109-1 (proxy.py helpers — ProxySettings + resolve_proxy_settings + build_subprocess_env), TASK-109-2 (probe_proxy_or_raise + tests с реальными TCP fixtures), TASK-109-3 (env injection в claude_cli + prd_generator subprocess sites), TASK-109-4 (--claude-proxy / --no-claude-proxy CLI flags + probe wiring в whilly init), TASK-109-5 (Whilly-Claude-Proxy-Guide.md + README + CHANGELOG). 40 unit tests новых (19 helpers + 7 probe + 5 subprocess env + 9 cli proxy). Whilly process os.environ НЕ модифицируется — только spawned Claude env. SC-1..SC-5 ready: SC-1 (e2e через real tunnel — manual demo, готово на operator side), SC-2 (regression-free pinned by test_init_e2e), SC-3 (probe friendly error pinned), SC-4 (parent env not mutated pinned), SC-5 (coverage на новый код высокий)."
     },
     {
       "id": "TASK-109-1",
@@ -142,7 +143,7 @@
       "title": "Whilly-Claude-Proxy-Guide + README + CHANGELOG",
       "category": "docs",
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-109-3",
         "TASK-109-4"
@@ -162,7 +163,8 @@
         "test -f docs/Whilly-Claude-Proxy-Guide.md",
         "grep -q 'WHILLY_CLAUDE_PROXY_URL' docs/Whilly-Claude-Proxy-Guide.md README.md CHANGELOG.md"
       ],
-      "prd_requirement": "docs/PRD-v41-claude-proxy.md NFR-4, Definition of Done #4, #5"
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md NFR-4, Definition of Done #4, #5",
+      "completion_notes": "docs/Whilly-Claude-Proxy-Guide.md написан: зачем proxy / SSH tunnel, базовая настройка, priority chain резолва, pre-flight probe + опт-аут, NO_PROXY logic, systemd unit пример для production, troubleshooting (5 случаев), таблица env vars + CLI flags, под капотом со ссылкой на Architecture. README pointer-таблица обновлена с записью про Claude proxy guide. CHANGELOG [Unreleased] получил блок Added — Claude HTTPS_PROXY support перед существующим whilly init блоком. Verification: test -f, grep WHILLY_CLAUDE_PROXY_URL по 3 файлам — все ✓."
     },
     {
       "id": "TASK-101",

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v4.1 work in progress
 
+### Added — Claude HTTPS_PROXY support (TASK-109)
+
+- New env var `WHILLY_CLAUDE_PROXY_URL` — Whilly injects `HTTPS_PROXY`
+  + `NO_PROXY` into the **spawned** Claude env only, never into its
+  own process env. Worker-side asyncpg / control-plane httpx keep
+  going direct via `NO_PROXY` (default
+  `localhost,127.0.0.1,::1`, override via `WHILLY_CLAUDE_NO_PROXY`).
+- Inherited shell `HTTPS_PROXY` is honoured as a fallback so the
+  existing `claudeproxy` shell-function flow keeps working without
+  setting a new env var.
+- New CLI flags on `whilly init`: `--claude-proxy URL` (override env
+  for one run) and `--no-claude-proxy` (force-disable, opt-out).
+  Mutually exclusive at argparse level.
+- Pre-flight TCP probe runs once on startup if proxy is active —
+  surfaces "tunnel not up" as a sub-second exit with the actionable
+  `ssh -fN -L PORT:127.0.0.1:8888 host` hint instead of letting
+  Claude time out 5+ minutes deep in its HTTPS client. Opt-out via
+  `WHILLY_CLAUDE_PROXY_PROBE=0` for proxies that reject bare TCP
+  probes.
+- See [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md)
+  for SSH-tunnel setup, systemd unit, and troubleshooting.
+
 ### Added — `whilly init` subcommand (TASK-104a)
 
 - New CLI subcommand `whilly init "<idea>"` that combines the v3
