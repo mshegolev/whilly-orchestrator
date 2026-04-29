@@ -143,14 +143,17 @@ from whilly.worker import (
 )
 
 __all__ = [
+    "BOOTSTRAP_TOKEN_ENV",
     "CONTROL_URL_ENV",
     "EXIT_ENVIRONMENT_ERROR",
     "EXIT_OK",
     "PLAN_ID_ENV",
     "WORKER_ID_ENV",
     "WORKER_TOKEN_ENV",
+    "build_register_parser",
     "build_worker_parser",
     "main",
+    "run_register_command",
     "run_worker_command",
 ]
 
@@ -166,6 +169,12 @@ CONTROL_URL_ENV: Final[str] = "WHILLY_CONTROL_URL"
 WORKER_TOKEN_ENV: Final[str] = "WHILLY_WORKER_TOKEN"
 PLAN_ID_ENV: Final[str] = "WHILLY_PLAN_ID"
 WORKER_ID_ENV: Final[str] = "WHILLY_WORKER_ID"
+
+#: Env var holding the cluster-join secret. Aliased here from
+#: :data:`whilly.adapters.transport.auth.BOOTSTRAP_TOKEN_ENV` so the
+#: ``whilly worker register`` subcommand reads the same value the
+#: control plane writes (single source of truth for the env name).
+BOOTSTRAP_TOKEN_ENV: Final[str] = "WHILLY_WORKER_BOOTSTRAP_TOKEN"
 
 # Exit codes — kept aligned with :mod:`whilly.cli.run` so callers comparing
 # against the v4 CLI never see numbering drift between subcommands.
@@ -440,6 +449,166 @@ async def _async_worker(
         )
 
 
+def build_register_parser() -> argparse.ArgumentParser:
+    """Build the ``whilly worker register ...`` argparse tree (TASK-101, VAL-AUTH-040).
+
+    The register flow is intentionally separate from the
+    :func:`build_worker_parser` loop parser:
+
+    * **Different auth.** ``register`` carries the cluster-join secret
+      (``WHILLY_WORKER_BOOTSTRAP_TOKEN``), the worker loop carries the
+      per-worker bearer token. Sharing one ``--token`` flag would
+      conflate them.
+    * **Different lifecycle.** ``register`` is a one-shot RPC that
+      prints the plaintext token and exits 0; the worker loop runs
+      indefinitely. A single argparse parser would drag the worker-
+      loop knobs (``--once``, ``--heartbeat-interval``, ...) into
+      ``register --help`` for no reason.
+
+    Output contract
+    ---------------
+    On success the command writes two lines to stdout, one ``key:
+    value`` per line, terminated by newlines:
+
+    .. code-block:: text
+
+       worker_id: w-<urlsafe-suffix>
+       token: <opaque-bearer>
+
+    The format is grep-able from shell scripts (``whilly worker
+    register | grep '^token:' | cut -d' ' -f2``) and matches the
+    VAL-AUTH-040 evidence assertion ("TUI snapshot shows non-empty
+    ``token: ...`` line"). Operators in interactive TTYs can copy-
+    paste either field directly.
+
+    Why no JSON output?
+        JSON would force operators to install ``jq`` to peel off one
+        field for the next command (``whilly worker --token=...``).
+        The ``key: value`` shape is shell-native and the CLI is meant
+        for human + ad-hoc-script consumption — a future ``--json``
+        flag can land if a tool requires structured output.
+    """
+    parser = argparse.ArgumentParser(
+        prog="whilly worker register",
+        description=(
+            "Register a new worker with the control plane and print its "
+            "plaintext per-worker bearer token. The plaintext is shown "
+            "exactly once — capture it for subsequent `whilly worker` "
+            "invocations or persist it via your secret manager."
+        ),
+    )
+    parser.add_argument(
+        "--connect",
+        dest="connect_url",
+        default=None,
+        help=(f"Control-plane base URL, e.g. http://control:8000 (env: {CONTROL_URL_ENV}). Required."),
+    )
+    parser.add_argument(
+        "--bootstrap-token",
+        dest="bootstrap_token",
+        default=None,
+        help=(
+            f"Cluster-join secret (env: {BOOTSTRAP_TOKEN_ENV}). Required. "
+            "Authenticates POST /workers/register; rotate independently "
+            "from per-worker bearers — see whilly/adapters/transport/auth.py."
+        ),
+    )
+    parser.add_argument(
+        "--hostname",
+        dest="hostname",
+        default=None,
+        help=(
+            "Hostname the new worker self-reports. Defaults to socket.gethostname() "
+            "if omitted, matching `whilly worker`'s identity convention."
+        ),
+    )
+    return parser
+
+
+def run_register_command(argv: Sequence[str]) -> int:
+    """Execute ``whilly worker register ...`` — return exit code (TASK-101, VAL-AUTH-040).
+
+    Parses the register subcommand args, opens a one-shot
+    :class:`RemoteWorkerClient` bound to the bootstrap secret, calls
+    :meth:`RemoteWorkerClient.register`, prints the plaintext token to
+    stdout in the documented ``key: value`` shape, and exits 0.
+
+    The transport client requires a non-empty ``token`` argument even
+    on the register-only path (it's the per-worker bearer field, not
+    used by ``register`` itself). We pass a placeholder string so the
+    constructor invariant is satisfied without exposing the real
+    bootstrap secret as the per-worker token by accident.
+
+    Exit codes
+    ----------
+    * ``0`` — registration succeeded; plaintext + worker_id printed.
+    * ``2`` — environment failure (missing ``--connect`` /
+      ``--bootstrap-token``); same as the worker loop.
+    * Any other failure (network error, server 4xx/5xx) propagates as
+      an asyncio traceback; the supervisor decides whether to retry —
+      mirrors :func:`run_worker_command`'s "let typed exceptions
+      surface" policy.
+    """
+    parser = build_register_parser()
+    args = parser.parse_args(list(argv))
+
+    connect_url = args.connect_url or os.environ.get(CONTROL_URL_ENV)
+    if not connect_url:
+        print(
+            f"whilly worker register: --connect is required (or set {CONTROL_URL_ENV}). "
+            "Point it at the control-plane base URL, e.g. http://control:8000.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    bootstrap_token = args.bootstrap_token or os.environ.get(BOOTSTRAP_TOKEN_ENV)
+    if not bootstrap_token:
+        print(
+            f"whilly worker register: --bootstrap-token is required (or set {BOOTSTRAP_TOKEN_ENV}). "
+            "This is the cluster-join secret — distinct from the per-worker bearer.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    hostname = args.hostname or socket.gethostname()
+
+    response = asyncio.run(_async_register(connect_url, bootstrap_token, hostname))
+    # ``key: value`` lines on stdout, one field per line. Stdout is the
+    # right channel because the contract is "scriptable extraction"
+    # (``... | grep '^token:'``); progress / diagnostics go to stderr.
+    sys.stdout.write(f"worker_id: {response.worker_id}\n")
+    sys.stdout.write(f"token: {response.token}\n")
+    sys.stdout.flush()
+    return EXIT_OK
+
+
+async def _async_register(
+    connect_url: str,
+    bootstrap_token: str,
+    hostname: str,
+) -> "RegisterResponse":  # noqa: F821 — resolved at runtime, see import below
+    """Open a short-lived :class:`RemoteWorkerClient` and call ``register``.
+
+    The local import keeps the cold-start cost of the ``register``
+    subcommand off the hot path — a worker that only ever runs the
+    main loop never imports the schemas module. Same pattern the rest
+    of :mod:`whilly.cli` uses for sub-CLI dispatch.
+    """
+    from whilly.adapters.transport.client import RemoteWorkerClient
+    from whilly.adapters.transport.schemas import RegisterResponse  # noqa: F401 — re-exported via TYPE_CHECKING shape
+
+    # The transport client requires ``token`` to be non-empty even on
+    # the register path; the placeholder is never sent over the wire
+    # because :meth:`RemoteWorkerClient.register` switches to the
+    # bootstrap branch.
+    async with RemoteWorkerClient(
+        connect_url,
+        token="register-placeholder",
+        bootstrap_token=bootstrap_token,
+    ) as client:
+        return await client.register(hostname)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point — registered as ``whilly-worker`` in pyproject.toml.
 
@@ -447,5 +616,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     ``argv`` from :data:`sys.argv` when called as the binary. Tests
     invoke :func:`run_worker_command` directly with a list to avoid
     poking at ``sys.argv``.
+
+    The wrapper also dispatches the ``register`` subcommand to
+    :func:`run_register_command` when the first positional token is
+    ``"register"`` — keeps the standalone ``whilly-worker`` console
+    script consistent with ``whilly worker register`` invoked through
+    the dispatcher in :mod:`whilly.cli`.
     """
-    return run_worker_command(sys.argv[1:] if argv is None else list(argv))
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args and args[0] == "register":
+        return run_register_command(args[1:])
+    return run_worker_command(args)

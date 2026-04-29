@@ -148,7 +148,13 @@ class FakeRemoteClient:
     # arrived (test timing bug) and the assertion below would catch it
     # via the empty release_calls list. Raise here for a more pointed
     # failure message.
-    async def complete(self, task_id: TaskId, worker_id: str, version: int) -> object:  # pragma: no cover
+    async def complete(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        cost_usd: object = None,
+    ) -> object:  # pragma: no cover
         raise AssertionError("FakeRemoteClient.complete should not run on the shutdown path")
 
     async def fail(self, task_id: TaskId, worker_id: str, version: int, reason: str) -> object:  # pragma: no cover

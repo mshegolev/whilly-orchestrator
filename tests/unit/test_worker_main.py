@@ -84,7 +84,12 @@ class FakeRepo:
     async def start_task(self, task_id: TaskId, version: int) -> Task:  # pragma: no cover
         raise AssertionError("start_task should not be called in heartbeat tests")
 
-    async def complete_task(self, task_id: TaskId, version: int) -> Task:  # pragma: no cover
+    async def complete_task(
+        self,
+        task_id: TaskId,
+        version: int,
+        cost_usd: object = None,
+    ) -> Task:  # pragma: no cover
         raise AssertionError("complete_task should not be called in heartbeat tests")
 
     async def fail_task(self, task_id: TaskId, version: int, reason: str) -> Task:  # pragma: no cover

@@ -393,7 +393,16 @@ async def run_local_worker(
         assert result is not None  # for mypy; the helper's contract guarantees this
         if result.is_complete and result.exit_code == 0:
             try:
-                await repo.complete_task(running.id, running.version)
+                # ``cost_usd`` flows from the agent runner's parsed usage
+                # envelope into the per-plan spend accumulator (TASK-102,
+                # VAL-BUDGET-030). ``None`` / 0.0 (e.g. Claude CLI did
+                # not emit ``total_cost_usd``) is the documented
+                # no-op-spend path (VAL-BUDGET-032).
+                await repo.complete_task(
+                    running.id,
+                    running.version,
+                    cost_usd=result.usage.cost_usd,
+                )
             except VersionConflictError as exc:
                 log.warning(
                     "complete_task lost the race: task=%s expected_version=%d actual=%s",

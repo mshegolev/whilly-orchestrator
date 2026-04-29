@@ -108,7 +108,7 @@ class FakeRepo:
         # arguments passed so tests can verify version threading.
         self.claim_calls: list[tuple[WorkerId, str]] = []
         self.start_calls: list[tuple[TaskId, int]] = []
-        self.complete_calls: list[tuple[TaskId, int]] = []
+        self.complete_calls: list[tuple[TaskId, int, object]] = []
         self.fail_calls: list[tuple[TaskId, int, str]] = []
 
     async def claim_task(self, worker_id: WorkerId, plan_id: str) -> Task | None:
@@ -126,8 +126,13 @@ class FakeRepo:
             raise result
         return result
 
-    async def complete_task(self, task_id: TaskId, version: int) -> Task:
-        self.complete_calls.append((task_id, version))
+    async def complete_task(
+        self,
+        task_id: TaskId,
+        version: int,
+        cost_usd: object = None,  # TASK-102: optional spend echo
+    ) -> Task:
+        self.complete_calls.append((task_id, version, cost_usd))
         if not self.complete_results:
             raise AssertionError("FakeRepo.complete_task called more times than scripted")
         result = self.complete_results.pop(0)
@@ -256,7 +261,7 @@ async def test_completes_one_task_happy_path(fake_sleep: list[float]) -> None:
     assert stats == WorkerStats(iterations=1, completed=1, failed=0, idle_polls=0)
     assert repo.claim_calls == [(WORKER_ID, PLAN_ID)]
     assert repo.start_calls == [("T-001", 1)]
-    assert repo.complete_calls == [("T-001", 2)]
+    assert repo.complete_calls == [("T-001", 2, 0.0)]
     assert repo.fail_calls == []
     # Prompt smoke check: the task id and plan name are inside the rendered text.
     assert len(captured_prompt) == 1
@@ -285,7 +290,7 @@ async def test_versions_thread_through_state_transitions(fake_sleep: list[float]
 
     # start receives the post-claim version (7); complete receives the post-start version (8).
     assert repo.start_calls == [("T-9", 7)]
-    assert repo.complete_calls == [("T-9", 8)]
+    assert repo.complete_calls == [("T-9", 8, 0.0)]
 
 
 # --------------------------------------------------------------------------- #
@@ -481,7 +486,7 @@ async def test_complete_task_conflict_logs_and_continues(fake_sleep: list[float]
 
     assert stats.completed == 1  # T-2 survived; T-1 lost the race
     assert stats.failed == 0
-    assert repo.complete_calls == [("T-1", 2), ("T-2", 2)]
+    assert repo.complete_calls == [("T-1", 2, 0.0), ("T-2", 2, 0.0)]
 
 
 async def test_fail_task_conflict_logs_and_continues(fake_sleep: list[float]) -> None:

@@ -100,6 +100,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
+from decimal import Decimal
 from types import TracebackType
 from typing import Any, Final, Self, TypeVar
 
@@ -953,6 +954,7 @@ class RemoteWorkerClient:
         task_id: TaskId,
         worker_id: str,
         version: int,
+        cost_usd: Decimal | float | int | None = None,
     ) -> CompleteResponse:
         """Mark ``task_id`` ``DONE`` (``POST /tasks/{task_id}/complete``, PRD FR-2.4).
 
@@ -1024,11 +1026,32 @@ class RemoteWorkerClient:
         RuntimeError
             If called outside the ``async with`` block.
         """
-        request = CompleteRequest(worker_id=worker_id, version=version)
+        # ``cost_usd`` is the optional per-task spend echo (TASK-102).
+        # Coerce a Python float/int into ``Decimal`` here so the
+        # schema-side ``Decimal | None`` field accepts it without
+        # surprising the operator with float-encoding artefacts.
+        cost_decimal: Decimal | None
+        if cost_usd is None:
+            cost_decimal = None
+        elif isinstance(cost_usd, Decimal):
+            cost_decimal = cost_usd
+        else:
+            cost_decimal = Decimal(str(cost_usd))
+        request = CompleteRequest(
+            worker_id=worker_id,
+            version=version,
+            cost_usd=cost_decimal,
+        )
+        # ``model_dump(mode='json')`` so ``Decimal`` becomes a JSON
+        # string (e.g. ``"0.4200"``) rather than the default repr; the
+        # server's pydantic validator parses it back into Decimal
+        # losslessly. The default ``model_dump()`` would serialise
+        # ``Decimal('0.42')`` as the literal Python repr which
+        # ``httpx``'s JSON encoder cannot serialise.
         response = await self._request(
             "POST",
             complete_path(task_id),
-            json=request.model_dump(),
+            json=request.model_dump(mode="json"),
         )
         return await self._parse_response(response, CompleteResponse)
 

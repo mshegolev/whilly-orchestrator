@@ -64,6 +64,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from decimal import Decimal
 from typing import Any
 
 import asyncpg
@@ -71,7 +72,64 @@ import asyncpg
 from whilly.core.models import PlanId, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
 
-__all__ = ["TaskRepository", "VersionConflictError"]
+__all__ = ["BUDGET_EXCEEDED_EVENT_TYPE", "TaskRepository", "VersionConflictError"]
+
+
+# Sentinel event type emitted exactly once when ``plans.spent_usd``
+# transitions from ``< budget_usd`` to ``>= budget_usd`` (TASK-102 /
+# VAL-BUDGET-040 / 041). The string is part of the audit-log contract:
+# downstream queries match on it (``WHERE event_type = 'plan.budget_exceeded'``)
+# and dashboards / post-mortems pivot off it. The dotted lower-case form
+# follows the project convention for plan-scoped event types — distinct
+# from the upper-case state-machine transitions
+# (``CLAIM`` / ``COMPLETE`` / ``FAIL``) which live on
+# :class:`whilly.core.state_machine.Transition`.
+BUDGET_EXCEEDED_EVENT_TYPE: str = "plan.budget_exceeded"
+
+
+# Quantum used to coerce a Python float-ish ``cost_usd`` into a stable
+# Decimal with the same precision as the ``plans.spent_usd`` /
+# ``plans.budget_usd`` columns. NUMERIC(10, 4) on the SQL side; we
+# round to 4 decimal places on the Python side so a runaway runner that
+# returns ``cost_usd = 0.123456789`` lands as ``0.1235`` in storage
+# without surprising the operator.
+_COST_USD_QUANTUM: Decimal = Decimal("0.0001")
+
+
+def _coerce_cost_usd(value: Any) -> Decimal:
+    """Normalise ``cost_usd`` (Decimal | float | int | None) → :class:`Decimal`.
+
+    Accepts every input the ``AgentResult.usage.cost_usd`` chain can
+    produce (the agent runner parses the value as ``float`` from
+    Claude's JSON envelope; the HTTP transport may also forward a
+    string-encoded Decimal in a future version). Rejects negative
+    values loudly — :meth:`TaskRepository.complete_task`'s strict
+    monotonic invariant (VAL-BUDGET-072) requires ``cost_usd >= 0``.
+
+    ``None`` and missing values normalise to ``Decimal(0)`` so callers
+    can pass through a missing usage envelope without a defensive
+    branch (VAL-BUDGET-032 — cost=0 is a no-op spend).
+    """
+    if value is None:
+        return Decimal(0)
+    if isinstance(value, Decimal):
+        cost = value
+    elif isinstance(value, (int, float)):
+        # ``Decimal(float)`` would faithfully encode the float's binary
+        # representation (``Decimal('0.10000000000000000555...')``);
+        # going through ``str`` first gives the human-friendly
+        # decimal form (``Decimal('0.1')``) which is what the operator
+        # expects to see in the events / dashboard.
+        cost = Decimal(str(value))
+    else:
+        raise TypeError(f"cost_usd must be Decimal | float | int | None, got {type(value).__name__}: {value!r}")
+    if cost < 0:
+        raise ValueError(f"cost_usd must be non-negative (strict-monotonic spend invariant); got {cost}")
+    # Quantize to numeric(10,4) precision so the SQL UPDATE stores the
+    # same value the Python caller intended without driver-side
+    # rounding surprises.
+    return cost.quantize(_COST_USD_QUANTUM)
+
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +156,32 @@ _PRIORITY_RANK_SQL: str = (
 # callers don't pre-filter.
 _CLAIM_SQL: str = f"""
 WITH picked AS (
-    SELECT id
-    FROM tasks
-    WHERE plan_id = $1
-      AND status = 'PENDING'
-    ORDER BY {_PRIORITY_RANK_SQL}, id
-    FOR UPDATE SKIP LOCKED
+    SELECT t.id
+    FROM tasks t
+    JOIN plans p ON p.id = t.plan_id
+    WHERE t.plan_id = $1
+      AND t.status = 'PENDING'
+      -- Budget guard (TASK-102, VAL-BUDGET-021..023). NULL budget is
+      -- the documented "unlimited" sentinel (VAL-BUDGET-020); strict
+      -- ``<`` makes the gate boundary-exclusive (VAL-BUDGET-021 /
+      -- VAL-BUDGET-023) so any sub-cent over-spend still blocks.
+      -- ``IS NULL OR ...`` short-circuits in Postgres so the strict
+      -- comparison never runs against NULL.
+      AND (p.budget_usd IS NULL OR p.spent_usd < p.budget_usd)
+    ORDER BY {_PRIORITY_RANK_SQL}, t.id
+    -- ``FOR UPDATE OF t`` locks the *tasks* row only — not the
+    -- single ``plans`` row that every concurrent claimer joins
+    -- against. Without ``OF t``, SKIP LOCKED would skip the
+    -- plans row whenever any other claimer holds it, starving
+    -- 99/100 callers in a 100-way contention test (SC-1) and
+    -- defeating the whole point of SKIP LOCKED's row-level
+    -- granularity. The plans row only needs a read-consistent
+    -- view of ``budget_usd`` / ``spent_usd``; the actual
+    -- spend mutation happens later in :data:`_INCREMENT_SPEND_SQL`
+    -- under its own ``FOR UPDATE`` (which serialises legitimately
+    -- because crossing-detection requires a consistent
+    -- pre-update snapshot).
+    FOR UPDATE OF t SKIP LOCKED
     LIMIT 1
 )
 UPDATE tasks
@@ -194,8 +272,9 @@ RETURNING
 # filter mirrors the state-machine rule from
 # :func:`whilly.core.state_machine.apply_transition` so a buggy or stale
 # caller cannot drag a DONE / FAILED / SKIPPED task back through the
-# lifecycle. RETURNING ships the post-update row so the caller doesn't need a
-# separate SELECT on the happy path.
+# lifecycle. RETURNING ships the post-update row plus its parent plan_id
+# so the caller can correlate the task transition with the plan-side
+# spend update without a follow-up SELECT.
 _COMPLETE_SQL: str = """
 UPDATE tasks
 SET status = 'DONE',
@@ -221,7 +300,68 @@ RETURNING
     tasks.acceptance_criteria,
     tasks.test_steps,
     tasks.prd_requirement,
-    tasks.version
+    tasks.version,
+    tasks.plan_id
+"""
+
+
+# Atomic plan-spend accumulator (TASK-102). Increments
+# ``plans.spent_usd`` by ``$2::numeric`` and RETURNS three values the
+# caller needs to decide whether to emit the
+# ``plan.budget_exceeded`` sentinel:
+#
+# * ``budget_usd`` — NULL = unlimited (no sentinel, ever);
+# * ``new_spent`` — the post-update running total;
+# * ``crossed`` — boolean: True iff this UPDATE moved spent_usd from
+#   strictly below the budget to >= the budget. The ``crossed`` flag
+#   is computed entirely SQL-side using the *pre-update* row value
+#   (referenced via the plain ``plans.spent_usd`` term, which under
+#   Postgres ``UPDATE ... RETURNING`` semantics resolves to the row's
+#   pre-update value — *not* the new value — when used in the SET
+#   list expression context). To avoid that subtlety we capture the
+#   pre-update value via a CTE and compute the crossing transition
+#   over the BEFORE / AFTER pair.
+#
+# The CTE form keeps the whole operation in a single round-trip and
+# guarantees the BEFORE / AFTER pair come from the same MVCC snapshot,
+# so two concurrent ``complete_task`` calls each carrying half of the
+# remaining budget can race through the optimistic-lock cleanly: each
+# UPDATE locks its own row, and the BEFORE values they observe are
+# serialised by the row lock — exactly one will see the
+# spent_usd-pre-update strictly below the budget; the other will see
+# pre-update already at-or-above (because the first commit advanced
+# the column). VAL-BUDGET-050 / 052 are pinned by this exact path.
+_INCREMENT_SPEND_SQL: str = """
+WITH plan_before AS (
+    SELECT id, budget_usd, spent_usd AS spent_before
+    FROM plans
+    WHERE id = $1
+    FOR UPDATE
+)
+UPDATE plans
+SET spent_usd = plans.spent_usd + $2::numeric
+FROM plan_before
+WHERE plans.id = plan_before.id
+RETURNING
+    plans.budget_usd AS budget_usd,
+    plans.spent_usd AS new_spent,
+    plan_before.spent_before AS spent_before,
+    (
+        plan_before.budget_usd IS NOT NULL
+        AND plan_before.spent_before < plan_before.budget_usd
+        AND plans.spent_usd >= plan_before.budget_usd
+    ) AS crossed
+"""
+
+
+# Plan-level sentinel insert (TASK-102). Distinct from
+# :data:`_INSERT_EVENT_SQL` because it populates ``plan_id`` instead of
+# ``task_id`` and writes the canonical
+# ``plan.budget_exceeded`` event_type. ``task_id`` is left NULL —
+# permitted since migration 005 relaxed the NOT NULL constraint.
+_INSERT_PLAN_EVENT_SQL: str = """
+INSERT INTO events (task_id, plan_id, event_type, payload)
+VALUES (NULL, $1, $2, $3::jsonb)
 """
 
 
@@ -368,6 +508,22 @@ WHERE worker_id = $1
 _INSERT_WORKER_SQL: str = """
 INSERT INTO workers (worker_id, hostname, token_hash)
 VALUES ($1, $2, $3)
+"""
+
+
+# Per-worker bearer validation lookup (TASK-101). Maps a token-hash to the
+# owning worker_id. ``LIMIT 1`` is defence-in-depth: migration 004's partial
+# UNIQUE index on ``workers (token_hash) WHERE token_hash IS NOT NULL``
+# already guarantees at most one row, but the LIMIT keeps the SQL safe even
+# in the unlikely scenario where the index has been dropped manually.
+# ``token_hash IS NOT NULL`` is implicit (``WHERE token_hash = $1`` cannot
+# match a NULL via ``=``) — a revoked worker's row is not selected because
+# a NULL never equals anything in SQL.
+_LOOKUP_WORKER_BY_TOKEN_HASH_SQL: str = """
+SELECT worker_id
+FROM workers
+WHERE token_hash = $1
+LIMIT 1
 """
 
 
@@ -749,7 +905,12 @@ class TaskRepository:
                 )
                 return _row_to_task(row)
 
-    async def complete_task(self, task_id: TaskId, version: int) -> Task:
+    async def complete_task(
+        self,
+        task_id: TaskId,
+        version: int,
+        cost_usd: Decimal | float | int | None = None,
+    ) -> Task:
         """Atomically transition ``task_id`` from ``IN_PROGRESS`` → ``DONE``.
 
         Optimistic-locking contract: the UPDATE only fires when the row's
@@ -758,25 +919,65 @@ class TaskRepository:
         incremented by 1, status is set to ``DONE``, and a ``COMPLETE`` event
         row is appended in the same transaction.
 
-        On failure raises :class:`VersionConflictError`. The error carries
-        the *expected* and *actual* (version, status) tuple so the caller
-        can distinguish:
+        Plan budget guard (TASK-102)
+        ----------------------------
+        When ``cost_usd > 0``, the same transaction *also* increments
+        ``plans.spent_usd`` by the supplied cost (VAL-BUDGET-030 /
+        VAL-BUDGET-031) — atomic with the task transition so a failed
+        audit insert rolls *both* the task flip and the spend update
+        back together. ``cost_usd = 0`` (the default for back-compat
+        callers and the documented "missing usage envelope" case,
+        VAL-BUDGET-032) skips the plan UPDATE entirely — no spurious
+        wire round-trip, no locking on the parent plan, no spend-time
+        delta.
 
-        * **lost update** — another writer (visibility-timeout sweep, second
-          worker after a re-claim) advanced the version first;
-        * **wrong status** — the task is already DONE / FAILED / SKIPPED
-          (idempotent retry detection);
-        * **task missing** — the row vanished (FK cascade in tests).
+        Sentinel emission (VAL-BUDGET-040 / 041)
+        ----------------------------------------
+        On the same call that crosses ``spent_usd`` from strictly below
+        ``budget_usd`` to ``>= budget_usd`` (and only on that call), a
+        single ``plan.budget_exceeded`` event row is written with
+        ``task_id IS NULL`` and ``plan_id`` populated. Subsequent
+        completes against the same plan see the pre-update spend
+        already at-or-above budget and emit no further sentinels —
+        the boolean ``crossed`` returned by :data:`_INCREMENT_SPEND_SQL`
+        is the single source of truth here. Plans with
+        ``budget_usd IS NULL`` (unlimited, VAL-BUDGET-042) never emit
+        the sentinel.
 
-        See :class:`VersionConflictError` for the field semantics.
+        Concurrency (VAL-BUDGET-050 / 052)
+        ----------------------------------
+        Two concurrent completes for last-budget-cents serialise on
+        ``plans.id`` via ``FOR UPDATE`` inside :data:`_INCREMENT_SPEND_SQL`.
+        Each call observes a distinct pre-update ``spent_before`` —
+        the first sees ``spent_before < budget_usd`` (and crosses);
+        the second sees ``spent_before >= budget_usd`` already (no
+        crossing). Both completes succeed (the per-task optimistic
+        lock filter is independent of the plan-spend serialisation),
+        ``spent_usd`` accumulates exactly the sum of both costs, and
+        exactly one sentinel is written.
 
-        Why no SELECT-then-UPDATE here?
-            We deliberately skip ``FOR UPDATE`` and the read-modify-write
-            ceremony: filtering by ``version`` in the UPDATE is the lock-free
-            equivalent and avoids holding a row lock while we write the
-            audit event. The follow-up ``_PROBE_TASK_SQL`` only runs on the
-            cold "0 rows updated" path, so the happy path is one round-trip.
+        Args
+        ----
+        task_id:
+            Task to complete.
+        version:
+            Caller's last-seen version. Standard optimistic-locking
+            guard.
+        cost_usd:
+            Spend amount to add to ``plans.spent_usd``. Accepts
+            ``Decimal``, ``int``, ``float``, or ``None``. ``None`` /
+            ``0`` is the no-op spend path (VAL-BUDGET-032). Negative
+            values are rejected (strict-monotonic invariant,
+            VAL-BUDGET-072). Quantised to the column's NUMERIC(10, 4)
+            precision before storage.
+
+        Raises
+        ------
+        VersionConflictError
+            On 0-row UPDATE — see classification on
+            :class:`VersionConflictError`.
         """
+        cost = _coerce_cost_usd(cost_usd)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(_COMPLETE_SQL, task_id, version)
@@ -790,10 +991,61 @@ class TaskRepository:
                     Transition.COMPLETE.value,
                     payload,
                 )
+
+                # Plan-spend update + sentinel emission (TASK-102).
+                # ``cost == 0`` short-circuits to avoid a spurious
+                # plan UPDATE — the AC for VAL-BUDGET-032 explicitly
+                # requires that path to be a *no-op spend*. We still
+                # complete the task and write the COMPLETE event;
+                # only the budget-side write is skipped.
+                if cost > 0:
+                    plan_id: PlanId = row["plan_id"]
+                    spend_row = await conn.fetchrow(
+                        _INCREMENT_SPEND_SQL,
+                        plan_id,
+                        cost,
+                    )
+                    # ``spend_row`` is None only if the plan was
+                    # deleted between the task UPDATE and our spend
+                    # UPDATE — extremely narrow race (FK cascade
+                    # would have wiped the task too); log loudly
+                    # and skip the sentinel rather than corrupt
+                    # the audit log with a sentinel referencing a
+                    # gone plan.
+                    if spend_row is None:
+                        logger.warning(
+                            "complete_task: plan %s vanished during spend update for task=%s — skipping sentinel",
+                            plan_id,
+                            row["id"],
+                        )
+                    elif spend_row["crossed"]:
+                        sentinel_payload = json.dumps(
+                            {
+                                "plan_id": plan_id,
+                                "budget_usd": str(spend_row["budget_usd"]),
+                                "spent_usd": str(spend_row["new_spent"]),
+                                "crossing_task_id": row["id"],
+                            }
+                        )
+                        await conn.execute(
+                            _INSERT_PLAN_EVENT_SQL,
+                            plan_id,
+                            BUDGET_EXCEEDED_EVENT_TYPE,
+                            sentinel_payload,
+                        )
+                        logger.info(
+                            "complete_task: plan=%s spent_usd=%s crossed budget_usd=%s — emitted %s sentinel",
+                            plan_id,
+                            spend_row["new_spent"],
+                            spend_row["budget_usd"],
+                            BUDGET_EXCEEDED_EVENT_TYPE,
+                        )
+
                 logger.info(
-                    "complete_task: task=%s version=%d → DONE",
+                    "complete_task: task=%s version=%d cost_usd=%s → DONE",
                     row["id"],
                     row["version"],
+                    cost,
                 )
                 return _row_to_task(row)
 
@@ -1381,6 +1633,44 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash)
         logger.info("register_worker: registered worker %s on %s", worker_id, hostname)
+
+    async def get_worker_id_by_token_hash(self, token_hash: str) -> WorkerId | None:
+        """Resolve a presented bearer's hash to the owning ``worker_id`` (TASK-101).
+
+        Used by the per-worker bearer FastAPI dependency in
+        :mod:`whilly.adapters.transport.auth` on every steady-state RPC.
+        ``token_hash`` is the SHA-256 hex digest of the plaintext bearer
+        the worker presented (computed by the dep — not by this method,
+        so the repository surface remains hashing-scheme-agnostic).
+
+        Returns the matching ``worker_id`` on hit, or ``None`` when no
+        row carries that hash. The latter covers three operationally
+        distinct cases — the auth layer treats them all as 401 because
+        from the wire's perspective they are indistinguishable:
+
+        * the token was never issued (random / forged bearer);
+        * the worker was revoked via ``UPDATE workers SET token_hash =
+          NULL`` (NULL ≠ anything under SQL three-valued logic, so the
+          equality predicate fails);
+        * the worker row was deleted (e.g. test cleanup, FK cascade).
+
+        Returning ``None`` rather than raising keeps the dep simple —
+        the 401 path is built once in :func:`_bearer_401` and the
+        repository never raises for "didn't find anything".
+
+        Why no audit event?
+            Auth lookups fire on every RPC; logging each one would
+            bloat ``events`` by orders of magnitude with no extra
+            audit value (the per-RPC handlers already log success /
+            failure with ``worker_id`` context). The 401 path is a
+            transport concern, not a domain transition.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchval(_LOOKUP_WORKER_BY_TOKEN_HASH_SQL, token_hash)
+        # ``WorkerId`` is a ``str`` type alias (``whilly.core.models``), so
+        # the asyncpg-returned ``str`` is already the right shape — no
+        # constructor wrapping needed.
+        return row
 
     async def update_heartbeat(self, worker_id: WorkerId) -> bool:
         """Stamp ``workers.last_heartbeat = NOW()`` for ``worker_id``.

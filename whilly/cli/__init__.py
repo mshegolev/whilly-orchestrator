@@ -41,6 +41,7 @@ Commands:
   dashboard   Live TUI dashboard for an in-flight plan.
   init        Interactive PRD wizard → plan import.
   worker      Run a remote worker against a control-plane URL.
+              `whilly worker register` mints a per-worker bearer token.
 
 Run `whilly <command> --help` for command-specific options.
 """
@@ -95,6 +96,16 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_init_command(rest)
     if cmd == "worker":
+        # Sub-dispatch ``whilly worker register ...`` to the registration
+        # one-shot before falling through to the main loop entry point —
+        # mirrors the standalone ``whilly-worker`` console script's
+        # behaviour (see :func:`whilly.cli.worker.main`). Keeps a single
+        # source of truth for the register CLI shape regardless of which
+        # binary the operator invokes.
+        if rest and rest[0] == "register":
+            from whilly.cli.worker import run_register_command
+
+            return run_register_command(rest[1:])
         from whilly.cli.worker import run_worker_command
 
         return run_worker_command(rest)

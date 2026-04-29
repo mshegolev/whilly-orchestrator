@@ -88,12 +88,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import decimal
 import io
 import json
 import logging
 import os
 import sys
 from collections.abc import Iterable, Sequence
+from decimal import Decimal
 
 import asyncpg
 from rich.console import Console
@@ -209,6 +211,40 @@ def build_plan_parser() -> argparse.ArgumentParser:
         description="Manage v4 plans (import / export / show).",
     )
     sub = parser.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    # ── plan create (TASK-102) ──────────────────────────────────────────
+    # Empty-plan creation primitive used by the budget-guard surface and
+    # by tests / operators who want a plan row in Postgres without
+    # importing a tasks JSON file. Distinct from ``plan import`` because
+    # the budget can only be set at create time today (a future
+    # ``plan set --budget`` could land separately).
+    p_create = sub.add_parser(
+        "create",
+        help="Create a new plan row (optionally with a budget cap).",
+    )
+    p_create.add_argument(
+        "--id",
+        dest="plan_id",
+        required=True,
+        help="Plan id (matches the 'plan_id' field used by import/export).",
+    )
+    p_create.add_argument(
+        "--name",
+        dest="name",
+        required=True,
+        help="Human-readable plan name (shown in `plan show`).",
+    )
+    p_create.add_argument(
+        "--budget",
+        dest="budget",
+        default=None,
+        help=(
+            "Spend cap in USD (Decimal). When set, the orchestrator refuses "
+            "to claim further tasks once plans.spent_usd >= this value, and "
+            "emits a 'plan.budget_exceeded' sentinel event on crossing. "
+            "Omit for unlimited (NULL stored)."
+        ),
+    )
 
     # ── plan import ──────────────────────────────────────────────────────
     p_import = sub.add_parser(
@@ -333,6 +369,8 @@ def run_plan_command(argv: Sequence[str]) -> int:
     """
     parser = build_plan_parser()
     args = parser.parse_args(list(argv))
+    if args.action == "create":
+        return _run_create(args.plan_id, name=args.name, budget=args.budget)
     if args.action == "import":
         return _run_import(args.plan_file)
     if args.action == "export":
@@ -353,6 +391,109 @@ def run_plan_command(argv: Sequence[str]) -> int:
     # an explicit handler here.
     parser.error(f"unknown action {args.action!r}")  # noqa: RET503  (no-return)
     return EXIT_ENVIRONMENT_ERROR  # pragma: no cover — argparse SystemExits first
+
+
+# ── plan create (TASK-102) ────────────────────────────────────────────────
+
+
+# Insert template for ``whilly plan create``. Uses ``ON CONFLICT (id) DO
+# NOTHING`` so re-running the command against an existing plan is
+# idempotent at the SQL layer (consistent with ``plan import``); the
+# Python wrapper still surfaces a "already exists" warning so the
+# operator knows their ``--budget`` argument was not applied to the
+# pre-existing row.
+_INSERT_PLAN_WITH_BUDGET_SQL: str = """
+INSERT INTO plans (id, name, budget_usd)
+VALUES ($1, $2, $3)
+ON CONFLICT (id) DO NOTHING
+RETURNING id
+"""
+
+
+def _parse_budget_arg(raw: str | None) -> Decimal | None:
+    """Validate the ``--budget`` flag and convert to :class:`Decimal`.
+
+    Rejects negative / non-numeric values with a single ``ValueError``
+    carrying a message safe to pipe to stderr (VAL-BUDGET-012). ``None``
+    is returned for ``raw is None`` (operator omitted the flag → NULL =
+    unlimited per VAL-BUDGET-011).
+    """
+    if raw is None:
+        return None
+    try:
+        value = Decimal(raw)
+    except (decimal.InvalidOperation, ValueError) as exc:
+        raise ValueError(f"--budget must be a numeric value (e.g. 5.00); got {raw!r}") from exc
+    if value < 0:
+        raise ValueError(f"--budget must be non-negative; got {value}")
+    # Quantise to numeric(10,4) precision so the persisted value matches
+    # the column shape (and the post-create echo to stdout shows the
+    # canonical form, not the operator's raw input).
+    return value.quantize(Decimal("0.0001"))
+
+
+def _run_create(plan_id: str, *, name: str, budget: str | None) -> int:
+    """Implement ``whilly plan create --id <id> --name <name> [--budget <usd>]``.
+
+    1. Validate ``--budget`` (if provided). Bad shape →
+       ``EXIT_VALIDATION_ERROR`` with stderr diagnostic naming the
+       offending value (VAL-BUDGET-012 evidence).
+    2. Read ``WHILLY_DATABASE_URL`` from the environment — missing →
+       ``EXIT_ENVIRONMENT_ERROR``.
+    3. INSERT the plan row via :data:`_INSERT_PLAN_WITH_BUDGET_SQL`.
+       ON CONFLICT (id) DO NOTHING — re-running on an existing id is a
+       safe no-op, but we surface a warning to stderr so the operator
+       knows their ``--budget`` value was *not* applied to the
+       pre-existing row.
+    """
+    try:
+        budget_decimal = _parse_budget_arg(budget)
+    except ValueError as exc:
+        print(f"whilly plan create: {exc}", file=sys.stderr)
+        return EXIT_VALIDATION_ERROR
+
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan create: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    inserted = asyncio.run(_async_create(dsn, plan_id, name, budget_decimal))
+    if not inserted:
+        print(
+            f"whilly plan create: warning: plan {plan_id!r} already exists; "
+            f"--budget was not applied (use `plan reset --hard` then re-create to change it).",
+            file=sys.stderr,
+        )
+        return EXIT_OK
+    budget_label = "unlimited" if budget_decimal is None else f"budget_usd={budget_decimal}"
+    print(f"whilly plan create: created plan {plan_id!r} ({name!r}, {budget_label}).")
+    return EXIT_OK
+
+
+async def _async_create(
+    dsn: str,
+    plan_id: str,
+    name: str,
+    budget: Decimal | None,
+) -> bool:
+    """INSERT a plan row; return True iff a fresh row was created.
+
+    Idiomatic short-lived pool lifecycle (matches ``_async_import`` /
+    ``_async_export``). Returns False on the ON CONFLICT no-op path so
+    the CLI can surface a warning rather than misreporting a no-op as
+    a successful create.
+    """
+    pool = await create_pool(dsn)
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(_INSERT_PLAN_WITH_BUDGET_SQL, plan_id, name, budget)
+        return row is not None
+    finally:
+        await close_pool(pool)
 
 
 def _run_import(plan_file: str) -> int:
