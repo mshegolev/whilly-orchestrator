@@ -36,7 +36,11 @@ import pytest
 
 from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.db import TaskRepository
-from whilly.adapters.db.repository import BUDGET_EXCEEDED_EVENT_TYPE
+from whilly.adapters.db.repository import (
+    BUDGET_EXCEEDED_EVENT_TYPE,
+    BUDGET_EXCEEDED_REASON,
+    BUDGET_EXCEEDED_THRESHOLD_PCT,
+)
 from whilly.core.models import PlanId
 
 pytestmark = DOCKER_REQUIRED
@@ -204,6 +208,10 @@ async def test_concurrent_crossing_emits_exactly_one_sentinel(db_pool: asyncpg.P
     assert payload["plan_id"] == "plan-bcc-cross"
     assert payload["crossing_task_id"] in set(task_ids)
     assert Decimal(payload["budget_usd"]) == budget
+    # VAL-CROSS-013: even under contention the SINGLE sentinel carries
+    # the contract-required reason / threshold_pct pins.
+    assert payload["reason"] == BUDGET_EXCEEDED_REASON == "budget_threshold"
+    assert payload["threshold_pct"] == BUDGET_EXCEEDED_THRESHOLD_PCT == 100
 
 
 # --------------------------------------------------------------------------- #
