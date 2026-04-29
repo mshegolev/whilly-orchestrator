@@ -73,7 +73,7 @@ import secrets
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final
 
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, Request, status
 
 if TYPE_CHECKING:
     from whilly.adapters.db import TaskRepository
@@ -117,11 +117,32 @@ _BEARER_PREFIX: Final[str] = "bearer "
 #: per-realm see this as the namespace.
 _BEARER_REALM: Final[str] = "whilly"
 
-# Public type alias for the dependency callables this module produces. A
-# FastAPI dependency is any callable; ours are async because they may grow
-# DB lookups in TASK-021b (per-worker token-hash verification) without a
-# breaking signature change.
+# Public type alias for the *gate-keeping* dependency callables this module
+# produces — :func:`make_bearer_auth` and :func:`make_bootstrap_auth`. Both
+# receive only the ``Authorization`` header and return ``None`` on success.
+# FastAPI dependencies are arbitrary callables; we keep the alias narrow so
+# the call sites that don't need identity binding stay typed accordingly.
 AuthDependency = Callable[[str | None], Awaitable[None]]
+
+# Public type alias for the *identity-binding* dependency that
+# :func:`make_db_bearer_auth` produces. The dep takes both
+# :class:`fastapi.Request` (so it can stash the resolved
+# ``worker_id`` on ``request.state.authenticated_worker_id`` for the
+# route handler's :func:`_require_token_owner` check — see
+# :mod:`whilly.adapters.transport.server`) and the ``Authorization``
+# header. Returns ``None`` on success: the gate-keeping shape stays
+# unchanged so existing handlers can keep declaring
+# ``dependencies=[Depends(bearer_dep)]`` without wiring the dep result
+# through a parameter.
+#
+# Why a separate alias?
+#     Mixing the two signatures under a single type would force every
+#     route that consumes :data:`AuthDependency` (e.g. tests that build
+#     ad-hoc gate-keeping deps via :func:`make_bearer_auth`) to also
+#     accept the wider :class:`Request` parameter. Splitting keeps each
+#     factory's contract narrow and makes it obvious at a glance which
+#     dependencies write to ``request.state`` and which don't.
+IdentityBindingAuthDependency = Callable[[Request, str | None], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +368,7 @@ def make_db_bearer_auth(
     repo: TaskRepository,
     *,
     legacy_token: str | None = None,
-) -> AuthDependency:
+) -> IdentityBindingAuthDependency:
     """Build a per-worker bearer ``Depends`` callable backed by the workers table.
 
     This is the v4.1 successor to :func:`make_bearer_auth` for the
@@ -414,16 +435,33 @@ def make_db_bearer_auth(
         successful match logs the one-shot deprecation warning
         (suppressible via :data:`SUPPRESS_WORKER_TOKEN_WARNING_ENV`).
 
+    Identity binding (TASK-101 scrutiny round-1 fix)
+    ------------------------------------------------
+    On a successful per-worker hash hit the dep stashes the resolved
+    ``worker_id`` on ``request.state.authenticated_worker_id`` so the
+    route handler's :func:`whilly.adapters.transport.server._require_token_owner`
+    check can reject cross-worker calls (worker A's bearer used to act
+    as worker B) with a 403 — VAL-AUTH-024. On the legacy
+    ``WHILLY_WORKER_TOKEN`` fallback path, ``authenticated_worker_id`` is
+    set to ``None`` (identity unknown — the shared cluster token cannot
+    name a specific worker), and the route-level helper treats that as
+    a no-op so the one-minor-version legacy compat window
+    (VAL-AUTH-030/031/034) stays green. A dep raise (401) does not
+    write to ``request.state`` — Starlette unwinds the request before
+    a handler runs, so unauthenticated requests never observe a
+    half-set state.
+
     Returns
     -------
-    AuthDependency
-        An async callable suitable for ``Depends(...)``. Returns
-        ``None`` on success (matching the
-        :func:`make_bearer_auth` shape so route handlers remain
-        compatible). Worker-identity-aware handlers can opt-in to
-        the resolved worker_id in a future revision by reading from
-        ``request.state``; today's handlers carry the worker_id in
-        the request body and the dep's role is gate-keeping only.
+    IdentityBindingAuthDependency
+        An async callable suitable for ``Depends(...)`` that takes a
+        :class:`fastapi.Request` and the ``Authorization`` header.
+        Returns ``None`` on success (matching the
+        :func:`make_bearer_auth` shape so handlers can continue to
+        declare it as ``dependencies=[Depends(bearer_dep)]`` without
+        consuming a return value); side-effect is the
+        ``request.state.authenticated_worker_id`` write described
+        above.
     """
     # Whitespace-stripped legacy token guards against operators
     # leaving the env value as a stray space — same rule as
@@ -438,7 +476,10 @@ def make_db_bearer_auth(
             "(use None to disable the legacy WHILLY_WORKER_TOKEN fallback)."
         )
 
-    async def db_bearer_auth(authorization: str | None = Header(default=None)) -> None:
+    async def db_bearer_auth(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> None:
         token = _extract_bearer(authorization)
         token_hash = hash_bearer_token(token)
         worker_id = await repo.get_worker_id_by_token_hash(token_hash)
@@ -447,18 +488,22 @@ def make_db_bearer_auth(
             # happens to equal ``legacy_token``, the deprecation warning
             # is NOT emitted on this path — VAL-AUTH-034 pins the
             # contract that "valid per-worker token never logs the
-            # deprecation". The route handler can correlate the
-            # bearer-resolved identity with the body's ``worker_id``
-            # echo (defence-in-depth), but the dep stays gate-keeping
-            # only.
+            # deprecation". Stash the DB-resolved identity on
+            # ``request.state`` so the route handlers'
+            # ``_require_token_owner`` helper can compare it against
+            # the body / path identity and reject cross-worker calls
+            # with a 403 (VAL-AUTH-024).
+            request.state.authenticated_worker_id = worker_id
             return None
         if legacy_token_clean is not None and secrets.compare_digest(token, legacy_token_clean):
-            # Legacy fallback hit. Emit the one-shot deprecation
-            # warning (suppressible) and accept the request. We hash
-            # the legacy token through the same code path as a
-            # safety check that ``compare_digest`` is the only
-            # constant-time comparison surface — nothing leaks
-            # whether the legacy token was "close" to a real one.
+            # Legacy fallback hit. The shared ``WHILLY_WORKER_TOKEN``
+            # cannot identify a specific worker, so we explicitly mark
+            # the identity as unknown; the route-level
+            # ``_require_token_owner`` helper treats ``None`` as a
+            # no-op and lets the legacy bearer act as "any worker" for
+            # one minor version (VAL-AUTH-030/031/034). Emit the
+            # one-shot deprecation warning (suppressible).
+            request.state.authenticated_worker_id = None
             _maybe_warn_legacy_worker_token()
             return None
         raise _bearer_401("invalid token")
@@ -562,6 +607,7 @@ __all__ = [
     "SUPPRESS_WORKER_TOKEN_WARNING_ENV",
     "WORKER_TOKEN_ENV",
     "AuthDependency",
+    "IdentityBindingAuthDependency",
     "bearer_auth",
     "bootstrap_auth",
     "hash_bearer_token",

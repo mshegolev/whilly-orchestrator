@@ -306,25 +306,260 @@ async def test_revocation_via_set_null_blocks_subsequent_rpc(
 
 
 # ---------------------------------------------------------------------------
-# VAL-AUTH-024 — cross-worker bearer on path-bound RPC returns 4xx
+# VAL-AUTH-024 — cross-worker bearer on every identity-bound RPC returns 403
 # ---------------------------------------------------------------------------
+#
+# Each of the five steady-state RPCs is exercised independently (heartbeat,
+# claim, complete, fail, release) — together with a sixth test that keeps
+# the body↔path 400 branch covered. This is the TASK-101 scrutiny round-1
+# fix: prior to the identity-binding change the only cross-worker test was
+# heartbeat with body!=path (which surfaces as 400, NOT a real token-owner
+# check). VAL-AUTH-024's evidence clause accepts ``(400, 401, 403)``;
+# token-owner mismatch is 403 ("auth succeeded, you can't do this") so
+# operator dashboards can split schema-validation 400s from authorisation
+# 403s cleanly.
 
 
-async def test_cross_worker_bearer_returns_4xx(
+async def test_cross_worker_bearer_on_heartbeat_returns_403(
     http_client_no_legacy: AsyncClient,
+    db_pool: asyncpg.Pool,
 ) -> None:
-    """Worker A's bearer on worker B's heartbeat path → 4xx (no heartbeat written for B)."""
+    """A's bearer on B's heartbeat (body=B, path=B) → 403; B's last_heartbeat unchanged."""
     worker_a, token_a = await _register(http_client_no_legacy, "host-cross-a")
     worker_b, _ = await _register(http_client_no_legacy, "host-cross-b")
 
-    # A's bearer authenticates as A; the body's worker_id (=B per the
-    # path) doesn't match, so the handler returns 400.
+    async with db_pool.acquire() as conn:
+        before = await conn.fetchval(
+            "SELECT last_heartbeat FROM workers WHERE worker_id = $1",
+            worker_b,
+        )
+
     response = await http_client_no_legacy.post(
         f"/workers/{worker_b}/heartbeat",
-        json={"worker_id": worker_a},  # body says A, path says B
+        json={"worker_id": worker_b},  # body and path both B; only bearer differs
         headers={"Authorization": f"Bearer {token_a}"},
     )
-    assert response.status_code in (400, 401, 403)
+
+    assert response.status_code == 403, response.text
+    assert worker_a in response.text or worker_b in response.text
+
+    async with db_pool.acquire() as conn:
+        after = await conn.fetchval(
+            "SELECT last_heartbeat FROM workers WHERE worker_id = $1",
+            worker_b,
+        )
+    assert after == before, "rejected heartbeat must not advance workers.last_heartbeat"
+
+
+async def test_cross_worker_bearer_on_claim_returns_403(
+    http_client_no_legacy: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A's bearer + body{worker_id:B, plan_id:...} → 403; task stays PENDING; no events."""
+    plan_id = "PLAN-CROSS-CLAIM"
+    task_id = "T-cross-claim-1"
+    await _seed_task(db_pool, plan_id, task_id)
+    _worker_a, token_a = await _register(http_client_no_legacy, "host-cross-claim-a")
+    worker_b, _ = await _register(http_client_no_legacy, "host-cross-claim-b")
+
+    response = await http_client_no_legacy.post(
+        CLAIM_PATH,
+        json={"worker_id": worker_b, "plan_id": plan_id},
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response.status_code == 403, response.text
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, claimed_by, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_count = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+    assert row is not None
+    assert row["status"] == "PENDING", "task must remain PENDING after rejected claim"
+    assert row["claimed_by"] is None
+    assert row["version"] == 0
+    assert events_count == 0, "no event row may be written on a rejected claim"
+
+
+async def test_cross_worker_bearer_on_complete_returns_403(
+    http_client_no_legacy: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """B legitimately claims; A's bearer + body{worker_id:B} on /complete → 403; task unchanged."""
+    plan_id = "PLAN-CROSS-COMPLETE"
+    task_id = "T-cross-complete-1"
+    await _seed_task(db_pool, plan_id, task_id)
+    _worker_a, token_a = await _register(http_client_no_legacy, "host-cross-complete-a")
+    worker_b, token_b = await _register(http_client_no_legacy, "host-cross-complete-b")
+
+    # B claims legitimately.
+    r_claim = await http_client_no_legacy.post(
+        CLAIM_PATH,
+        json={"worker_id": worker_b, "plan_id": plan_id},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert r_claim.status_code == 200, r_claim.text
+    claimed_version = r_claim.json()["task"]["version"]
+
+    async with db_pool.acquire() as conn:
+        before = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_before = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+
+    response = await http_client_no_legacy.post(
+        f"/tasks/{task_id}/complete",
+        json={"worker_id": worker_b, "version": claimed_version, "cost_usd": "0.01"},
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response.status_code == 403, response.text
+
+    async with db_pool.acquire() as conn:
+        after = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_after = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+    assert after == before, "task row must not change on rejected complete"
+    assert events_after == events_before, "no event row may be written on rejected complete"
+
+
+async def test_cross_worker_bearer_on_fail_returns_403(
+    http_client_no_legacy: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """B legitimately claims; A's bearer + body{worker_id:B} on /fail → 403; task unchanged."""
+    plan_id = "PLAN-CROSS-FAIL"
+    task_id = "T-cross-fail-1"
+    await _seed_task(db_pool, plan_id, task_id)
+    _worker_a, token_a = await _register(http_client_no_legacy, "host-cross-fail-a")
+    worker_b, token_b = await _register(http_client_no_legacy, "host-cross-fail-b")
+
+    r_claim = await http_client_no_legacy.post(
+        CLAIM_PATH,
+        json={"worker_id": worker_b, "plan_id": plan_id},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert r_claim.status_code == 200, r_claim.text
+    claimed_version = r_claim.json()["task"]["version"]
+
+    async with db_pool.acquire() as conn:
+        before = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_before = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+
+    response = await http_client_no_legacy.post(
+        f"/tasks/{task_id}/fail",
+        json={
+            "worker_id": worker_b,
+            "version": claimed_version,
+            "reason": "cross-worker-fail-test",
+        },
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response.status_code == 403, response.text
+
+    async with db_pool.acquire() as conn:
+        after = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_after = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+    assert after == before, "task row must not change on rejected fail"
+    assert events_after == events_before, "no event row may be written on rejected fail"
+
+
+async def test_cross_worker_bearer_on_release_returns_403(
+    http_client_no_legacy: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """B legitimately claims; A's bearer + body{worker_id:B} on /release → 403; task unchanged."""
+    plan_id = "PLAN-CROSS-RELEASE"
+    task_id = "T-cross-release-1"
+    await _seed_task(db_pool, plan_id, task_id)
+    _worker_a, token_a = await _register(http_client_no_legacy, "host-cross-release-a")
+    worker_b, token_b = await _register(http_client_no_legacy, "host-cross-release-b")
+
+    r_claim = await http_client_no_legacy.post(
+        CLAIM_PATH,
+        json={"worker_id": worker_b, "plan_id": plan_id},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert r_claim.status_code == 200, r_claim.text
+    claimed_version = r_claim.json()["task"]["version"]
+
+    async with db_pool.acquire() as conn:
+        before = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_before = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+
+    response = await http_client_no_legacy.post(
+        f"/tasks/{task_id}/release",
+        json={
+            "worker_id": worker_b,
+            "version": claimed_version,
+            "reason": "cross-worker-release-test",
+        },
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response.status_code == 403, response.text
+
+    async with db_pool.acquire() as conn:
+        after = await conn.fetchrow(
+            "SELECT status, version FROM tasks WHERE id = $1",
+            task_id,
+        )
+        events_after = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE task_id = $1",
+            task_id,
+        )
+    assert after == before, "task row must not change on rejected release"
+    assert events_after == events_before, "no event row may be written on rejected release"
+
+
+async def test_heartbeat_body_path_mismatch_returns_400(
+    http_client_no_legacy: AsyncClient,
+) -> None:
+    """Body↔path mismatch is its own branch — independently exercised from the 403 token-owner check.
+
+    Register A; POST /workers/{A}/heartbeat with body {worker_id: <other>}
+    and bearer token_a. The body↔path 400 check fires AHEAD of the
+    token-owner 403 check (server.py heartbeat handler), so this case
+    must surface as 400 even though the bearer is valid for A.
+    """
+    worker_a, token_a = await _register(http_client_no_legacy, "host-bp-mismatch")
+
+    response = await http_client_no_legacy.post(
+        f"/workers/{worker_a}/heartbeat",
+        json={"worker_id": "w-other"},  # body != path
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert response.status_code == 400, response.text
+    assert "does not match" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
