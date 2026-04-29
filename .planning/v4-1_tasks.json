@@ -844,7 +844,7 @@
       "title": "docs/Whilly-Workstation-Bootstrap.md — onboard a second machine to a shared v4.1 plan",
       "category": "docs",
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "dependencies": [],
       "key_files": [
         "docs/Whilly-Workstation-Bootstrap.md",
