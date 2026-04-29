@@ -66,8 +66,8 @@ single :meth:`asyncpg.Connection.transaction`. Why each detail matters:
 
 Exit codes
 ----------
-The CLI follows the conventional 0/1/2 split, mirroring the legacy
-:mod:`whilly.cli_legacy` and the rest of the v4 CLI tasks:
+The CLI follows the conventional 0/1/2 split, mirroring the rest of the
+v4 CLI tasks:
 
 * ``0`` — success (plan + N tasks committed; or canonical JSON printed).
 * ``1`` — validation failure: malformed JSON, missing required field,
