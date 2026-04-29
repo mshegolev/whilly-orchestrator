@@ -439,6 +439,55 @@ RETURNING task_id
 """
 
 
+# Plan reset (TASK-103). Two modes:
+#
+# * ``keep-tasks`` — soft reset. Wipe the events table for every task in
+#   the plan, flip every task back to ``PENDING`` (clearing claim
+#   ownership, bumping ``version``), then write one ``RESET`` event per
+#   task carrying ``payload = {"reason": "manual_reset", "mode":
+#   "keep_tasks", "version": <new>}``. Useful for replaying a
+#   debug-stuck plan from scratch without re-importing the JSON.
+#
+# * ``hard`` — DELETE the plan row; ON DELETE CASCADE on the FK chain
+#   (plans → tasks → events) wipes everything in one statement. Useful
+#   when the plan JSON itself changed and an idempotent re-import would
+#   otherwise refuse to clobber existing rows (DO NOTHING semantics).
+#   No audit row is written: the events table is gone with the rest of
+#   the plan, so any RESET row would be deleted before commit anyway —
+#   operators relying on durable audit trail should use ``keep-tasks``
+#   or rely on the file-based mirror (TASK-106).
+#
+# All three statements (events DELETE, tasks UPDATE, RESET INSERT) run
+# inside a single Python-level ``async with conn.transaction()`` rather
+# than one combined CTE because per-statement diagnostics matter on the
+# operator-facing reset path: a CHECK violation should surface with the
+# offending statement's verb in the error, not as a generic CTE failure.
+# The transaction wrapper provides the same atomicity guarantee as the
+# combined CTE form would.
+_RESET_DELETE_EVENTS_SQL: str = """
+DELETE FROM events
+WHERE task_id IN (SELECT id FROM tasks WHERE plan_id = $1)
+"""
+
+_RESET_UPDATE_TASKS_SQL: str = """
+UPDATE tasks
+SET status = 'PENDING',
+    claimed_by = NULL,
+    claimed_at = NULL,
+    version = tasks.version + 1,
+    updated_at = NOW()
+WHERE plan_id = $1
+RETURNING id, version
+"""
+
+# ``DELETE FROM plans WHERE id = $1`` cascades through the FK chain
+# (tasks ON DELETE CASCADE, events ON DELETE CASCADE on tasks.id) so
+# one statement clears the entire plan. The pre-DELETE COUNT lets us
+# return a row count to the CLI for the operator-facing summary line.
+_RESET_COUNT_TASKS_SQL: str = "SELECT COUNT(*)::int AS c FROM tasks WHERE plan_id = $1"
+_RESET_DELETE_PLAN_SQL: str = "DELETE FROM plans WHERE id = $1"
+
+
 class VersionConflictError(Exception):
     """Optimistic-locking mismatch on a :class:`TaskRepository` mutation.
 
@@ -1069,6 +1118,112 @@ class TaskRepository:
             return False
         logger.debug("update_heartbeat: worker %s last_heartbeat refreshed", worker_id)
         return True
+
+    async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
+        """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).
+
+        Implements the data-side half of the ``whilly plan reset`` CLI
+        (TASK-103). Two modes, selected by the ``keep_tasks`` flag:
+
+        * ``keep_tasks=True`` — soft reset. Deletes every event row whose
+          task lives under ``plan_id``, then flips every such task back
+          to ``status='PENDING'`` (clearing ``claimed_by`` /
+          ``claimed_at``, incrementing ``version``), and writes one
+          ``RESET`` event per task carrying ``payload = {"reason":
+          "manual_reset", "mode": "keep_tasks", "version": <new>}``.
+          Returns the number of tasks reset.
+
+        * ``keep_tasks=False`` — hard reset. ``DELETE FROM plans WHERE
+          id = $1``; the FK chain's ``ON DELETE CASCADE`` wipes the
+          tasks rows and (transitively) the events rows in one
+          statement. Returns the pre-delete count of tasks (so the CLI
+          can show the same "N tasks affected" summary as in soft mode).
+
+        Atomicity
+        ---------
+        Both modes run inside a single ``async with conn.transaction()``
+        so an operator can't observe a partial reset. In soft mode the
+        three statements (events DELETE, tasks UPDATE, audit INSERT
+        per task) commit as a unit. In hard mode the COUNT and DELETE
+        commit as a unit — the COUNT runs against the same MVCC
+        snapshot the DELETE will operate on, so the returned value
+        matches the rows that were actually affected.
+
+        Why not a single combined CTE?
+            Per-statement diagnostics matter on the operator-facing
+            reset path: a CHECK constraint violation (e.g. someone
+            extending ``events.event_type`` with a CHECK) should surface
+            with the offending verb in the error message rather than
+            being lost behind a CTE wrapper. The transaction is the
+            atomicity contract; the per-statement granularity is
+            developer ergonomics.
+
+        Why no audit row in hard mode?
+            ``DELETE FROM plans`` cascades to ``events`` — anything we
+            insert before the delete would be wiped before commit, and
+            anything inserted after the delete has no ``task_id`` to
+            reference (FK NOT NULL). Operators relying on a durable
+            audit trail should use ``keep_tasks=True`` or wait for the
+            file-based audit mirror (TASK-106).
+
+        Args
+        ----
+        plan_id:
+            The plan to reset. A non-existent ``plan_id`` returns ``0``
+            without error in either mode (idempotent — repeated resets
+            on the same id are safe).
+        keep_tasks:
+            ``True`` for soft reset, ``False`` for hard reset.
+
+        Returns
+        -------
+        int
+            Number of tasks affected (reset to PENDING in soft mode, or
+            scheduled for deletion in hard mode). Returns ``0`` when the
+            plan is unknown — callers can use this to differentiate
+            "plan exists, was empty" from "plan doesn't exist" by
+            checking the plan row separately if they care.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                if keep_tasks:
+                    # Wipe events first so the post-reset audit rows are
+                    # the only RESET-tagged rows left for this plan.
+                    await conn.execute(_RESET_DELETE_EVENTS_SQL, plan_id)
+                    rows = await conn.fetch(_RESET_UPDATE_TASKS_SQL, plan_id)
+                    for row in rows:
+                        payload = json.dumps(
+                            {
+                                "reason": "manual_reset",
+                                "mode": "keep_tasks",
+                                "version": row["version"],
+                            }
+                        )
+                        await conn.execute(
+                            _INSERT_EVENT_SQL,
+                            row["id"],
+                            "RESET",
+                            payload,
+                        )
+                    logger.info(
+                        "reset_plan(keep_tasks=True): plan=%s reset %d task(s)",
+                        plan_id,
+                        len(rows),
+                    )
+                    return len(rows)
+
+                # Hard mode: count first (so we can report what we
+                # nuked), then DELETE the plan row. CASCADE handles
+                # tasks + events in the same statement.
+                count_row = await conn.fetchrow(_RESET_COUNT_TASKS_SQL, plan_id)
+                count = int(count_row["c"]) if count_row else 0
+                await conn.execute(_RESET_DELETE_PLAN_SQL, plan_id)
+                logger.info(
+                    "reset_plan(keep_tasks=False): plan=%s deleted (%d task(s) cascaded)",
+                    plan_id,
+                    count,
+                )
+                return count
 
     async def _raise_version_conflict(
         self,

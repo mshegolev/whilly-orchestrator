@@ -224,7 +224,7 @@
       "title": "whilly plan reset PLAN_ID",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [],
       "key_files": [
         "whilly/cli/plan.py",
