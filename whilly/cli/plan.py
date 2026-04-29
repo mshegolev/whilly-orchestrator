@@ -99,8 +99,9 @@ import asyncpg
 from rich.console import Console
 
 from whilly.adapters.db import close_pool, create_pool
-from whilly.adapters.db.repository import TaskRepository
+from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
+from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
 from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
 
@@ -283,6 +284,43 @@ def build_plan_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the interactive y/N confirmation prompt.",
     )
+
+    # ── plan apply ───────────────────────────────────────────────────────
+    # ``plan apply <plan_file>`` is the import + decision-gate composite
+    # (TASK-104c). Without ``--strict`` it behaves like ``plan import``
+    # plus a structured warning per task that fails the
+    # :func:`whilly.core.gates.evaluate_decision_gate` rules — every
+    # task is still imported into Postgres. With ``--strict`` it
+    # additionally calls :meth:`TaskRepository.skip_task` on each
+    # REJECT verdict so the offending row lands in the DB as
+    # ``SKIPPED`` (with a ``SKIP`` event row carrying the missing
+    # field labels) before any worker gets a chance to claim it.
+    #
+    # The ``--strict`` slot is between :func:`detect_cycles` and the
+    # eventual agent-pool open: a cyclic plan still fails at exit 1
+    # before the gate even runs (see VAL-GATES-019 for the contract).
+    p_apply = sub.add_parser(
+        "apply",
+        help=(
+            "Import a v4 plan JSON and run the Decision Gate on each task; "
+            "with --strict, gate-rejecting tasks are marked SKIPPED."
+        ),
+    )
+    p_apply.add_argument(
+        "plan_file",
+        help="Path to a v4 plan JSON file (see examples/sample_plan.json).",
+    )
+    p_apply.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Enable strict Decision Gate: tasks whose description, "
+            "acceptance_criteria, or test_steps fail the pure gate check are "
+            "transitioned to SKIPPED via repo.skip_task with reason "
+            "'decision_gate_failed'. Without --strict the gate only emits a "
+            "structured warning to stderr and leaves the task PENDING."
+        ),
+    )
     return parser
 
 
@@ -308,6 +346,8 @@ def run_plan_command(argv: Sequence[str]) -> int:
             hard=bool(args.hard),
             yes=bool(args.yes),
         )
+    if args.action == "apply":
+        return _run_apply(args.plan_file, strict=bool(args.strict))
     # argparse's ``required=True`` already surfaces a 2-exit on missing
     # action; this branch is defensive for future subcommands added without
     # an explicit handler here.
@@ -1066,5 +1106,179 @@ async def _async_reset(dsn: str, plan_id: str, *, keep_tasks: bool) -> int:
     try:
         repo = TaskRepository(pool)
         return await repo.reset_plan(plan_id, keep_tasks=keep_tasks)
+    finally:
+        await close_pool(pool)
+
+
+# ── plan apply (TASK-104c) ───────────────────────────────────────────────
+
+
+def _run_apply(plan_file: str, *, strict: bool) -> int:
+    """Implement ``whilly plan apply <plan_file> [--strict]`` (TASK-104c).
+
+    Composite of :func:`_run_import` plus the
+    :func:`whilly.core.gates.evaluate_decision_gate` step:
+
+    1. :func:`parse_plan` — bad shape → ``EXIT_VALIDATION_ERROR``.
+    2. :func:`detect_cycles` — any cycle → ``EXIT_VALIDATION_ERROR``
+       with the chain printout (PRD VAL-GATES-019: cycle errors win
+       over gate errors at the same exit code).
+    3. ``WHILLY_DATABASE_URL`` env check — missing →
+       ``EXIT_ENVIRONMENT_ERROR``.
+    4. :func:`_async_apply` — open the pool, INSERT plan + tasks in
+       one transaction, then run the Decision Gate over each task and
+       (in ``--strict`` mode only) call
+       :meth:`TaskRepository.skip_task` on each REJECT.
+
+    Default mode (``strict=False``) emits one structured warning to
+    stderr per failing task and leaves it ``PENDING`` — no
+    ``task.skipped`` / ``SKIP`` events are written from the gate path
+    (PRD VAL-GATES-022). Strict mode writes one ``SKIP`` event per
+    REJECT (PRD VAL-CROSS-003).
+
+    Exit codes follow the module-level convention (``0`` = ok,
+    ``1`` = validation error, ``2`` = environment error). Both modes
+    return ``EXIT_OK`` on the happy path — the gate diagnostic is a
+    soft warning, not a validation failure (the cycle check above is
+    where hard failures live).
+    """
+    try:
+        plan, tasks = parse_plan(plan_file)
+    except PlanParseError as exc:
+        print(f"whilly plan apply: {exc}", file=sys.stderr)
+        return EXIT_VALIDATION_ERROR
+    except FileNotFoundError as exc:
+        print(
+            f"whilly plan apply: file not found: {exc.filename or plan_file}",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    cycles = detect_cycles(plan)
+    if cycles:
+        for cycle in cycles:
+            print(f"whilly plan apply: Cycle detected: {_format_cycle(cycle)}", file=sys.stderr)
+        return EXIT_VALIDATION_ERROR
+
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan apply: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    skipped_ids, warned_ids = asyncio.run(_async_apply(dsn, plan, list(tasks), strict=strict))
+
+    if strict and skipped_ids:
+        print(
+            f"whilly plan apply: applied plan {plan.id!r} ({len(tasks)} task(s)); "
+            f"--strict skipped {len(skipped_ids)} task(s): {', '.join(skipped_ids)}.",
+        )
+    elif warned_ids:
+        # Default-mode warnings already went to stderr inside _async_apply;
+        # the success line on stdout still reports the import count so
+        # shell pipelines / CI logs stay parseable.
+        print(
+            f"whilly plan apply: applied plan {plan.id!r} ({len(tasks)} task(s)); "
+            f"{len(warned_ids)} task(s) failed Decision Gate (see warnings above).",
+        )
+    else:
+        print(f"whilly plan apply: applied plan {plan.id!r} ({len(tasks)} task(s)).")
+    return EXIT_OK
+
+
+async def _async_apply(
+    dsn: str,
+    plan: Plan,
+    tasks: list[Task],
+    *,
+    strict: bool,
+) -> tuple[list[TaskId], list[TaskId]]:
+    """Open a pool, INSERT plan + tasks, then run the Decision Gate.
+
+    Returns ``(skipped_ids, warned_ids)``: the task ids that were
+    transitioned to ``SKIPPED`` via :meth:`TaskRepository.skip_task`
+    (only populated when ``strict=True``) and the task ids that
+    surfaced a structured warning (only populated when ``strict=False``).
+    These two sets are mutually exclusive — strict mode never warns,
+    default mode never skips.
+
+    Lifecycle mirrors :func:`_async_import`: short-lived pool with the
+    ``SELECT 1`` health check, INSERT plan + tasks in a single
+    transaction (so a crash mid-INSERT can never leave a partially-
+    populated plan visible), then the gate iterations run in their
+    own per-row transactions inside :meth:`skip_task`. The gate
+    iteration intentionally does *not* share the import transaction:
+    we want every task imported even if a later ``skip_task`` raises.
+    """
+    pool = await create_pool(dsn)
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await _insert_plan_and_tasks(conn, plan, tasks)
+
+        repo = TaskRepository(pool)
+        skipped: list[TaskId] = []
+        warned: list[TaskId] = []
+        for task in tasks:
+            verdict = evaluate_decision_gate(task)
+            if verdict.kind == GateVerdictKind.ALLOW:
+                continue
+            if strict:
+                # ``task.version`` is the version we just inserted (0
+                # by default); the row was created in this same call
+                # so no other writer can have advanced it. The
+                # idempotency probe inside ``skip_task`` covers the
+                # operator-iteration case (re-running ``apply`` after
+                # a partial run) without us having to re-fetch here.
+                try:
+                    await repo.skip_task(
+                        task.id,
+                        task.version,
+                        reason="decision_gate_failed",
+                        detail={"missing": list(verdict.missing)},
+                    )
+                except VersionConflictError as exc:
+                    # Surface conflicts as warnings rather than aborting:
+                    # the gate isn't authoritative enough to prevent a
+                    # legitimate worker that beat us to the row. The
+                    # task ends up not skipped — operators can re-run
+                    # ``apply`` once the worker finishes.
+                    logger.warning(
+                        "plan apply --strict: skip_task conflict on task %s: %s",
+                        task.id,
+                        exc,
+                    )
+                    print(
+                        f"whilly plan apply: warning: could not skip {task.id!r} ({exc}); leaving as-is.",
+                        file=sys.stderr,
+                    )
+                    continue
+                logger.info(
+                    "plan apply --strict: skipped task %s (missing=%s)",
+                    task.id,
+                    verdict.missing,
+                )
+                skipped.append(task.id)
+            else:
+                logger.warning(
+                    "plan apply: decision_gate_failed task=%s missing=%s reason=%s",
+                    task.id,
+                    verdict.missing,
+                    verdict.reason,
+                )
+                # Stable structured stderr line; the ``decision_gate``
+                # substring is part of the public contract (PRD
+                # VAL-GATES-018) so operators can grep for it.
+                print(
+                    "whilly plan apply: warning: decision_gate task="
+                    f"{task.id!r} missing={list(verdict.missing)} "
+                    f"reason={verdict.reason!r}",
+                    file=sys.stderr,
+                )
+                warned.append(task.id)
+        return skipped, warned
     finally:
         await close_pool(pool)
