@@ -122,6 +122,22 @@ _DOCKER_REQUIRED = pytest.mark.skipif(
 
 _FORBIDDEN_IN_CORE = ("asyncpg", "httpx", "subprocess", "fastapi", "uvicorn", "alembic")
 
+# Documented narrow exceptions that mirror the ``.importlinter``
+# ``ignore_imports`` block. Each entry maps a ``whilly.core.*`` module path
+# (relative to the repository root, POSIX-style) to the set of forbidden
+# attribute / import substrings that module is allowed to contain. Keep this
+# table tightly scoped — every entry is a deliberate, contract-anchored
+# exemption to the SC-6 / TC-8 purity rule, not a general escape hatch.
+#
+# whilly/core/triz.py is granted ``subprocess`` (TASK-104b / VAL-TRIZ-006:
+# the per-task TRIZ analyzer is contract-pinned to live in this file and to
+# spawn the ``claude`` CLI via ``subprocess.run``). The corresponding
+# ``import-linter`` allowance is recorded in ``.importlinter`` under
+# ``[importlinter:contract:core-purity] ignore_imports``.
+_CORE_PURITY_EXEMPTIONS: dict[str, tuple[str, ...]] = {
+    "whilly/core/triz.py": ("subprocess.", "import subprocess"),
+}
+
 
 def test_whilly_core_is_importable_without_io_dependencies() -> None:
     """``whilly.core`` and its submodules import without pulling in I/O deps.
@@ -159,19 +175,31 @@ def test_whilly_core_subprocess_and_chdir_grep_clean() -> None:
     ``os.chdir`` / ``subprocess.run`` patterns are explicitly forbidden by the
     PRD (SC-6 / Module structure). Static-source grep catches them even if the
     import-graph check happens to miss the indirection.
+
+    Documented narrow exceptions are recorded in :data:`_CORE_PURITY_EXEMPTIONS`
+    and mirror the ``.importlinter`` ``ignore_imports`` table — currently only
+    ``whilly/core/triz.py`` (TASK-104b: the per-task TRIZ analyzer is
+    contract-pinned to subprocess the ``claude`` CLI from this exact module per
+    VAL-TRIZ-006). Any *new* file under ``whilly/core/`` that imports
+    ``subprocess`` or calls ``os.chdir`` will still trip this test.
     """
     core_dir = Path(__file__).resolve().parents[2] / "whilly" / "core"
     assert core_dir.is_dir(), f"expected whilly/core/ at {core_dir}"
 
     offenders: list[str] = []
     for py_file in sorted(core_dir.rglob("*.py")):
+        rel_path = py_file.relative_to(core_dir.parent.parent).as_posix()
+        exempted = _CORE_PURITY_EXEMPTIONS.get(rel_path, ())
         text = py_file.read_text(encoding="utf-8")
         # Strip simple ``# ...`` comments before scanning so docstring
         # discussions of forbidden symbols don't trip the test.
         live = "\n".join(line.partition("#")[0] for line in text.splitlines())
         for needle in ("os.chdir(", "os.getcwd(", "subprocess.", "import subprocess"):
+            if needle in exempted:
+                # Documented per-file exception (see _CORE_PURITY_EXEMPTIONS).
+                continue
             if needle in live:
-                offenders.append(f"{py_file.relative_to(core_dir.parent.parent)}: {needle}")
+                offenders.append(f"{rel_path}: {needle}")
     assert not offenders, "Forbidden call sites in whilly.core:\n  " + "\n  ".join(offenders)
 
 
