@@ -86,6 +86,13 @@ CREATE TABLE events (
     task_id    TEXT NOT NULL REFERENCES tasks (id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
     payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Per-event caller-supplied diagnostics (TASK-104b, migration 003).
+    -- Distinct from ``payload`` (which carries state-machine
+    -- bookkeeping like ``version`` / ``reason``); ``detail`` is
+    -- nullable, free-form, and never written as the JSON literal
+    -- ``null`` or as ``{}`` — the repo passes Python ``None`` straight
+    -- through asyncpg so SQL ``IS NULL`` predicates round-trip cleanly.
+    detail     JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
