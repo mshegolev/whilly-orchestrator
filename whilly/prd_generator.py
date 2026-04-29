@@ -196,12 +196,92 @@ def generate_prd(
     return out_path
 
 
+def _build_tasks_payload(
+    prd_path: Path,
+    model: str,
+    raw_dump_path: Path | None = None,
+) -> dict:
+    """Read PRD, call Claude, validate the JSON-tasks response — pure data flow.
+
+    Extracted from :func:`generate_tasks` (TASK-104a-1) so the same
+    pipeline can power both the v3 ``generate_tasks`` (writes
+    ``<slug>_tasks.json``) and the v4 ``generate_tasks_dict`` (returns
+    in-memory dict for direct ``import_plan_dict`` consumption).
+
+    Args:
+        prd_path: PRD markdown file. Must exist.
+        model: Claude model to ask.
+        raw_dump_path: Optional path where raw Claude output is saved if
+            JSON parsing fails — gives the operator a forensics trail
+            without making the caller manage it. Pass ``None`` to skip.
+
+    Returns:
+        Validated dict with at least keys ``project`` (str) and ``tasks``
+        (list[dict]). Each task gets default values for ``status``,
+        ``dependencies``, ``key_files``, ``acceptance_criteria``,
+        ``test_steps`` and an auto-generated ``id`` if missing.
+
+    Raises:
+        FileNotFoundError: PRD file missing.
+        RuntimeError: Claude returned empty response, output isn't valid
+            JSON (even after ``json_repair`` fallback), or no tasks were
+            generated.
+    """
+    if not prd_path.exists():
+        raise FileNotFoundError(f"PRD not found: {prd_path}")
+
+    prd_content = prd_path.read_text(encoding="utf-8")
+    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\nPRD файл: {prd_path}\n\nСодержимое PRD:\n```\n{prd_content}\n```\n"
+
+    log.info("Generating tasks from PRD: %s", prd_path.name)
+    content = _call_claude(prompt, model)
+
+    if not content:
+        raise RuntimeError("Claude returned empty response for task generation")
+
+    content = content.strip()
+    if content.startswith("```json"):
+        content = content[len("```json") :].strip()
+    if content.startswith("```"):
+        content = content[3:].strip()
+    if content.endswith("```"):
+        content = content[:-3].strip()
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        try:
+            import json_repair
+
+            data = json_repair.loads(content)
+        except Exception:
+            if raw_dump_path is not None:
+                raw_dump_path.write_text(content, encoding="utf-8")
+                raise RuntimeError(f"Invalid JSON from Claude. Raw saved to {raw_dump_path}") from None
+            raise RuntimeError("Invalid JSON from Claude (no raw_dump_path provided)") from None
+
+    tasks = data.get("tasks", [])
+    if not tasks:
+        raise RuntimeError("No tasks generated from PRD")
+
+    for i, task in enumerate(tasks):
+        task.setdefault("status", "pending")
+        task.setdefault("dependencies", [])
+        task.setdefault("key_files", [])
+        task.setdefault("acceptance_criteria", [])
+        task.setdefault("test_steps", [])
+        if "id" not in task:
+            task["id"] = f"TASK-{i + 1:03d}"
+
+    return data
+
+
 def generate_tasks(
     prd_path: str | Path,
     output_dir: str = ".planning",
     model: str = "claude-opus-4-6[1m]",
 ) -> Path:
-    """Generate tasks.json from a PRD file.
+    """Generate tasks.json from a PRD file (v3 file-based flow).
 
     Args:
         prd_path: Path to PRD markdown file.
@@ -212,67 +292,53 @@ def generate_tasks(
         Path to generated tasks.json file.
     """
     prd_file = Path(prd_path)
-    if not prd_file.exists():
-        raise FileNotFoundError(f"PRD not found: {prd_file}")
-
-    prd_content = prd_file.read_text(encoding="utf-8")
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Derive output filename
     stem = prd_file.stem.lower().replace("prd-", "").replace("prd_", "")
     out_path = out_dir / f"{stem}_tasks.json"
 
-    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\nPRD файл: {prd_file}\n\nСодержимое PRD:\n```\n{prd_content}\n```\n"
-
-    log.info("Generating tasks from PRD: %s", prd_file.name)
-    content = _call_claude(prompt, model)
-
-    if not content:
-        raise RuntimeError("Claude returned empty response for task generation")
-
-    # Strip markdown fences
-    content = content.strip()
-    if content.startswith("```json"):
-        content = content[len("```json") :].strip()
-    if content.startswith("```"):
-        content = content[3:].strip()
-    if content.endswith("```"):
-        content = content[:-3].strip()
-
-    # Validate JSON
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError:
-        # Try json-repair
-        try:
-            import json_repair
-
-            data = json_repair.loads(content)
-        except Exception:
-            # Save raw and raise
-            raw_path = out_path.with_suffix(".raw.txt")
-            raw_path.write_text(content, encoding="utf-8")
-            raise RuntimeError(f"Invalid JSON from Claude. Raw saved to {raw_path}")
-
-    # Validate structure
-    tasks = data.get("tasks", [])
-    if not tasks:
-        raise RuntimeError("No tasks generated from PRD")
-
-    # Ensure all tasks have required fields
-    for i, task in enumerate(tasks):
-        task.setdefault("status", "pending")
-        task.setdefault("dependencies", [])
-        task.setdefault("key_files", [])
-        task.setdefault("acceptance_criteria", [])
-        task.setdefault("test_steps", [])
-        if "id" not in task:
-            task["id"] = f"TASK-{i + 1:03d}"
+    data = _build_tasks_payload(prd_file, model, raw_dump_path=out_path.with_suffix(".raw.txt"))
 
     out_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    log.info("Tasks saved: %s (%d tasks)", out_path, len(tasks))
+    log.info("Tasks saved: %s (%d tasks)", out_path, len(data["tasks"]))
     return out_path
+
+
+def generate_tasks_dict(
+    prd_path: str | Path,
+    plan_id: str,
+    model: str = "claude-opus-4-6[1m]",
+) -> dict:
+    """Generate tasks payload from a PRD file — return dict, no disk write.
+
+    v4 entry point (TASK-104a-1, PRD docs/PRD-v41-prd-wizard-port.md FR-4).
+    The returned dict is the same shape as what ``generate_tasks`` writes
+    to ``<slug>_tasks.json``, ready for direct consumption by
+    :func:`whilly.adapters.filesystem.plan_io.import_plan_dict`. Skipping
+    the disk round-trip means ``whilly init`` never has to materialise a
+    ``tasks.json`` only to read it back — the wizard goes straight from
+    PRD → Postgres.
+
+    The ``plan_id`` is set explicitly on the returned dict (Claude isn't
+    asked to pick one — the CLI owns slug derivation per FR-3).
+
+    Args:
+        prd_path: Path to PRD markdown file. Must exist.
+        plan_id: Plan id to stamp into the payload's ``plan_id`` key.
+        model: Claude model to use.
+
+    Returns:
+        Dict with keys ``project`` (str), ``plan_id`` (str), and
+        ``tasks`` (list[dict] with all defaults applied).
+
+    Raises:
+        Same as :func:`_build_tasks_payload`.
+    """
+    data = _build_tasks_payload(Path(prd_path), model, raw_dump_path=None)
+    data["plan_id"] = plan_id
+    log.info("Tasks payload built: plan_id=%s tasks=%d", plan_id, len(data["tasks"]))
+    return data
 
 
 def _call_claude(prompt: str, model: str) -> str:

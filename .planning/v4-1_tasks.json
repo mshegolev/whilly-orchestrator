@@ -121,7 +121,7 @@
       "title": "Extract generate_tasks_dict() from prd_generator.py",
       "category": "refactor",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [],
       "key_files": [
         "whilly/prd_generator.py",
@@ -139,7 +139,8 @@
         "pytest tests/unit/test_prd_generator_dict.py -v",
         "pytest tests/unit/ -k 'prd' -q"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-4"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-4",
+      "completion_notes": "Refactored whilly/prd_generator.py: extracted _build_tasks_payload(prd_path, model, raw_dump_path) helper from existing generate_tasks. Added new generate_tasks_dict(prd_path, plan_id, model) -> dict entry point that returns the same shape but without writing to disk + stamps explicit plan_id from caller (slug ownership lives in CLI per PRD FR-3, not Claude). Existing generate_tasks still writes <slug>_tasks.json + returns Path; v3 whilly --prd-wizard flow unchanged (per PRD NFR-4 / SC-4). Added 12 unit tests in tests/unit/test_prd_generator_dict.py covering: payload shape + defaults, markdown fence stripping, missing PRD, empty Claude response, no-tasks edge case, raw-dump forensics on invalid JSON, generate_tasks file write/path, generate_tasks_dict no-disk-write sentinel, plan_id override of Claude response, error propagation. All mock _call_claude — no subprocess in unit suite. Verification: ruff clean, mypy --strict whilly/core/ clean, lint-imports KEPT, pytest tests/unit/ -> 454 passed in 1.03s. Unblocks TASK-104a-3 (cli/init.py composition) which depends on this + TASK-104a-2 (import_plan_dict)."
     },
     {
       "id": "TASK-104a-2",
