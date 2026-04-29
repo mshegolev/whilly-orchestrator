@@ -1,11 +1,11 @@
-"""Tests for the per-task log viewer + cleanup added in the logging upgrade.
+"""Tests for the per-task log viewer + cleanup added in the v3 logging upgrade.
 
-Three concerns:
+Two concerns kept after TASK-107 removed the legacy ``_log_event`` writer:
+
 1. ``cleanup_old_logs`` deletes only what it should (per-task artifacts) and
    keeps the global ``whilly_events.jsonl`` + the rotating ``whilly.log``.
-2. ``_log_event`` continues to write the global JSONL but additionally writes a
-   per-task file when ``task_id`` is supplied.
-3. ``cmd_list`` discovers tasks from per-task event files.
+2. ``cmd_list`` discovers tasks from per-task event files (which are seeded
+   directly by this test, not by the removed legacy emitter).
 """
 
 from __future__ import annotations
@@ -13,17 +13,40 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from whilly.cli import _log_event
 from whilly.log_viewer import cleanup_old_logs, cmd_list, discover_tasks
 
 
 def _set_old(path: Path, days_old: int) -> None:
     cutoff = time.time() - days_old * 86400
     os.utime(path, (cutoff, cutoff))
+
+
+def _write_event(log_dir: Path, event: str, **payload: object) -> None:
+    """Inline replacement for the removed legacy ``_log_event`` helper.
+
+    Writes the same JSONL shape the legacy emitter produced (global file
+    plus per-task file when ``task_id`` is set) so the on-disk format
+    pinned by :mod:`whilly.log_viewer` keeps a stable test fixture even
+    after the v3 writer that produced it was removed in TASK-107.
+    """
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        **payload,
+    }
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "whilly_events.jsonl").open("a", encoding="utf-8").write(line)
+    task_id = payload.get("task_id")
+    if task_id:
+        per_task = log_dir / "tasks"
+        per_task.mkdir(parents=True, exist_ok=True)
+        (per_task / f"{task_id}.events.jsonl").open("a", encoding="utf-8").write(line)
 
 
 def test_cleanup_removes_only_old_per_task_artifacts(tmp_path: Path) -> None:
@@ -83,29 +106,10 @@ def test_cleanup_disabled_when_ttl_zero(tmp_path: Path) -> None:
     assert old.exists()
 
 
-def test_log_event_writes_per_task_file_when_task_id_given(tmp_path: Path) -> None:
-    log_dir = tmp_path / "whilly_logs"
-    log_dir.mkdir()
-
-    _log_event(log_dir, "task_complete", task_id="T-42", duration_s=1.5, cost_usd=0.01)
-    _log_event(log_dir, "plan_start", plan="x.json", tasks=3)  # no task_id
-
-    global_lines = (log_dir / "whilly_events.jsonl").read_text().strip().splitlines()
-    assert len(global_lines) == 2
-
-    per_task = log_dir / "tasks" / "T-42.events.jsonl"
-    assert per_task.is_file()
-    per_task_lines = per_task.read_text().strip().splitlines()
-    assert len(per_task_lines) == 1
-    payload = json.loads(per_task_lines[0])
-    assert payload["task_id"] == "T-42"
-    assert payload["event"] == "task_complete"
-
-
 def test_discover_tasks_reads_per_task_events(tmp_path: Path) -> None:
     log_dir = tmp_path / "whilly_logs"
     log_dir.mkdir()
-    _log_event(log_dir, "task_complete", task_id="T-7", duration_s=2.0, cost_usd=0.05)
+    _write_event(log_dir, "task_complete", task_id="T-7", duration_s=2.0, cost_usd=0.05)
 
     summaries = discover_tasks(log_dir)
 

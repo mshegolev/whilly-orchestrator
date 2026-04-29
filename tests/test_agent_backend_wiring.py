@@ -19,7 +19,6 @@ three surfaces fail loudly:
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -71,49 +70,13 @@ class TestActiveBackendFromEnv:
 
 
 # ── OC-111: CLI --agent flag parsing ──────────────────────────────────────────
-
-
-class TestCLIAgentFlag:
-    """cli.main parses ``--agent`` before dispatching; we don't need a full
-    plan file — the flag must either succeed and be stripped (followed by
-    plan discovery) or error out with a clear message. We stub plan
-    discovery so the test stays isolated from the filesystem."""
-
-    def test_agent_opencode_sets_env(self, clean_env, tmp_path, monkeypatch):
-        plan = tmp_path / "tasks.json"
-        plan.write_text(
-            '{"project":"t","tasks":[{"id":"A","status":"done","description":"noop",'
-            '"dependencies":[],"key_files":[],"priority":"low",'
-            '"acceptance_criteria":[],"test_steps":[]}]}'
-        )
-        monkeypatch.chdir(tmp_path)
-        # All tasks already done → run_plan exits before spawning agents.
-        monkeypatch.setenv("WHILLY_HEADLESS", "1")
-
-        from whilly.cli import main
-
-        rc = main(["--agent", "opencode", str(plan)])
-
-        assert rc == 0
-        assert os.environ.get("WHILLY_AGENT_BACKEND") == "opencode"
-
-    def test_agent_unknown_exits_nonzero(self, clean_env, tmp_path, monkeypatch, capsys):
-        monkeypatch.chdir(tmp_path)
-        from whilly.cli import main
-
-        rc = main(["--agent", "bogus", "tasks.json"])
-
-        assert rc == 1
-        captured = capsys.readouterr()
-        assert "Unknown backend" in captured.out or "Unknown backend" in captured.err
-
-    def test_agent_missing_value_exits_nonzero(self, clean_env, tmp_path, monkeypatch, capsys):
-        monkeypatch.chdir(tmp_path)
-        from whilly.cli import main
-
-        # --agent at end without value
-        rc = main(["--agent"])
-        assert rc == 1
+#
+# The legacy v3 ``whilly`` parser owned a top-level ``--agent`` flag; that
+# parser was removed in TASK-107. Backend selection in v4 happens via the
+# ``WHILLY_AGENT_BACKEND`` env var (covered by ``TestActiveBackendFromEnv``
+# above) and through the worker / dashboard sub-CLIs that own their own
+# argparse. The original ``TestCLIAgentFlag`` cases were legacy-only and
+# have been removed.
 
 
 # ── OC-112: tmux_runner.launch_agent honors backend ───────────────────────────

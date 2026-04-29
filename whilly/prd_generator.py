@@ -176,8 +176,8 @@ def generate_prd(
 
     if slug is None:
         # Legacy behaviour preserved verbatim — first ~50 chars of the
-        # description, alnum/_/- only. Existing callers (the v3
-        # whilly --init flow via cli_legacy) keep working unchanged.
+        # description, alnum/_/- only. Existing v4 ``whilly init`` callers
+        # keep working unchanged.
         slug = description.strip()[:50].replace(" ", "-").replace("/", "-")
         slug = "".join(c for c in slug if c.isalnum() or c in "-_")
     filename = f"PRD-{slug}.md"

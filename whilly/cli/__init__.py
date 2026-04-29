@@ -1,38 +1,25 @@
-"""Whilly v4.0 CLI dispatcher (PRD FR-2.5, FR-3.1, TASK-010b).
+"""Whilly v4 CLI dispatcher.
 
-This package shadows the legacy v3 :mod:`whilly.cli` module — the actual v3
-implementation now lives in :mod:`whilly.cli_legacy`. We re-export every
-public symbol of the legacy module so existing code paths keep working
-unchanged during the big-bang v4 rewrite (PRD TC-9):
+Single entry point for the ``whilly`` console script declared in
+:file:`pyproject.toml` (``[project.scripts] whilly = "whilly.cli:main"``).
+Routes the first positional token to the matching v4 sub-CLI:
 
-* ``from whilly.cli import main`` — :func:`main` below dispatches v4
-  subcommands first, then falls back to the legacy entry point.
-* ``from whilly.cli import _log_event`` and other underscore-prefixed
-  helpers — re-exported explicitly because :pep:`8` ``from foo import *``
-  skips ``_`` names.
-* ``patch("whilly.cli.time.sleep")`` and similar attribute-level patches
-  used by the v3 test suite — wildcard re-exports the ``time`` module
-  reference that legacy ``cli_legacy.py`` imports at the top, so these
-  patches keep targeting the same in-memory module object.
+* ``whilly plan ...``      → :mod:`whilly.cli.plan`
+* ``whilly run ...``       → :mod:`whilly.cli.run`
+* ``whilly dashboard ...`` → :mod:`whilly.cli.dashboard`
+* ``whilly init ...``      → :mod:`whilly.cli.init`
+* ``whilly worker ...``    → :mod:`whilly.cli.worker`
 
-Why a dispatcher rather than two separate console scripts?
-----------------------------------------------------------
-``[project.scripts] whilly = "whilly.cli:main"`` in :file:`pyproject.toml`
-points at *this* :func:`main`, not the legacy one. The dispatcher lets us
-add v4 subcommands (``whilly plan import``, ``whilly plan show`` from
-TASK-015, ``whilly run`` from TASK-019c) without rewriting the v3 argument
-parser yet — first token is the routing key, everything else is delegated
-to either the v4 sub-CLI or the legacy parser. Once the v4 surface fully
-covers the v3 use cases (TASK-029 / TASK-033 territory), the legacy
-fallback can be deleted in a single follow-up commit.
+Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
+non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
+Rich Live runtime, or the Claude/agent stack just to print usage text.
 
-PEP 8 complaints about ``import *``
------------------------------------
-We tolerate them here on purpose: the alternative is enumerating ~50
-names from the legacy module and keeping that list in sync with every
-v3 patch. The test suite already relies on the entire surface being
-importable as ``whilly.cli.<X>``, so a wildcard plus an explicit
-underscore-prefixed re-export list is the lowest-friction option.
+Unknown subcommands print the v4 help block to stderr and exit ``2``
+(argparse convention). The v3 top-level flags ``--all``, ``--resume``,
+``--prd-wizard``, ``--workspace``, and ``--worktree`` are no longer
+recognised; their functionality either moved to a v4 subcommand or was
+removed (``WHILLY_WORKTREE`` / ``WHILLY_USE_WORKSPACE`` env vars are now
+no-ops — the v4 CLI does not act on them).
 """
 
 from __future__ import annotations
@@ -40,69 +27,87 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 
-# Re-export the legacy module surface so existing v3 imports
-# (``from whilly.cli import main``, ``patch.object(whilly.cli, "Reporter")``,
-# ``patch("whilly.cli.time.sleep")``) keep resolving to the same objects.
-# Wildcard misses ``_``-prefixed names, hence the explicit second import.
-from whilly.cli_legacy import *  # noqa: F401,F403
-from whilly.cli_legacy import (  # noqa: F401
-    _emit_json,
-    _finalise_project_board,
-    _log_event,
-)
-from whilly.cli_legacy import main as _legacy_main
+__all__ = ["main", "run_plan_command"]
+
+
+_HELP_TEXT = """\
+Whilly v4 — distributed task orchestrator.
+
+Usage: whilly <command> [options]
+
+Commands:
+  plan        Manage plans (import, export, show, reset, apply).
+  run         Run a local worker that claims tasks from a plan.
+  dashboard   Live TUI dashboard for an in-flight plan.
+  init        Interactive PRD wizard → plan import.
+  worker      Run a remote worker against a control-plane URL.
+
+Run `whilly <command> --help` for command-specific options.
+"""
+
+
+def _print_help(stream: object = None) -> None:
+    """Print the v4 help block. Defaults to stdout."""
+    out = stream if stream is not None else sys.stdout
+    out.write(_HELP_TEXT)
+    out.flush()
 
 
 def main(argv: list[str] | None = None) -> int:
-    """v4 CLI entry point — dispatch ``plan`` to v4, everything else to v3.
+    """v4 CLI entry point — dispatch the first positional token to its sub-CLI.
 
-    The first positional token decides the route:
-
-    * ``whilly plan ...`` → :mod:`whilly.cli.plan` (TASK-010b et al.)
-    * anything else (``whilly``, ``whilly --resume``, ``whilly tasks.json``)
-      → legacy :func:`whilly.cli_legacy.main`.
-
-    ``argv`` defaults to ``sys.argv[1:]`` to match the legacy contract; we
-    pass the *original* ``argv`` (not the post-router slice) to the legacy
-    main so its own argument parsing sees the full list it expects.
+    ``argv`` defaults to ``sys.argv[1:]`` (matching the standard Python CLI
+    contract). When the first token is unknown — including the legacy v3
+    flags ``--all``, ``--resume``, ``--prd-wizard``, ``--workspace``, and
+    ``--worktree`` — the command prints the v4 help block to stderr and
+    returns ``2``.
     """
     args = sys.argv[1:] if argv is None else list(argv)
-    if args and args[0] == "plan":
-        # Lazy import: ``whilly.cli.plan`` pulls in asyncpg via the db adapter.
-        # Importing it eagerly at module load time would force every legacy
-        # ``whilly`` invocation (including ``whilly --help``) to pay that cost.
+
+    if not args or args[0] in ("-h", "--help"):
+        _print_help()
+        return 0
+
+    if args[0] in ("-V", "--version"):
+        from whilly import __version__
+
+        sys.stdout.write(f"whilly {__version__}\n")
+        sys.stdout.flush()
+        return 0
+
+    cmd = args[0]
+    rest = args[1:]
+
+    if cmd == "plan":
         from whilly.cli.plan import run_plan_command
 
-        return run_plan_command(args[1:])
-    if args and args[0] == "run":
-        # Same lazy-import argument as ``plan`` above: ``whilly.cli.run`` pulls
-        # asyncpg + the worker stack; legacy ``whilly --resume`` invocations
-        # shouldn't pay that import cost. Owner: TASK-019c.
+        return run_plan_command(rest)
+    if cmd == "run":
         from whilly.cli.run import run_run_command
 
-        return run_run_command(args[1:])
-    if args and args[0] == "dashboard":
-        # Same lazy-import argument as the other v4 subcommands: the Rich
-        # Live runtime and asyncpg pool are only paid for by callers that
-        # actually want the dashboard. Owner: TASK-027.
+        return run_run_command(rest)
+    if cmd == "dashboard":
         from whilly.cli.dashboard import run_dashboard_command
 
-        return run_dashboard_command(args[1:])
-    if args and args[0] == "init":
-        # ``whilly init`` — interactive PRD wizard + plan import. Lazy
-        # import keeps legacy ``whilly --resume`` etc. fast (init pulls
-        # asyncpg via the inserter and the prd_generator's Claude
-        # subprocess wiring). Owner: TASK-104a-3.
+        return run_dashboard_command(rest)
+    if cmd == "init":
         from whilly.cli.init import run_init_command
 
-        return run_init_command(args[1:])
-    return _legacy_main(argv)
+        return run_init_command(rest)
+    if cmd == "worker":
+        from whilly.cli.worker import run_worker_command
+
+        return run_worker_command(rest)
+
+    sys.stderr.write(f"whilly: unknown command {cmd!r}\n\n")
+    _print_help(sys.stderr)
+    return 2
 
 
 def run_plan_command(argv: Sequence[str]) -> int:
     """Re-export of :func:`whilly.cli.plan.run_plan_command` for convenience.
 
-    Lets tests that don't need to round-trip through ``main`` invoke the
+    Lets tests that don't need to round-trip through :func:`main` invoke the
     plan-subcommand parser directly without importing :mod:`whilly.cli.plan`
     themselves. Implemented as a thin wrapper rather than a re-export at
     import time so we keep the ``asyncpg`` import lazy.
