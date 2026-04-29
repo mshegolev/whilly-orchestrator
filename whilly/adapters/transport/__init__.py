@@ -31,13 +31,17 @@ to know which submodule a schema lives in.
 
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
+    SUPPRESS_WORKER_TOKEN_WARNING_ENV,
     WORKER_TOKEN_ENV,
     AuthDependency,
     bearer_auth,
     bootstrap_auth,
+    hash_bearer_token,
     make_bearer_auth,
     make_bootstrap_auth,
+    make_db_bearer_auth,
     reset_lazy_dependencies,
+    reset_legacy_warning_state,
 )
 from whilly.adapters.transport.client import (
     DEFAULT_BACKOFF_SCHEDULE,
@@ -80,6 +84,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "HEALTH_PATH",
     "REGISTER_PATH",
+    "SUPPRESS_WORKER_TOKEN_WARNING_ENV",
     "WORKER_TOKEN_ENV",
     "AuthDependency",
     "AuthError",
@@ -102,7 +107,10 @@ __all__ = [
     "bearer_auth",
     "bootstrap_auth",
     "create_app",
+    "hash_bearer_token",
     "make_bearer_auth",
     "make_bootstrap_auth",
+    "make_db_bearer_auth",
     "reset_lazy_dependencies",
+    "reset_legacy_warning_state",
 ]

@@ -105,7 +105,12 @@ class FakeRepo:
             raise result
         return result
 
-    async def complete_task(self, task_id: TaskId, version: int) -> Task:  # pragma: no cover
+    async def complete_task(
+        self,
+        task_id: TaskId,
+        version: int,
+        cost_usd: object = None,  # TASK-102
+    ) -> Task:  # pragma: no cover
         self.complete_calls.append((task_id, version))
         result = self.complete_results.pop(0)
         if isinstance(result, VersionConflictError):

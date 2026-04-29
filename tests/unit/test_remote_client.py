@@ -1097,7 +1097,9 @@ async def test_complete() -> None:
     assert captured["auth"] == "Bearer bearer-tok"
     import json
 
-    assert json.loads(captured["body"]) == {"worker_id": "w-1", "version": 1}
+    # ``cost_usd`` defaults to ``None`` when the caller omits it
+    # (TASK-102 — back-compat for the no-spend path).
+    assert json.loads(captured["body"]) == {"worker_id": "w-1", "version": 1, "cost_usd": None}
 
     # Phase 2: handler returns 409 with the structured envelope. The
     # version skew here mirrors the canonical "another writer won the

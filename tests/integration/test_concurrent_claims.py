@@ -342,7 +342,11 @@ async def test_repeat_claims_after_exhaustion_return_none(
     async with db_pool.acquire() as conn:
         await conn.executemany(
             "INSERT INTO workers (worker_id, hostname, token_hash) VALUES ($1, $2, $3)",
-            [(f"w-second-{i:03d}", f"host-second-{i}", "sha256:second") for i in range(10)],
+            # Each second-wave worker gets a unique token_hash because
+            # migration 004 (TASK-101) added a partial UNIQUE index over
+            # ``workers.token_hash`` (where token_hash IS NOT NULL); a
+            # shared placeholder would now violate that constraint.
+            [(f"w-second-{i:03d}", f"host-second-{i}", f"sha256:second-{i:03d}") for i in range(10)],
         )
     second_workers = [f"w-second-{i:03d}" for i in range(10)]
     second_wave = await asyncio.gather(*(task_repo.claim_task(wid, plan_id) for wid in second_workers))
