@@ -1256,7 +1256,6 @@ class Dashboard:
             "  [dim]WHILLY_MODEL=opus-4-6[/]     Модель Claude\n"
             "  [dim]WHILLY_VOICE=0[/]            Отключить голосовые уведомления\n"
             "  [dim]WHILLY_WEB=1[/]              HTTP статус на localhost:9191\n"
-            "  [dim]WHILLY_WORKTREE=1[/]         Git worktree изоляция агентов\n"
             "  [dim]WHILLY_VERIFY=1[/]           Lint+test после каждой задачи\n\n"
             f"[bold]\u2666 Текущая сессия[/]\n"
             f"  Plan:       {plan_name}\n"

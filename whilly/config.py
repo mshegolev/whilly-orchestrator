@@ -86,8 +86,12 @@ class WhillyConfig:
     HEADLESS: bool = False
     TIMEOUT: int = 0
     STATE_FILE: str = ".whilly_state.json"
-    WORKTREE: bool = False  # WHILLY_WORKTREE=1 — per-task git worktree (только при MAX_PARALLEL > 1)
-    USE_WORKSPACE: bool = False  # WHILLY_USE_WORKSPACE=1 (или --workspace) — включить plan-level worktree
+    # WHILLY_WORKTREE / WHILLY_USE_WORKSPACE were per-task / plan-level git
+    # worktree toggles in v3 — removed in v4 (TASK-107). The fields are
+    # retained as no-ops so legacy `.env` files / shell exports keep parsing
+    # without error; setting them has no behavioural effect on the v4 CLI.
+    WORKTREE: bool = False  # WHILLY_WORKTREE — removed no-op since v3.3+ (kept for backward .env compat)
+    USE_WORKSPACE: bool = False  # WHILLY_USE_WORKSPACE — removed no-op since v3.3+ (kept for backward .env compat)
 
     # Logging verbosity + retention
     VERBOSE: bool = False  # WHILLY_VERBOSE=1 (или --verbose/-v) — Whilly debug + ANTHROPIC_LOG=info
