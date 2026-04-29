@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 import asyncpg
@@ -133,6 +134,23 @@ RETURNING
 _INSERT_EVENT_SQL: str = """
 INSERT INTO events (task_id, event_type, payload)
 VALUES ($1, $2, $3::jsonb)
+"""
+
+
+# Variant of :data:`_INSERT_EVENT_SQL` that also writes the ``detail`` JSONB
+# column (TASK-104b, migration 003). Distinct statement rather than a
+# four-arg superset because most call sites do not have a ``detail`` payload
+# — passing ``NULL`` through every existing INSERT would inflate the wire
+# round-trip with no upside, and the explicit two-statement split keeps
+# each call site's intent legible.
+#
+# ``$4::jsonb`` accepts SQL ``NULL`` straight from Python ``None`` (asyncpg
+# does not stringify None into the JSON literal ``"null"`` for jsonb
+# columns); the column itself is nullable per the migration so a Python
+# ``None`` round-trips to ``IS NULL`` on read (VAL-TRIZ-009).
+_INSERT_EVENT_WITH_DETAIL_SQL: str = """
+INSERT INTO events (task_id, event_type, payload, detail)
+VALUES ($1, $2, $3::jsonb, $4::jsonb)
 """
 
 
@@ -779,7 +797,14 @@ class TaskRepository:
                 )
                 return _row_to_task(row)
 
-    async def fail_task(self, task_id: TaskId, version: int, reason: str) -> Task:
+    async def fail_task(
+        self,
+        task_id: TaskId,
+        version: int,
+        reason: str,
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> Task:
         """Atomically transition ``task_id`` from ``CLAIMED`` | ``IN_PROGRESS`` → ``FAILED``.
 
         Mirrors :meth:`complete_task` but accepts both pre-START and
@@ -795,6 +820,29 @@ class TaskRepository:
 
         Raises :class:`VersionConflictError` on optimistic-lock mismatch
         (same three-way classification as :meth:`complete_task`).
+
+        TASK-104b extensions
+        --------------------
+        ``detail`` (keyword-only) accepts a free-form dict that is
+        persisted into the new ``events.detail`` JSONB column (migration
+        003). When ``detail`` is ``None`` (the default), the column is
+        SQL ``NULL`` rather than the literal JSON ``null`` or the empty
+        object ``{}`` (VAL-TRIZ-009). Reserved keys live on
+        ``events.payload`` (``version`` / ``reason``); ``detail`` is
+        free-form caller diagnostics.
+
+        Per-task TRIZ hook
+        ~~~~~~~~~~~~~~~~~~
+        After the FAIL transition commits, the method optionally
+        invokes :func:`whilly.core.triz.analyze_contradiction_with_outcome`
+        on the post-update :class:`Task` and writes a follow-up
+        ``triz.contradiction`` (positive verdict) or ``triz.error``
+        (timeout) event row carrying the finding shape in ``detail``.
+        Gated by ``WHILLY_TRIZ_ENABLED=1`` (off by default in tests, on
+        in prod-like config). Fail-open contract (VAL-TRIZ-015): the hook
+        never re-raises into the caller for any of the documented soft-
+        fail modes (claude absent, timeout, malformed JSON, claude
+        non-zero exit).
         """
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -803,11 +851,13 @@ class TaskRepository:
                     await self._raise_version_conflict(conn, task_id, version)
 
                 payload = json.dumps({"version": row["version"], "reason": reason})
+                detail_jsonb = json.dumps(detail) if detail is not None else None
                 await conn.execute(
-                    _INSERT_EVENT_SQL,
+                    _INSERT_EVENT_WITH_DETAIL_SQL,
                     row["id"],
                     Transition.FAIL.value,
                     payload,
+                    detail_jsonb,
                 )
                 logger.info(
                     "fail_task: task=%s version=%d reason=%r → FAILED",
@@ -815,7 +865,83 @@ class TaskRepository:
                     row["version"],
                     reason,
                 )
-                return _row_to_task(row)
+                updated = _row_to_task(row)
+
+        # TRIZ hook runs *after* the FAIL commit (VAL-TRIZ-010 ordering
+        # contract: FAIL row's ``created_at`` ≤ ``triz.contradiction``
+        # row's ``created_at``). Running outside the transaction also
+        # guarantees a TRIZ failure cannot roll the FAIL transition back
+        # — VAL-TRIZ-003 requires the FAIL event row preserved when
+        # claude is absent.
+        if os.environ.get("WHILLY_TRIZ_ENABLED") == "1":
+            await self._maybe_emit_triz_event(updated)
+        return updated
+
+    async def _maybe_emit_triz_event(self, task: Task) -> None:
+        """Optional per-task TRIZ analyser hook (TASK-104b).
+
+        Subprocesses the ``claude`` CLI via
+        :func:`whilly.core.triz.analyze_contradiction_with_outcome` and
+        writes a follow-up event row depending on the outcome:
+
+        * positive verdict — one ``triz.contradiction`` event with
+          ``detail = {"contradiction_type": ..., "reason": ...}``.
+        * subprocess timeout — one ``triz.error`` event with
+          ``detail = {"reason": "timeout"}``.
+        * everything else (claude absent, malformed JSON, claude
+          non-zero exit, no contradiction found) — no event row.
+
+        Fail-open: every exception (analyzer-side AND DB-side) is
+        swallowed with a WARNING log so the FAIL transition that
+        already committed stays observable.
+        """
+        # Local import keeps cold-start cost off the import graph for
+        # workloads that never invoke fail_task with the env flag set.
+        from whilly.core.triz import (  # noqa: PLC0415 — see comment above
+            ERROR_REASON_TIMEOUT,
+            analyze_contradiction_with_outcome,
+        )
+
+        try:
+            outcome = analyze_contradiction_with_outcome(task)
+        except Exception as exc:  # noqa: BLE001 — fail-open contract
+            logger.warning(
+                "triz hook: analyzer raised unexpectedly: %r — skipping event",
+                exc,
+            )
+            return
+
+        if outcome.finding is not None:
+            event_type = "triz.contradiction"
+            detail_payload: dict[str, Any] = {
+                "contradiction_type": outcome.finding.contradiction_type,
+                "reason": outcome.finding.reason,
+            }
+        elif outcome.error_reason == ERROR_REASON_TIMEOUT:
+            event_type = "triz.error"
+            detail_payload = {"reason": "timeout"}
+        else:
+            # No contradiction OR a soft-fail mode (claude absent,
+            # parse error, non-zero exit) that we deliberately do NOT
+            # surface as an event row (VAL-TRIZ-003 / VAL-TRIZ-005).
+            return
+
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    _INSERT_EVENT_WITH_DETAIL_SQL,
+                    task.id,
+                    event_type,
+                    json.dumps({}),
+                    json.dumps(detail_payload),
+                )
+        except Exception as exc:  # noqa: BLE001 — fail-open contract
+            logger.warning(
+                "triz hook: failed to write %s event for task=%s: %r",
+                event_type,
+                task.id,
+                exc,
+            )
 
     async def release_task(self, task_id: TaskId, version: int, reason: str) -> Task:
         """Atomically transition ``task_id`` from ``CLAIMED`` | ``IN_PROGRESS`` → ``PENDING``.

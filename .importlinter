@@ -29,3 +29,10 @@ forbidden_modules =
 ignore_imports =
     # whilly.core may use stdlib `os` for os.path utilities, but tests assert
     # no os.chdir / os.getcwd call sites via grep in CI (see TASK-029).
+    # whilly.core.triz is granted a documented exception to use subprocess /
+    # shutil because the per-task TRIZ analyzer (TASK-104b) is pinned to
+    # ``whilly/core/triz.py`` by the validation contract (VAL-TRIZ-006:
+    # ``subprocess.run`` calls observable inside the module). The rest of
+    # whilly.core stays pure — this exception is intentionally narrow.
+    whilly.core.triz -> subprocess
+    whilly.core.triz -> shutil
