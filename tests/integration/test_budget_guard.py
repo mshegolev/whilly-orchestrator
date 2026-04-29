@@ -59,6 +59,8 @@ from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.db import TaskRepository
 from whilly.adapters.db.repository import (
     BUDGET_EXCEEDED_EVENT_TYPE,
+    BUDGET_EXCEEDED_REASON,
+    BUDGET_EXCEEDED_THRESHOLD_PCT,
     VersionConflictError,
 )
 from whilly.core.models import PlanId, TaskId
@@ -424,6 +426,9 @@ async def test_crossing_budget_emits_sentinel_once(db_pool: asyncpg.Pool, task_r
     assert Decimal(payload["budget_usd"]) == Decimal("1.0000")
     assert Decimal(payload["spent_usd"]) == Decimal("1.1000")
     assert payload["crossing_task_id"] == completed_id
+    # VAL-CROSS-013: crossing-condition pins.
+    assert payload["reason"] == BUDGET_EXCEEDED_REASON == "budget_threshold"
+    assert payload["threshold_pct"] == BUDGET_EXCEEDED_THRESHOLD_PCT == 100
 
 
 async def test_sentinel_event_shape_matches_contract(db_pool: asyncpg.Pool, task_repo: TaskRepository) -> None:
@@ -445,7 +450,52 @@ async def test_sentinel_event_shape_matches_contract(db_pool: asyncpg.Pool, task
     assert sentinel["task_id"] is None
     assert sentinel["plan_id"] == "plan-shape"
     payload = json.loads(sentinel["payload"])
-    assert set(payload.keys()) >= {"plan_id", "budget_usd", "spent_usd", "crossing_task_id"}
+    assert set(payload.keys()) >= {
+        "plan_id",
+        "budget_usd",
+        "spent_usd",
+        "crossing_task_id",
+        "reason",
+        "threshold_pct",
+    }
+
+
+async def test_budget_exceeded_payload_includes_reason_and_threshold_pct(
+    db_pool: asyncpg.Pool, task_repo: TaskRepository
+) -> None:
+    """The sentinel payload pins ``reason='budget_threshold'`` and ``threshold_pct=100`` (VAL-CROSS-013).
+
+    Independent of the wider sentinel-shape test: this is the verbatim
+    evidence query the user-testing validator runs —
+    ``SELECT payload->>'reason', (payload->>'threshold_pct')::int FROM
+    events WHERE plan_id=$1 AND event_type='plan.budget_exceeded'`` —
+    must return ``('budget_threshold', 100)``.
+    """
+    await _seed_plan(
+        db_pool,
+        "plan-cross-013",
+        budget_usd=Decimal("0.5000"),
+        spent_usd=Decimal("0"),
+    )
+    await _seed_task(db_pool, "T-cross-013", "plan-cross-013")
+    await _seed_worker(db_pool, "w-cross-013")
+
+    await _claim_start_complete(task_repo, "plan-cross-013", "w-cross-013", cost_usd=Decimal("0.5000"))
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            (
+                "SELECT payload->>'reason' AS reason, "
+                "(payload->>'threshold_pct')::int AS threshold_pct "
+                "FROM events "
+                "WHERE plan_id = $1 AND event_type = $2"
+            ),
+            "plan-cross-013",
+            BUDGET_EXCEEDED_EVENT_TYPE,
+        )
+    assert row is not None
+    assert row["reason"] == "budget_threshold"
+    assert row["threshold_pct"] == 100
 
 
 async def test_unlimited_plan_never_emits_sentinel(db_pool: asyncpg.Pool, task_repo: TaskRepository) -> None:

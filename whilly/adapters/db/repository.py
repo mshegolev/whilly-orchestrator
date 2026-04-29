@@ -72,7 +72,13 @@ import asyncpg
 from whilly.core.models import PlanId, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
 
-__all__ = ["BUDGET_EXCEEDED_EVENT_TYPE", "TaskRepository", "VersionConflictError"]
+__all__ = [
+    "BUDGET_EXCEEDED_EVENT_TYPE",
+    "BUDGET_EXCEEDED_REASON",
+    "BUDGET_EXCEEDED_THRESHOLD_PCT",
+    "TaskRepository",
+    "VersionConflictError",
+]
 
 
 # Sentinel event type emitted exactly once when ``plans.spent_usd``
@@ -85,6 +91,15 @@ __all__ = ["BUDGET_EXCEEDED_EVENT_TYPE", "TaskRepository", "VersionConflictError
 # (``CLAIM`` / ``COMPLETE`` / ``FAIL``) which live on
 # :class:`whilly.core.state_machine.Transition`.
 BUDGET_EXCEEDED_EVENT_TYPE: str = "plan.budget_exceeded"
+
+# Contract pins for the ``plan.budget_exceeded`` payload (VAL-CROSS-013).
+# The v4.1 design only emits the sentinel on the 100%-of-budget crossing,
+# so ``reason`` is fixed to ``budget_threshold`` and ``threshold_pct`` to
+# ``100`` — defined as module-level constants here so future thresholds
+# (e.g. 50% / 90% pre-warnings) can extend the same path without a
+# literal-search across the codebase.
+BUDGET_EXCEEDED_REASON: str = "budget_threshold"
+BUDGET_EXCEEDED_THRESHOLD_PCT: int = 100
 
 
 # Quantum used to coerce a Python float-ish ``cost_usd`` into a stable
@@ -1025,6 +1040,8 @@ class TaskRepository:
                                 "budget_usd": str(spend_row["budget_usd"]),
                                 "spent_usd": str(spend_row["new_spent"]),
                                 "crossing_task_id": row["id"],
+                                "reason": BUDGET_EXCEEDED_REASON,
+                                "threshold_pct": BUDGET_EXCEEDED_THRESHOLD_PCT,
                             }
                         )
                         await conn.execute(
