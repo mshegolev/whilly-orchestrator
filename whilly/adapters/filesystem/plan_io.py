@@ -60,7 +60,7 @@ from typing import Any
 
 from whilly.core.models import Plan, Priority, Task, TaskStatus
 
-__all__ = ["PlanParseError", "parse_plan", "serialize_plan"]
+__all__ = ["PlanParseError", "parse_plan", "parse_plan_dict", "serialize_plan"]
 
 
 # Required keys at the top level of the JSON document. ``plan_id`` is
@@ -121,6 +121,57 @@ def parse_plan(path: str | os.PathLike[str]) -> tuple[Plan, list[Task]]:
         raise PlanParseError(f"plan file {plan_path} must contain a JSON object at the top level")
 
     return _plan_from_dict(data, source=str(plan_path))
+
+
+def parse_plan_dict(
+    payload: dict[str, Any],
+    *,
+    plan_id: str | None = None,
+) -> tuple[Plan, list[Task]]:
+    """Validate an in-memory plan ``payload`` and return ``(Plan, list[Task])``.
+
+    Counterpart to :func:`parse_plan` for callers who already hold the
+    decoded JSON in memory and don't want to round-trip through the
+    filesystem (TASK-104a-2). The canonical caller is
+    :mod:`whilly.cli.init`: the PRD wizard hands a freshly-built dict
+    from :func:`whilly.prd_generator.generate_tasks_dict` straight into
+    this parser, then drives the same ``_insert_plan_and_tasks`` helper
+    that ``whilly plan import`` uses, with no ``tasks.json`` ever
+    touching disk.
+
+    Args:
+        payload: Decoded plan dict — same shape as what :func:`parse_plan`
+            reads from a file. Must have ``project`` (str) and ``tasks``
+            (list[dict]) at the top level. ``plan_id`` may be present
+            either in the dict itself or via the keyword argument; the
+            keyword argument wins on conflict (slug ownership lives in
+            the CLI per PRD docs/PRD-v41-prd-wizard-port.md FR-3, not in
+            the wizard's JSON output).
+        plan_id: Optional override that takes precedence over any
+            ``plan_id`` key already in ``payload``. ``None`` means "use
+            whatever the dict carries", which falls back to ``project``
+            via the same path as :func:`parse_plan`.
+
+    Returns:
+        Same pair as :func:`parse_plan`: ``(Plan, list[Task])`` where
+        the list is the same task tuple unpacked, ready for batched
+        INSERT in the CLI's :func:`_insert_plan_and_tasks`.
+
+    Raises:
+        PlanParseError: any validation failure. The ``source`` in the
+            message is ``"<dict>"`` rather than a file path so the
+            operator can tell which surface produced the bad shape.
+    """
+    if not isinstance(payload, dict):
+        raise PlanParseError(f"plan payload must be a dict, got {type(payload).__name__}")
+    if plan_id is not None:
+        if not isinstance(plan_id, str) or not plan_id:
+            raise PlanParseError(f"plan_id override must be a non-empty string, got {plan_id!r}")
+        # Override-on-conflict: caller-provided id wins. Mutating a
+        # shallow copy keeps the caller's dict untouched even though
+        # _plan_from_dict only reads.
+        payload = {**payload, "plan_id": plan_id}
+    return _plan_from_dict(payload, source="<dict>")
 
 
 def serialize_plan(plan: Plan, tasks: Iterable[Task]) -> dict[str, Any]:

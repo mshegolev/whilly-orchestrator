@@ -147,7 +147,7 @@
       "title": "Add import_plan_dict() to whilly.adapters.filesystem.plan_io",
       "category": "refactor",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [],
       "key_files": [
         "whilly/adapters/filesystem/plan_io.py",
@@ -165,7 +165,8 @@
         "pytest tests/unit/test_plan_io.py -v",
         "pytest tests/integration/test_plan_io.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-4"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-4",
+      "completion_notes": "Added parse_plan_dict(payload, plan_id=None) to whilly/adapters/filesystem/plan_io.py — pure parser counterpart of parse_plan() that takes a dict instead of a file path. Reuses existing _plan_from_dict helper. plan_id keyword arg overrides payloads value (slug ownership stays in CLI per PRD FR-3). Defensive: shallow-copy via {**payload} before override so callers dict is never mutated. Real INSERT logic (whilly/cli/plan.py::_insert_plan_and_tasks) reused as-is — no DB code added here. 8 new unit tests in tests/unit/test_plan_io.py: shape parity with parse_plan, plan_id override priority, fallback to project, no-mutation contract, non-dict rejection, empty plan_id rejection, error propagation, source label. All 35 plan_io tests green. Verification: ruff clean, mypy core clean, lint-imports KEPT."
     },
     {
       "id": "TASK-104a-3",
