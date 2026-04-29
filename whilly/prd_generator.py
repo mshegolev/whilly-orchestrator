@@ -346,9 +346,21 @@ def generate_tasks_dict(
     Raises:
         Same as :func:`_build_tasks_payload`.
     """
-    data = _build_tasks_payload(Path(prd_path), model, raw_dump_path=None)
+    # TASK-109 follow-up: real-world run on 2026-04-29 surfaced a
+    # "Invalid JSON from Claude" with no forensics file — debugging
+    # impossible. Save raw next to the PRD so the operator can see
+    # what Claude actually returned and either patch the prompt or
+    # paste the JSON in by hand. The path mirrors what
+    # ``generate_tasks`` already does for the v3 file flow.
+    prd_p = Path(prd_path)
+    raw_dump = prd_p.with_suffix(".tasks.raw.txt")
+    data = _build_tasks_payload(prd_p, model, raw_dump_path=raw_dump)
     data["plan_id"] = plan_id
     log.info("Tasks payload built: plan_id=%s tasks=%d", plan_id, len(data["tasks"]))
+    # Happy path: remove the forensics file so a successful run leaves
+    # no trash on disk. Only kept if _build_tasks_payload raised.
+    if raw_dump.exists():
+        raw_dump.unlink()
     return data
 
 
