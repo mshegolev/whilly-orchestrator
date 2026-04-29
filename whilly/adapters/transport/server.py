@@ -160,7 +160,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Final
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
@@ -168,6 +168,7 @@ from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
     AuthDependency,
+    IdentityBindingAuthDependency,
     hash_bearer_token,
     make_bootstrap_auth,
     make_db_bearer_auth,
@@ -714,7 +715,7 @@ def create_app(
     # 401 in production. ``make_db_bearer_auth`` is the per-worker
     # bearer surface (TASK-101); legacy ``WHILLY_WORKER_TOKEN`` rides
     # along as the optional one-minor-version fallback.
-    bearer_dep: AuthDependency = make_db_bearer_auth(repo, legacy_token=legacy_worker_token)
+    bearer_dep: IdentityBindingAuthDependency = make_db_bearer_auth(repo, legacy_token=legacy_worker_token)
     bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
 
     @asynccontextmanager
@@ -907,7 +908,7 @@ def create_app(
         response_model=HeartbeatResponse,
         dependencies=[Depends(bearer_dep)],
     )
-    async def heartbeat(worker_id: str, payload: HeartbeatRequest) -> HeartbeatResponse:
+    async def heartbeat(request: Request, worker_id: str, payload: HeartbeatRequest) -> HeartbeatResponse:
         """Refresh ``workers.last_heartbeat`` for ``worker_id`` (PRD FR-1.6).
 
         Gated by the per-worker bearer dependency — the cluster-shared
@@ -930,10 +931,19 @@ def create_app(
             # URL). 422 would be a pure schema violation; this is a
             # cross-field validation that FastAPI can't catch via
             # pydantic alone.
+            #
+            # Order matters: the body↔path 400 check stays AHEAD of
+            # the token-owner 403 check below so VAL-AUTH-024's
+            # ``(400, 401, 403)`` envelope keeps both branches
+            # independently exercised (one test for the 400 schema
+            # mismatch, one test for the 403 cross-worker bearer).
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(f"worker_id in body does not match path: path={worker_id!r} body={payload.worker_id!r}"),
             )
+        # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
+        # bearer cannot heartbeat worker B even when body == path == B.
+        _require_token_owner(request, worker_id)
         ok = await repo.update_heartbeat(worker_id)
         return HeartbeatResponse(ok=ok)
 
@@ -955,7 +965,7 @@ def create_app(
         },
         dependencies=[Depends(bearer_dep)],
     )
-    async def claim(payload: ClaimRequest) -> Response | ClaimResponse:
+    async def claim(request: Request, payload: ClaimRequest) -> Response | ClaimResponse:
         """Long-polled task acquisition (PRD FR-1.3).
 
         Wraps :meth:`TaskRepository.claim_task` in a server-side poll
@@ -990,6 +1000,10 @@ def create_app(
             unconditional final ``claim_task`` so a row that arrived
             in the trailing window is still returned rather than 204'd.
         """
+        # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
+        # bearer cannot claim a task on behalf of worker B even though
+        # the path carries no identity.
+        _require_token_owner(request, payload.worker_id)
         deadline = time.monotonic() + claim_long_poll_timeout
         while True:
             claimed = await repo.claim_task(payload.worker_id, payload.plan_id)
@@ -1043,7 +1057,9 @@ def create_app(
         },
         dependencies=[Depends(bearer_dep)],
     )
-    async def complete_task(task_id: str, payload: CompleteRequest) -> CompleteResponse | JSONResponse:
+    async def complete_task(
+        request: Request, task_id: str, payload: CompleteRequest
+    ) -> CompleteResponse | JSONResponse:
         """Terminal-state RPC: IN_PROGRESS → DONE (PRD FR-1.1, FR-2.4).
 
         Thin wrapper over :meth:`TaskRepository.complete_task`. The
@@ -1085,6 +1101,10 @@ def create_app(
             ``responses`` map declared on the route, so /docs shows
             the correct shape on the conflict path.
         """
+        # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
+        # bearer cannot complete a task on behalf of worker B even if
+        # B legitimately claimed it.
+        _require_token_owner(request, payload.worker_id)
         try:
             updated = await repo.complete_task(task_id, payload.version, payload.cost_usd)
         except VersionConflictError as exc:
@@ -1123,7 +1143,7 @@ def create_app(
         },
         dependencies=[Depends(bearer_dep)],
     )
-    async def fail_task(task_id: str, payload: FailRequest) -> FailResponse | JSONResponse:
+    async def fail_task(request: Request, task_id: str, payload: FailRequest) -> FailResponse | JSONResponse:
         """Terminal-state RPC: CLAIMED | IN_PROGRESS → FAILED (PRD FR-1.1, FR-2.4).
 
         Mirrors :func:`complete_task` exactly except for the extra
@@ -1140,6 +1160,9 @@ def create_app(
         owns that policy and the 409 envelope surfaces the actual
         status when the transition is rejected.
         """
+        # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
+        # bearer cannot fail a task on behalf of worker B.
+        _require_token_owner(request, payload.worker_id)
         try:
             updated = await repo.fail_task(task_id, payload.version, payload.reason)
         except VersionConflictError as exc:
@@ -1178,7 +1201,7 @@ def create_app(
         },
         dependencies=[Depends(bearer_dep)],
     )
-    async def release_task(task_id: str, payload: ReleaseRequest) -> ReleaseResponse | JSONResponse:
+    async def release_task(request: Request, task_id: str, payload: ReleaseRequest) -> ReleaseResponse | JSONResponse:
         """Worker-driven release: CLAIMED | IN_PROGRESS → PENDING (TASK-022b3, PRD FR-1.6, NFR-1).
 
         HTTP analogue of :meth:`TaskRepository.release_task` — wraps the
@@ -1215,6 +1238,9 @@ def create_app(
           handler reached this RPC (extremely narrow race); the
           terminal status wins.
         """
+        # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
+        # bearer cannot release a task on behalf of worker B.
+        _require_token_owner(request, payload.worker_id)
         try:
             updated = await repo.release_task(task_id, payload.version, payload.reason)
         except VersionConflictError as exc:
@@ -1237,6 +1263,58 @@ def create_app(
         return ReleaseResponse(task=TaskPayload.from_task(updated))
 
     return app
+
+
+def _require_token_owner(request: Request, claimed_worker_id: str) -> None:
+    """Reject cross-worker bearer use with 403 (TASK-101 scrutiny round-1 fix / VAL-AUTH-024).
+
+    :func:`whilly.adapters.transport.auth.make_db_bearer_auth` stashes
+    the DB-resolved ``worker_id`` on
+    ``request.state.authenticated_worker_id`` when the per-worker hash
+    lookup hits. This helper compares that resolved identity against
+    the ``claimed_worker_id`` the route handler observed (from the
+    request body or path) and raises 403 on mismatch — i.e. worker A's
+    token cannot be used to ``heartbeat``/``claim``/``complete``/
+    ``fail``/``release`` as worker B.
+
+    Why 403 (not 401)?
+        RFC 7235 §3.1 / RFC 6750 §3: 401 means "I don't know who you
+        are"; 403 means "I know who you are, you can't do this". The
+        token authenticated successfully — auth is *not* the failure;
+        the *operation* is forbidden. VAL-AUTH-024's evidence clause
+        accepts ``(400, 401, 403)``, so 403 is contract-compliant; we
+        choose 403 to keep schema-validation 400s separate from
+        authorisation 403s in operator dashboards / log queries.
+
+    Legacy fallback (``WHILLY_WORKER_TOKEN`` shared bearer) — no-op
+        On the legacy path the dep stashes ``None`` because the
+        shared cluster token cannot identify a specific worker. We
+        treat ``None`` as a no-op so the one-minor-version legacy
+        compat window (VAL-AUTH-030/031/034) stays green: the legacy
+        bearer is allowed to act as "any worker" exactly because
+        identity is unknown. When the legacy fallback is removed in
+        v4.2 this branch collapses (the dep itself will raise 401 on
+        every non-DB-resolved request).
+
+    Why a module-level helper rather than a FastAPI dependency?
+        Each handler already extracts ``payload.worker_id`` from a
+        typed request schema, so the comparison is one expression at
+        the top of the handler. A separate ``Depends`` would have to
+        re-parse the body or read the path parameter via ``Request``
+        — twice the work for the same outcome. Inlining the call
+        keeps the auth boundary explicit at the call site.
+    """
+    authenticated = getattr(request.state, "authenticated_worker_id", None)
+    if authenticated is None:
+        # Legacy fallback path (identity unknown) or an unauthenticated
+        # request that somehow reached the handler — neither case can
+        # be enforced here without regressing VAL-AUTH-030/031/034.
+        return
+    if authenticated != claimed_worker_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(f"token owner {authenticated!r} cannot act as worker {claimed_worker_id!r}"),
+        )
 
 
 def _conflict_response(exc: VersionConflictError) -> JSONResponse:
