@@ -88,8 +88,12 @@ def test_sc_5_core_coverage_at_least_eighty_percent() -> None:
     try:
         # Step 1: collect coverage by running the unit tests that exercise
         # whilly.core specifically. tests/unit/test_state_machine.py +
-        # test_scheduler.py + test_prompts.py are authored to 100% on
-        # whilly/core/.
+        # test_scheduler.py + test_prompts.py are authored to 100% on the
+        # legacy whilly/core/ surface; tests/unit/core/test_gates.py
+        # (TASK-104c, PR #223) and tests/unit/core/test_triz.py (TASK-104b,
+        # PR #224) cover the v4.1 additions whilly/core/gates.py and
+        # whilly/core/triz.py — without them the SC-5 gate trips at 71%
+        # because triz.py shows 0% (90 stmts) and gates.py shows ~49%.
         run_args = [
             sys.executable,
             "-m",
@@ -102,6 +106,8 @@ def test_sc_5_core_coverage_at_least_eighty_percent() -> None:
             "tests/unit/test_state_machine.py",
             "tests/unit/test_scheduler.py",
             "tests/unit/test_prompts.py",
+            "tests/unit/core/test_gates.py",
+            "tests/unit/core/test_triz.py",
         ]
         run_result = subprocess.run(
             run_args,
