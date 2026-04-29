@@ -87,7 +87,7 @@
       "title": "Wire proxy env into Claude subprocess call sites",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-109-1"
       ],
@@ -106,7 +106,8 @@
       "test_steps": [
         "pytest tests/unit/test_claude_subprocess_env.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-2, SC-4"
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-2, SC-4",
+      "completion_notes": "Wired build_subprocess_env into the two Claude spawn sites: whilly/adapters/runner/claude_cli.py::_spawn_and_collect (worker → Claude) and whilly/prd_generator.py::_call_claude (PRD wizard → Claude). Both call resolve_proxy_settings() (env-only — CLI flags wire in TASK-109-4) and pass env=child_env to the spawn primitive (asyncio.create_subprocess_exec / subprocess.Popen respectively). Whilly parent process os.environ is NEVER mutated — proven by test_claude_cli_does_not_mutate_os_environ. 5 new unit tests in tests/unit/test_claude_subprocess_env.py covering: default-no-proxy spawn (no HTTPS_PROXY in env), WHILLY_CLAUDE_PROXY_URL injection, parent-env-not-mutated invariant, prd_generator with-proxy, prd_generator without-proxy. lint-imports KEPT (proxy.py imports from claude_cli/prd_generator stay in adapters layer)."
     },
     {
       "id": "TASK-109-4",

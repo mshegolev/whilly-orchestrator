@@ -383,12 +383,22 @@ def _call_claude(prompt: str, model: str) -> str:
     log.info("Calling Claude CLI (model=%s, prompt=%d chars, timeout=%ds)...", model, len(prompt), timeout)
     t0 = time.time()
 
+    # TASK-109-3: inject HTTPS_PROXY/NO_PROXY into the spawned env only.
+    # The PRD-wizard caller (whilly init) holds Postgres / httpx
+    # connections in this same parent process when the import phase
+    # runs; we mustn't route those through the Claude proxy.
+    from whilly.adapters.runner import proxy as _proxy
+
+    _settings = _proxy.resolve_proxy_settings()
+    _child_env = _proxy.build_subprocess_env(os.environ, _settings)
+
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=_child_env,
         )
     except FileNotFoundError:
         log.error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code")
