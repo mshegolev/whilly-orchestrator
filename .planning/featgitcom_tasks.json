@@ -1,0 +1,1036 @@
+{
+  "project": "Git Integration & PR/Release Automation in prd-wizard",
+  "prd_file": "/opt/develop/whilly-orchestrator/docs/PRD-featgitcom.md",
+  "total_tasks": 36,
+  "agent_instructions": {
+    "before_start": [
+      "Прочитай PRD в /opt/develop/whilly-orchestrator/docs/PRD-featgitcom.md внимательно — особенно секции Functional Requirements и Technical Constraints",
+      "Проверь зависимости задачи в tasks.json — все указанные dependency должны быть в статусе done",
+      "Изучи существующий код: whilly/cli.py (run_plan, build_task_prompt), whilly/config.py (WhillyConfig.from_env), whilly/task_manager.py (atomic writes), whilly/worktree_runner.py (WorktreeManager), whilly/agent_runner.py",
+      "Соблюдай контракт plan JSON: id/status/dependencies/key_files/priority/description/acceptance_criteria/test_steps",
+      "Не ломай startup banner и cleanup _original_cwd при изменении run_plan"
+    ],
+    "during_work": [
+      "Следуй интерфейсам существующих модулей (TaskManager.mark_status/save/reload, WhillyConfig pattern, atomic tempfile+os.replace для конфигов)",
+      "Любой write в .whilly/git.yaml — через tempfile + os.replace (как в task_manager.save)",
+      "Все git-операции должны писать структурные события в whilly_logs/whilly_events.jsonl (event: git.*)",
+      "Используй python3 -m ruff для lint/format (НЕ PATH ruff) — должна совпадать версия с CI",
+      "Запускай ruff check --fix и ruff format после редактирования любых .py файлов",
+      "Делай атомарные изменения в одном MR scope — не рефактори чужой код мимоходом",
+      "Line length 120, target py310 — не нарушай pyproject.toml настройки",
+      "Для каждого нового env var обнови WhillyConfig.from_env() и docs/Whilly-Usage.md"
+    ],
+    "before_finish": [
+      "Запусти python3 -m ruff check whilly/ tests/ — должен пройти без ошибок",
+      "Запусти python3 -m ruff format --check whilly/ tests/ — должно быть отформатировано",
+      "Запусти pytest -q — все тесты должны пройти",
+      "Обнови docs (README.md, docs/Whilly-Usage.md, docs/Whilly-Interfaces-and-Tasks.md) если меняешь публичный CLI/env/JSON контракт",
+      "Перед коммитом — git pull origin main --rebase",
+      "Отметь задачу done в tasks.json через TaskManager / поставь <promise>COMPLETE</promise>",
+      "Сделай commit с conventional message feat(TASK-XXX): ..."
+    ]
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "phase": "M1 — Git preflight + config",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Создать модуль whilly/git_config.py со схемой .whilly/git.yaml и функциями atomic load/save (tempfile + os.replace). Поля: git.enabled, provider, base_branch, branch_template, auto_pr, auto_release, auto_commit_per_task, self_heal. Добавить PyYAML в pyproject.toml зависимости.",
+      "status": "done",
+      "dependencies": [],
+      "key_files": [
+        "whilly/git_config.py",
+        "pyproject.toml",
+        "tests/test_git_config.py"
+      ],
+      "acceptance_criteria": [
+        "GitConfig dataclass с полными значениями по умолчанию из PRD FR-12",
+        "load_git_config(path) возвращает дефолты если файла нет",
+        "save_git_config(path, cfg) пишет atomic через tempfile + os.replace",
+        "Битый YAML не приводит к crash — fall back на дефолты с warning",
+        "Unit-тесты покрывают round-trip, atomic write, fallback на пустом файле"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_config.py tests/test_git_config.py",
+        "python3 -m ruff format --check whilly/git_config.py tests/test_git_config.py",
+        "pytest tests/test_git_config.py -q"
+      ],
+      "prd_requirement": "FR-12, NFR atomic writes"
+    },
+    {
+      "id": "TASK-002",
+      "phase": "M1 — Git preflight + config",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Расширить whilly/config.py: добавить в WhillyConfig поля git_enabled, git_provider, auto_pr, auto_release, auto_commit, bump, self_heal, base_branch. Реализовать override-стек: CLI flag > env var > .whilly/git.yaml > built-in default. Прочитать env vars WHILLY_GIT_*, WHILLY_AUTO_PR, WHILLY_AUTO_RELEASE, WHILLY_BUMP, WHILLY_SELF_HEAL, WHILLY_BASE_BRANCH в from_env.",
+      "status": "done",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "key_files": [
+        "whilly/config.py",
+        "tests/test_config_git.py"
+      ],
+      "acceptance_criteria": [
+        "WhillyConfig.from_env() читает все WHILLY_GIT_* / WHILLY_AUTO_* / WHILLY_BUMP env",
+        "WhillyConfig.merge_with_git_yaml(path) применяет приоритет env > file > default",
+        "WHILLY_AUTO_PR=0 переопределяет git.yaml auto_pr=true (Метрика 4 PRD)",
+        "Unit-тесты на каждый уровень override-стека"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/config.py tests/test_config_git.py",
+        "pytest tests/test_config_git.py -q",
+        "WHILLY_AUTO_PR=0 python3 -c 'from whilly.config import WhillyConfig; c=WhillyConfig.from_env(); print(c.auto_pr)'"
+      ],
+      "prd_requirement": "FR-12, Метрика 4"
+    },
+    {
+      "id": "TASK-003",
+      "phase": "M1 — Git preflight + config",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/git_preflight.py с функцией run_preflight(cwd, config, headless): детектит git-репо, проверяет dirty состояние, спрашивает init/commit/skip/abort, выбор провайдера (gh/glab/none), auto_pr, auto_release. Сохраняет в .whilly/git.yaml. В headless — fail-fast с подсказкой 'run whilly --git-config interactively first'.",
+      "status": "done",
+      "dependencies": [
+        "TASK-001",
+        "TASK-002"
+      ],
+      "key_files": [
+        "whilly/git_preflight.py",
+        "tests/test_git_preflight.py"
+      ],
+      "acceptance_criteria": [
+        "FR-2: на пустом репо предлагает git init + дефолтный .gitignore + initial commit",
+        "FR-3: на dirty репо показывает git status и спрашивает y/n/skip",
+        "FR-4: спрашивает provider только при отсутствии .whilly/git.yaml",
+        "Headless-режим без git.yaml → exit code 5 с понятным сообщением",
+        "Все события пишутся в whilly_events.jsonl (event: git.preflight.*)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_preflight.py tests/test_git_preflight.py",
+        "pytest tests/test_git_preflight.py -q"
+      ],
+      "prd_requirement": "FR-1, FR-2, FR-3, FR-4, NFR headless"
+    },
+    {
+      "id": "TASK-004",
+      "phase": "M1 — Git preflight + config",
+      "category": "functional",
+      "priority": "high",
+      "description": "Добавить CLI команды whilly --git-config (интерактивный rerun preflight с перезаписью .whilly/git.yaml) и whilly --git-reset (удалить .whilly/git.yaml). Регистрация в argparse, диспатч в cli.main до run_plan. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. В whilly/git_preflight.py добавлен force=True kwarg в run_preflight (default False сохраняет TASK-003 контракт): когда True, cached_present игнорируется и FR-4 questionnaire срабатывает повторно даже при наличии .whilly/git.yaml — но FR-2 init и FR-3 dirty-check всё ещё уважают реальное состояние репо (это про git state, не про cached policy). Запись по-прежнему через save_git_config (atomic tempfile+os.replace), так что нет промежуточного состояния где старый файл удалён, а новый ещё не записан — TOCTOU-safe для Ctrl+C во время вопросов. Event git.preflight.start теперь включает force flag в payload для аудит-trail. В whilly/cli.py добавлены два публичных handler-а: _run_git_config_command(args) — тонкий wrapper над run_preflight(force=True) с резолюцией headless из WhillyConfig.HEADLESS|not stdin.isatty(), пробрасывает PreflightAbort.code в exit_code (по умолчанию EXIT_CONFIG_REQUIRED=5 для NFR-headless без TTY); _run_git_reset_command(args) — destructive op с three-tier confirmation (--yes/-y → skip prompt; interactive с TTY → input '[Y/n]:' с empty=Yes default; non-interactive без --yes → exit 2 + hint mentioning --yes), использует Path.unlink() с try/except OSError для устойчивости, эмитит структурное событие git.config.reset в whilly_events.jsonl. Dispatch в main() добавлен ПЕРЕД _show_startup_banner() (комплектом с --config/--doctor/--handoff-*) — операционные команды не должны платить 5-секундный sleep banner-а. HELP_TEXT обновлён двумя новыми строками с описанием FR-12 семантики. Сопутствующий fix: whilly/cli.py::_log_event теперь делает log_dir.mkdir(parents=True, exist_ok=True) перед записью — pre-existing latent bug (NFR fresh-dir), не всплывал т.к. до сих пор все callers попадали в _log_event ПОСЛЕ run_plan который сам создаёт LOG_DIR через _make_event_emitter; --git-reset — первый caller с холодного fresh-dir состояния. Тесты tests/test_cli_git_commands.py: 19 тестов через 4 класса (TestHelpTextMentions 2, TestPreflightForceKwarg 3, TestGitConfigDispatch 5, TestGitResetDispatch 9). Покрыты: HELP_TEXT содержит --git-config + --git-reset (acceptance grep), force=True overwrites cached yaml + sets cached=False в результате + emits force flag в start event + force=False default остаётся cached=True (regression guard для TASK-003), --git-config writes yaml через main() с user answers (gh/y/n), overwrites existing yaml через main() (real cli dispatch), works без tasks.json (acceptance), no-TTY → exit 5 (NFR-headless), banner НЕ показывается (operational-fast-path), --git-reset returns 0 если файла нет, --yes/-y skip prompt без TTY (script-friendly), interactive y/empty/n confirmation paths, no-TTY-no--yes → exit 2 + hint содержит '--yes' (NFR-headless destructive guard), works без tasks.json, banner НЕ показывается. Fixture repo() seeds .gitignore с whilly.log + whilly_logs/ + .whilly_state.json + .whilly_workspaces/ чтобы side-effects от main() (logging.basicConfig + RotatingFileHandler) не делали working tree dirty и не триггерили FR-3 prompt. _commit_all() helper для тестов которые seed .whilly/git.yaml. _force_tty() monkeypatches sys.stdin.isatty/sys.stdout.isatty. _scripted_input() pops queued answers с AssertionError на лишний prompt. Все 1326 тестов проекта зелёные (+19 новых от 1307 baseline TASK-014c), make lint clean (139 файлов отформатировано), make test clean. Acceptance grep: `whilly --help | grep -E 'git-config|git-reset'` returns 3 lines.",
+      "status": "done",
+      "dependencies": [
+        "TASK-003"
+      ],
+      "key_files": [
+        "whilly/cli.py",
+        "tests/test_cli_git_commands.py"
+      ],
+      "acceptance_criteria": [
+        "whilly --git-config запускает интерактивные вопросы preflight и пишет .whilly/git.yaml",
+        "whilly --git-reset удаляет .whilly/git.yaml (с подтверждением Y/n)",
+        "Команды работают без существующего tasks.json",
+        "Unit-тесты на argparse и handler dispatch"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/cli.py tests/test_cli_git_commands.py",
+        "pytest tests/test_cli_git_commands.py -q",
+        "whilly --help | grep -E 'git-config|git-reset'"
+      ],
+      "prd_requirement": "FR-12 (--git-config / --git-reset)"
+    },
+    {
+      "id": "TASK-005",
+      "phase": "M1 — Git preflight + config",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase M1 Integration Test: e2e-сценарий на временной директории — пустая dir → whilly --prd-wizard --headless без env даёт exit 5; с env WHILLY_GIT_PROVIDER=none и WHILLY_GIT_ENABLED=0 проходит preflight молча; повторный запуск использует кэшированный .whilly/git.yaml. Override стек проверяется реально. DONE: новый файл tests/test_m1_integration.py с 14 тестами через 5 классов (TestFr2EmptyDirectory 2, TestFr3DirtyTree 3, TestHeadlessFlow 4, TestSecondRunUsesCachedYaml 2, TestCliDispatch 3). Все помечены module-level pytestmark = pytest.mark.integration (per-test mark не дублируется — экономнее, но pytest -m integration их подхватит). Маркер integration зарегистрирован в pyproject.toml [tool.pytest.ini_options] markers, чтобы pytest --strict-markers / CI не падали с PytestUnknownMarkWarning. Тесты используют real subprocess.run против git init/commit/status, real save_git_config/load_git_config round-trip, real WhillyConfig.from_env_only().merge_with_git_yaml() для override-stack проверок, real main(['--git-config']) / main(['--git-reset']) argparse dispatch. Покрыты: FR-2 init y (создаётся .git, HEAD = 'chore: initial commit', .whilly/git.yaml персистится), FR-2 init n (no .git, persisted enabled=false, второй прогон — cached без promptов), FR-3 commit y (snapshot в HEAD + FR-4 questions всё равно срабатывают), FR-3 commit n (PreflightAbort code=1, working tree untouched, yaml НЕ персистится — отказ оставляет user free retry), FR-3 skip (committed_snapshot=False, файл остаётся в working tree, provider='none' форсит auto_pr/auto_release=False), Headless empty dir без env → PreflightAbort code=5 + hint содержит 'git config' и 'whilly_git_provider'/'git-config' (NFR-headless контракт), Headless с WHILLY_GIT_PROVIDER=none + WHILLY_GIT_ENABLED=0 проходит молча (empty input queue raises на любом prompt — proves no questions asked) + WhillyConfig overrides yaml, env > yaml > default override stack (WHILLY_AUTO_PR=0 побеждает yaml.auto_pr=true, WHILLY_AUTO_RELEASE unset → yaml побеждает default), yaml > default когда env unset, второй прогон даёт result.cached=True + событие git.preflight.cached, events persist в whilly_events.jsonl с ISO timestamp, main(['--git-config']) с TTY → 0 + yaml записан, main(['--git-config']) headless без TTY → 5 + yaml не создан, main(['--git-reset', '--yes']) удаляет yaml без prompt. Helpers: _scripted_input() raises AssertionError на лишний prompt — это и доказывает, что cached path skip-ает FR-4 questions; _seed_gitignore() seedит .gitignore с whilly.log + whilly_logs/ + .whilly_state.json + .whilly_workspaces/ чтобы main()'s logging.basicConfig + RotatingFileHandler не дёргали FR-3 dirty check; _force_no_tty() monkeypatch sys.stdin/stdout.isatty(). Autouse fixtures: _git_identity (GIT_AUTHOR/COMMITTER_NAME/EMAIL для CI без $HOME/.gitconfig); _clean_whilly_env (drop WHILLY_*+HEADLESS, чтобы dev-ская env переменная не пробивала override-stack тесты). Дублирование fixtures с test_git_preflight.py / test_cli_git_commands.py намеренное — integration suite остаётся независимой от unit-suite инфраструктуры (общий conftest.py изменил бы оба слоя одним коммитом). pyproject.toml дополнен markers = ['integration: end-to-end tests that exercise real subprocess / filesystem (PRD-featgitcom milestones)']. Все 1586 тестов проекта зелёные (+14 новых от 1572 baseline), make lint clean (147 файлов отформатировано), make test clean. Acceptance: pytest tests/test_m1_integration.py -q -m integration → 14 passed in 0.95s.",
+      "status": "done",
+      "dependencies": [
+        "TASK-002",
+        "TASK-003",
+        "TASK-004"
+      ],
+      "key_files": [
+        "tests/test_m1_integration.py"
+      ],
+      "acceptance_criteria": [
+        "E2E-тест на tmp_path с реальным git init",
+        "Покрыты все три ветки FR-2 (init y/n) и FR-3 (commit y/n/skip)",
+        "Headless с WHILLY_GIT_* env проходит без вопросов",
+        "Все integration-тесты помечены @pytest.mark.integration"
+      ],
+      "test_steps": [
+        "pytest tests/test_m1_integration.py -q -m integration",
+        "pytest tests/ -q"
+      ],
+      "prd_requirement": "M1 milestone integration"
+    },
+    {
+      "id": "TASK-006",
+      "phase": "M2 — Branch + per-task commit",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/git_branch.py: функция ensure_feature_branch(slug, base_branch) — детектит main/master, создаёт ветку feature/prd-{slug} от base, при коллизии ветки в TTY спрашивает reuse/new-suffix-N, в headless — fail. Вызвать из prd_wizard / run_plan после preflight и до запуска плана.",
+      "status": "done",
+      "dependencies": [
+        "TASK-003"
+      ],
+      "key_files": [
+        "whilly/git_branch.py",
+        "whilly/cli.py",
+        "tests/test_git_branch.py"
+      ],
+      "acceptance_criteria": [
+        "FR-5: создаётся feature/prd-{slug} от main или master",
+        "Существующая ветка → prompt reuse/new-suffix или headless-fail",
+        "branch_template из git.yaml уважается",
+        "Unit-тесты с tmp git репо"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_branch.py tests/test_git_branch.py",
+        "pytest tests/test_git_branch.py -q"
+      ],
+      "prd_requirement": "FR-5"
+    },
+    {
+      "id": "TASK-007",
+      "phase": "M2 — Branch + per-task commit",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/git_commit.py: функция auto_commit_task(task) выполняет git add {task.key_files} (или -A если пуст), git commit -m 'feat({id}): {first_line_description}'. Хук вызывается из run_plan после смены статуса task на done. На пустой changeset / hook fail — log warning + продолжить. Совместимость с worktree_runner: коммит идёт в worktree-ветку, cherry-pick остаётся как был.",
+      "status": "done",
+      "dependencies": [
+        "TASK-006"
+      ],
+      "key_files": [
+        "whilly/git_commit.py",
+        "whilly/cli.py",
+        "whilly/worktree_runner.py",
+        "tests/test_git_commit.py"
+      ],
+      "acceptance_criteria": [
+        "FR-6: per-task auto-commit с правильным сообщением",
+        "Пустой diff / pre-commit hook fail не блокирует loop",
+        "Worktree-режим: commit в worktree, существующий cherry-pick не сломан",
+        "config.auto_commit=false полностью отключает хук",
+        "Performance: коммит < 2s на средний task (NFR)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_commit.py tests/test_git_commit.py",
+        "pytest tests/test_git_commit.py -q",
+        "pytest tests/test_worktree_runner.py -q"
+      ],
+      "prd_requirement": "FR-6, NFR performance, NFR worktree"
+    },
+    {
+      "id": "TASK-008",
+      "phase": "M2 — Branch + per-task commit",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase M2 Integration Test: реальный план из 2 фейковых задач + tmp git репо → run_plan создаёт feature/prd-test ветку, после каждого done появляется коммит с правильным сообщением, .whilly_state.json и whilly_logs/ не попадают в коммит. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Новый файл tests/test_m2_integration.py с 7 тестами через 3 классов (TestFeatureBranchCreation 3, TestAutoCommitOnDoneTransitions 3, TestM2EndToEndChain 1). Все помечены module-level pytestmark = pytest.mark.integration (mirroring TASK-005 convention). Тесты используют real subprocess.run против git init/commit/log/ls-tree, real run_preflight() для FR-2 init y branch (создаёт .gitignore + initial commit + .whilly/git.yaml), real _maybe_ensure_feature_branch() и _maybe_auto_commit_task() из whilly.cli — это и есть load-bearing wiring которое milestone composition test проверяет. Покрыты: feature/prd-{slug} branch creation от main с persisted policy (cold-start integration через preflight + plan + plan_slug), branch creation skipped без .whilly/git.yaml (legacy projects baseline preserved), branch creation skipped когда GIT_ENABLED=False (override stack из FR-12 опт-аут), 2 done transitions → 2 commits на feature branch с правильными feat(TASK-X): subjects (acceptance verbatim), .whilly_state.json и whilly_logs/whilly_events.jsonl excluded из commits через FR-2 default .gitignore (git ls-tree -r HEAD --name-only — proves NEVER committed, не just no diff), AUTO_COMMIT=False skip path (auto_commit_per_task=false в yaml), full e2e chain preflight → branch → 2 commits с real git log oneline assertion. Helpers: _scripted_input() raises AssertionError на лишний prompt — это и доказывает, что preflight/branch не задал unexpected questions; _seed_repo_with_preflight() encapsulates FR-2 init y answer queue ['y','gh','n','n'] для consistent test seeding; _committed_files() через git ls-tree -r HEAD стрингер чем git diff — проверяет blob ever committed а не just no-diff; _all_commits() для acceptance criterion'а git log --oneline. Autouse fixtures: _git_identity (GIT_AUTHOR/COMMITTER + GIT_CONFIG_PARAMETERS='init.defaultBranch=main' через env, чтобы system git default не разломал асерты на host'ах с master default — без этого тесты рандомно падают на новых OSX и старых Linux); _clean_whilly_env (drop WHILLY_*+HEADLESS чтобы dev shell не пробивал AUTO_COMMIT=0 в test).  Дублирование fixtures с test_m1_integration.py намеренное — integration suite остаётся независимой от unit-suite и от друг друга (общий conftest.py изменил бы N слоёв одним коммитом). Все 1593 тестов проекта зелёные (+7 от 1586 baseline TASK-005), make lint clean (148 файлов отформатировано), make test clean. Acceptance: pytest tests/test_m2_integration.py -q -m integration → 7 passed in 1.05s.",
+      "status": "done",
+      "dependencies": [
+        "TASK-006",
+        "TASK-007"
+      ],
+      "key_files": [
+        "tests/test_m2_integration.py"
+      ],
+      "acceptance_criteria": [
+        "E2E на tmp_path: 2 task done → 2 коммита на feature-ветке",
+        ".whilly_state.json и whilly_logs/ исключены из всех коммитов",
+        "git log --oneline соответствует ожиданию"
+      ],
+      "test_steps": [
+        "pytest tests/test_m2_integration.py -q -m integration"
+      ],
+      "prd_requirement": "M2 milestone integration"
+    },
+    {
+      "id": "TASK-009a",
+      "phase": "M3 — PR creation",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/git_providers/__init__.py с абстракцией Provider (Protocol/ABC) с 5 методами: push, pr_create, pr_merge, release_create, issue_create. Реализовать фабрику get_provider(config) с auto-detect (shutil.which) — отсутствует CLI → warning + fallback на NoneProvider (push-only).",
+      "status": "done",
+      "dependencies": [
+        "TASK-007"
+      ],
+      "key_files": [
+        "whilly/git_providers/__init__.py",
+        "tests/test_git_providers_base.py"
+      ],
+      "acceptance_criteria": [
+        "Provider Protocol/ABC с 5 методами полностью описан",
+        "get_provider(config) возвращает GhProvider/GlabProvider/NoneProvider по config.git_provider",
+        "Auto-detect через shutil.which → graceful fallback с warning в whilly_events.jsonl",
+        "Unit-тесты на factory dispatch и fallback"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_providers/__init__.py tests/test_git_providers_base.py",
+        "pytest tests/test_git_providers_base.py -q"
+      ],
+      "prd_requirement": "FR-4 abstraction, NFR fallback"
+    },
+    {
+      "id": "TASK-009b",
+      "phase": "M3 — PR creation",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Реализовать GhProvider (whilly/git_providers/gh_provider.py) через subprocess вызовы gh CLI: push, pr_create, pr_merge, release_create, issue_create. Mock-тесты на каждый subprocess вызов. Идемпотентность pr_create через gh pr edit при существующем PR.",
+      "status": "done",
+      "dependencies": [
+        "TASK-009a"
+      ],
+      "key_files": [
+        "whilly/git_providers/gh_provider.py",
+        "tests/test_gh_provider.py"
+      ],
+      "acceptance_criteria": [
+        "Все 5 методов Provider реализованы через gh CLI subprocess",
+        "Mock subprocess для каждого метода",
+        "pr_create идемпотентен: проверка существующего PR → gh pr edit вместо create",
+        "Корректная обработка stderr/exit_code с прокидкой в caller"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_providers/gh_provider.py tests/test_gh_provider.py",
+        "pytest tests/test_gh_provider.py -q"
+      ],
+      "prd_requirement": "FR-8, Technical Constraints (gh CLI)"
+    },
+    {
+      "id": "TASK-009c",
+      "phase": "M3 — PR creation",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Реализовать GlabProvider (whilly/git_providers/glab_provider.py) через glab CLI / python-gitlab для gitlab.example.com. Токен через `glab config get token -h gitlab.example.com`. Все 5 методов Provider покрыты mock-тестами. Идемпотентность как у GhProvider.",
+      "status": "done",
+      "dependencies": [
+        "TASK-009a"
+      ],
+      "key_files": [
+        "whilly/git_providers/glab_provider.py",
+        "tests/test_glab_provider.py"
+      ],
+      "acceptance_criteria": [
+        "Все 5 методов Provider реализованы через glab CLI или python-gitlab",
+        "Токен извлекается через `glab config get token -h gitlab.example.com`",
+        "Mock subprocess + python-gitlab fixtures для тестов",
+        "Идемпотентность pr_create через MR update"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_providers/glab_provider.py tests/test_glab_provider.py",
+        "pytest tests/test_glab_provider.py -q"
+      ],
+      "prd_requirement": "FR-8, Technical Constraints (glab + gitlab.example.com)"
+    },
+    {
+      "id": "TASK-010",
+      "phase": "M3 — PR creation",
+      "category": "functional",
+      "priority": "high",
+      "description": "Создать whilly/pr_body_builder.py: формирует тело PR из PRD-{slug}.md (Problem Statement + Objectives) + краткой сводки выполненных задач (id, description, status). Возвращает markdown-string + title. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Модуль whilly/pr_body_builder.py содержит: PrBody frozen dataclass (title + body — иммутабельный return-value mirroring SelfHealReport/CommitResult convention), TITLE_MAX_LENGTH=60 constant соответствующий PRD acceptance, BODY_HEADING_* / PRD_*_NOTE / FALLBACK_TITLE публичные константы для grep-friendly downstream callers, extract_prd_sections(prd_text, [titles]) public lifter с case-sensitive matching (typo case — surface, not coerce), format_title(raw, *, project, max_length) с резолюцией raw → project → FALLBACK_TITLE и ellipsis-truncation на единичный символ '…' (max_length-1 чтобы оставить место под него), build_pr_body(*, tasks, prd_path, project, branch, base_branch, prd_url) — единственный public entry point, pure no-IO кроме одного PRD read, deterministic byte-identical output для одинаковых inputs (критично для idempotent re-PR в TASK-011), graceful degradation на missing/None/directory PRD path с явными PRD_MISSING_NOTE / PRD_SECTION_MISSING_NOTE, _render_tasks_table с pipe/backslash escaping и multi-line collapse, _render_header опциональный блок (omit когда нет project+branch), _render_prd_reference с url > path > note приоритетом. Title резолвится из PRD H1 (с stripping 'PRD:' prefix), fallback на project, last-resort 'Whilly auto-PR' constant. Тесты tests/test_pr_body_builder.py: 46 тестов через 8 секций (extract_prd_sections 6, format_title 8, title resolution 4, required body sections 4, tasks table 7, PRD reference 3, header block 4, graceful degradation 6, determinism 3, dataclass invariant 1). Покрыты: H2 bounding (section стопает на следующем H2 не на EOF), case sensitivity, missing sections returned as absent, H3 staying inside H2 section, exact title boundary без ellipsis, multiline collapse в title, custom max_length, whitespace strip перед ellipsis, PRD H1 lift с PRD: prefix stripping, sample tasks table с pipe/backslash escape, input order preservation (no re-sort), empty tasks → friendly note, multi-line description → first line only, long desc → truncation с '…', non-done статусы рендерятся verbatim, url > path > note приоритет в reference, project + branch header rendering, missing/none/directory prd_path не падают, prd без target sections → SECTION_MISSING_NOTE, partial PRD (только Problem Statement) → no missing note, str path accepted, byte-identical output для двух одинаковых вызовов, single trailing newline, section order summary→tasks→reference, frozen dataclass раз unable to mutate. Все 1173 теста проекта зелёные (+46 новых), make lint + make test clean.",
+      "status": "done",
+      "dependencies": [
+        "TASK-009a",
+        "TASK-009b",
+        "TASK-009c"
+      ],
+      "key_files": [
+        "whilly/pr_body_builder.py",
+        "tests/test_pr_body_builder.py"
+      ],
+      "acceptance_criteria": [
+        "Title: краткая выжимка из PRD (60 chars max)",
+        "Body содержит ## Summary, ## Tasks Completed (table), ## PRD Reference (link)",
+        "Тест: фикстура PRD + список Task → стабильный markdown",
+        "Не падает на отсутствующем PRD-файле"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/pr_body_builder.py tests/test_pr_body_builder.py",
+        "pytest tests/test_pr_body_builder.py -q"
+      ],
+      "prd_requirement": "FR-8 (PR body builder)"
+    },
+    {
+      "id": "TASK-011",
+      "phase": "M3 — PR creation",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Интеграция в cli.run_plan: после успешного завершения плана и при config.auto_pr=true → provider.push(branch) + provider.pr_create(title, body, base_branch). Idempotent: если PR на этой ветке уже существует — не дублировать, обновить body. URL PR сохранить в state и вывести в финальный отчёт reporter.Reporter. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Новый модуль whilly/auto_pr.py — pure orchestrator (no I/O of its own beyond providers), AutoPrResult frozen dataclass с полным diagnostic payload (ok/reason/branch/base_branch/pr_url/pr_number/existed/error/raw), 13 OUTCOME_* констант под whole skip/result taxonomy (OK/UPDATED/GIT_DISABLED/AUTO_PR_DISABLED/NOT_A_REPO/NO_GIT_YAML/NO_PROVIDER/DETACHED_HEAD/ON_BASE_BRANCH/NO_PROGRESS/RUN_INCOMPLETE/PUSH_FAILED/PR_FAILED), 7 EVENT_* констант под git.auto_pr.* namespace (skipped/started/push_ok/push_failed/created/updated/failed), current_branch(cwd) public helper с git rev-parse abbrev-ref + детектом detached HEAD (пустой stdout / 'HEAD' literal), run_auto_pr(...) — единственный public entry point с conservative gating mirroring _maybe_ensure_feature_branch + _maybe_auto_commit_task style (every skip path silent, never raises, returns AutoPrResult с reason). Gating order: run_incomplete → GIT_ENABLED → AUTO_PR → not_a_repo → no_git_yaml → detached_head → on_base_branch → no_progress → no_provider. Provider duck-typing через name=='none' attribute (no NoneProvider import — keeps import graph cheap). Idempotency полностью делегирована провайдеру (gh pr edit / glab mr update — TASK-009b/c contract): caller не делает state pre-check, чтобы избежать TOCTOU window 'state says no PR yet but remote has one'. _safe_push() / _safe_pr_create() обёртки конвертируют любые неожиданные exceptions из провайдера в ProviderResult(ok=False) — defensive layer над documented 'never raises' контрактом провайдеров. _render_pr_body() резолвит prd_path: reads tasks.json, нормализует относительные пути относительно plan_file.parent, gracefully skips на ошибках. Расширения существующих модулей: whilly/state_store.py — record_pr_url(url, number, branch, base) + get_pr_record() публичный API через тот же _atomic_write/_load_raw_or_empty pattern что self_heal counter, save() preserves pr_record при iteration writes (mirror trick), pr_record хранится как sub-dict ('pr_record': {url, number, branch, base, recorded_at}) для extensibility (assignees/labels/CI status в будущих PRDs). whilly/reporter.py — finalize() получил 4 keyword-only kwargs (pr_url, pr_number, pr_branch, pr_base_branch) с default None, _save_json() пишет 'pr' блок только если any() of values is not None (legacy reports без pr-блока остаются валидными), generate_summary() добавляет ## Pull Requests секцию с table 'Plan / PR / Branch' только когда хотя бы один report имеет pr.url (no empty-table noise). whilly/cli.py — новый _maybe_run_auto_pr() helper в conservative-gating стиле, run_plan() restructured: exit_code computation moved up before auto-PR (так что run_incomplete=exit_code in TIMEOUT/BUDGET корректно вычисляется), auto_pr step lands ПЕРЕД state_store.clear() (URL сохраняется на диске даже при крэше последующего finalize), reporter.finalize() получает pr_* kwargs verbatim, headless JSON envelope включает pr_url/pr_number когда они есть. Тесты tests/test_auto_pr.py: 23 теста через 7 классов (TestCurrentBranch 3, TestGating 9, TestHappyPath 2, TestIdempotency 2, TestFailurePaths 2, TestStatePersistence 3, TestResultDataclass 2). Покрыты: real git init + git checkout -b на tmp_path для branch detection (детект attached/detached/not-a-repo через subprocess), все 9 skip outcomes (run_incomplete/git_disabled/auto_pr_disabled/not_a_repo/no_git_yaml/on_base_branch/no_progress/no_provider/detached_head), happy path с argument shape verification (push={branch,remote,force}, pr_create={title,body,head,base,draft}), idempotency: existed=True → OUTCOME_UPDATED + EVENT_PR_UPDATED (НЕ EVENT_PR_CREATED), push failure → pr_create НЕ вызывается + EVENT_PUSH_FAILED, pr_create failure после успешного push → captured error, state_store.record_pr_url через get_pr_record assertion, save() preserves pr_record, frozen dataclass invariant. FakeProvider дублирует Provider Protocol surface полностью (5 методов) с canned response queues. Все 1196 тестов проекта зелёные (+23 новых), make lint clean, make test clean.",
+      "status": "done",
+      "dependencies": [
+        "TASK-009a",
+        "TASK-009b",
+        "TASK-009c",
+        "TASK-010"
+      ],
+      "key_files": [
+        "whilly/cli.py",
+        "whilly/state_store.py",
+        "whilly/reporter.py",
+        "tests/test_auto_pr.py"
+      ],
+      "acceptance_criteria": [
+        "FR-8: auto-pr=true → ветка запушена + PR создан",
+        "Idempotent: повторный запуск с существующим PR не падает, не создаёт дубликат",
+        "URL PR в state_store + в финальном Markdown отчёте",
+        "config.auto_pr=false → push не выполняется, PR не создаётся"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/cli.py tests/test_auto_pr.py",
+        "pytest tests/test_auto_pr.py -q"
+      ],
+      "prd_requirement": "FR-8, FR-10 idempotency"
+    },
+    {
+      "id": "TASK-012",
+      "phase": "M3 — PR creation",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase M3 Integration Test: с моком gh CLI прогнать prd-wizard → план → auto-pr. Проверить: push сделан 1 раз, gh pr create вызван с правильными аргументами, повторный запуск не дублирует. Аналогично для glab.",
+      "status": "done",
+      "dependencies": [
+        "TASK-011"
+      ],
+      "key_files": [
+        "tests/test_m3_integration.py"
+      ],
+      "acceptance_criteria": [
+        "Mock gh + glab subprocess",
+        "Idempotency проверяется реальным двойным запуском",
+        "PR URL появляется в reports/*.md"
+      ],
+      "test_steps": [
+        "pytest tests/test_m3_integration.py -q -m integration"
+      ],
+      "prd_requirement": "M3 milestone integration",
+      "notes": "Реализовано в tests/test_m3_integration.py (8 тестов, все integration). Покрыты: TestM3WithGhProvider (push+pr_create argv shape, идемпотентность через real double-run по already-exists path, EVENT_PR_CREATED→EVENT_PR_UPDATED ordering); TestM3WithGlabProvider (симметричное покрытие mr create / mr view / mr update); TestPrUrlSurfacesInReports (Reporter.finalize → generate_summary → URL в reports/*.md, негативный кейс — секция Pull Requests не появляется без pr_url); TestM3CombinedRollup (gh + glab оба видны в одном cross-plan summary). Subprocess-уровень мокается через unittest.mock.patch на _run_gh / _run_glab / _run_git, оркестратор и провайдеры остаются реальными — это и проверяет композицию M3.",
+      "acceptance_status": {
+        "Mock gh + glab subprocess": "covered (patch.object on _run_gh/_run_glab/_run_git)",
+        "Idempotency через двойной запуск": "covered (real two run_auto_pr calls; provider already-exists path produces existed=True)",
+        "PR URL появляется в reports/*.md": "covered (Reporter.finalize → generate_summary; assert URL + Markdown link)"
+      }
+    },
+    {
+      "id": "TASK-013",
+      "phase": "M4 — Version bump + auto-release",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/version_bump.py: bump_version(level: 'patch'|'minor'|'major') синхронно правит whilly/__init__.py и pyproject.toml через tomllib (3.11+) / tomli (3.10) — НЕ regex. Добавить tomli в зависимости для py3.10. Делает commit 'chore: bump version to X.Y.Z' если git.enabled=true.",
+      "status": "done",
+      "dependencies": [
+        "TASK-007"
+      ],
+      "key_files": [
+        "whilly/version_bump.py",
+        "pyproject.toml",
+        "tests/test_version_bump.py"
+      ],
+      "acceptance_criteria": [
+        "FR-7: --bump=patch|minor|major / WHILLY_BUMP env триггерят bump",
+        "Версии в whilly/__init__.py и pyproject.toml совпадают после bump",
+        "Использован tomllib/tomli для парсинга, НЕ regex",
+        "Default behaviour: без --bump никаких изменений",
+        "Bump делает только коммит, НЕ push (это делает release pipeline)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/version_bump.py tests/test_version_bump.py",
+        "pytest tests/test_version_bump.py -q"
+      ],
+      "prd_requirement": "FR-7, Technical Constraints (tomllib)"
+    },
+    {
+      "id": "TASK-014a",
+      "phase": "M4 — Version bump + auto-release",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/release_pipeline.py с функцией poll_pr_merge_when_ci_green(provider, pr_url, timeout): polling статуса CI с таймаутом WHILLY_RELEASE_TIMEOUT (default 1800s), вызывает provider.pr_merge только при зелёном CI. Запускается ТОЛЬКО когда config.auto_release=true И --bump указан. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Provider Protocol расширен новым методом pr_status_ci(*, number, head) -> CIStatusResult — read-only снапшот CI с tri-state дискриминатором (CI_STATE_PENDING/SUCCESS/FAILURE/UNKNOWN) + failed_checks list для forensic trail. CIStatusResult — frozen dataclass с полями ok/reason/state/failed_checks/pr_number/raw, отдельный от ProviderResult чтобы avoid stringly-typed reasons для tri-state verdict (callers branch on state, not on bool ok). NoneProvider получил no-op stub возвращающий CI_STATE_UNKNOWN + REASON_NO_PROVIDER. GhProvider.pr_status_ci реализован через `gh pr checks <id> --json name,state,conclusion`: парсит JSON независимо от exit code (gh использует non-zero для red CI undocumented), модуль-level _summarise_gh_checks() helper с PEP 621 enum mapping (QUEUED/IN_PROGRESS/PENDING/WAITING/REQUESTED → pending; SUCCESS/NEUTRAL/SKIPPED conclusion → green per GitHub UI; rest → red), pending wins over failure mid-run так что re-run-on-failure workflows не ломают polling loop, empty list → UNKNOWN не SUCCESS (no-checks ≠ safe-to-merge). GlabProvider.pr_status_ci реализован через `glab mr view <id> --output json`: пробует head_pipeline.status > pipeline.status > detailed_merge_status в priority order (multi-version glab compat), failed_jobs/failed_builds list extraction для breakdown, manual/skipped pipeline statuses count as success matching GitLab UI. WhillyConfig получил RELEASE_TIMEOUT (1800s default) + RELEASE_POLL_INTERVAL (30s default) — мапятся через field-name auto-mapping на WHILLY_RELEASE_TIMEOUT/WHILLY_RELEASE_POLL_INTERVAL. Новый модуль whilly/release_pipeline.py — pure orchestrator (no I/O beyond providers + sleep), ReleaseStepResult frozen dataclass с полным diagnostic payload (ok/reason/pr_url/pr_number/state/failed_checks/merge_url/polls/elapsed_s/error/raw), 13 OUTCOME_* констант (MERGED/ALREADY_MERGED/GIT_DISABLED/AUTO_RELEASE_DISABLED/NO_BUMP/NO_PR/RUN_INCOMPLETE/NO_PROVIDER/CI_FAILURE/CI_TIMEOUT/CI_UNKNOWN/MERGE_FAILED/STATUS_FETCH_FAILED), 8 EVENT_* констант под git.release.* namespace (skipped/started/poll/ci_green/ci_red/ci_timeout/merged/merge_failed), poll_pr_merge_when_ci_green(...) — единственный public entry point с conservative gating mirroring auto_pr.run_auto_pr style: run_incomplete → GIT_ENABLED → AUTO_RELEASE → BUMP (PRD acceptance gate) → pr_number-or-branch → no_provider. Polling design: fixed-interval (no jitter/backoff — CI verdicts arrive at unpredictable times; backoff would add latency at the moment we want a tight loop), one-poll grace для UNKNOWN перед fail-fast (fresh PRs need a beat to spawn check rows), CI red → fail-fast БЕЗ retry (PRD FR-10 — CI failure is a postal error), idempotency через recognising 'already merged' stderr hints (_ALREADY_MERGED_HINTS) → OUTCOME_ALREADY_MERGED не OUTCOME_MERGE_FAILED. _safe_pr_status_ci() / _safe_pr_merge() обёртки конвертируют любые exception в failure result (defensive layer над documented 'never raises' контрактом провайдеров). state_store.record_pr_url() reuse для merge URL persistence (TASK-014b extends с tag/release schema). Sleep + monotonic test seams (Callable kwargs) — production callers leave defaults time.sleep/time.monotonic, тесты инжектят stub без realtime sleep. cli.run_plan() — новый _maybe_run_release_pipeline() helper в conservative-gating стиле, lands ПОСЛЕ auto_pr_result computation и ПЕРЕД reporter.finalize() так что merge URL persists even при последующем crash, провайдер строится лениво из get_provider() в helper а не пробрасывается через сигнатуру. Тесты tests/test_release_pipeline_polling.py: 25 тестов через 7 классов (TestGating 8, TestHappyPath 3, TestCIRed 3, TestTimeout 1, TestUnknown 2, TestIdempotency 2, TestStatePersistence 2, TestResultDataclass 2 + extra coverage class headers). Дополнительно tests/test_gh_provider.py +14 тестов (TestPRStatusCI 9, TestSummariseGhChecks 5), tests/test_glab_provider.py +12 тестов (TestPRStatusCI 9, TestSummariseGlabPipeline 4). Покрыты все skip outcomes, happy path с pending→green polling sequence, custom merge_method forwarding, red-first-poll without merge call, transport error short-circuit без looping, timeout с deterministic monotonic clock seam, UNKNOWN one-poll grace, idempotent already-merged via stderr substring matching, real merge failure propagation, state_store persistence на success без leakage в skip paths, frozen dataclass invariant. FakeProvider дублирует Provider Protocol surface для status/merge с canned response queues (last entry sticks для long polling). Все 1247 тестов проекта зелёные (+51 новых), make lint clean (136 файлов отформатировано).",
+      "status": "done",
+      "dependencies": [
+        "TASK-011",
+        "TASK-013"
+      ],
+      "key_files": [
+        "whilly/release_pipeline.py",
+        "whilly/cli.py",
+        "tests/test_release_pipeline_polling.py"
+      ],
+      "acceptance_criteria": [
+        "FR-9: gate auto_release=true И --bump — без --bump release НЕ запускается",
+        "Polling MR с CI-status, таймаут конфигурируемо WHILLY_RELEASE_TIMEOUT (default 1800s)",
+        "Auto-merge только на green CI",
+        "Mock-тесты на provider.pr_status_ci с green/red/timeout сценариями"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/release_pipeline.py tests/test_release_pipeline_polling.py",
+        "pytest tests/test_release_pipeline_polling.py -q"
+      ],
+      "prd_requirement": "FR-9 (polling, auto-merge gate)"
+    },
+    {
+      "id": "TASK-014b",
+      "phase": "M4 — Version bump + auto-release",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Расширить whilly/release_pipeline.py: после auto-merge — checkout main + pull + tag vX.Y.Z + push --tags → provider.release_create(notes). Notes генерируются из git log между предыдущим тегом и текущим. Идемпотентность: tag существует → skip; release существует → skip без error. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. В whilly/release_pipeline.py добавлены 11 новых OUTCOME_* констант (RELEASED/RELEASE_ALREADY_EXISTS/NOT_MERGED/NOT_A_REPO/VERSION_PARSE_FAILED/CHECKOUT_FAILED/PULL_FAILED/TAG_FAILED/TAG_PUSH_FAILED/RELEASE_CREATE_FAILED, plus reuse OUTCOME_GIT_DISABLED/AUTO_RELEASE_DISABLED/NO_BUMP/NO_PROVIDER/RUN_INCOMPLETE) и 9 новых EVENT_* констант под git.release.* namespace (tag_started/tag_skipped/tag_created/tag_existed/tag_pushed/tag_failed/release_created/release_existed/release_failed). TagReleaseResult — frozen dataclass с полным diagnostic payload (ok/reason/tag/version/release_url/release_existed/tag_existed/notes/error/raw), отдельный от ReleaseStepResult чтобы каждый шаг pipeline-а имел свой возврат — финальный отчёт сможет показать обе записи. tag_and_release(...) — единственный новый public entry point, pure orchestrator (only side effects: git subprocess via injected runner + единственный provider.release_create), conservative gating mirroring poll_pr_merge_when_ci_green's стиль: run_incomplete → GIT_ENABLED → AUTO_RELEASE → BUMP (тот же PRD acceptance gate что и polling) → merge_result.ok (новый gate — без успешного merge нечего тагать) → no_provider → not_a_repo → version_parse_failed (читается через _read_release_version с tomllib + drift check между pyproject.toml и __init__.py). Three-layer idempotency: (1) tag-side через git rev-parse --verify --quiet refs/tags/<tag> с race-recovery recheck на случай parallel tag landing, (2) push-side через natural git push idempotency (already-pushed тег = success), (3) release-side через делегирование в provider.release_create который уже probe'ит view <tag> first (TASK-009b/c). Notes generation BEFORE tagging: git describe --tags --abbrev=0 HEAD, с двойным fallback — если describe возвращает создаваемый тег (от предыдущего failed run), retry на HEAD^; full history fallback когда нет previous tag совсем; safe-string fallback ('Release v{version}.') если git log сам падает. _read_release_version() reuses _parse_pyproject_version + _parse_init_version из whilly.version_bump (lazy import) с pre-tag drift check — не позволяет tag-нуть версию которая разъехалась между файлами. _safe_release_create() обёртка конвертирует любой провайдер raise в ReleaseResult(ok=False) — defensive layer. _safe_git() обёртка над runner — никогда не возвращает None, синтезирует CompletedProcess с returncode=1 при exception. _make_default_git_runner() — production runner с FileNotFoundError → exit 127, TimeoutExpired → exit 124 (GNU coreutils convention), OSError → exit 1, всегда capture stderr. _record_release() через state_store.record_pr_url с branch=tag/base=base_branch (transitional schema reuse — TASK-014c представит record_release_state). Тесты tests/test_release_pipeline_tag.py: 31 тест через 7 классов (TestGating 12, TestHappyPath 3, TestIdempotency 3, TestFailurePaths 6, TestNotesGeneration 3, TestStatePersistence 2, TestResultDataclass 2). FakeRunner — handler-prefix dispatch с register/register_sequence (последний response sticks), sorted longest-prefix-first для определённости routing'а; FakeProvider дублирует release_create surface с canned response queue + raise_on_release seam. Покрыты все 9 skip outcomes (run_incomplete/git_disabled/auto_release_disabled/no_bump (whitespace + empty)/not_merged (None + ok=False)/no_provider (None + NoneProvider)/not_a_repo/version_parse_failed (missing pyproject + drift)), happy path с full step ordering verification (checkout → pull → describe → log → tag → push → release_create) + base_branch override propagation, idempotency: pre-existing local tag → skip git tag -a + still push, provider existed=True → OUTCOME_RELEASE_ALREADY_EXISTS + EVENT_RELEASE_EXISTED, race-recovery когда git tag fails но recheck shows существующий, все 5 failure paths (checkout/pull/tag/push/release_create) с downstream-step short-circuit verification (tag failure → провайдер не вызывался; push failure → провайдер не вызывался), buggy provider raising RuntimeError swallowed, notes generation с previous tag range (## Changes since vX.Y.Z), describe loop fallback (новый тег на HEAD → HEAD^ retry), git log fail → safe fallback, state_store persistence (release URL + tag в branch field) и skip-paths-don't-record (gating не должен оставлять следов в state), frozen dataclass invariant + default field shapes. Все 1278 тестов проекта зелёные (+31 новых от 1247 baseline), make lint clean (137 файлов отформатировано).",
+      "status": "done",
+      "dependencies": [
+        "TASK-014a"
+      ],
+      "key_files": [
+        "whilly/release_pipeline.py",
+        "tests/test_release_pipeline_tag.py"
+      ],
+      "acceptance_criteria": [
+        "checkout main + pull + tag vX.Y.Z + push --tags",
+        "provider.release_create вызывается с notes из git log diff",
+        "Idempotency: tag exists → skip; release exists → skip без error",
+        "Mock-тесты на git tag + provider.release_create"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/release_pipeline.py tests/test_release_pipeline_tag.py",
+        "pytest tests/test_release_pipeline_tag.py -q"
+      ],
+      "prd_requirement": "FR-9 (tag + release)"
+    },
+    {
+      "id": "TASK-014c",
+      "phase": "M4 — Version bump + auto-release",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Дополнить whilly/release_pipeline.py: python -m build && twine upload dist/* с pre-check версии в PyPI (защита от Risks: твин публикует битую версию). Twine читает токен ТОЛЬКО из env/.pypirc (Security NFR). Версия уже в PyPI → skip без error. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. В whilly/release_pipeline.py добавлены 3 новых tri-state константы (PYPI_STATE_PUBLISHED/NOT_PUBLISHED/UNKNOWN — UNKNOWN намеренно non-fatal: twine 'File already exists' это second-line defence, transiently-failed pre-check не должен блокировать релиз только делать его громче), 8 новых OUTCOME_* констант (PUBLISHED/PYPI_ALREADY_PUBLISHED/NOT_RELEASED/NO_PACKAGE_NAME/BUILD_FAILED/NO_ARTIFACTS/UPLOAD_FAILED, plus reuse OUTCOME_GIT_DISABLED/AUTO_RELEASE_DISABLED/NO_BUMP/NOT_A_REPO/RUN_INCOMPLETE/VERSION_PARSE_FAILED), 10 новых EVENT_* констант под git.release.* namespace (pypi_skipped/started/version_check/build_started/build_ok/build_failed/upload_started/published/already_published/upload_failed). PyPICheckResult — frozen dataclass с tri-state state + status_code + error для honesty: API down ≠ 'not published'. PyPIPublishResult — frozen dataclass mirroring TagReleaseResult shape с полями ok/reason/package/version/artifacts/pypi_url/already_published/pypi_state/error/raw. publish_to_pypi(...) — единственный новый public entry point, pure orchestrator (only side effects: pypi_checker probe + python -m build / twine upload via injected runner), conservative gating mirroring tag_and_release: run_incomplete → GIT_ENABLED → AUTO_RELEASE → BUMP (PRD acceptance gate) → tag_result.ok (новый gate — без успешного tag нечего публиковать) → not_a_repo → version_parse_failed (читается из tag_result.version или _read_release_version с tomllib + drift check) → no_package_name (читается из pyproject.toml [project].name через _read_package_name с tomllib lazy import). Two-layer idempotency: (1) pre-check via PyPI JSON API — 200 → PYPI_ALREADY_PUBLISHED skip-build-and-upload fast path, 404 → fresh upload, 5xx/timeout → UNKNOWN proceed (twine catches dup), (2) post-upload via _PYPI_ALREADY_PUBLISHED_HINTS substring match в combined stderr+stdout (file already exists / appears to already exist / already been published / 400 bad request / http error 400 — broad 'already exist' substring catches twine's 'Skipping ... appears to already exist' message). Security NFR satisfied by construction: subprocess argv состоит ТОЛЬКО из ['python', '-m', 'twine', 'upload', '--non-interactive', *artifact_paths] — токен никогда не появляется в sys.argv, twine читает TWINE_USERNAME/TWINE_PASSWORD/.pypirc из inherited env сама. _discover_artifacts с package-name normalisation (foo-bar ↔ foo_bar — wheels normalize underscores) + version filtering чтобы stale dist artifacts от прошлых билдов не попали в upload. _make_default_pypi_runner — production runner с FileNotFoundError → exit 127, TimeoutExpired → exit 124 (GNU coreutils convention), всегда capture stderr (mirroring _make_default_git_runner). _default_pypi_checker — stdlib-only urllib.request.urlopen probe https://pypi.org/pypi/<pkg>/<version>/json с tri-state mapping (HTTP 200 → PUBLISHED, HTTPError 404 → NOT_PUBLISHED, URLError/HTTPError-other → UNKNOWN, любой Exception → UNKNOWN); никаких новых deps (httpx/requests не требуется — одна query не оправдывает добавление зависимости). _safe_pypi_check / _safe_pypi_run обёртки конвертируют любые exceptions в UNKNOWN/CompletedProcess(returncode=1) — defensive layer. _record_pypi через state_store.record_pr_url с branch='pypi:<pkg>@<version>' (transitional schema reuse — TASK-022b представит record_release_state с dedicated pypi_url field). build_timeout=600s default (build с native extensions медленный), upload_timeout=300s default (network-bound). Custom dist_dir kwarg для тестов чтобы не загрязнять production checkout's dist/. Тесты tests/test_release_pipeline_pypi.py: 29 тестов через 9 классов (TestGating 10, TestPreCheckIdempotent 1, TestHappyPath 3, TestUploadIdempotency 2, TestFailurePaths 4, TestSecurity 1, TestStatePersistence 3, TestResultDataclass 2, TestDefaultPypiChecker 2, TestArtifactDiscovery 1). FakePypiRunner — handler-prefix dispatch с register/register_with_side_effect (последний для materialising fake artifacts во время build call), sorted longest-prefix-first для определённости routing, default success no-op для commands которые тест не mock'ает. FakePypiChecker — canned PyPICheckResult queue (последний sticks). Покрыты все 10 skip outcomes (run_incomplete/git_disabled/auto_release_disabled/no_bump (BUMP='' + whitespace)/tag_result_none/tag_result_failure/not_a_repo/version_parse_failed (no pyproject + tag без version)/no_package_name), pre-check fast path (PUBLISHED → skip build+upload + EVENT_PYPI_ALREADY_PUBLISHED via 'pre_check'), happy path с full chain verification (build → upload → state ordering, --outdir пробрасывается в build, --non-interactive в twine, NIKAKIH credential flags в argv), step ordering (checker → build → upload), custom dist_dir override, twine 'File already exists' в stderr → idempotent success, twine 'appears to already exist' в stdout → idempotent success (covers twine --skip-existing variants), build failure → upload short-circuited (НЕ вызывался), build returncode=0 но no artifacts → NO_ARTIFACTS, twine 403 Forbidden → UPLOAD_FAILED (red, НЕ idempotent — TASK-017b будет wrap retry), buggy pypi_checker raising RuntimeError → swallowed via UNKNOWN, Security NFR (env vars TWINE_USERNAME/TWINE_PASSWORD set но НЕ появляются в argv — pypi-shaped strings, __token__ literal, base64-shaped tokens все verified absent), state_store persistence на success + via pre-check, skip paths не оставляют следов в state, frozen dataclass invariant + default field shapes, default checker через monkeypatched urllib.request.urlopen для 404→NOT_PUBLISHED + URLError→UNKNOWN (без real network), package-name normalisation (foo-bar pyproject → foo_bar wheel artifacts) + stale-version filtering. Все 1307 тестов проекта зелёные (+29 от 1278 baseline TASK-014b), make lint clean (138 файлов отформатировано).",
+      "status": "done",
+      "dependencies": [
+        "TASK-014b"
+      ],
+      "key_files": [
+        "whilly/release_pipeline.py",
+        "tests/test_release_pipeline_pypi.py"
+      ],
+      "acceptance_criteria": [
+        "PyPI version pre-check через JSON API → skip если версия уже опубликована",
+        "Twine токен читается ТОЛЬКО из env/.pypirc — никогда не передаётся как arg",
+        "build + upload обёрнуты в try/except с понятным сообщением",
+        "Mock-тесты на subprocess(twine) + httpx/requests(PyPI JSON)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/release_pipeline.py tests/test_release_pipeline_pypi.py",
+        "pytest tests/test_release_pipeline_pypi.py -q"
+      ],
+      "prd_requirement": "FR-9, Risks pypi broken version, NFR security"
+    },
+    {
+      "id": "TASK-015",
+      "phase": "M4 — Version bump + auto-release",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase M4 Integration Test: с моками gh + twine прогнать full pipeline (prd-wizard → план → auto-pr → bump → auto-release → PyPI). Двойной запуск (idempotency Метрика 5): второй раз НЕ создаёт дубль tag/release/PyPI upload. DONE: реализовано в tests/test_m4_integration.py (4 интеграционных теста через 3 test-классов). TestM4FullChainFreshRelease.test_full_chain_first_run_completes_with_published_outcome — happy path всей цепочки auto_pr → poll_pr_merge_when_ci_green → bump_version → tag_and_release → publish_to_pypi на одном tmp_path репо с реальным git init. GhProvider c mocked _run_gh/_run_git seams + FakePollProvider для polling/release + FakeGitRunner для tag step + FakePypiRunner с register_with_side_effect для построения dist/* без форка реального python -m build + fake pypi_checker. Проверяет: PR создан (#42, OUTCOME_OK), polling 1 итерация (ci_green с первого poll, sleep[]==[]), bump_version 3.3.0→3.3.1 atomic dual-rewrite (pyproject.toml + whilly/__init__.py обa содержат \"3.3.1\", старая версия отсутствует), tag v3.3.1 created (rev-parse=fail → tag -a), release_create на провайдере с notes containing 'v3.3.0', publish_to_pypi pre-check 404 → build → upload, twine argv не содержит --password/TWINE_PASSWORD (Security NFR by construction), артефакт whilly-3.3.1-py3-none-any.whl в результате, cross-step events trail включает git.auto_pr.created → git.release.merged → EVENT_TAG_CREATED → EVENT_TAG_PUSHED → EVENT_RELEASE_CREATED → EVENT_PYPI_VERSION_CHECK → EVENT_PYPI_PUBLISHED, отсутствуют tag_failed/release_failed/pypi_upload_failed события. TestM4Idempotency.test_second_run_reuses_pr_merge_tag_and_pypi — Метрика 5 двойной прогон. Первый run: классический happy path c bump=patch, выходит published. Второй run на том же репо: pr_create stderr 'a pull request already exists' → pr view (#77 metadata) → pr edit (existed=True, без второго pr create POST), pr_merge ok=False stderr 'a pull request was already merged' → _ALREADY_MERGED_HINTS classification → OUTCOME_ALREADY_MERGED ok=True, bump_version(level='') → REASON_DISABLED no-op (файлы остаются 3.3.1, не 3.3.2 — критический фикс: `bump_version(level='patch')` после успешного бампа создал бы v3.3.2 что нарушает идемпотентность; тест моделирует cli's resume logic которая передаёт пустой level когда state знает что bump уже произошёл), tag_and_release rev-parse=0 → tag_existed=True + provider.release_create returns existed=True → OUTCOME_RELEASE_ALREADY_EXISTS, runner.call_args(('tag','-a'))==[] (no second git tag), но runner.call_args(('push','origin','v3.3.1'))==1 раз (re-push existing tag это git no-op success — TASK-014b's third idempotency layer, intentional), publish_to_pypi pypi_checker returns 200 OK → OUTCOME_PYPI_ALREADY_PUBLISHED, runner.call_args для python -m build И python -m twine == [] (zero calls — pre-check short-circuit перед build, критичный assertion для Метрика 5 — без pre-check второй run silently rebuilds + retries upload). Cross-run events: ровно 1 EVENT_PYPI_PUBLISHED + ровно 1 EVENT_PYPI_ALREADY_PUBLISHED + ровно 1 EVENT_RELEASE_EXISTED. TestM4PyPIPreCheckGuard.test_precheck_200_ok_short_circuits_before_build — изолированная проверка что pre-check 200 OK перекрывает build И upload, обa зарегистрированы но обa не вызываются. test_unknown_precheck_with_twine_duplicate_stderr_still_idempotent — second-line defence: pre-check UNKNOWN (DNS failure scenario), twine returns 1 + stderr 'HTTPError: 400 Bad Request - File already exists.' → классификатор _PYPI_ALREADY_PUBLISHED_HINTS → OUTCOME_PYPI_ALREADY_PUBLISHED ok=True, build + upload оба вызваны но идемпотентность сохранена (демонстрирует что даже если pre-check был бы случайно удалён, twine's own duplicate detection covers immediate harm — но pre-check всё равно saves network round-trip + build cost). Все 1605 тестов проекта зелёные (+4 от 1601 baseline TASK-012), make lint clean (150 файлов отформатировано), make test clean. Configuration choices: оба runs используют BUMP=patch в config (polling/tag/publish gate на нём, не на bump_version output), idempotency на уровне bump моделируется через level='' аргумент к bump_version — mirroring expected cli resume logic. retry_backoff_delays=(0,0,0) + retry_sleep=lambda _s: None для instant runs. monotonic injected as iter(range(10_000)).__next__ для deterministic polling deadline. sleep injected as no-op так как CI green с первой итерации. Дизайнерское решение — отдельный test file чем фолдинг в test_release_pipeline_*: per-step suites pinят своих контракты gating + argv shape + idempotency-on-the-same-call; M4 уровень доказывает что они композируются в coherent pipeline где output каждого шага gates the next.",
+      "status": "done",
+      "dependencies": [
+        "TASK-014a",
+        "TASK-014b",
+        "TASK-014c"
+      ],
+      "key_files": [
+        "tests/test_m4_integration.py"
+      ],
+      "acceptance_criteria": [
+        "Полная цепочка отрабатывает с моками (Метрика 2)",
+        "Двойной запуск идемпотентен (Метрика 5)",
+        "Pre-check PyPI version защищает от дубликата upload"
+      ],
+      "test_steps": [
+        "pytest tests/test_m4_integration.py -q -m integration"
+      ],
+      "prd_requirement": "M4 milestone, Метрика 2, Метрика 5"
+    },
+    {
+      "id": "TASK-016",
+      "phase": "M5 — Error classification + retry",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/git_errors.py: ErrorClass enum (auth_error, timeout_error, network_error, merge_conflict, ci_failure, unknown_error). Функция classify(stderr, exit_code, tool) возвращает ErrorClass. Функция retry_with_backoff(fn, max_attempts=3, delays=[5,15,45], retriable={timeout_error, network_error}). Auth → fail-fast с подсказкой '{tool} auth login'. DONE: реализовано в commit на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Модуль whilly/git_errors.py содержит ErrorClass enum (7 членов: OK + 6 failure classes), EXIT_AUTH_REQUIRED=4, DEFAULT_BACKOFF_DELAYS=(5,15,45), RETRIABLE_CLASSES={TIMEOUT,NETWORK}, REASON_TO_CLASS bridge для интеграции с git_providers REASON_*, AuthRequiredError исключение, classify(stderr, exit_code, tool) с упорядоченными pattern-таблицами (timeout > auth > network > conflict > ci_failure), format_recovery_hint() с tool-specific auth hints (gh/glab/twine/git), retry_with_backoff() с инжектируемыми sleep/classifier для тестов и on_retry callback для observability. Тесты tests/test_git_errors.py: 77 тестов через 9 test-классов покрывают все 6 классов с реальными stderr примерами (gh 401, glab unauthorized, twine 403, git Could not resolve host, merge conflict, CI failure), retry semantics (3 попытки, 5/15/45 backoff, только transient), auth fail-fast через AuthRequiredError, не-retriable короткое замыкание, custom retriable set, on_retry callback с swallowed exceptions, default classifier для ProviderResult duck-typing. Все 1031 тестов проекта зелёные, ruff check + format clean.",
+      "status": "done",
+      "dependencies": [
+        "TASK-009a",
+        "TASK-009b",
+        "TASK-009c"
+      ],
+      "key_files": [
+        "whilly/git_errors.py",
+        "tests/test_git_errors.py"
+      ],
+      "acceptance_criteria": [
+        "FR-10: 6 классов ошибок корректно детектятся по строкам/exit codes (gh 401, glab unauthorized, twine 403, etc.)",
+        "Retry: 3 попытки, backoff 5/15/45s, только для transient",
+        "Auth-error → exit code 4 (новый код 'auth required')",
+        "Merge conflict → подсказка 'Resolve conflicts manually and re-run with --resume'",
+        "Unit-тесты на каждый класс"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_errors.py tests/test_git_errors.py",
+        "pytest tests/test_git_errors.py -q"
+      ],
+      "prd_requirement": "FR-10"
+    },
+    {
+      "id": "TASK-017a",
+      "phase": "M5 — Error classification + retry",
+      "category": "functional",
+      "priority": "high",
+      "description": "Обернуть все subprocess-вызовы в GhProvider и GlabProvider (push, pr_create, pr_merge, release_create, issue_create) в retry_with_backoff с classify(stderr, exit_code, tool). Auth-error → AuthRequiredError (exit code 4). Network/timeout → 3 retry с backoff 5/15/45s. Mock-тесты на каждый провайдер симулируют transient + auth сценарии. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Дизайнерское решение — wrap на уровне публичного метода (не subprocess). Каждый из 5 методов GhProvider/GlabProvider теперь представляет собой однострочный wrapper над _retry(lambda: self._xxx_once(...)); вся существующая логика переехала в private _xxx_once helper'ы (push/pr_create/pr_merge/release_create/issue_create/pr_status_ci × 2 провайдера = 12 _xxx_once). Per-method retry правильно ловит provider-level partial-success паттерны (например _pr_create_once делает gh pr create + опционально gh pr view + gh pr edit; transient retry на любой из них приведёт к идемпотентному повторению через 'already exists' branch). _retry() — единственная точка где живёт retry policy (mirroring git_branch / git_commit conventions): передаёт fn в whilly.git_errors.retry_with_backoff с tool=self.name (через который AuthRequiredError получает имя инструмента для login-hint formatter'а). retry_with_backoff classifier по умолчанию это _default_result_classifier который читает .ok / .reason ProviderResult-shaped значений через REASON_TO_CLASS bridge — не нужно повторно реализовывать stderr-substring matching, всё уже сделано в _classify_stderr (TASK-009b/c) и git_errors.classify (TASK-016). __init__ обоих провайдеров расширен 5-ю keyword-only параметрами (max_attempts/backoff_delays/sleep/retriable/raise_on_auth), все default'ы матчат PRD FR-10 контракт (3 attempts, 5/15/45s, RETRIABLE_CLASSES, raise_on_auth=True). Production callers leave defaults; тесты инжектят backoff_delays=(0,0,0) + sleep=list.append для instant runs + sleep schedule assertion. Контракт Provider Protocol изменён в одну сторону: методы теперь МОГУТ raise AuthRequiredError (а не только возвращать ok=False). Это интенциональное PRD-сигнальное событие — не bug — top-level cli handler (TASK-017c) поймает его и выйдет с EXIT_AUTH_REQUIRED=4. Существующие defensive wrappers (auto_pr._safe_push / _safe_pr_create, release_pipeline._safe_pr_status_ci / _safe_pr_merge / _safe_release_create) обновлены: ловят AuthRequiredError первым и re-raise, потом ловят broad Exception для defensive convertation в ProviderResult(ok=False) — без этого изменения broad-catch съел бы AuthRequiredError (он наследует RuntimeError). self_heal._try_create_issue ИНТЕНЦИОНАЛЬНО продолжает swallow AuthRequiredError — issue creation это recovery path после уже произошедшего crash, и пробрасывание нового AuthRequiredError маскировало бы оригинальный exception (что и есть его документированная защита). Существующие тесты test_gh_provider.py / test_glab_provider.py — 4 авторизационных теста в каждом — обновлены чтобы передавать raise_on_auth=False в конструктор: они проверяют CLASSIFIER (что 401 stderr → REASON_AUTH_REQUIRED) а не raising behavior. Raising behavior тестируется отдельно в новых retry suites. Новые тесты tests/test_gh_provider_retry.py: 26 тестов через 8 классов (TestConstructor 3, TestPushRetry 5, TestPRCreateRetry 2, TestPRMergeRetry 2, TestReleaseCreateRetry 2, TestIssueCreateRetry 2, TestPRStatusCIRetry 3, TestClassifierIntegration 6, TestExitCodeContract 1). Покрыты: default max_attempts=3 (3 calls + 2 sleeps на persistent transient), default backoff = (5,15,45) constant lock-in, custom max_attempts=5 respected, transient timeout retry → succeeds, transient network retry → succeeds, AuthRequiredError raise с tool='gh' / stderr / 'gh auth login' в hint, exhaustion (3 calls + 2 sleeps), unknown-error returns immediately (no retry), pr_create transient + auth, pr_merge transient + auth, release_create transient (4 calls = 2 attempts × view+create) + auth (2 calls = 1 attempt fail-fast), issue_create transient + auth, pr_status_ci transport-error retry + auth, red-CI does NOT retry (ok=True with state=failure → ErrorClass.OK short-circuits). Classifier integration: 401 → AUTH, DNS → NETWORK, timeout substring → TIMEOUT, exit 124 alone → TIMEOUT, unknown passthrough, exit 0 with stderr → OK regardless. Exit code constant: EXIT_AUTH_REQUIRED == 4. Аналогично tests/test_glab_provider_retry.py: 23 теста через 7 классов (TestConstructor 2, TestPushRetry 5, TestPRCreateRetry 2, TestPRMergeRetry 2, TestReleaseCreateRetry 2, TestIssueCreateRetry 2, TestPRStatusCIRetry 3, TestClassifierIntegration 5). Mirror coverage gh suite-а с glab-flavoured stderr patterns ('401 Unauthorized', 'glab auth login', 'gitlab.example.com' DNS). Все 1375 тестов проекта зелёные (+49 от 1326 baseline TASK-004), make lint clean (141 файл отформатировано), make test clean. Acceptance commands: `python3 -m ruff check whilly/git_providers/ tests/test_gh_provider_retry.py tests/test_glab_provider_retry.py` ✓ all checks passed; `pytest tests/test_gh_provider_retry.py tests/test_glab_provider_retry.py -q` ✓ 49 passed.",
+      "status": "done",
+      "dependencies": [
+        "TASK-016",
+        "TASK-009b",
+        "TASK-009c"
+      ],
+      "key_files": [
+        "whilly/git_providers/gh_provider.py",
+        "whilly/git_providers/glab_provider.py",
+        "tests/test_gh_provider_retry.py",
+        "tests/test_glab_provider_retry.py"
+      ],
+      "acceptance_criteria": [
+        "Все 5 методов GhProvider/GlabProvider обёрнуты в retry_with_backoff",
+        "classify правильно различает auth/timeout/network/unknown по stderr реальных gh/glab команд",
+        "Auth-error поднимает AuthRequiredError → caller возвращает exit code 4",
+        "Mock subprocess покрывает transient retry (3 попытки) и fail-fast (auth)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_providers/ tests/test_gh_provider_retry.py tests/test_glab_provider_retry.py",
+        "pytest tests/test_gh_provider_retry.py tests/test_glab_provider_retry.py -q"
+      ],
+      "prd_requirement": "FR-10 (provider retry)"
+    },
+    {
+      "id": "TASK-017b",
+      "phase": "M5 — Error classification + retry",
+      "category": "functional",
+      "priority": "high",
+      "description": "Обернуть subprocess-вызовы в release_pipeline (git push, git push --tags, twine upload, polling pr_status_ci) в retry_with_backoff. Twine 403 → AuthRequiredError. CI failure НЕ retry (постоянная ошибка). PyPI version-already-uploaded → не считается ошибкой. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Дизайнерское решение — wrap на уровне runner-результата (CompletedProcess), а не на уровне subprocess.run или _safe_git/_safe_pypi_run. Каждое из 3 network-bound runner-вызовов (git pull --ff-only origin {base} в tag_and_release; git push origin {tag} в tag_and_release; python -m twine upload в publish_to_pypi) теперь оборачивается в _retry_runner_call(lambda: _safe_git/_safe_pypi_run(...), tool=..., command=..., max_attempts=..., delays=..., sleep=..., emit=..., classifier=...). Local-only ops (git checkout, git tag -a, git rev-parse, git describe, git log, python -m build) НЕ оборачиваются — retry на локальные команды не имеет смысла (нет transient failures), только добавит latency. Это зеркалит whilly.git_errors.RETRIABLE_CLASSES = {TIMEOUT, NETWORK} — retry policy intentionally narrow. _retry_runner_call(make_proc, *, tool, command, max_attempts, delays, sleep, classifier=None, emit=None, raise_on_auth=True) — единственная новая публичная (relative to module) точка интеграции с whilly.git_errors. make_proc — zero-arg lambda над _safe_git/_safe_pypi_run (которые гарантируют always-returns-CompletedProcess контракт). Default classifier = _classify_completed_process (адаптер CompletedProcess → ErrorClass через git_errors.classify(stderr, returncode, tool)). Custom classifier для twine = _classify_twine_upload — recognizes _PYPI_ALREADY_PUBLISHED_HINTS substrings в stderr+stdout → ErrorClass.OK short-circuit (без этого retry burned бы 3 useless attempts на success-shaped failure прежде чем downstream code path на line 1746 поднял бы already_published=True). on_retry callback эмитит EVENT_RETRY = 'git.release.retry' в whilly_events.jsonl с payload (tool, command, attempt, max_attempts, error_class, returncode, stderr[:200]) — observability hook для операторов вопроса 'почему release_pipeline шёл 45s вместо 5s'. Сигнатуры tag_and_release(...) и publish_to_pypi(...) расширены 3 keyword-only test seam параметрами (retry_max_attempts: int = DEFAULT_MAX_ATTEMPTS, retry_backoff_delays: Sequence[float] = DEFAULT_BACKOFF_DELAYS, retry_sleep: Callable[[float], None] = time.sleep). Production callers leave defaults (3 attempts × 5/15/45 s × real time.sleep); тесты инжектят (0,0,0) + sleep=list.append для instant runs + sleep schedule assertion. Контракт изменён в одну сторону: tag_and_release / publish_to_pypi теперь МОГУТ raise AuthRequiredError (прежде они только возвращали ok=False с reason). Это интенциональное PRD FR-10 fail-fast поведение — top-level cli handler (TASK-017c) должен поймать его и выйти с EXIT_AUTH_REQUIRED=4. Polling layer (poll_pr_merge_when_ci_green) НЕ получил дополнительной обёртки: provider.pr_status_ci уже обёрнут в retry на уровне провайдера (TASK-017a TestPRStatusCIRetry), а CI red-verdict — fail-fast без retry — обеспечивается gating на CI_STATE_FAILURE прежде любого provider.pr_merge вызова (test_release_pipeline_polling.py::TestCIRed). Defensive smoke в новом suite подтверждает что поломанный merge_result полностью блокирует tag_and_release без единого runner.call (нет double-retry edge case). Существующие 2 теста (test_push_failure в tag suite, test_upload_failure_with_unrelated_error_is_red в pypi suite) обновлены: их stderr перезаписан с auth-flavored ('fatal: Authentication failed' / 'HTTP 403 Forbidden') на unknown-class ('refusing to push tag' / 'something genuinely weird happened') — эти тесты сохраняют покрытие 'non-auth failure → OUTCOME_*_FAILED red result' семантики; auth-fail-fast специально покрыт в новом TestAuthRequiredFastFail suite. Новые тесты tests/test_release_pipeline_retry.py: 42 теста через 10 классов (TestClassifierHelpers 11, TestRetryRunnerCallPrimitive 6, TestTagPullRetry 4, TestTagPushRetry 3, TestTwineUploadRetry 3, TestAuthRequiredFastFail 4, TestPyPIAlreadyPublishedNoRetry 2, TestCINoRetryAtPollingLayer 2, TestRetrySleepSchedule 4, TestEventEmission 3). Покрыты: 11 pure-fn helper тестов (success/timeout/network/auth/unknown classify, twine success/already-exists-stderr/already-exists-stdout/403/timeout/unknown), 6 primitive _retry_runner_call тестов (success first attempt no sleep, transient-then-success 2 attempts, exhausted returns last value, unknown short-circuits, auth raises with tool, raise_on_auth=False inhibits raise), tag_pull (transient timeout 2 attempts → success, 3-attempt exhaust → PULL_FAILED, network DNS resolve error retries, unknown class no retry), tag_push (transient 2-attempt success, 3-attempt exhaust → TAG_PUSH_FAILED, defensive: checkout NOT retried even when fails — single attempt only), twine_upload (transient 2-attempt success, 3-attempt exhaust → UPLOAD_FAILED, build NOT retried + twine never invoked when build failed), auth_fast_fail (twine 403 → AuthRequiredError(tool='twine') + login hint содержит 'TWINE_USERNAME'/'pypirc' + один attempt only, EXIT_AUTH_REQUIRED == 4 lock-in, git push 401 → AuthRequiredError(tool='git'), git pull 401 → AuthRequiredError), already_published (twine returncode=1 + stderr 'File already exists' → ok=True PYPI_ALREADY_PUBLISHED single attempt, twine --skip-existing stdout 'appears to already exist' → ok=True), CI no-retry (failed merge_result blocks tag_and_release with empty runner.calls, failed tag_result blocks publish_to_pypi с empty runner.calls), backoff schedule (DEFAULT_BACKOFF_DELAYS == (5, 15, 45) lock-in, DEFAULT_MAX_ATTEMPTS == 3 lock-in, default delays produce sleeps [5, 15] на 3-attempt exhaust, custom max_attempts=5 → 4 sleeps), event emission (retry event payload включает tool/command/attempt/max_attempts/error_class/returncode/stderr, нет retry events на clean success, twine retry event имеет tool='twine'+'twine upload' command). FakeGitRunner / FakePypiRunner / FakePypiChecker дублируют существующие test fixtures из test_release_pipeline_tag/pypi с одним дополнением — register_sequence для queue of responses (последний response sticks для test long polling). Все 1417 тестов проекта зелёные (+42 от 1375 baseline TASK-017a, минус 0 — 2 существующих теста переписаны без net delta), make lint + make test clean.",
+      "status": "done",
+      "dependencies": [
+        "TASK-016",
+        "TASK-014a",
+        "TASK-014b",
+        "TASK-014c"
+      ],
+      "key_files": [
+        "whilly/release_pipeline.py",
+        "tests/test_release_pipeline_retry.py"
+      ],
+      "acceptance_criteria": [
+        "git push / push --tags / twine upload обёрнуты в retry_with_backoff",
+        "twine 403 → AuthRequiredError (exit 4) без retry",
+        "CI failure (red) → fail-fast без retry (постоянная ошибка)",
+        "Mock subprocess + httpx для PyPI JSON покрывают все классы ошибок"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/release_pipeline.py tests/test_release_pipeline_retry.py",
+        "pytest tests/test_release_pipeline_retry.py -q"
+      ],
+      "prd_requirement": "FR-10 (release retry), Risks pypi auth"
+    },
+    {
+      "id": "TASK-017c",
+      "phase": "M5 — Error classification + retry",
+      "category": "functional",
+      "priority": "high",
+      "description": "В whilly/cli.py и whilly/git_preflight.py: при headless-режиме и отсутствии .whilly/git.yaml — выйти с exit code 5 и понятным stderr-сообщением 'run whilly --git-config interactively first'. Задокументировать полный набор exit codes (0=ok, 1=some failed, 2=budget, 3=timeout, 4=auth required, 5=headless-needs-config) в docs/Whilly-Usage.md. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. В whilly/cli.py добавлены два новых exit-code константы (EXIT_AUTH_REQUIRED=4 mirroring whilly.git_errors.EXIT_AUTH_REQUIRED, EXIT_CONFIG_REQUIRED=5 mirroring whilly.git_preflight.EXIT_CONFIG_REQUIRED) — оба объявлены module-top рядом с существующими EXIT_SUCCESS/SOME_FAILED/BUDGET/TIMEOUT чтобы тесты и внешние callers могли импортировать без circular dep на git_errors/git_preflight. Mirror-test (test_mirror_git_errors_exit_auth_required + test_mirror_git_preflight_exit_config_required) пинит equality чтобы будущий refactor одной из трёх констант не разъехался. Добавлена кортеж _GIT_POLICY_ENV_VARS=('WHILLY_GIT_PROVIDER','WHILLY_GIT_ENABLED') как single source of truth для bypass-проверки. Новый pure helper _check_headless_git_config(cwd, headless) — единственная точка decision-making (membership-not-equality check для env vars, mirroring merge_with_git_yaml override-stack semantics из TASK-002). Returns int|None — Optional shape вместо raise-or-pass потому что callers в main() уже разбираются с tuple (rc, _) shapes; добавляющий exception чисто из элегантности был бы регрессом. stderr hint включает обе rescue-команды (`whilly --git-config` interactively first И WHILLY_GIT_PROVIDER/WHILLY_GIT_ENABLED env vars) — оператор на CI логе нет TTY чтобы прочитать наш диалог, hint это весь UX. Gate-вызов размещён в main() ПОСЛЕ всех flag-validation paths (--timeout/--workspace/--agent) и ПЕРЕД resolve_agent_name — это критичный invariant: если расположить gate раньше, то существующие tests на 'unknown --agent backend → exit 1' ломаются (gate возвращает 5 первым). Тесты test_agent_unknown_exits_nonzero/test_agent_missing_value_exits_nonzero уже проверяют это сейчас (после fix gate position от первой попытки). Operational rescue commands (--config/--git-config/--git-reset/--doctor/--handoff-*) returnят рано — ДО _show_startup_banner и ДО WhillyConfig.from_env — поэтому gate их не trip'ает (regression-защита через TestRescueCommandsBypassGate с 3 теста на --help/--doctor/--git-reset). AuthRequiredError → exit 4 wiring добавлено в main() exception handler цикла run_plan: lazy import (`from whilly.git_errors import AuthRequiredError`) исключает циклическую зависимость и не платит import cost для общего happy-path; isinstance check ПЕРЕД broad log.exception() гарантирует что AuthRequiredError получает priority treatment (ансі-цветной hint в stderr с tool name, max-with worst_exit_code, break чтобы не попытаться следующий plan). exc.__str__() уже содержит format_recovery_hint() output (из whilly.git_errors._format_recovery_hint c case-by-tool dispatch — gh/glab/twine/git) поэтому не нужно format'ить заново — переиспользуем верный layer. HELP_TEXT расширен двумя новыми строками '4 Auth required' + '5 Headless run needs git config'. docs/Whilly-Usage.md получил новую секцию '## Headless exit codes' с full table 0-5 (4=auth required, 5=headless needs config), prose разъяснение exit code 4/5 с явным 'exit code 4'/'exit code 5' для acceptance grep, и явная override-stack diagram (CLI > env > .whilly/git.yaml > default) поскольку TASK-022b ещё pending но grep-friendly summary полезен сейчас. Sopровождающий fix: tests/test_agent_backend_wiring.py::test_agent_opencode_sets_env получил monkeypatch.setenv('WHILLY_GIT_ENABLED', '0') — этот тест предшествует TASK-017c контракту и проверяет --agent opencode plumbing (не git integration) — opt-out через env var это правильный fix, не релакс gate. Тесты tests/test_headless_exit_codes.py: 19 тестов через 6 классов (TestExitCodeConstants 4, TestHeadlessGate 6, TestMainHeadlessGate 3, TestRescueCommandsBypassGate 3, TestAuthRequiredExitCode 2, TestHeadlessExitCodeSubprocess 1). Покрыты: EXIT_AUTH_REQUIRED==4 lock-in, EXIT_CONFIG_REQUIRED==5 lock-in, mirror-equality с git_errors+git_preflight (drift defense), interactive run pass-through (headless=False → None), headless+no_yaml+no_env → 5 + hint содержит '--git-config' и 'WHILLY_GIT_PROVIDER', existing yaml bypasses gate, env WHILLY_GIT_PROVIDER bypasses, env WHILLY_GIT_ENABLED='0' bypasses, empty env value still bypasses (membership not equality semantics), main() in clean dir headless → 5, main() with yaml does not gate to 5, main() with env does not gate to 5, --help works in headless+clean, --doctor works in headless+clean, --git-reset works in headless+clean (rescue commands), AuthRequiredError raised in run_plan → main returns EXIT_AUTH_REQUIRED, AuthRequiredError message mentions tool ('glab') в stderr, subprocess.run(python -m whilly --headless) в clean tmp_path tmp_dir → returncode==5 + 'whilly --git-config' в stdout/stderr (literal acceptance criterion verbatim). Fixture _clean_env (autouse) снимает все WHILLY_* из inheritied env чтобы тесты не флапали на developer's shell. Fixture empty_dir patches _show_startup_banner на no-op чтобы каждый main() call не платил 5-секундный sleep — банner регрессия покрыта отдельно в test_cli_git_commands.py::test_dispatched_before_banner. test_main_with_yaml_does_not_gate_to_5 / _with_env_does_not_gate_to_5 patches select_plan_interactive чтобы не блокироваться на input() — они тестируют что gate НЕ fired (rc != 5), не downstream behavior. Subprocess test passes PYTHONPATH=os.pathsep.join(sys.path) в env чтобы python -m whilly находил пакет. Все 1436 тестов проекта зелёные (+19 от 1417 baseline TASK-017b), make lint clean (143 файла отформатировано). Acceptance grep: `grep -E 'exit code 4|exit code 5' docs/Whilly-Usage.md` returns 2 lines.",
+      "status": "done",
+      "dependencies": [
+        "TASK-003",
+        "TASK-016"
+      ],
+      "key_files": [
+        "whilly/git_preflight.py",
+        "whilly/cli.py",
+        "docs/Whilly-Usage.md",
+        "tests/test_headless_exit_codes.py"
+      ],
+      "acceptance_criteria": [
+        "Headless без git.yaml → exit code 5 с подсказкой в stderr",
+        "Exit codes 0/1/2/3/4/5 задокументированы единой таблицей в docs/Whilly-Usage.md",
+        "grep 'exit code 4|exit code 5' docs/Whilly-Usage.md находит обе строки",
+        "Unit-тест: subprocess.run(whilly --headless) в чистой dir → returncode == 5"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/git_preflight.py whilly/cli.py tests/test_headless_exit_codes.py",
+        "pytest tests/test_headless_exit_codes.py -q",
+        "grep -E 'exit code 4|exit code 5' docs/Whilly-Usage.md"
+      ],
+      "prd_requirement": "FR-10, NFR headless"
+    },
+    {
+      "id": "TASK-018",
+      "phase": "M5 — Error classification + retry",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase M5 Integration Test: с моками, симулирующими каждый класс ошибки (auth, timeout, network, merge_conflict, ci_failure), проверить корректное поведение retry/fail-fast и exit codes. DONE: реализовано в tests/test_m5_integration.py — 22 теста через 6 классов (TestM5SixClassesScenarios 6, TestM5BackoffSchedule 2, TestM5FailFastClasses 3, TestM5SubprocessExitCodes 2, TestM5ClassifierProbes 8 параметризованных + 2 граничных, TestM5PublicSurface 1). Все помечены module-level pytestmark = pytest.mark.integration mirroring M1/M2/M3/M4 convention. Дизайнерское решение — composition over re-coverage: per-layer suites (test_git_errors / test_gh_provider_retry / test_glab_provider_retry / test_release_pipeline_retry / test_headless_exit_codes) уже пинят свои контракты; M5 доказывает что они композируются в coherent pipeline где каждая ErrorClass сурфейсится через real cross-module path (provider → release_pipeline → cli) с правильным exit code. Coverage breakdown по PRD acceptance: «6 классов ошибок покрыты scenario-тестами» — каждый ErrorClass получает свой composition scenario: AUTH_ERROR через GhProvider.push() + patched _run_git с 401 → AuthRequiredError → cli.main() → EXIT_AUTH_REQUIRED=4 (3 layers wired in one chain), TIMEOUT_ERROR через tag_and_release runner injecting 124+'timed out' → 3 attempts → OUTCOME_PULL_FAILED, NETWORK_ERROR через 'Could not resolve host' → push retries → OUTCOME_TAG_PUSH_FAILED, MERGE_CONFLICT через GhProvider.pr_merge() с conflict stderr → REASON_CONFLICT + ровно 1 _run_gh call (no retry), CI_FAILURE через _CIStubProvider returning CI_STATE_FAILURE → poll_pr_merge_when_ci_green → OUTCOME_CI_FAILURE без provider.pr_merge invocation, UNKNOWN_ERROR через opaque stderr → 1 attempt + 0 sleeps. «Network/timeout вызывают 3 retry, потом fail» — TestM5BackoffSchedule.test_transient_failure_through_release_uses_5_15_default_sleep пинит 5/15 sleep schedule через behaviour (НЕ через constants) запуская tag_and_release БЕЗ override retry_backoff_delays — production callers используют default DEFAULT_BACKOFF_DELAYS=(5,15,45). Constant lock-in отдельно в test_default_schedule_is_5_15_45. «Auth/merge_conflict/ci_failure не вызывают retry» — TestM5FailFastClasses 3 теста: каждый класс проверяет ровно 1 underlying call (subprocess или provider method) — discriminator против регрессии 'случайно добавили в RETRIABLE_CLASSES'. Auth assertion дополнительно проверяет AuthRequiredError.tool='gh' + 'gh auth login' в hint (operator UX). TestM5SubprocessExitCodes — final acceptance gate: in-process test_auth_error_through_main_returns_exit_4 (AuthRequiredError raised в run_plan → main returns 4) + real subprocess test_subprocess_headless_clean_dir_exit_5 (python -m whilly --headless в clean tmp_path → returncode 5 + 'whilly --git-config' в combined output). Subprocess test ~1s — оплачивается потому что every wrapper в between (argparse → headless gate → main loop) exercised end-to-end, а monkeypatch.chdir для in-process теста доказывает что main() resolves cwd via os.getcwd() и gate fires до patched run_plan если cwd unset. TestM5ClassifierProbes — параметризованные 6 stderr inputs покрывающие все 6 ErrorClass через real classify() function (одинаковые inputs с test_release_pipeline_retry.TestClassifierHelpers — sole-source-of-truth alignment), + 2 boundary cases (success short-circuit на exit 0, UNKNOWN на empty stderr). TestM5PublicSurface — defensive smoke на module exports так что refactor который renames REASON_*/EXIT_* без deprecation alias trip'ает M5 gate. Helpers: _make_repo() — minimal stub repo (just .git/ + pyproject.toml + whilly/__init__.py) потому что release_pipeline только проверяет cwd/.git existence, real git init не требуется и сэкономит ~2s; FakeGitRunner mirroring test_release_pipeline_retry shape (longest-prefix-first dispatch); _CIStubProvider — minimal Provider duck-type для polling layer scenario (только pr_status_ci + pr_merge call recording). Autouse fixtures _git_identity + _clean_whilly_env намеренно дублируются с M1/M2/M3/M4 integration suites — integration suite остаётся independent от unit-suite infrastructure (общий conftest.py изменил бы 5 слоёв одним коммитом). Все 1627 тестов проекта зелёные (+22 от 1605 baseline TASK-015), make lint clean (151 файл), make test clean. Acceptance: pytest tests/test_m5_integration.py -q -m integration → 22 passed in 5.26s.",
+      "status": "done",
+      "dependencies": [
+        "TASK-016",
+        "TASK-017a",
+        "TASK-017b",
+        "TASK-017c"
+      ],
+      "key_files": [
+        "tests/test_m5_integration.py"
+      ],
+      "acceptance_criteria": [
+        "6 классов ошибок покрыты scenario-тестами",
+        "Network/timeout вызывают 3 retry, потом fail",
+        "Auth/merge_conflict/ci_failure не вызывают retry"
+      ],
+      "test_steps": [
+        "pytest tests/test_m5_integration.py -q -m integration"
+      ],
+      "prd_requirement": "M5 milestone integration"
+    },
+    {
+      "id": "TASK-019a",
+      "phase": "M6 — Self-heal",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Создать whilly/self_heal.py: top-level exception handler в cli.run_plan ловит traceback ТОЛЬКО из whilly/*.py (path filter, НЕ из task-агента). config.self_heal=false → exception пробрасывается как раньше. Записать событие git.self_heal.detected в whilly_events.jsonl. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Модуль whilly/self_heal.py содержит SelfHealOutcome enum (DISABLED/BYPASSED/EXTERNAL/DETECTED), SelfHealReport frozen dataclass с полным diagnostic payload (exc_type/message/traceback_text/deepest_frame_path/plan_file/iteration), 4 константы EVENT_DETECTED/BYPASSED/DISABLED/EXTERNAL под namespace git.self_heal.*, is_internal_whilly_traceback(tb, package_root) с path-фильтром по deepest frame (отбрасывает <string>/<frozen> синтетику и frame'ы вне PACKAGE_ROOT), handle_internal_exception(exc, *, config, log_dir, event_logger, package_root, plan_file, iteration, bypass_exceptions) с decision tree (config.SELF_HEAL=false → DISABLED no-emit; isinstance(exc, bypass_exceptions) → BYPASSED audit-only; внешний traceback → EXTERNAL audit-only; внутренний → DETECTED + полный traceback в payload), _safe_emit() для swallowing event sink crashes (FR-11 invariant 'handler never raises on its own'), _make_event_emitter mirroring git_commit/git_branch shape для unified whilly_events.jsonl schema. Wired в cli.run_plan через try/except Exception перед finally блоком: вызывает handle_internal_exception с bypass_exceptions=(AuthRequiredError,) чтобы auth-failures (которые рейзятся изнутри whilly/git_errors.py — strict path filter их бы мис-классифицировал) пропускались на cli.main → exit code 4. Handler observation-only для TASK-019a (always re-raise после emit'а), recovery dispatch (issue create / agent dispatch / MR polling) запланированы в TASK-019b/c/020a-c. Тесты tests/test_self_heal_handler.py: 20 тестов через 4 test-классов (TestPathFilter 6, TestHandleInternalException 10, TestAuthRequiredErrorBypass 1, TestPublicSurface 3). Path filter покрыт реальными tracebacks из tmp_path-файлов через runpy.run_path (deepest frame's co_filename — настоящий путь). Defensive paths: broken event sink не маскирует оригинальный exception, пустой bypass_exceptions tuple никогда не матчит ничего. Все 1051 тест проекта зелёный (+20 новых), make lint clean (128 файлов отформатировано).",
+      "status": "done",
+      "dependencies": [
+        "TASK-009a",
+        "TASK-009b",
+        "TASK-009c",
+        "TASK-016"
+      ],
+      "key_files": [
+        "whilly/self_heal.py",
+        "whilly/cli.py",
+        "tests/test_self_heal_handler.py"
+      ],
+      "acceptance_criteria": [
+        "FR-11: только internal Whilly traceback триггерит self-heal (по path фильтру whilly/*.py)",
+        "config.self_heal=false → exception re-raise без вмешательства",
+        "Event git.self_heal.detected пишется в whilly_events.jsonl с traceback",
+        "Unit-тест: traceback из task-agent (вне whilly/*.py) НЕ триггерит handler"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/self_heal.py tests/test_self_heal_handler.py",
+        "pytest tests/test_self_heal_handler.py -q"
+      ],
+      "prd_requirement": "FR-11 (internal-only filter)"
+    },
+    {
+      "id": "TASK-019b",
+      "phase": "M6 — Self-heal",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Расширить whilly/self_heal.py: при детектированном internal exception вызывать provider.issue_create в whilly-репо. URL репо вычисляется из pyproject.toml поля urls.Source. Тело issue включает traceback + контекст (план, текущая task, версия Whilly). DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. В whilly/self_heal.py добавлены 3 новых event-константы (git.self_heal.issue_created/_failed/_skipped) под уже зафиксированный namespace, кортеж PYPROJECT_URL_KEYS=('Source','Repository','Homepage') с порядком предпочтения по PEP 621 (Source — каноничный label, Repository — фактический ключ Whilly's pyproject, Homepage — last-resort fallback), новые поля SelfHealReport.issue_url/issue_number, публичный resolve_whilly_repo_url(pyproject_path) с case-insensitive lookup и .git stripping, _normalize_repo_slug(url) с host-aware нормализацией (github.com/gitlab.com → owner/repo, self-hosted GitLab/Enterprise → URL verbatim), _format_issue_title() с 80-char prefix-aware truncation и многострочной msg-collapse, _format_issue_body() с markdown секциями Context/Exception/Traceback и triple-backtick neutralisation, _try_create_issue() как orchestrator с decision tree (нет провайдера → issue_skipped(no_provider); NoneProvider duck-typed по name='none' → issue_skipped(provider_none); pyproject без URL → issue_skipped(no_repo_url); provider raises → issue_failed(provider_raised) + swallow; result.ok=False → issue_failed(reason+stderr); success → issue_created с url+number+repo+labels). Provider Protocol расширен совместимым repo: str | None = None kwarg во всех 4 реализациях (Protocol + GhProvider + GlabProvider + NoneProvider) — gh/glab CLI получают --repo OWNER/REPO когда передан, иначе flag отсутствует. cli.run_plan лениво конструирует provider через get_provider() в except clause только при config.GIT_ENABLED=True (с broad-catch fallback на None если construction failed) и пробрасывает в handle_internal_exception. Тесты tests/test_self_heal_issue.py: 30 тестов через 6 классов (TestResolveRepoUrl 11, TestNormalizeRepoSlug 4 + 1 enterprise, TestIssueTitleBuilder 5, TestIssueBodyBuilder 4, TestHandlerIssueCreation 9, TestPublicSurface 2). Покрыт каждый decision path: happy path с реальным slug + всех labels, no_provider, provider_none, no_repo_url, provider raises NotImplementedError (FR-11 invariant защищён), provider returns ok=False с REASON_AUTH_REQUIRED + stderr, EXTERNAL outcome не триггерит issue, DISABLED outcome не триггерит issue, custom labels passthrough, self-hosted GitLab URL forwarded verbatim. Дополнительно tests/test_gh_provider.py + tests/test_glab_provider.py получили по 2 теста на --repo flag forwarding (set vs default), tests/test_git_providers_base.py — тест на NoneProvider.issue_create(repo=...) duck-typing. 2 существующих TASK-019a теста обновлены чтобы фильтровать на EVENT_DETECTED (раньше assert len(events)==1, теперь — после TASK-019b — DETECTED + issue_skipped(no_provider) = 2 события). Все 1096 тестов проекта зелёные (+45 net), make lint clean (129 файлов отформатировано).",
+      "status": "done",
+      "dependencies": [
+        "TASK-019a"
+      ],
+      "key_files": [
+        "whilly/self_heal.py",
+        "tests/test_self_heal_issue.py"
+      ],
+      "acceptance_criteria": [
+        "Issue создаётся через provider.issue_create в whilly-репо",
+        "Repo URL парсится из pyproject.toml urls.Source через tomllib/tomli",
+        "Тело issue содержит traceback + контекст плана + версию Whilly",
+        "Event git.self_heal.issue_created пишется в whilly_events.jsonl с issue URL"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/self_heal.py tests/test_self_heal_issue.py",
+        "pytest tests/test_self_heal_issue.py -q"
+      ],
+      "prd_requirement": "FR-11 (issue creation)"
+    },
+    {
+      "id": "TASK-019c",
+      "phase": "M6 — Self-heal",
+      "category": "functional",
+      "priority": "critical",
+      "description": "Расширить whilly/self_heal.py: запускать починечный Claude-агент через agent_runner (НЕ дублируя subprocess-код). Anti-recursion: счётчик self_heal_attempts в state_store, max 2 за запуск. Третья попытка → fail-fast 'Manual intervention required'. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. В whilly/state_store.py добавлены три публичных метода (increment_self_heal_attempts/get_self_heal_attempts/reset_self_heal_attempts) и общий _atomic_write helper, плюс save() теперь читает существующий счётчик с диска перед записью так что обычный per-iteration save не сбрасывает счётчик в 0 (load остаётся 24h-stale-aware, но _load_raw_or_empty для self-heal counter игнорирует staleness — счётчик это per-run budget а не resumable state). В whilly/self_heal.py добавлены 3 новых event-константы (git.self_heal.dispatch/_failed/_exhausted), DEFAULT_MAX_SELF_HEAL_ATTEMPTS=2, EXHAUSTED_MESSAGE='Manual intervention required', FIX_AGENT_TEXT_SNIPPET_LIMIT=200, новые поля SelfHealReport.self_heal_attempts/fix_agent_dispatched/fix_agent_text/fix_agent_exit_code, ленивый импорт COMPLETION_MARKER из whilly.agents.base для prompt builder, _try_dispatch_fix_agent() как orchestrator с decision tree (state_store=None → DISPATCH_FAILED no_state_store; increment raises → DISPATCH_FAILED state_store_failed; attempts>max → EXHAUSTED no-dispatch; runner raises → DISPATCH_FAILED agent_runner_raised + counter уже incremented; success → DISPATCH event), _build_fix_agent_prompt() с фиксированной структурой sections (Crash context / Traceback / Required outcome) включающей fix/self-heal-* branch convention и `fix:` MR title prefix для будущего TASK-020a polling, _default_fix_agent_runner() как production wrapper над whilly.agent_runner.run_agent (lazy import), _snippet_from_agent_result() с ellipsis-truncation на FIX_AGENT_TEXT_SNIPPET_LIMIT, _exit_code_from_agent_result() defensive coercion. handle_internal_exception() расширена пятью kwargs (state_store, max_self_heal_attempts, fix_agent_runner, fix_agent_model, fix_agent_timeout) — все default-None так что TASK-019a/b call sites работают без изменений. cli.run_plan теперь пробрасывает state_store=state_store в handle_internal_exception (1-line additive change). Тесты tests/test_self_heal_dispatch.py: 31 тест через 8 классов (TestStateStoreCounter 9, TestDispatchHappyPath 4, TestAntiRecursion 2, TestDispatchDefensive 3, TestDispatchOutcomeGating 2, TestPromptBuilder 5, TestDispatchIndependentOfIssue 1, TestPublicSurface 4). Покрыты: монотонный инкремент (1→2→3), atomic-rename hygiene (no leftover .tmp), save preserves counter, increment preserves other state fields, reset zeroes counter, corrupt-state recovery, happy path 1st/2nd attempt с правильным prompt + EVENT_DISPATCH payload, 3rd attempt → EXHAUSTED no-dispatch, configurable max_attempts, no_state_store skip, BrokenStore raise swallowed, runner raise swallowed (counter incremented even на runner failure), DISABLED не triggers, EXTERNAL не triggers, prompt includes attempt counter / completion marker / fix branch convention, prompt омит optional lines когда missing, prompt neutralises ``` в exc_message, dispatch fires независимо от issue_skipped, public surface guard. Все 1127 тестов проекта зелёные (+31 net), make lint clean (130 файлов отформатировано).",
+      "status": "done",
+      "dependencies": [
+        "TASK-019b"
+      ],
+      "key_files": [
+        "whilly/self_heal.py",
+        "whilly/state_store.py",
+        "tests/test_self_heal_dispatch.py"
+      ],
+      "acceptance_criteria": [
+        "Self-heal Claude-агент запускается через agent_runner (нет дублирования subprocess)",
+        "state_store.self_heal_attempts инкрементится атомарно",
+        "Anti-recursion: max 2 попытки → fail-fast 'Manual intervention required'",
+        "События git.self_heal.dispatch + git.self_heal.exhausted пишутся в jsonl"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/self_heal.py whilly/state_store.py tests/test_self_heal_dispatch.py",
+        "pytest tests/test_self_heal_dispatch.py -q"
+      ],
+      "prd_requirement": "FR-11 (agent dispatch + anti-recursion), Risks self-heal infinite loop"
+    },
+    {
+      "id": "TASK-020a",
+      "phase": "M6 — Self-heal",
+      "category": "functional",
+      "priority": "high",
+      "description": "Расширить whilly/self_heal.py: после запуска починечного агента — polling fix-MR с title prefix 'fix:' через provider.pr_list. Таймаут WHILLY_SELF_HEAL_CI_TIMEOUT (default 1800s). DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Provider Protocol расширен 6-м методом pr_list(*, head=None, state='open') -> PullRequestListResult. Дизайн: title-prefix фильтрация делается КЛИЕНТСКИ в self_heal (не в провайдере) — ни GitHub search syntax (`fix: in:title`) ни GitLab MR API не поддерживают надёжный server-side startswith-фильтр на title. Возвращать полный open-list и фильтровать в Whilly держит поведение идентичным между провайдерами и тривиально тестируемым. Новые типы: PullRequestSummary frozen dataclass (number/url/title/head/state/raw — иммутабельный для безопасной передачи между итерациями polling loop), PullRequestListResult (ProviderResult subclass с items: list[PullRequestSummary]). NoneProvider.pr_list возвращает ok=False+REASON_NO_PROVIDER+empty items так что polling layer не NPE-ит на len(items). GhProvider.pr_list через `gh pr list --state {state} --json number,url,title,headRefName,state` (+ --head когда указан), state passes через verbatim (gh принимает наш vocabulary 1:1). GlabProvider.pr_list через `glab mr list --state {glab_state} --output json` (+ --source-branch когда head указан) с _translate_state_for_glab переводом 'open' → 'opened' / 'opened' → 'opened' / 'merged'/'closed'/'all' verbatim — единое vocabulary для callers без знания GitLab quirks. _summary_from_glab_row нормализует state 'opened' обратно в 'open' для callers. WhillyConfig получил два новых int field SELF_HEAL_CI_TIMEOUT (default 1800s, mirrors RELEASE_TIMEOUT) и SELF_HEAL_POLL_INTERVAL (default 30s, mirrors RELEASE_POLL_INTERVAL) — оба через field-name auto-mapping на WHILLY_SELF_HEAL_CI_TIMEOUT/WHILLY_SELF_HEAL_POLL_INTERVAL. Новые в whilly/self_heal.py: 5 OUTCOME_MR_* констант (FOUND/TIMEOUT/FETCH_FAILED/SELF_HEAL_DISABLED/NO_PROVIDER), 6 EVENT_MR_* констант под git.self_heal.* namespace (skipped/poll_started/poll/found/timeout/fetch_failed), DEFAULT_FIX_MR_TITLE_PREFIX='fix:' (matches fix-agent prompt template _build_fix_agent_prompt line 1128 — single source of truth для prefix во всём проекте), DEFAULT_SELF_HEAL_CI_TIMEOUT=1800, DEFAULT_SELF_HEAL_POLL_INTERVAL=30. FixMrPollResult frozen dataclass (ok/reason/mr_number/mr_url/mr_title/mr_head/polls/elapsed_s/error/raw) mirrors ReleaseStepResult shape так что TASK-020c sequencer сможет branch на одинаковых fields через все три step-а pipeline-а. poll_for_fix_mr(*, provider, config=None, log_dir=None, title_prefix='fix:', head=None, state='open', timeout_s=None, poll_interval_s=None, sleep=time.sleep, monotonic=time.monotonic, event_logger=None) — единственный новый public entry point, pure orchestrator (только side effect: provider.pr_list + sleep), conservative gating mirroring poll_pr_merge_when_ci_green: SELF_HEAL=False → DISABLED quiet skip (no event — operators opted out, audit log не должен забиваться 'we considered polling but didn't' entries), provider=None или NoneProvider → NO_PROVIDER + EVENT_MR_SKIPPED. Polling loop: provider.pr_list(head=head, state=state) → если items с title.lower().startswith(prefix.lower()) → MR_FOUND + EVENT_MR_FOUND с полной MR metadata, если ok=False → MR_FETCH_FAILED + EVENT_MR_FETCH_FAILED БЕЗ retry (TASK-017a уже wrap'ит провайдер call в retry — by the time we see ok=False the per-call retry is exhausted, looping more would just burn polling budget), no match → check deadline (monotonic() + interval > deadline → MR_TIMEOUT + EVENT_MR_TIMEOUT), иначе sleep(interval). Timeout=0 / negative clamped в 0 (deadline=float('inf') позволяет один poll). Poll interval=0 clamped в 1 (defensive — tight-loop на provider не нужен). _safe_pr_list() обёртка: AuthRequiredError re-raises (top-level cli routes на exit 4), любой другой exception → PullRequestListResult(ok=False, reason=REASON_UNKNOWN). _first_matching_mr() публичный helper для unit-tests, case-insensitive prefix match через .lower().startswith(), defensive getattr на title (items без title silently skipped). Не wired в handle_internal_exception на этом этапе — TASK-020c сделает full sync chain (poll → CI → merge → resume). Тесты tests/test_self_heal_mr_polling.py: 31 тест через 9 классов (TestModuleConstants 3, TestGating 4, TestHappyPath 5, TestTitlePrefix 4, TestTimeout 3, TestTransportFailure 2, TestAuthErrorPropagation 1, TestBudgetOverrides 4, TestEventPayloads 3, TestResultDataclass 2). Покрыты: DEFAULT_FIX_MR_TITLE_PREFIX/TIMEOUT/INTERVAL constant lock-in, SELF_HEAL=False quiet skip (provider.list_calls==[] + events==[]), no_provider → MR_SKIPPED event, NoneProvider duck-type detection, no config → defaults to enabled, match on first poll → no sleeps + EVENT_MR_FOUND, empty→empty→match polling sequence с правильным sleep schedule [5,5], first matching item wins когда multiple, head/state filter forwarding, case-insensitive 'FIX:' match, non-matching titles skipped (loop continues), custom prefix override ('hotfix('), items без title attribute defensive skip, deadline arithmetic с timeout=10/poll=5/3 timestamps, timeout event payload (timeout_s/polls/title_prefix), zero timeout edge case (match on first poll OK), transport failure short-circuits (polls==1, slept==[]), transport failure stderr propagation, AuthRequiredError propagates unmodified с tool='gh', explicit timeout_s/poll_interval_s overrides config, negative timeout clamped (still allows match), zero interval clamped to 1, started event payload includes budget knobs/title_prefix/head/state, found event includes mr_number/url/title/head, per-poll event each iteration с poll counter, FixMrPollResult frozen + safe defaults. Дополнительно tests/test_gh_provider.py +7 тестов (TestPRList 4 + TestSummaryFromGhRow 3), tests/test_glab_provider.py +13 тестов (TestPRList 4 + TestSummaryFromGlabRow 4 + TestTranslateStateForGlab 6), tests/test_git_providers_base.py +4 теста (NoneProvider.pr_list returns no_provider + empty items, PullRequestSummary frozen, PullRequestListResult default factory не shared). FakeProvider дублирует Provider Protocol surface для pr_list (canned response queue + last response sticks), FakeConfig minimal surface (SELF_HEAL/SELF_HEAL_CI_TIMEOUT/SELF_HEAL_POLL_INTERVAL). _make_clock helper mirroring test_release_pipeline_polling. Все 1491 тест проекта зелёный (+55 от 1436 baseline TASK-017c), make lint clean (144 файла отформатировано), make test clean. Acceptance grep: `grep -E 'EVENT_MR_TIMEOUT|EVENT_MR_FOUND' whilly/self_heal.py` returns 4+ lines.",
+      "status": "done",
+      "dependencies": [
+        "TASK-019c"
+      ],
+      "key_files": [
+        "whilly/self_heal.py",
+        "whilly/git_providers/__init__.py",
+        "whilly/git_providers/gh_provider.py",
+        "whilly/git_providers/glab_provider.py",
+        "whilly/config.py",
+        "tests/test_self_heal_mr_polling.py",
+        "tests/test_gh_provider.py",
+        "tests/test_glab_provider.py",
+        "tests/test_git_providers_base.py"
+      ],
+      "acceptance_criteria": [
+        "Polling fix-MR с title prefix 'fix:' через provider.pr_list",
+        "Таймаут конфигурируется через WHILLY_SELF_HEAL_CI_TIMEOUT (default 1800s)",
+        "Timeout → fail-fast с понятным сообщением + event git.self_heal.mr_timeout",
+        "Mock-тесты на provider.pr_list (MR появляется / не появляется)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/self_heal.py tests/test_self_heal_mr_polling.py",
+        "pytest tests/test_self_heal_mr_polling.py -q"
+      ],
+      "prd_requirement": "FR-11 (polling fix-MR)"
+    },
+    {
+      "id": "TASK-020b",
+      "phase": "M6 — Self-heal",
+      "category": "functional",
+      "priority": "high",
+      "description": "Расширить whilly/self_heal.py: дождаться зелёного CI на fix-MR через provider.pr_status_ci. Auto-merge ТОЛЬКО при green CI (Risk mitigation: broken fix). CI red → fail-fast БЕЗ merge. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Дизайнерское решение — MIRROR shape :func:`whilly.release_pipeline.poll_pr_merge_when_ci_green` (TASK-014a) но с self-heal-specific gating и dedicated git.self_heal.* event namespace. Не reuse напрямую потому что (1) gates различаются (release_pipeline: GIT_ENABLED/AUTO_RELEASE/BUMP; self-heal: SELF_HEAL alone — sharing бы заставил один gate set leak в другой), (2) PRD acceptance явно требует git.self_heal.ci_red distinct event для дашбордов (operator response 'cancel user release' vs 'investigate fix-agent diff' разный), (3) FixMrCiMergeResult shape тоньше — release_pipeline.ReleaseStepResult несёт failed_checks для tag-and-release breakdown, self-heal только использует verdict для merge-or-not. В whilly/self_heal.py добавлены 8 новых OUTCOME_CI_* констант (MERGED/ALREADY_MERGED/FAILURE/TIMEOUT/UNKNOWN/MERGE_FAILED/STATUS_FETCH_FAILED/NO_TARGET, plus reuse SELF_HEAL_DISABLED/NO_PROVIDER strings из poll_for_fix_mr — gating semantics identical) и 8 новых EVENT_CI_* констант под git.self_heal.* namespace (skipped/started/poll/green/red/timeout/merged/merge_failed). FixMrCiMergeResult — frozen dataclass с полным diagnostic payload (ok/reason/mr_number/mr_url/merge_url/state/failed_checks/polls/elapsed_s/error/raw) mirroring ReleaseStepResult shape так что TASK-020c sequencer сможет branch на одинаковых fields. wait_for_fix_mr_ci_and_merge(*, provider, mr_number, mr_url, mr_head, config, log_dir, timeout_s, poll_interval_s, merge_method='squash', sleep, monotonic, event_logger, state_store) — единственный новый public entry point, pure orchestrator (only side effects: provider.pr_status_ci + provider.pr_merge + sleep), conservative gating mirroring poll_pr_merge_when_ci_green: SELF_HEAL=False → SELF_HEAL_DISABLED quiet skip (no event — operators opted out, audit log не должен забиваться 'we considered merging but didn't' entries), provider=None или NoneProvider → NO_PROVIDER + EVENT_CI_SKIPPED, mr_number+mr_head оба отсутствуют → NO_TARGET + EVENT_CI_SKIPPED. Polling loop: provider.pr_status_ci → если ok=False → STATUS_FETCH_FAILED + EVENT_CI_RED БЕЗ retry (TASK-017a уже wraps call в retry; looping здесь burned бы polling budget без changing outcome) + НИКАКОГО pr_merge call, если CI_STATE_SUCCESS → EVENT_CI_GREEN → _attempt_fix_mr_merge → pr_merge → MERGED/ALREADY_MERGED/MERGE_FAILED, если CI_STATE_FAILURE → CI_FAILURE + EVENT_CI_RED + НИКАКОГО pr_merge call (PRD broken-fix risk mitigation — red CI = worse outcome чем no fix at all потому что landed бы buggy code on top of original bug), если CI_STATE_UNKNOWN >1 poll → CI_UNKNOWN (allow один initial UNKNOWN before giving up — freshly-pushed MRs need beat to spawn check row, mirroring release_pipeline grace), если CI_STATE_PENDING (или initial UNKNOWN) → check deadline → sleep или EVENT_CI_TIMEOUT. Idempotency через stderr-substring matching (_FIX_MR_ALREADY_MERGED_HINTS = 'already merged'/'pull request not mergeable: it is already merged'/'merge request is already merged'/'is closed') — re-run после partial recovery возвращает OUTCOME_CI_ALREADY_MERGED (ok=True) не OUTCOME_CI_MERGE_FAILED. Hints kept local (НЕ imported из release_pipeline) чтобы import graph оставался cheap. _attempt_fix_mr_merge() — separate helper mirroring release_pipeline._attempt_merge для testing isolation. _safe_fix_pr_status_ci() / _safe_fix_pr_merge() обёртки конвертируют любые unexpected exceptions из провайдера в failure result, AuthRequiredError re-raises (cli routes на exit 4 — swallowing бы silently turned auth wall в opaque polling timeout). _record_fix_mr_merge() — best-effort persistence через state_store.record_pr_url с branch=mr_head field (transitional schema reuse — TASK-020c представит dedicated record_fix_mr_merge schema). timeout=0 / negative → clamped в 0 (deadline=∞ позволяет один poll match). poll_interval=0 → clamped в 1 (defensive — tight-loop на provider не нужен). merge_method default 'squash' matches release_pipeline для consistency. Тесты tests/test_self_heal_ci_merge.py: 36 тестов через 9 классов (TestGating 6, TestHappyPath 3, TestCIRed 3, TestTimeout 2, TestUnknown 2, TestIdempotency 2, TestFailurePaths 3, TestAuthErrorPropagation 2, TestBudgetOverrides 4, TestStatePersistence 4, TestResultDataclass 3, TestOutcomeTaxonomy 2). Покрыты: SELF_HEAL=False quiet skip (provider.status_calls==[] + events==[]), NO_PROVIDER + EVENT_CI_SKIPPED, NoneProvider duck-type detection, NO_TARGET когда оба mr_number+mr_head отсутствуют, head alone — valid target (mr_number=None, mr_head set → loop runs), no config → defaults enabled, green-first-poll → MERGED + один pr_merge call с правильным argument shape (number/head/method), pending→pending→green polling sequence с правильным sleep schedule [5,5], custom merge_method forwarded (squash → rebase), red-first-poll → CI_FAILURE + НИКАКОГО pr_merge (PRD broken-fix mitigation), pending→red same guarantee, EVENT_CI_RED включает failed_checks breakdown + mr_number/mr_url, pending-until-deadline → CI_TIMEOUT + НИКАКОГО merge + EVENT_CI_TIMEOUT с timeout_s/mr_number, zero timeout edge case (match on first poll OK), persistent UNKNOWN >1 poll → CI_UNKNOWN no-merge, UNKNOWN-then-green merges after grace, idempotent already-merged via gh phrasing ('Pull request not mergeable: it is already merged') + glab phrasing ('Merge request is already merged'), transport failure (ok=False) short-circuits без retry без merge call (один status_call only), real merge failure ('merge conflict' stderr) → MERGE_FAILED + EVENT_CI_GREEN всё ещё emitted (got past gate, merge step failed), buggy provider raising RuntimeError swallowed → STATUS_FETCH_FAILED, AuthRequiredError из status raise → propagates с tool='gh', AuthRequiredError из merge raise → propagates с tool='glab' (covers TASK-017a wiring), explicit timeout_s/poll_interval_s overrides config (started event records resolved knobs), negative timeout clamped to 0, zero interval clamped to 1, default budget constants lockin (1800/30), state_store.record_pr_url called on success с правильными kwargs (url=merge_url, number=mr_number, branch=mr_head), state_store NOT called on red CI / gating skip (skip paths не должны оставлять следов), bare state_store без record_pr_url method не raises (best-effort), frozen dataclass invariant + safe defaults + separate instances не share mutable state, OUTCOME_CI_* + EVENT_CI_* string value lockin (drift defense для dashboards/log scrapers). FakeProvider дублирует Provider Protocol surface для status/merge с canned response queues (последний sticks для long polling) + raise_on_status/raise_on_merge seams для exception testing. RecordingStateStore captures record_pr_url calls для assertion. _make_clock helper mirroring test_release_pipeline_polling. Все 1527 тестов проекта зелёные (+36 от 1491 baseline TASK-020a), make lint clean (145 файлов отформатировано). Acceptance commands: `python3 -m ruff check whilly/self_heal.py tests/test_self_heal_ci_merge.py` ✓ all checks passed; `pytest tests/test_self_heal_ci_merge.py -q` ✓ 36 passed.",
+      "status": "done",
+      "dependencies": [
+        "TASK-020a"
+      ],
+      "key_files": [
+        "whilly/self_heal.py",
+        "tests/test_self_heal_ci_merge.py"
+      ],
+      "acceptance_criteria": [
+        "Wait for green CI с таймаутом WHILLY_SELF_HEAL_CI_TIMEOUT",
+        "Auto-merge ТОЛЬКО при green CI (Risk mitigation broken fix)",
+        "CI red → fail-fast без merge + event git.self_heal.ci_red",
+        "Mock-тесты на оба сценария (green merge vs red no-merge)"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/self_heal.py tests/test_self_heal_ci_merge.py",
+        "pytest tests/test_self_heal_ci_merge.py -q"
+      ],
+      "prd_requirement": "FR-11 (CI gate, Risk broken fix)"
+    },
+    {
+      "id": "TASK-020c",
+      "phase": "M6 — Self-heal",
+      "category": "functional",
+      "priority": "high",
+      "description": "Расширить whilly/self_heal.py: после успешного merge fix-MR — pull/upgrade Whilly (pip install -U git+url ИЛИ git pull в репо) → cli.run_plan(resume=True) для возобновления исходного плана. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Финальная стадия FR-11: orchestrator upgrade_and_resume_after_fix(*, plan_file, config, state_store, agent_name='whilly', log_dir, upgrade_strategy='auto', repo_url, package_root, pyproject_path, upgrade_timeout_s=600, git_remote='origin', git_branch, upgrader, runner, event_logger, monotonic) — pure orchestrator, side effects ровно три: subprocess (через injectable upgrader), runner=cli.run_plan (через injectable, lazy-import чтобы избежать import cycle с cli.py:2160), state_store.reset_self_heal_attempts. Decision tree mirroring poll_for_fix_mr/wait_for_fix_mr_ci_and_merge: SELF_HEAL=False → SELF_HEAL_DISABLED quiet skip (no event), plan_file отсутствует → NO_PLAN + EVENT_RESUME_SKIPPED, invalid strategy → INVALID_STRATEGY + EVENT_UPGRADE_FAILED. Strategy resolution: 'auto' probes PACKAGE_ROOT.parent / .git → 'git' если present, иначе 'pip' (dotfile probe — без git rev-parse subprocess latency). Upgrade step (skip только когда strategy='skip'): EVENT_UPGRADE_STARTED → upgrader → EVENT_UPGRADE_SUCCEEDED|FAILED. Upgrade failure → OUTCOME_RESUME_UPGRADE_FAILED, **resume НЕ attempted** (rationale: buggy code всё ещё in-process; resume бы re-trigger self-heal handler bumping anti-recursion counter без real progress). Resume step: state_store=None → NO_STATE_STORE + EVENT_RESUME_SKIPPED, state_store.load() returns None или mismatched plan_file → NO_STATE, иначе runner(plan_file, config, agent_name, resume=True, state_store=state_store). Success → EVENT_RESUMED + state_store.reset_self_heal_attempts() (counter cleanup так что second crash в same operator-run starts at 1/2 не 1/2+leftover). Runner exception → OUTCOME_RESUME_FAILED + EVENT_RESUME_FAILED БЕЗ raise (FR-11 invariant: handler никогда не raises). _default_upgrader: pip strategy → (sys.executable, -m, pip, install, -U, git+url) с repo_url из resolve_whilly_repo_url когда не передан явно; git strategy → (git, -C, package_root.parent, pull, --ff-only, remote, [branch]) с cwd=package_root.parent. FileNotFoundError/TimeoutExpired/non-zero returncode → UpgradeResult(ok=False) с captured stderr и precise error string. Новые в whilly/self_heal.py: 7 EVENT_* констант (UPGRADE_STARTED/SUCCEEDED/FAILED/SKIPPED + RESUMED/RESUME_FAILED/RESUME_SKIPPED) под git.self_heal.* namespace, 8 OUTCOME_RESUME_* констант (OK/SELF_HEAL_DISABLED/NO_PLAN/INVALID_STRATEGY/UPGRADE_FAILED/NO_STATE_STORE/NO_STATE/FAILED), 4 UPGRADE_STRATEGY_* константы (AUTO/PIP/GIT/SKIP), DEFAULT_UPGRADE_TIMEOUT_S=600, DEFAULT_PIP_ARGV=(sys.executable,-m,pip,install,-U) (важно — virtualenv-aware), DEFAULT_GIT_REMOTE='origin'. UpgradeResult frozen dataclass (ok/strategy/argv/returncode/stdout/stderr/error) — injection seam между orchestrator и subprocess shim. ResumeAfterFixResult frozen dataclass с полным diagnostic payload (ok/reason/upgrade_attempted/upgrade_succeeded/upgrade_strategy/upgrade_returncode/upgrade_stdout/upgrade_stderr/upgrade_argv/upgrade_error/resume_attempted/resume_succeeded/resume_error/elapsed_s/raw). _safe_state_load() / _safe_reset_self_heal_attempts() обёртки swallow all exceptions так что misbehaving store не масκирует success of resume itself. _tail() truncates stdout/stderr на 4_000 chars для events file (pip output может быть megabytes). Тесты tests/test_self_heal_resume.py: 45 тестов через 11 классов (TestGating 5, TestStrategyResolution 3, TestHappyPath 3, TestUpgradeFailure 3, TestSkipUpgrade 1, TestNoStateBranches 4, TestRunnerRaises 2, TestStateCounterReset 5, TestDefaultUpgrader 7, TestEventPayloads 4, TestResultDataclass 4, TestOutcomeAndEventLockin 4). Покрыты: SELF_HEAL=False quiet skip (no events + no upgrader call + no runner call), missing/empty plan_file → NO_PLAN, invalid strategy 'bogus' rejected с EVENT_UPGRADE_FAILED carrying valid_strategies list, config=None defaults to enabled (forward compat), auto strategy picks git when tmp_path/.git present, auto picks pip otherwise, explicit strategy bypasses dotgit probe verbatim, PRD-mandated unit test: после mock merge → runner.calls с resume=True/state_store=store/plan_file forwarded/agent_name='whilly', upgrader получает repo_url+timeout propagated, EVENT sequence started→succeeded→resumed in order, EVENT_RESUMED payload (plan_file/upgrade_strategy/upgrade_attempted/upgrade_succeeded), custom agent_name propagation, pip failure → OUTCOME_RESUME_UPGRADE_FAILED + runner.calls=[] (buggy code preservation) + reset_calls=0 (counter не cleared on failure), upgrade_failed event payload (strategy/returncode/error/stderr_tail), upgrader raising → swallowed → OUTCOME_RESUME_UPGRADE_FAILED (FR-11 invariant), strategy='skip' bypasses upgrader entirely но resume happens, no state_store → NO_STATE_STORE + EVENT_RESUME_SKIPPED, no saved state → NO_STATE, mismatched plan_file → NO_STATE, state_store.load() raise → swallowed → NO_STATE, runner exception → OUTCOME_RESUME_FAILED БЕЗ propagation + EVENT_RESUME_FAILED с exc_type/exc_message + reset_calls=0, runner exception after successful upgrade — result reflects mixed outcome correctly, reset_self_heal_attempts called exactly once on success, NOT called on upgrade failure / runner failure / gating skips, bare store без reset_self_heal_attempts method no-ops (best-effort), reset raising не masks resume success. _default_upgrader тесты с patch('whilly.self_heal.subprocess.run'): pip argv shape с DEFAULT_PIP_ARGV prefix + git+url suffix, pip без repo_url (и без [project.urls]) → ok=False с 'no repo_url' error, git argv shape (git -C package_root.parent pull --ff-only remote branch), git без branch омиттит final argv element, non-zero returncode → ok=False + stderr captured + 'exit code N' error, FileNotFoundError → 'command not found' error, TimeoutExpired → 'timed out after Ns' error. Event payload assertions: started carries strategy+timeout_s, succeeded carries argv list+returncode, EVENT_RESUME_SKIPPED carries plan_file+reason, log_dir без explicit event_logger → JSONL appender writes events with 'ts' ISO-8601 prefix. Result dataclass invariants: ResumeAfterFixResult+UpgradeResult оба frozen, default upgrade_argv==() безопасный, default raw factory не shared между instances. Lockin: 8 OUTCOME_RESUME_* string values + 7 EVENT_* names start with 'git.self_heal.' + 4 strategy literals unique strings + DEFAULT_PIP_ARGV uses sys.executable. Все 1572 тестов проекта зелёные (+45 от 1527 baseline TASK-020b), make lint clean (146 файлов), make test clean. Acceptance commands: `python3 -m ruff check whilly/self_heal.py tests/test_self_heal_resume.py` ✓ all checks passed; `pytest tests/test_self_heal_resume.py -q` ✓ 45 passed in 0.08s. **Не wired в handle_internal_exception на этом коммите** — sequencing poll_for_fix_mr → wait_for_fix_mr_ci_and_merge → upgrade_and_resume_after_fix живёт TASK-021 (M6 integration test), keeping standalone здесь позволяет unit-test isolation против mock provider/state-store/runner.",
+      "status": "done",
+      "dependencies": [
+        "TASK-020b"
+      ],
+      "key_files": [
+        "whilly/self_heal.py",
+        "whilly/cli.py",
+        "tests/test_self_heal_resume.py"
+      ],
+      "acceptance_criteria": [
+        "Pull/upgrade Whilly после merge (pip install -U git+url или git pull)",
+        "cli.run_plan(resume=True) запускается с восстановленным state",
+        "Event git.self_heal.resumed пишется в whilly_events.jsonl",
+        "Unit-тест: после mock merge → run_plan вызывается с resume=True"
+      ],
+      "test_steps": [
+        "python3 -m ruff check whilly/self_heal.py tests/test_self_heal_resume.py",
+        "pytest tests/test_self_heal_resume.py -q"
+      ],
+      "prd_requirement": "FR-11 (upgrade + resume)"
+    },
+    {
+      "id": "TASK-021",
+      "phase": "M6 — Self-heal",
+      "category": "test",
+      "priority": "high",
+      "description": "Phase M6 Integration Test (Метрика 3): искусственно ввести bug в whilly/cli.py (через monkeypatch), запустить Whilly → проверить что: issue создан + fix-MR появился + после mock green CI план возобновлён через resume. Anti-recursion: 3-я попытка → fail-fast. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. Дизайнерское решение — compositional integration test через layered fakes, где single FakeProvider / real StateStore (на disk против tmp_path) / FakeRunner (agent_runner.run_agent) / StubUpgrader / StubRunPlanRunner thread'аются через все 4 стадии self-heal pipeline'а одного scenario. Цель M6 — пин cross-stage handoffs (issue→dispatch, dispatch→poll, poll→merge, merge→resume), которые слипают мимо per-stage suites потому что unit tests stub предыдущую стадию's output. Не reuse subprocess-driven main() entry point (как M5/test_headless_exit_codes делает) потому что full pipeline не собран из cli.run_plan на этом этапе — TASK-019/020 живут как standalone helpers, integrating их в run_plan = work for separate tasks. Compositional drive через прямые вызовы всех 4 public entry points (handle_internal_exception → poll_for_fix_mr → wait_for_fix_mr_ci_and_merge → upgrade_and_resume_after_fix) точно матчит как cli would orchestrate в production, давая M6 ту же сценарную coverage без зависимости от unwritten plumbing. Новый файл tests/test_m6_integration.py: 9 тестов через 4 класса (TestFullSelfHealPipeline 2, TestAntiRecursion 2, TestRedCiRefusesMerge 2, TestStageHandoff 3). Module-level pytestmark = [pytest.mark.integration, pytest.mark.slow] — обе marker apply, integration лет CI run all M-suites together, slow — policy 'opt-in via -m slow' so fast pre-commit loop excludes pipeline composition tests даже при том что injected clocks make it fast. Marker 'slow' зарегистрирован новой строкой в pyproject.toml [tool.pytest.ini_options] markers рядом с 'integration' (TASK-005) — pytest --strict-markers не warn'ит. FakeProvider композитный — exposes issue_create / pr_list / pr_status_ci / pr_merge с canned response queues (последний sticks для long polling) + cross-call accounting для inter-stage assertions ('merge call carried mr_number from polling stage'). FakeRunner records prompts (drop-in для agent_runner.run_agent — сigna duck-typed result_text/exit_code/is_complete). StubUpgrader records calls + returns canned UpgradeResult(ok=True, strategy='pip'). StubRunPlanRunner records resume invocation kwargs (plan_file/agent_name/resume/state_store_present). _build_internal_exc через runpy.run_path с file под pkg/ — synthetic-traceback trick mirroring per-stage suites, deepest frame's co_filename points под pkg так handler's path filter classifies как DETECTED. _seed_resumable_state pre-populates StateStore.save с iteration=4/cost=0.42/task_status так чтобы upgrade_and_resume_after_fix.load() finds matching plan_file и не fail'ит на NO_STATE. _make_clock helper mirrors per-stage suite idiom (yields values in order, final sticks). Покрыты: TestFullSelfHealPipeline.test_full_pipeline_happy_path — все 4 стадии composeят: handler files issue (issue_calls==1 + report.issue_url/issue_number set + counter persisted к 1) → poll_for_fix_mr finds matching MR (default fake returns 'fix:'-titled summary → poll.mr_number==42, poll.mr_head=='fix/self-heal-runtime-error') → wait_for_fix_mr_ci_and_merge merges (merge_calls==1, merge.number==42 carrying number из polling stage) → upgrade_and_resume_after_fix succeeds (upgrader.calls==1, runner.calls[0].plan_file matches seed, resume=True, counter reset к 0). Audit trail invariant: events file contains all 8 terminal verbs (DETECTED→ISSUE_CREATED→DISPATCH→MR_FOUND→CI_GREEN→CI_MERGED→UPGRADE_SUCCEEDED→RESUMED) AND ordering check ensures stages fired в correct sequence (regression that swapped order would imply stage executed before prerequisite). test_full_pipeline_pending_then_green_polls_until_success — provider.status_results queue [PENDING, PENDING, SUCCESS] forces 3 polls before merge — pins polling cadence really runs through deterministic clock. TestAntiRecursion.test_third_attempt_emits_exhausted_no_dispatch — 3 sequential handle_internal_exception calls (each crash под its own pkg/crashN/broken.py file потому что runpy не reuses compiled code object для overwritten path), counter progression 1→2→3, EXHAUSTED event на третьем с attempts==3+max_attempts==DEFAULT_MAX_SELF_HEAL_ATTEMPTS (=2), runner.calls==2 (третий отказ), DISPATCH events==2, store.get_self_heal_attempts()==3 (на disk verified). TestAntiRecursion.test_successful_resume_resets_counter_for_next_run — pre-populated counter=1 + successful upgrade_and_resume_after_fix → counter==0 (cleanup invariant — operator running Whilly second time не inherit'ит leftover budget). TestRedCiRefusesMerge.test_ci_failure_blocks_merge — provider.status_results=[FAILURE+failed_checks=['unit-tests','lint']] → result.ok=False+OUTCOME_CI_FAILURE+failed_checks propagated, **provider.merge_calls==[]** (load-bearing PRD broken-fix mitigation — regression where merge slipped through despite red CI surfaces here), event sequence has CI_RED но никакого CI_MERGED/CI_GREEN. test_red_ci_does_not_proceed_to_resume — pins composition rule: caller code (cli.run_plan eventually) must guard `if ci_result.ok:` before calling resume. Test simulates intended caller logic (`if ci_result.ok: upgrade_and_resume_after_fix(...)`), then asserts upgrader.calls==[] + run_plan_runner.calls==[] + provider.merge_calls==[]. Без compositional rule в M6, regression where someone wired resume to fire unconditionally would slip past per-stage suites. TestStageHandoff.test_handler_dispatch_then_poller_finds_matching_mr — pins prefix invariant: prompt template (in _build_fix_agent_prompt) advertises 'fix:' AND polling default DEFAULT_FIX_MR_TITLE_PREFIX=='fix:'. Test asserts both: prompt contains 'fix:' lowercase, AND poll.mr_title.lower().startswith('fix:'). Drift between them = poller misses every legitimate fix. test_merge_result_carries_mr_number_to_resume_stage — operators correlate 'we merged PR #42' with 'we resumed plan X' via mr_number join key — regression dropping number breaks audit trail traceability. test_pipeline_short_circuits_when_self_heal_disabled — config(SELF_HEAL=False) → all 4 stages collapse to no-ops: handler returns DISABLED + provider.issue_calls==[]+runner.calls==[], poller skips silently + provider.list_calls==[], merge stage skips silently + provider.status_calls==[]+merge_calls==[], resume stage skips silently + upgrader.calls==[]+run_plan_runner.calls==[]. AND aggregate audit invariant: events file completely empty (no DISABLED noise) — proves silent-skip property composes. Time control: sleep injected как lambda _: None, monotonic injected как _make_clock([0.0, 1.0, 2.0]) tickers — все polling loops finish в microseconds (full suite runs в 0.04-0.07s). Ровно 0 real time.sleep calls fire from M6 suite. Все 1636 тестов проекта зелёные (+9 от 1627 baseline TASK-018), make lint clean (152 файла отформатировано), make test clean. Acceptance commands: `pytest tests/test_m6_integration.py -q -m integration` ✓ 9 passed in 0.04s; `pytest -m 'integration and slow' tests/test_m6_integration.py -q --strict-markers` ✓ 9 passed (validates dual-marker selection works). pyproject.toml diff: добавлена строка 'slow: tests excluded from the fast pre-commit loop — opt-in via `-m slow` (PRD-featgitcom Метрика 3 self-heal pipeline)' к [tool.pytest.ini_options] markers list, ниже строки 'integration' (TASK-005). Дублирование fixtures/helpers (FakeConfig/FakeRunner/_build_internal_exc/_read_events/_make_clock) с per-stage suites намеренное — integration suite остаётся независимой от unit-suite инфраструктуры (общий conftest.py изменил бы оба слоя одним коммитом, нарушая 'cannot break five layers at once' invariant из TASK-005 docstring).",
+      "status": "done",
+      "dependencies": [
+        "TASK-019a",
+        "TASK-019b",
+        "TASK-019c",
+        "TASK-020a",
+        "TASK-020b",
+        "TASK-020c"
+      ],
+      "key_files": [
+        "tests/test_m6_integration.py"
+      ],
+      "acceptance_criteria": [
+        "E2E с monkeypatched bug приводит к issue + fix-MR + resume (Метрика 3)",
+        "Anti-recursion test: 3 попытки → fail-fast",
+        "Mock CI red → НЕТ auto-merge",
+        "Помечено @pytest.mark.integration + @pytest.mark.slow"
+      ],
+      "test_steps": [
+        "pytest tests/test_m6_integration.py -q -m integration"
+      ],
+      "prd_requirement": "M6 milestone, Метрика 3"
+    },
+    {
+      "id": "TASK-022a",
+      "phase": "M7 — Tests + docs",
+      "category": "docs",
+      "priority": "high",
+      "description": "Добавить раздел 'Git Integration' в README.md: quickstart (preflight → wizard → auto-pr), список новых env vars (WHILLY_GIT_*, WHILLY_AUTO_*, WHILLY_BUMP, WHILLY_SELF_HEAL), short link на docs/Whilly-Usage.md для деталей.",
+      "status": "done",
+      "dependencies": [
+        "TASK-017c",
+        "TASK-020c"
+      ],
+      "key_files": [
+        "README.md"
+      ],
+      "acceptance_criteria": [
+        "README имеет секцию '## Git Integration' с quickstart примером",
+        "Перечислены ключевые env vars и CLI флаги (--bump, --git-config)",
+        "Ссылка на docs/Whilly-Usage.md для override-стека и exit codes"
+      ],
+      "test_steps": [
+        "grep -E 'Git Integration|WHILLY_GIT_PROVIDER|--bump' README.md",
+        "markdownlint README.md || true"
+      ],
+      "prd_requirement": "M7 docs (README)",
+      "notes": "Implemented (FR-12 README slice): added '## Git Integration' section to README.md between Self-Healing and Modules. Quickstart covers preflight (whilly --git-config) → normal run (auto-PR via .whilly/git.yaml policy) → release (WHILLY_BUMP=patch + WHILLY_AUTO_RELEASE=1). CLI-flag table lists --git-config, --git-reset, and --bump (with honest forward-compat note: today surfaced via WHILLY_BUMP — argparse slot reserved). Env-var table lists 8 keys: WHILLY_GIT_ENABLED, WHILLY_GIT_PROVIDER, WHILLY_BASE_BRANCH, WHILLY_AUTO_PR, WHILLY_AUTO_RELEASE, WHILLY_AUTO_COMMIT, WHILLY_BUMP, WHILLY_SELF_HEAL — long-tail polling knobs deferred to Whilly-Usage.md to avoid drift. Exit codes 4 (auth) + 5 (headless needs config) called out. Acceptance: grep -E 'Git Integration|WHILLY_GIT_PROVIDER|--bump' README.md → 4 matches. Lint: ruff check + ruff format --check clean (152 files). Tests: 1636 passed in 139s."
+    },
+    {
+      "id": "TASK-022b",
+      "phase": "M7 — Tests + docs",
+      "category": "docs",
+      "priority": "high",
+      "description": "Обновить docs/Whilly-Usage.md: новые CLI флаги (--bump, --pr/--no-pr, --release/--no-release, --self-heal, --git-config, --git-reset), новые env vars (WHILLY_AUTO_PR/RELEASE, WHILLY_BUMP, WHILLY_SELF_HEAL, WHILLY_BASE_BRANCH, WHILLY_RELEASE_TIMEOUT, WHILLY_SELF_HEAL_CI_TIMEOUT), exit codes таблица (0/1/2/3/4/5), override-стек (CLI > env > .whilly/git.yaml > default), schema .whilly/git.yaml.. DONE: docs/Whilly-Usage.md дополнен новой секцией '## Git integration (PRD-featgitcom)' между 'Full env var reference' и 'Headless exit codes'. Контент: (1) Quickstart 4-шага (whilly --git-config → нормальный run с auto-PR → WHILLY_BUMP=patch WHILLY_AUTO_RELEASE=1 для релиза → whilly --git-reset --yes); (2) подсекция '.whilly/git.yaml schema' с YAML-примером всех 8 полей (enabled, provider, base_branch, branch_template, auto_pr, auto_release, auto_commit_per_task, self_heal) + таблицей field/type/default/override-env-var; (3) подсекция 'Override stack' с явной нотацией CLI > WHILLY_* env > .whilly/git.yaml > default + объяснением os.environ-membership detection (WHILLY_AUTO_PR=0 vs default-False distinction) — это знание из config.py:194-203 critical для операторов которые ставят 0 ожидая что 'оно само' снимет YAML-true; (4) подсекция 'CLI flags' с таблицей --git-config/--git-reset (это единственные реально wired CLI флаги) + честное disclosure что --bump/--pr/--no-pr/--release/--no-release/--self-heal exposed only as WHILLY_* env vars сейчас, CLI-flag layer reserved для forward-compat; (5) подсекция 'Git-integration env vars' с таблицей всех 12 переменных: WHILLY_GIT_ENABLED, WHILLY_GIT_PROVIDER, WHILLY_BASE_BRANCH, WHILLY_AUTO_PR, WHILLY_AUTO_RELEASE, WHILLY_AUTO_COMMIT, WHILLY_SELF_HEAL, WHILLY_BUMP, WHILLY_RELEASE_TIMEOUT, WHILLY_RELEASE_POLL_INTERVAL, WHILLY_SELF_HEAL_CI_TIMEOUT, WHILLY_SELF_HEAL_POLL_INTERVAL — каждая с дефолтом и описанием семантики. Boolean coercion (1/0, true/false, yes/no) явно задокументирован. Существующий блок 'Headless exit codes' оставлен intact (codes 0-5 уже были там), убран дублирующий блок override-stack в его конце — заменён на cross-reference '#override-stack' anchor чтобы не было stale duplication drift в будущем. Acceptance grep #1 (`WHILLY_AUTO_PR|--bump|exit code 4|--git-config|override`): 20 хитов в 16 строках (PRD-acceptance минимум по одному на каждый паттерн — все present). Acceptance grep #2 (`git\\.yaml|base_branch|branch_template`): 14 хитов в 14 строках. markdownlint опционален в test_steps (`|| true`) и не запускался — pyproject не пинит markdownlint, это soft-check. Lint+tests baseline сохранён: python3 -m ruff check whilly/ tests/ → All checks passed; ruff format --check → 152 already formatted (нулевая Python diff — это docs-only task); pytest -q → 1636 passed in 141s (no regressions от M6 baseline). Намеренные decisions: (a) НЕ выдумывать --bump/--pr CLI флаги которых нет в cli.py — документация должна отражать реальность кода (release_pipeline.py / version_bump.py упоминают --bump только в PRD-acceptance docstrings, не в argparse). Документ honestly раскрывает что operational surface = env vars сейчас. (b) Override-stack ВВЕДЁН до exit-codes секции, потому что exit code 5 ссылается на 'WHILLY_GIT_PROVIDER / WHILLY_GIT_ENABLED' — читатель должен знать стек перед чтением кодов. (c) Schema-таблица + YAML-пример рядом — таблица для grep/quick-ref, пример для copy-paste. (d) WHILLY_RELEASE_POLL_INTERVAL и WHILLY_SELF_HEAL_POLL_INTERVAL включены хотя task description их не перечислил — они env-only operational tuning из config.py:130/142 и операторам нужен полный список env-only vars в одном месте чтобы не охотиться по docstring-ам. Что unblock-нуто: TASK-022a (README) теперь может cross-link на конкретные anchor-ы (#override-stack, #git-integration-env-vars, #whillygityaml-schema) вместо дублирования; TASK-022c (Interfaces) ссылается на эту страницу для operational concerns, focused on module contracts. После 022a+022c → TASK-023a (final e2e) можно начинать.",
+      "status": "done",
+      "dependencies": [
+        "TASK-017c",
+        "TASK-020c"
+      ],
+      "key_files": [
+        "docs/Whilly-Usage.md"
+      ],
+      "acceptance_criteria": [
+        "Whilly-Usage.md описывает все новые CLI флаги и env vars",
+        "Таблица exit codes 0/1/2/3/4/5 с описанием каждого",
+        "Override-стек явно задокументирован",
+        ".whilly/git.yaml schema (все 8 полей с типами и дефолтами)"
+      ],
+      "test_steps": [
+        "grep -E 'WHILLY_AUTO_PR|--bump|exit code 4|--git-config|override' docs/Whilly-Usage.md",
+        "grep -E 'git\\.yaml|base_branch|branch_template' docs/Whilly-Usage.md",
+        "markdownlint docs/Whilly-Usage.md || true"
+      ],
+      "prd_requirement": "M7 docs (Usage), FR-12"
+    },
+    {
+      "id": "TASK-022c",
+      "phase": "M7 — Tests + docs",
+      "category": "docs",
+      "priority": "high",
+      "description": "Обновить docs/Whilly-Interfaces-and-Tasks.md: контракт каждого нового модуля (git_config, git_preflight, git_branch, git_commit, git_providers Protocol+Gh+Glab+None, release_pipeline, self_heal, version_bump, git_errors). Для каждого: публичные функции/классы + назначение + ключевые exception/exit conditions.",
+      "status": "done",
+      "dependencies": [
+        "TASK-017c",
+        "TASK-020c"
+      ],
+      "key_files": [
+        "docs/Whilly-Interfaces-and-Tasks.md"
+      ],
+      "acceptance_criteria": [
+        "Контракты 9 новых модулей (git_config, git_preflight, git_branch, git_commit, git_providers, release_pipeline, self_heal, version_bump, git_errors) описаны",
+        "Для каждого модуля — список публичных функций с сигнатурами",
+        "ErrorClass enum + AuthRequiredError описаны в секции git_errors"
+      ],
+      "test_steps": [
+        "grep -E 'git_providers|release_pipeline|self_heal|git_errors' docs/Whilly-Interfaces-and-Tasks.md",
+        "grep -E 'ErrorClass|AuthRequiredError|GitConfig' docs/Whilly-Interfaces-and-Tasks.md",
+        "markdownlint docs/Whilly-Interfaces-and-Tasks.md || true"
+      ],
+      "prd_requirement": "M7 docs (Interfaces)",
+      "completed_notes": "Section 7 (Git Integration & Release Automation — контракты модулей) appended to docs/Whilly-Interfaces-and-Tasks.md. Описаны контракты 9 модулей: git_config, git_preflight, git_branch, git_commit, git_providers (Provider Protocol + Gh + Glab + None + factory), release_pipeline, self_heal, version_bump, git_errors. Для каждого модуля — публичные dataclass'ы с полями, сигнатуры функций с named args, exit conditions (что raises и что нет), идемпотентность, REASON_*/OUTCOME_*/CI_STATE_* константы, имена структурированных событий. ErrorClass enum + AuthRequiredError + EXIT_AUTH_REQUIRED задокументированы в §7.9. Test_steps: оба grep-чека прошли, ruff/format чистые, pytest 1636 passed."
+    },
+    {
+      "id": "TASK-023a",
+      "phase": "M7 — Tests + docs",
+      "category": "test",
+      "priority": "critical",
+      "description": "Создать tests/test_e2e_full_pipeline.py — финальный smoke/e2e на временном git-репо с моками gh + twine: prd-wizard → preflight → branch → план из 5 задач с per-task auto-commit → auto-pr → bump=patch → auto-release → PyPI mock. Проверить Метрики 1 (≤ 2 мин), 2 (success rate), 4 (env override), 5 (idempotency через --resume).",
+      "status": "done",
+      "dependencies": [
+        "TASK-005",
+        "TASK-008",
+        "TASK-012",
+        "TASK-015",
+        "TASK-018",
+        "TASK-021",
+        "TASK-022a",
+        "TASK-022b",
+        "TASK-022c"
+      ],
+      "key_files": [
+        "tests/test_e2e_full_pipeline.py"
+      ],
+      "acceptance_criteria": [
+        "Метрика 1: первый запуск ≤ 2 мин на 5 задачах (без CI ожидания, mocked)",
+        "Метрика 2: success rate 95% по 20 повторным запускам (mocked)",
+        "Метрика 4: WHILLY_AUTO_PR=0 переопределяет git.yaml без модификации файла",
+        "Метрика 5: повторный --resume не создаёт дубликатов PR/tag/release/PyPI",
+        "Тест помечен @pytest.mark.integration"
+      ],
+      "test_steps": [
+        "python3 -m ruff check tests/test_e2e_full_pipeline.py",
+        "python3 -m ruff format --check tests/test_e2e_full_pipeline.py",
+        "pytest tests/test_e2e_full_pipeline.py -q -m integration"
+      ],
+      "prd_requirement": "Метрики 1, 2, 4, 5; M7 final integration"
+    },
+    {
+      "id": "TASK-023b",
+      "phase": "M7 — Tests + docs",
+      "category": "infra",
+      "priority": "critical",
+      "description": "Обновить .github/workflows/ci.yml: расширить test matrix до py3.10/3.11/3.12, добавить шаги ruff check + ruff format --check + pytest -q (включая integration). Зафиксировать запуск tests/test_e2e_full_pipeline.py в CI matrix. DONE: реализовано на ветке whilly/workspace/git-integration-pr-release-automation-in-prd-wiz. .github/workflows/ci.yml: матрица в job `test` уже покрывала py3.10/3.11/3.12 на ubuntu-latest + cross-platform smoke (windows-latest/macos-latest на 3.12) — оставлена нетронутой. Добавлены 3 новых шага ВНУТРИ test job (после `Install dev deps`, перед/после существующего `Run pytest`) выполняющиеся на КАЖДОЙ версии Python матрицы: (1) `Ruff check (per-version)` → `python -m ruff check whilly/ tests/` — гарантирует линт-чистоту на всех 3 поддерживаемых версиях (раньше ruff жил только в job `lint` на py3.12, что оставляло окно для py3.10/3.11-specific нарушений если бы ruff bumped минимальную версию или intervened parser-changes); (2) `Ruff format check (per-version)` → `python -m ruff format --check whilly/ tests/` — симметрично формат; (3) `Integration smoke (PRD-featgitcom e2e full pipeline)` → `pytest -q tests/test_e2e_full_pipeline.py` — закрепляет TASK-023a e2e файл КАК ИМЕНОВАННЫЙ CI step (отдельно от обычного `pytest -q`), что защищает от будущего регресса где кто-то добавит `addopts = '-m \"not integration\"'` в pyproject.toml и e2e тихо выпадет из default collection. Job `lint` (auto-fix-and-push gate на py3.12) оставлен intact — это load-bearing pattern для contributor ergonomics, новые шаги его дублируют per-version intentionally (lint job делает auto-commit фиксов; matrix job делает hard verification per-version без auto-commit). Job `agent-backends` не трогали — он отдельный гейт OC-119. Использован `python -m ruff` а не PATH `ruff` (соответствует CLAUDE.md feedback 'Use correct ruff version'). Acceptance verification локально: (1) `grep -E '3\\.10|3\\.11|3\\.12' .github/workflows/ci.yml` → 5 строк (matrix versions + 4 cross-platform/lint job pinned 3.12); (2) `python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'` → YAML валиден; (3) `python3 -m ruff check whilly/ tests/` → All checks passed (157 файлов); (4) `python3 -m ruff format --check whilly/ tests/` → 153 files already formatted; (5) `pytest -q` → 1641 passed in 149.36s; (6) `pytest -q tests/test_e2e_full_pipeline.py` отдельно → 5 passed in 9.68s. Workflow дополнительно содержит inline-комментарий на новом integration-step объясняющий why-named (regression guard). Изменение ATOMIC: только ci.yml меняется, никаких сопутствующих рефакторов в lint job или test job structure. Соответствие глобальному CLAUDE.md правилу 'GitHub Actions security' — все новые шаги используют статические команды без интерполяции `${{ github.* }}` в run:, никакой command-injection surface не введено.",
+      "status": "done",
+      "dependencies": [
+        "TASK-023a"
+      ],
+      "key_files": [
+        ".github/workflows/ci.yml"
+      ],
+      "acceptance_criteria": [
+        "CI matrix покрывает py3.10/3.11/3.12",
+        "Шаги ruff check + ruff format --check + pytest -q зелёные на каждой версии",
+        "tests/test_e2e_full_pipeline.py запускается в integration-stage CI",
+        "Workflow YAML валиден (actionlint / yaml.safe_load)"
+      ],
+      "test_steps": [
+        "grep -E '3\\.10|3\\.11|3\\.12' .github/workflows/ci.yml",
+        "python3 -c 'import yaml; yaml.safe_load(open(\".github/workflows/ci.yml\"))'",
+        "python3 -m ruff check whilly/ tests/",
+        "python3 -m ruff format --check whilly/ tests/",
+        "pytest -q"
+      ],
+      "prd_requirement": "M7 CI matrix, Метрика 2"
+    }
+  ]
+}
