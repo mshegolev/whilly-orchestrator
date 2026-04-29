@@ -88,6 +88,14 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.dashboard import run_dashboard_command
 
         return run_dashboard_command(args[1:])
+    if args and args[0] == "init":
+        # ``whilly init`` — interactive PRD wizard + plan import. Lazy
+        # import keeps legacy ``whilly --resume`` etc. fast (init pulls
+        # asyncpg via the inserter and the prd_generator's Claude
+        # subprocess wiring). Owner: TASK-104a-3.
+        from whilly.cli.init import run_init_command
+
+        return run_init_command(args[1:])
     return _legacy_main(argv)
 
 

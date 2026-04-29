@@ -149,6 +149,7 @@ def generate_prd(
     output_dir: str = "docs",
     model: str = "claude-opus-4-6[1m]",
     author: str = "",
+    slug: str | None = None,
 ) -> Path:
     """Generate a PRD markdown file from a project description.
 
@@ -157,6 +158,13 @@ def generate_prd(
         output_dir: Directory for output file.
         model: Claude model to use.
         author: Author name for PRD header.
+        slug: Optional explicit slug to use as the PRD filename
+            (``PRD-<slug>.md``). When ``None`` (legacy behaviour) — the
+            slug is auto-derived from the first ~50 chars of
+            ``description``. The new ``whilly init`` flow (TASK-104a-3)
+            passes an explicit slug so the filename matches the
+            ``plan_id`` that gets imported into Postgres — slug ownership
+            lives in the CLI per PRD docs/PRD-v41-prd-wizard-port.md FR-3.
 
     Returns:
         Path to generated PRD file.
@@ -164,9 +172,12 @@ def generate_prd(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Derive filename from description
-    slug = description.strip()[:50].replace(" ", "-").replace("/", "-")
-    slug = "".join(c for c in slug if c.isalnum() or c in "-_")
+    if slug is None:
+        # Legacy behaviour preserved verbatim — first ~50 chars of the
+        # description, alnum/_/- only. Existing callers (the v3
+        # whilly --init flow via cli_legacy) keep working unchanged.
+        slug = description.strip()[:50].replace(" ", "-").replace("/", "-")
+        slug = "".join(c for c in slug if c.isalnum() or c in "-_")
     filename = f"PRD-{slug}.md"
     out_path = out_dir / filename
 

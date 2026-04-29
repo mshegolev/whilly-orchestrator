@@ -173,7 +173,7 @@
       "title": "Implement whilly/cli/init.py composition root",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-104a-1",
         "TASK-104a-2"
@@ -196,14 +196,15 @@
         "pytest tests/unit/test_cli_init.py -v",
         "whilly init --help | grep -E '\\-\\-slug|\\-\\-interactive|\\-\\-headless|\\-\\-no-import'"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-1, FR-2, FR-3, FR-5, FR-6"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-1, FR-2, FR-3, FR-5, FR-6",
+      "completion_notes": "Created whilly/cli/init.py composition root: argparse with idea (positional, multi-word), --slug, --interactive/--headless (mutually exclusive), --no-import, --force, --model, --output-dir. Slug derivation via _slugify (kebab-case, max 8 words, fallback to plan). Slug validation via _validate_slug (regex [a-z0-9][a-z0-9-]*[a-z0-9], single alnum char allowed). TTY detection via _resolve_mode (sys.stdin.isatty default → interactive; --interactive/--headless force override). Four production seams (interactive_runner, headless_runner, tasks_builder, plan_inserter) accept fakes via kwargs for cheap unit testing. Production wiring: prd_launcher.run_prd_wizard for interactive, prd_generator.generate_prd (extended with explicit slug param) for headless, prd_generator.generate_tasks_dict for tasks payload, parse_plan_dict + cli.plan._async_import for DB. Registered as new branch in cli/__init__.py dispatcher (lazy import keeps legacy fast). prd_generator.generate_prd extended: opt-in slug parameter (None preserves legacy auto-derivation). 33 unit tests in tests/unit/test_cli_init.py covering FR-1..FR-3, FR-5, FR-6."
     },
     {
       "id": "TASK-104a-4",
       "title": "Idempotency + error handling + --force flag",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-104a-3"
       ],
@@ -222,7 +223,8 @@
       "test_steps": [
         "pytest tests/unit/test_cli_init_idempotent.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-7, FR-8"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-7, FR-8",
+      "completion_notes": "Idempotency + error handling baked into TASK-104a-3 since they share whilly/cli/init.py. FR-7: existing PRD without --force → exit 1 with hint to use --force or pick another slug; --force lets wizard overwrite. FR-8: empty idea text → exit 1, invalid slug → exit 1, wizard exit≠0 → exit 1, wizard exit 0 but no PRD → exit 1, generate_tasks_dict RuntimeError → exit 1 with PRD preserved for inspection, missing WHILLY_DATABASE_URL → exit 2 (env error) with PRD preserved, plan_inserter exception → exit 1 with PRD preserved, KeyboardInterrupt → exit 130 (POSIX SIGINT). 14 unit tests in tests/unit/test_cli_init.py covering each fail path. All 47 init tests + 509 total unit tests green."
     },
     {
       "id": "TASK-104a-5",
