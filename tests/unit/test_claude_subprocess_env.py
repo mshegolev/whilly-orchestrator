@@ -123,13 +123,34 @@ async def test_claude_cli_does_not_mutate_os_environ(
 # ─── prd_generator._call_claude ───────────────────────────────────────────
 
 
-def test_prd_generator_call_claude_with_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PRD-wizard's call site also injects HTTPS_PROXY into spawned env."""
-    monkeypatch.setenv(WHILLY_PROXY_URL_ENV, "http://prd-proxy:9999")
-    monkeypatch.delenv(INHERITED_HTTPS_PROXY_ENV, raising=False)
-    monkeypatch.setenv("CLAUDE_BIN", "/bin/true")
+class _StreamLike:
+    """Minimal file-like for the heartbeat / drain threads in ``_call_claude``.
 
-    captured: dict[str, Any] = {}
+    The production code reads stderr line-by-line and stdout via
+    ``communicate()``; we hand back tiny stand-ins that don't block.
+    """
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload.decode("utf-8")
+        self._consumed = False
+
+    def __iter__(self) -> Any:
+        return iter(())  # no stderr lines
+
+    def read(self) -> str:
+        if self._consumed:
+            return ""
+        self._consumed = True
+        return self._payload
+
+
+def _make_fake_popen(captured: dict[str, Any]) -> type:
+    """Return a ``FakePopen`` class that records the ``env`` kwarg into ``captured``.
+
+    Factory rather than module-level class so the per-test ``captured``
+    dict is closed over without a global. Two production callers pass
+    the result to ``monkeypatch.setattr`` for ``subprocess.Popen``.
+    """
 
     class FakePopen:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -148,7 +169,17 @@ def test_prd_generator_call_claude_with_proxy(monkeypatch: pytest.MonkeyPatch) -
         def wait(self) -> int:
             return 0
 
-    monkeypatch.setattr("whilly.prd_generator.subprocess.Popen", FakePopen)
+    return FakePopen
+
+
+def test_prd_generator_call_claude_with_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PRD-wizard's call site also injects HTTPS_PROXY into spawned env."""
+    monkeypatch.setenv(WHILLY_PROXY_URL_ENV, "http://prd-proxy:9999")
+    monkeypatch.delenv(INHERITED_HTTPS_PROXY_ENV, raising=False)
+    monkeypatch.setenv("CLAUDE_BIN", "/bin/true")
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr("whilly.prd_generator.subprocess.Popen", _make_fake_popen(captured))
 
     from whilly.prd_generator import _call_claude
 
@@ -169,25 +200,7 @@ def test_prd_generator_call_claude_without_proxy(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("CLAUDE_BIN", "/bin/true")
 
     captured: dict[str, Any] = {}
-
-    class FakePopen:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            captured["env"] = kwargs.get("env")
-            self.stdout = _StreamLike(b'{"ok": 1}')
-            self.stderr = _StreamLike(b"")
-            self.returncode = 0
-            self.pid = 12345
-
-        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
-            return ('{"ok": 1}', "")
-
-        def kill(self) -> None:
-            pass
-
-        def wait(self) -> int:
-            return 0
-
-    monkeypatch.setattr("whilly.prd_generator.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("whilly.prd_generator.subprocess.Popen", _make_fake_popen(captured))
 
     from whilly.prd_generator import _call_claude
 
@@ -196,24 +209,3 @@ def test_prd_generator_call_claude_without_proxy(monkeypatch: pytest.MonkeyPatch
     env = captured["env"]
     assert env is not None
     assert "HTTPS_PROXY" not in env
-
-
-class _StreamLike:
-    """Minimal file-like for the heartbeat / drain threads in _call_claude.
-
-    The production code reads stderr line-by-line and stdout via
-    communicate(); we hand back tiny stand-ins that don't block.
-    """
-
-    def __init__(self, payload: bytes) -> None:
-        self._payload = payload.decode("utf-8")
-        self._consumed = False
-
-    def __iter__(self) -> Any:
-        return iter(())  # no stderr lines
-
-    def read(self) -> str:
-        if self._consumed:
-            return ""
-        self._consumed = True
-        return self._payload

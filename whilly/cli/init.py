@@ -33,6 +33,8 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from whilly.adapters.runner import proxy
+
 logger = logging.getLogger("whilly.cli.init")
 
 # Exit codes (kept identical to the v4 plan/run subcommands so a shell
@@ -273,19 +275,31 @@ def run_init_command(
     # confusing connection-refused buried inside Claude's HTTP client.
     # WHILLY_CLAUDE_PROXY_PROBE=0 opts out (e.g. weird proxies that
     # reject TCP probes; we trust the operator).
-    from whilly.adapters.runner import proxy as _proxy
-
-    _settings = _proxy.resolve_proxy_settings(
+    proxy_settings = proxy.resolve_proxy_settings(
         cli_url=args.claude_proxy,
         cli_disabled=args.no_claude_proxy,
     )
-    if _settings.is_active and os.environ.get(_proxy.WHILLY_PROBE_ENV, "1") != "0":
+    proxy_url = proxy_settings.url
+    if proxy_url and proxy.should_probe():
         try:
-            assert _settings.url is not None
-            _proxy.probe_proxy_or_raise(_settings.url)
+            proxy.probe_proxy_or_raise(proxy_url)
         except RuntimeError as probe_exc:
             print(str(probe_exc), file=sys.stderr)
             return EXIT_ENVIRONMENT_ERROR
+
+    # Materialise the resolved CLI/env priority into ``os.environ`` so
+    # downstream re-resolves (in ``_call_claude`` / ``_spawn_and_collect``,
+    # which read ``os.environ`` only) see the same decision the probe was
+    # based on. ``WHILLY_CLAUDE_PROXY_URL`` is only read by Whilly's own
+    # ``resolve_proxy_settings`` — setting it has no behavioural effect on
+    # parent-process httpx. For ``--no-claude-proxy`` we additionally drop
+    # ``HTTPS_PROXY`` so the env-fallback branch in ``resolve_proxy_settings``
+    # doesn't re-introduce a proxy downstream against the operator's intent.
+    if proxy_url and args.claude_proxy:
+        os.environ[proxy.WHILLY_PROXY_URL_ENV] = args.claude_proxy
+    elif args.no_claude_proxy:
+        os.environ.pop(proxy.WHILLY_PROXY_URL_ENV, None)
+        os.environ.pop(proxy.INHERITED_HTTPS_PROXY_ENV, None)
 
     # ── Step 1: produce PRD file ────────────────────────────────────────
     try:

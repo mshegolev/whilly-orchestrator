@@ -27,7 +27,7 @@ DEFAULT_NO_PROXY: str = "localhost,127.0.0.1,::1"
 
 WHILLY_PROXY_URL_ENV: str = "WHILLY_CLAUDE_PROXY_URL"
 WHILLY_NO_PROXY_ENV: str = "WHILLY_CLAUDE_NO_PROXY"
-WHILLY_PROBE_ENV: str = "WHILLY_CLAUDE_PROXY_PROBE"
+WHILLY_PROXY_PROBE_ENV: str = "WHILLY_CLAUDE_PROXY_PROBE"
 
 INHERITED_HTTPS_PROXY_ENV: str = "HTTPS_PROXY"
 
@@ -140,11 +140,45 @@ def build_subprocess_env(
     spawns; mutating it would leak the proxy into the parent process.
     """
     result = dict(parent_env)
-    if settings.is_active:
-        assert settings.url is not None  # narrowed by is_active
-        result["HTTPS_PROXY"] = settings.url
+    # Bind to a local so the truthy check narrows for the type checker
+    # without an `assert` — assertions are stripped under ``python -O``,
+    # so a real branch is the safer guard.
+    url = settings.url
+    if url:
+        result["HTTPS_PROXY"] = url
         result["NO_PROXY"] = settings.no_proxy
     return result
+
+
+def spawn_env_for_claude(parent_env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Resolve proxy settings from ``parent_env`` and build the spawn-env in one step.
+
+    Single entry-point used by both ``claude_cli._spawn_and_collect`` and
+    ``prd_generator._call_claude``. CLI overrides from ``whilly init`` are
+    already materialised into env vars by ``run_init_command`` before any
+    spawn happens, so the env-only resolution path is correct here.
+    """
+    if parent_env is None:
+        import os
+
+        parent_env = os.environ
+    settings = resolve_proxy_settings(env=parent_env)
+    return build_subprocess_env(parent_env, settings)
+
+
+def should_probe(env: Mapping[str, str] | None = None) -> bool:
+    """Return ``True`` iff the TCP probe should run before invoking Claude.
+
+    The probe is enabled by default; an operator opts out with
+    ``WHILLY_CLAUDE_PROXY_PROBE=0`` (e.g. for proxies that legitimately
+    reject bare TCP probes). Centralised here so any future relaxation of
+    the opt-out grammar (``"false"``, ``"no"``, …) lands in one place.
+    """
+    if env is None:
+        import os
+
+        env = os.environ
+    return env.get(WHILLY_PROXY_PROBE_ENV, "1") != "0"
 
 
 def probe_proxy_or_raise(url: str, *, timeout: float = 0.5) -> None:
@@ -171,7 +205,7 @@ def probe_proxy_or_raise(url: str, *, timeout: float = 0.5) -> None:
     if host is None:
         raise RuntimeError(
             f"whilly: cannot parse Claude proxy URL {url!r} "
-            f"(expected http://host:port). To skip this check: {WHILLY_PROBE_ENV}=0"
+            f"(expected http://host:port). To skip this check: {WHILLY_PROXY_PROBE_ENV}=0"
         )
 
     port = parsed.port
@@ -194,7 +228,7 @@ def probe_proxy_or_raise(url: str, *, timeout: float = 0.5) -> None:
             f"whilly: Claude proxy unreachable at {url} ({exc.__class__.__name__}: {exc})\n"
             f"Hint: bring up the SSH tunnel first, e.g.:\n"
             f"  ssh -fN -L {port}:127.0.0.1:8888 gpt-proxy\n"
-            f"To skip this check: {WHILLY_PROBE_ENV}=0"
+            f"To skip this check: {WHILLY_PROXY_PROBE_ENV}=0"
         ) from exc
 
 
@@ -203,9 +237,11 @@ __all__ = [
     "INHERITED_HTTPS_PROXY_ENV",
     "ProxySettings",
     "WHILLY_NO_PROXY_ENV",
-    "WHILLY_PROBE_ENV",
+    "WHILLY_PROXY_PROBE_ENV",
     "WHILLY_PROXY_URL_ENV",
     "build_subprocess_env",
     "probe_proxy_or_raise",
     "resolve_proxy_settings",
+    "should_probe",
+    "spawn_env_for_claude",
 ]

@@ -176,8 +176,7 @@ async def _spawn_and_collect(prompt: str, model: str) -> AgentResult:
     # TASK-109-3: inject HTTPS_PROXY/NO_PROXY into the spawned env only,
     # so worker-side asyncpg / httpx (running in the parent process)
     # keep going direct to Postgres / control plane.
-    settings = proxy.resolve_proxy_settings()
-    child_env = proxy.build_subprocess_env(os.environ, settings)
+    child_env = proxy.spawn_env_for_claude()
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,

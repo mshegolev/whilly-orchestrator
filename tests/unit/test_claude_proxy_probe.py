@@ -9,9 +9,9 @@ Covers :func:`whilly.adapters.runner.proxy.probe_proxy_or_raise`:
 * Diagnostic message contains the SSH-tunnel hint that the PRD
   requires.
 
-The fake server is a `socket.socket` bound to ``127.0.0.1:0`` (kernel
-picks the port). Two reasons for using a real socket rather than a
-mock:
+The ``listening_port`` / ``closed_port`` fixtures live in
+``tests/unit/conftest.py`` (shared with ``test_cli_init_proxy.py``).
+Two reasons for using real sockets rather than mocks:
 
 * The probe does ``socket.create_connection``; mocking that would
   bypass the actual code path we want to validate.
@@ -22,45 +22,9 @@ PRD: ``docs/PRD-v41-claude-proxy.md`` FR-3 / SC-3.
 
 from __future__ import annotations
 
-import socket
-from collections.abc import Iterator
-
 import pytest
 
 from whilly.adapters.runner.proxy import probe_proxy_or_raise
-
-
-@pytest.fixture
-def listening_port() -> Iterator[int]:
-    """Bind a real listener on an ephemeral port; yield it; close on teardown.
-
-    ``backlog=1`` means a single pending connection slot which is all the
-    probe ever needs (it doesn't ``accept()``, just connects). The yield/
-    close pattern guarantees the socket goes away even if the test
-    raises mid-assertion.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    sock.listen(1)
-    try:
-        port = sock.getsockname()[1]
-        yield port
-    finally:
-        sock.close()
-
-
-@pytest.fixture
-def closed_port() -> int:
-    """Return a port that is *not* listening.
-
-    Bind + close releases the port; the kernel won't immediately reuse
-    it for a competing listener within the test, so a probe against
-    this port reliably gets ``ConnectionRefusedError``.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    return port
 
 
 # ─── happy path ────────────────────────────────────────────────────────────
