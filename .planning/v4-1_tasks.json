@@ -84,28 +84,198 @@
     },
     {
       "id": "TASK-104a",
-      "title": "Port PRD wizard to v4 — interactive `whilly init`",
+      "title": "Port PRD wizard to v4 — interactive `whilly init` (epic)",
       "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a-1",
+        "TASK-104a-2",
+        "TASK-104a-3",
+        "TASK-104a-4",
+        "TASK-104a-5",
+        "TASK-104a-6"
+      ],
+      "key_files": [
+        "docs/PRD-v41-prd-wizard-port.md",
+        "whilly/cli/init.py",
+        "whilly/prd_generator.py",
+        "whilly/adapters/filesystem/plan_io.py",
+        "tests/integration/test_init_e2e.py"
+      ],
+      "description": "Epic. Требования и SC формализованы в docs/PRD-v41-prd-wizard-port.md. Декомпозирован на 6 атомарных подзадач (TASK-104a-1..6), каждая выполнима за один PR. Закрытие epic'а = все 6 подзадач done + integration smoke зелёный.",
+      "acceptance_criteria": [
+        "Все 6 sub-task'ов TASK-104a-1..6 в статусе done",
+        "PRD docs/PRD-v41-prd-wizard-port.md SC-1..SC-6 зелёные",
+        "whilly init '<идея>' --headless создаёт PRD + засевает план в Postgres",
+        "whilly --prd-wizard (legacy) продолжает работать без regression"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_init_e2e.py -v",
+        "coverage report --include='whilly/cli/init.py' --fail-under=80"
+      ],
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md (SC-1..SC-6)"
+    },
+    {
+      "id": "TASK-104a-1",
+      "title": "Extract generate_tasks_dict() from prd_generator.py",
+      "category": "refactor",
       "priority": "high",
       "status": "pending",
       "dependencies": [],
       "key_files": [
-        "whilly/cli/init.py",
-        "whilly/prd_wizard.py",
-        "whilly/prd_launcher.py",
-        "tests/integration/test_prd_wizard_v4.py"
+        "whilly/prd_generator.py",
+        "tests/unit/test_prd_generator_dict.py"
       ],
-      "description": "В v3 был интерактивный flow: whilly --init 'описание' -> Claude задаёт уточняющие вопросы -> формируется PRD-документ -> tasks.json. На v4 этот flow нужно адаптировать под Postgres-плановую модель: PRD сохраняется как файл (как и сейчас), но список задач напрямую идёт в БД через repo.import_plan() вместо записи в tasks.json. cli_legacy.prd_wizard / prd_launcher переиспользуются, новый wrapper в whilly/cli/init.py делает glue.",
+      "description": "Существующая generate_tasks(prd_path) в prd_generator.py запрашивает Claude и пишет tasks.json на диск. Нужна вариация generate_tasks_dict(prd_path, plan_id) которая возвращает dict {project, tasks: [...]} в памяти, не трогая диск. Реализация: вынести core-логику запроса+парсинга в _build_tasks_payload() helper, оба варианта (generate_tasks и generate_tasks_dict) зовут helper, generate_tasks дополнительно делает json.dump. Это enabling change для TASK-104a-2/3/4 — без него wizard вынужден писать tasks.json на диск только чтобы сразу прочитать.",
       "acceptance_criteria": [
-        "whilly init 'описание задачи' запускает Claude CLI в interactive режиме с master prompt'ом из prd_wizard",
-        "По завершении — PRD сохраняется в docs/PRD-<slug>.md, tasks записываются в Postgres (plan_id = slug)",
-        "После создания плана — печатает 'whilly run --plan <slug>' и 'whilly plan show <slug>' для следующего шага",
-        "--non-interactive флаг прокидывает описание в Claude CLI без вопросов (для скриптов)"
+        "generate_tasks_dict(prd_path: Path, plan_id: str) -> dict реализована",
+        "Возвращает dict с ключами 'project' (str) и 'tasks' (list[dict])",
+        "Существующая generate_tasks() вызывает тот же helper, поведение не меняется",
+        "Unit-тест mock'ает Claude subprocess и проверяет shape возвращаемого dict",
+        "ruff + mypy clean"
       ],
       "test_steps": [
-        "pytest tests/integration/test_prd_wizard_v4.py -v"
+        "pytest tests/unit/test_prd_generator_dict.py -v",
+        "pytest tests/unit/ -k 'prd' -q"
       ],
-      "prd_requirement": "docs/v4.0-release-checklist.md#out-of-scope: 'PRD wizard / whilly --init / TRIZ analyzer'"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-4"
+    },
+    {
+      "id": "TASK-104a-2",
+      "title": "Add import_plan_dict() to whilly.adapters.filesystem.plan_io",
+      "category": "refactor",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/adapters/filesystem/plan_io.py",
+        "tests/unit/test_plan_io.py"
+      ],
+      "description": "Существующая import_plan(path) читает JSON-файл и зовёт TaskRepository. Нужен второй вход import_plan_dict(payload, plan_id) который принимает уже-распарсенный dict (от generate_tasks_dict). Не материализовать tasks.json на диск только ради того чтобы сразу его прочитать. Implementation: вынести core-flow из import_plan в _persist_plan() helper, оба варианта зовут helper, import_plan дополнительно делает json.load.",
+      "acceptance_criteria": [
+        "import_plan_dict(payload: dict, plan_id: str) -> ImportResult реализована",
+        "Реюзает существующую validation/parse_plan логику",
+        "Существующая import_plan(path) поведение не меняет",
+        "Unit-тест: import_plan_dict({'project': X, 'tasks': [...]}) -> запись в test DB через testcontainers",
+        "ruff + mypy + lint-imports clean (никаких новых импортов из whilly.cli)"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_plan_io.py -v",
+        "pytest tests/integration/test_plan_io.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-4"
+    },
+    {
+      "id": "TASK-104a-3",
+      "title": "Implement whilly/cli/init.py composition root",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a-1",
+        "TASK-104a-2"
+      ],
+      "key_files": [
+        "whilly/cli/init.py",
+        "whilly/cli/__init__.py",
+        "tests/unit/test_cli_init.py"
+      ],
+      "description": "Новый sub-CLI whilly init '<идея>'. Composition root склеивает: argparse → slug detection → TTY detection → prd_launcher.run_interactive ИЛИ prd_wizard.run_headless → generate_tasks_dict → import_plan_dict → success message. Регистрируется в dispatcher whilly/cli/__init__.py::main как новая branch. Не трогает cli_legacy (FR-NFR-4).",
+      "acceptance_criteria": [
+        "whilly init '<идея>' [--slug X] [--interactive|--headless] [--no-import] [--force] работает",
+        "TTY detection: sys.stdin.isatty() → interactive default; иначе headless",
+        "Slug auto-derivation из idea если --slug не передан (kebab-case, [a-z0-9-]+)",
+        "Exit code 0 на успехе, 1 на ошибке wizard'а / БД, 130 на SIGINT",
+        "После import печатает 'whilly plan show <slug>' и 'whilly run --plan <slug>'",
+        "Unit-тесты на argparse parsing + slug derivation"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_cli_init.py -v",
+        "whilly init --help | grep -E '\\-\\-slug|\\-\\-interactive|\\-\\-headless|\\-\\-no-import'"
+      ],
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-1, FR-2, FR-3, FR-5, FR-6"
+    },
+    {
+      "id": "TASK-104a-4",
+      "title": "Idempotency + error handling + --force flag",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a-3"
+      ],
+      "key_files": [
+        "whilly/cli/init.py",
+        "tests/unit/test_cli_init_idempotent.py"
+      ],
+      "description": "FR-7 + FR-8 из PRD: повторный whilly init с тем же slug'ом — отказ если PRD уже существует, --force перезаписывает. Если plan уже в БД — отказ (до TASK-103 нет clean reset, документируем как known limitation). Error handling: wizard exit≠0 → exit 1 с понятным сообщением; БД error → exit 1, PRD остаётся; KeyboardInterrupt → exit 130.",
+      "acceptance_criteria": [
+        "Без --force и существующим PRD-файлом → exit 1 с сообщением 'already exists; pass --force or pick another slug'",
+        "С --force и существующим PRD — wizard перезаписывает (если plan в БД и нет TASK-103 — отказ с workaround hint про psql)",
+        "wizard exit≠0 без сохранения PRD → exit 1, понятное сообщение",
+        "generate_tasks_dict вернул пустой/невалидный план → exit 1, PRD остаётся для дебага",
+        "Unit-тесты на каждый failure path"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_cli_init_idempotent.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md FR-7, FR-8"
+    },
+    {
+      "id": "TASK-104a-5",
+      "title": "fake_claude_prd.sh fixture + integration test",
+      "category": "test",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a-3"
+      ],
+      "key_files": [
+        "tests/fixtures/fake_claude_prd.sh",
+        "tests/integration/test_init_e2e.py"
+      ],
+      "description": "OQ-1 из PRD: отдельный shell-stub эмулирующий PRD-разговор. Принимает идею через stdin / argv, печатает деterministic PRD-Markdown в файл по аргументам, плюс возвращает мок-tasks JSON для generate_tasks_dict. Integration test: testcontainers Postgres + CLAUDE_BIN=fake_claude_prd.sh + whilly init '<idea>' --headless --slug test-init → assert PRD-файл создан + plan записан в БД с N≥1 задачей + events таблица содержит no rows (worker не запускался, только plan import).",
+      "acceptance_criteria": [
+        "tests/fixtures/fake_claude_prd.sh executable",
+        "Stub детерминированный: одни и те же входы → одни и те же PRD + tasks",
+        "tests/integration/test_init_e2e.py покрывает SC-1, SC-2, SC-6 из PRD",
+        "Прогон занимает <30с против testcontainers Postgres"
+      ],
+      "test_steps": [
+        "test -x tests/fixtures/fake_claude_prd.sh",
+        "pytest tests/integration/test_init_e2e.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md SC-1, SC-2, SC-6"
+    },
+    {
+      "id": "TASK-104a-6",
+      "title": "User-facing docs + CHANGELOG entry",
+      "category": "docs",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-104a-3",
+        "TASK-104a-4",
+        "TASK-104a-5"
+      ],
+      "key_files": [
+        "docs/Whilly-Init-Guide.md",
+        "README.md",
+        "CHANGELOG.md"
+      ],
+      "description": "Документация для оператора: docs/Whilly-Init-Guide.md (как пользоваться, examples обоих режимов, recovery story при crashed wizard, troubleshooting); короткая секция в README про whilly init с указателем на guide; CHANGELOG entry под [4.1.0] ### Added — whilly init subcommand.",
+      "acceptance_criteria": [
+        "docs/Whilly-Init-Guide.md покрывает interactive + headless flow с copy-paste примерами",
+        "README.md имеет секцию 'whilly init' с 1-screen quickstart",
+        "CHANGELOG.md содержит запись '## [4.1.0] - YYYY-MM-DD' с под-разделом '### Added — whilly init'"
+      ],
+      "test_steps": [
+        "test -f docs/Whilly-Init-Guide.md",
+        "grep -q 'whilly init' README.md",
+        "grep -q '## \\[4\\.1\\.0\\]' CHANGELOG.md"
+      ],
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md Definition of Done #4, #5"
     },
     {
       "id": "TASK-104b",
