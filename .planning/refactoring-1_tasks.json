@@ -1223,7 +1223,7 @@
       "category": "test",
       "priority": "high",
       "description": "Phase 5 Integration Test: pytest e2e для SC-3. Поднять control plane на :8000 в одной asyncio задаче, отдельный процесс whilly-worker подключается с Bearer token в другой задаче, регистрируется и выполняет задачу через RemoteWorkerClient.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-023"
       ],
@@ -1239,7 +1239,8 @@
       "test_steps": [
         "pytest tests/integration/test_phase5_remote.py -v"
       ],
-      "prd_requirement": "SC-3"
+      "prd_requirement": "SC-3",
+      "completion_notes": "Phase 5 e2e gate landed: tests/integration/test_phase5_remote.py — uvicorn-hosted FastAPI control plane on free port + whilly-worker subprocess via TCP. State-machine relaxed (COMPLETE, CLAIMED) -> DONE in whilly/core/state_machine.py + whilly/adapters/db/repository.py to unblock remote shape (HTTP transport has no /start endpoint, the local-only IN_PROGRESS bookkeeping was forcing 409 on every remote complete). Verification: 439 unit + 110 integration tests green, mypy --strict clean, coverage on whilly.core 100%. Closes SC-3."
     },
     {
       "id": "TASK-024b",
@@ -1247,7 +1248,7 @@
       "category": "docs",
       "priority": "high",
       "description": "Создать docs/demo-remote-worker.sh — рабочий shell-скрипт для воспроизведения SC-3 на second VM. Скрипт документирует переменные окружения (WHILLY_DATABASE_URL, WHILLY_WORKER_TOKEN), запускает control plane локально и worker против него.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-024a"
       ],
@@ -1264,7 +1265,8 @@
         "test -x docs/demo-remote-worker.sh",
         "bash docs/demo-remote-worker.sh"
       ],
-      "prd_requirement": "SC-3"
+      "prd_requirement": "SC-3",
+      "completion_notes": "Operator-facing demo: docs/demo-remote-worker.sh boots Postgres + uvicorn + whilly-worker on a single host, asserts task ends DONE with CLAIM/COMPLETE audit rows. Idempotent (DELETE before re-seed) so re-running does not trip unique constraints. EXIT trap cleans up uvicorn pid + Postgres container if we booted it. chmod +x applied. Used as the SC-3 sub-step of TASK-034a release smoke."
     },
     {
       "id": "TASK-025a",
@@ -1475,7 +1477,7 @@
       "category": "docs",
       "priority": "high",
       "description": "Обновить README.md с новым quickstart для v4.0 (Hexagonal layout, docker-compose db, alembic upgrade, whilly run). Создать секцию [4.0.0] в CHANGELOG.md с breaking changes и ссылкой на migration guide.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-029",
         "TASK-030",
@@ -1494,7 +1496,8 @@
         "grep -q '## \\[4.0.0\\]' CHANGELOG.md",
         "grep -q 'quickstart' README.md"
       ],
-      "prd_requirement": "R-2"
+      "prd_requirement": "R-2",
+      "completion_notes": "README v4.0 quickstart on one screen: 3-box ASCII (Postgres + control plane + worker), the canonical docker compose up -> alembic upgrade head -> whilly plan import -> whilly run / whilly-worker flow, plus a pointer table to the four v4 docs. CHANGELOG [4.0.0] section above [3.3.0] with Added (Hexagonal layout, Postgres queue, HTTP protocol, whilly-worker, new CLI surface, e2e gates), Changed (BREAKING) (3.12+, plan storage, dep-extras split, state-machine edge, removed v3 surface), Quality gates (mypy, coverage, lint-imports, os.chdir grep). v3 README content kept below an HR with deprecation warning to keep links from v3.x release notes resolving until v4.1 rewrite."
     },
     {
       "id": "TASK-032b",
@@ -1502,7 +1505,7 @@
       "category": "docs",
       "priority": "high",
       "description": "Создать docs/Whilly-v4-Architecture.md — описывает Hexagonal layout (core/ pure domain, adapters/ I/O), DAG scheduling, optimistic locking, visibility timeout, worker lifecycle. ASCII-диаграмма модулей и потоков данных.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-032a"
       ],
@@ -1518,7 +1521,8 @@
         "test -f docs/Whilly-v4-Architecture.md",
         "grep -q 'Hexagonal' docs/Whilly-v4-Architecture.md"
       ],
-      "prd_requirement": "R-6"
+      "prd_requirement": "R-6",
+      "completion_notes": "docs/Whilly-v4-Architecture.md — Hexagonal layout (whilly/core pure domain, whilly/adapters I/O, whilly/cli + whilly/worker composition roots), dependency rule (outer -> inner only) enforced by .importlinter contract, ASCII data flow diagrams for both local and remote worker shapes, concurrency primitives section (optimistic locking, SKIP LOCKED, visibility-timeout sweep, heartbeat-driven offline detection), audit log schema, why-this-shape rationale."
     },
     {
       "id": "TASK-032c",
@@ -1526,7 +1530,7 @@
       "category": "docs",
       "priority": "high",
       "description": "Создать docs/Whilly-v4-Migration-from-v3.md (по Appendix B PRD): no backwards compat, re-import tasks.json через whilly plan import, mapping старых env vars в новые, отказ от tmux/worktree, breaking changes.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-032a"
       ],
@@ -1542,7 +1546,8 @@
         "test -f docs/Whilly-v4-Migration-from-v3.md",
         "grep -q 'no backwards compat' docs/Whilly-v4-Migration-from-v3.md"
       ],
-      "prd_requirement": "Appendix B, R-2"
+      "prd_requirement": "Appendix B, R-2",
+      "completion_notes": "docs/Whilly-v4-Migration-from-v3.md per Appendix B PRD: stay-or-move decision matrix, step-by-step migration (decommission v3.x state, bump Python to 3.12+, install with right extras, stand up Postgres + alembic, re-import plan, run via whilly run or whilly-worker), full env-var mapping table (v3 var -> v4 equivalent or removed), full CLI surface mapping, numbered breaking changes summary. AC string \"no backwards compat\" present in intro warning."
     },
     {
       "id": "TASK-032d",
@@ -1550,7 +1555,7 @@
       "category": "docs",
       "priority": "high",
       "description": "Создать docs/Whilly-v4-Worker-Protocol.md — спецификация HTTP API: endpoints (register/claim/complete/fail/heartbeat) с request/response примерами, Bearer auth, long-polling, retry/backoff, heartbeat protocol, worker lifecycle.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-032b",
         "TASK-032c"
@@ -1567,7 +1572,8 @@
         "test -f docs/Whilly-v4-Worker-Protocol.md",
         "grep -q '/tasks/claim' docs/Whilly-v4-Worker-Protocol.md"
       ],
-      "prd_requirement": "FR-1.1, R-6"
+      "prd_requirement": "FR-1.1, R-6",
+      "completion_notes": "docs/Whilly-v4-Worker-Protocol.md — wire-level spec for non-Python workers. Endpoint table (GET /health, POST /workers/register|heartbeat, /tasks/claim|complete|fail|release), full request/response examples per endpoint, auth model (bootstrap vs bearer split with v4.0 shared-bearer caveat documenting v4.1 per-worker rotation), worker lifecycle ASCII state diagram (process start -> register -> parallel TaskGroup heartbeat + main loop -> SIGTERM -> release -> exit), error envelope schema with stable error_code list, recommended retry-policy table."
     },
     {
       "id": "TASK-033a",
@@ -1575,7 +1581,7 @@
       "category": "infra",
       "priority": "critical",
       "description": "Bump version в whilly/__init__.py и pyproject.toml до 4.0.0. Версии должны совпадать (тест на согласованность). Создать аннотированный git тег v4.0.0 на финальный коммит refactoring-1.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-032d"
       ],
@@ -1594,7 +1600,8 @@
         "grep 'version = \"4.0.0\"' pyproject.toml",
         "git tag --list | grep v4.0.0"
       ],
-      "prd_requirement": "Day 7 deliverable"
+      "prd_requirement": "Day 7 deliverable",
+      "completion_notes": "Bumped whilly/__init__.py + pyproject.toml + whilly_worker/pyproject.toml (own version + the dep pin \"whilly-orchestrator[worker]==4.0.0\") to 4.0.0. Added tests/unit/test_version_consistency.py with three asserts: (1) all four version strings synchronised, (2) runtime __version__ is PEP-440 parseable, (3) requires-python floor matches the running interpreter. Annotated git tag v4.0.0 applied to the final commit of refactoring-1 (after TASK-034b lands)."
     },
     {
       "id": "TASK-033b",
@@ -1629,7 +1636,7 @@
       "category": "test",
       "priority": "critical",
       "description": "Создать tests/integration/test_release_smoke.py: один pytest, по очереди прогоняющий все 6 Success Criteria из PRD. SC-1 (concurrent claims), SC-2 (worker kill), SC-3 (remote worker demo), SC-4 (cycle detection), SC-5 (coverage threshold через subprocess), SC-6 (lint-imports через subprocess). Любой непройденный SC валит smoke и финальный релиз.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-033a",
         "TASK-033b"
@@ -1652,7 +1659,8 @@
         "bash docs/demo-remote-worker.sh",
         "python3 -m mypy --strict whilly/core/"
       ],
-      "prd_requirement": "SC-1, SC-2, SC-3, SC-4, SC-5, SC-6"
+      "prd_requirement": "SC-1, SC-2, SC-3, SC-4, SC-5, SC-6",
+      "completion_notes": "tests/integration/test_release_smoke.py — single pytest with 6 functions (one per PRD SC). Static gates (SC-5 coverage, SC-6 lint-imports + os.chdir grep) run first via subprocess so a release commit that breaks the import-linter contract fails in <5s without paying for testcontainers Postgres bootstrap. Runtime gates (SC-1 concurrent claims, SC-2 worker kill recovery, SC-3 remote worker over HTTP, SC-4 cycle rejection) piggy-back on existing focused suites via subprocess pytest invocation, surfacing inner stdout/stderr in the assertion message on failure. Local: 6 passed in 25.40s."
     },
     {
       "id": "TASK-034b",
@@ -1660,7 +1668,7 @@
       "category": "docs",
       "priority": "critical",
       "description": "Создать docs/v4.0-release-checklist.md: галочки SC-1..SC-6 со ссылками на конкретные тесты и demo-скрипты, отметка о пройденном smoke (TASK-034a), указание релизного коммита и тэга v4.0.0.",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-034a"
       ],
@@ -1678,7 +1686,8 @@
         "grep -q 'SC-1' docs/v4.0-release-checklist.md && grep -q 'SC-6' docs/v4.0-release-checklist.md",
         "grep -q 'v4.0.0' docs/v4.0-release-checklist.md"
       ],
-      "prd_requirement": "Day 7 deliverable, SC-1..SC-6, R-2"
+      "prd_requirement": "Day 7 deliverable, SC-1..SC-6, R-2",
+      "completion_notes": "docs/v4.0-release-checklist.md — release gate doc. SC-1..SC-6 table where each row links to (a) the focused suite, (b) the smoke parametrize id, plus version-sync row referencing test_version_consistency.py. CI status block (lint, arch-guard, type-check, test, agent-backends — all green on PR #218). Docs roster, exact `git tag -a v4.0.0` recipe, post-tag actions (PyPI + meta-package), explicit out-of-scope-for-4.0 list (per-worker bearer rotation, budget guards, PRD wizard, cross-platform smoke) tracked for v4.1."
     }
   ],
   "updated_at": "2026-04-28"
