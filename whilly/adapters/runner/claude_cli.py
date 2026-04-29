@@ -49,6 +49,7 @@ import os
 from collections.abc import Sequence
 from typing import Final
 
+from whilly.adapters.runner import proxy
 from whilly.adapters.runner.result_parser import AgentResult, parse_output
 from whilly.core.models import Task
 
@@ -172,11 +173,17 @@ async def _spawn_and_collect(prompt: str, model: str) -> AgentResult:
     embedded shell tools — we don't want that to crash the wrapper).
     """
     cmd = build_command(prompt, model)
+    # TASK-109-3: inject HTTPS_PROXY/NO_PROXY into the spawned env only,
+    # so worker-side asyncpg / httpx (running in the parent process)
+    # keep going direct to Postgres / control plane.
+    settings = proxy.resolve_proxy_settings()
+    child_env = proxy.build_subprocess_env(os.environ, settings)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env,
         )
     except FileNotFoundError:
         log.error("claude binary not found at %r — set CLAUDE_BIN to override", _claude_bin())
