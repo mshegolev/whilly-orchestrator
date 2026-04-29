@@ -4,6 +4,163 @@
   "description": "Backlog задач, явно отложенных из v4.0 в секцию 'Out of scope for v4.0' release-checklist'а. Не баги, а сознательные scope-cuts: per-worker bearer rotation, budget guards, --reset, миграция v3 фич (PRD wizard / TRIZ analyzer / Decision Gate), удаление cli_legacy, file-based audit mirror, cross-platform smoke, Forge pipeline. Каждая задача связана с конкретной строкой docs/v4.0-release-checklist.md секции Out-of-scope-for-v40.",
   "tasks": [
     {
+      "id": "TASK-109",
+      "title": "Claude proxy / SSH-tunnel integration (epic)",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-109-1",
+        "TASK-109-2",
+        "TASK-109-3",
+        "TASK-109-4",
+        "TASK-109-5"
+      ],
+      "key_files": [
+        "docs/PRD-v41-claude-proxy.md",
+        "whilly/adapters/runner/proxy.py",
+        "whilly/adapters/runner/claude_cli.py",
+        "whilly/prd_generator.py"
+      ],
+      "description": "Epic. Worker и whilly init должны проксировать ТОЛЬКО Claude subprocess через HTTPS_PROXY (gpt-proxy SSH tunnel pattern), оставляя Postgres / control plane direct через NO_PROXY. PRD: docs/PRD-v41-claude-proxy.md. Декомпозирован на 5 sub-tasks 109-1..5.",
+      "acceptance_criteria": [
+        "Все 5 sub-task в done",
+        "PRD docs/PRD-v41-claude-proxy.md SC-1..SC-5 зелёные",
+        "WHILLY_CLAUDE_PROXY_URL=http://127.0.0.1:11112 + поднятый туннель → whilly init --headless успешно работает против реального Anthropic API"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_claude_proxy_helpers.py tests/unit/test_claude_proxy_probe.py tests/unit/test_claude_subprocess_env.py tests/unit/test_cli_init_proxy.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md (SC-1..SC-5)"
+    },
+    {
+      "id": "TASK-109-1",
+      "title": "whilly/adapters/runner/proxy.py — pure helpers",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [],
+      "key_files": [
+        "whilly/adapters/runner/proxy.py",
+        "tests/unit/test_claude_proxy_helpers.py"
+      ],
+      "description": "Новый модуль с двумя pure функциями: ProxySettings dataclass + resolve_proxy_settings(cli_url, env_url, default_no_proxy) (CLI flag > WHILLY_CLAUDE_PROXY_URL > inherited HTTPS_PROXY > None) + build_subprocess_env(parent_env, settings) -> dict (no diff если url=None; HTTPS_PROXY+NO_PROXY если url не None). Без I/O.",
+      "acceptance_criteria": [
+        "ProxySettings dataclass: url: str | None, no_proxy: str",
+        "resolve_proxy_settings правильная иерархия (CLI > env > inherited > None)",
+        "build_subprocess_env: url=None → parent_env unchanged; url='...' → новый dict с HTTPS_PROXY+NO_PROXY",
+        "8+ unit-тестов на каждый branch"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_claude_proxy_helpers.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-1, FR-5, FR-6"
+    },
+    {
+      "id": "TASK-109-2",
+      "title": "Pre-flight TCP probe with friendly error",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-109-1"
+      ],
+      "key_files": [
+        "whilly/adapters/runner/proxy.py",
+        "tests/unit/test_claude_proxy_probe.py"
+      ],
+      "description": "probe_proxy_or_raise(url, timeout=0.5) -> None. Парсит URL, делает socket.create_connection. На fail → RuntimeError с подсказкой про SSH tunnel.",
+      "acceptance_criteria": [
+        "Success → None silently",
+        "ConnectionRefused / timeout → RuntimeError с подсказкой 'ssh -fN -L ...'",
+        "Unit-тест с фейковым TCP-сервером + closed-port случай"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_claude_proxy_probe.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-3, SC-3"
+    },
+    {
+      "id": "TASK-109-3",
+      "title": "Wire proxy env into Claude subprocess call sites",
+      "category": "feat",
+      "priority": "high",
+      "status": "pending",
+      "dependencies": [
+        "TASK-109-1"
+      ],
+      "key_files": [
+        "whilly/adapters/runner/claude_cli.py",
+        "whilly/prd_generator.py",
+        "tests/unit/test_claude_subprocess_env.py"
+      ],
+      "description": "В двух subprocess sites (claude_cli и prd_generator._call_claude) — резолвить ProxySettings и передавать env={**os.environ, **diff} в subprocess. Whilly process сам остаётся без HTTPS_PROXY.",
+      "acceptance_criteria": [
+        "claude_cli.py использует build_subprocess_env",
+        "prd_generator._call_claude — то же самое",
+        "Worker process os.environ НЕ модифицирован",
+        "Unit-тесты с monkeypatch на subprocess.Popen / asyncio.create_subprocess_exec"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_claude_subprocess_env.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-2, SC-4"
+    },
+    {
+      "id": "TASK-109-4",
+      "title": "CLI flags --claude-proxy / --no-claude-proxy + probe wiring",
+      "category": "feat",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-109-2",
+        "TASK-109-3"
+      ],
+      "key_files": [
+        "whilly/cli/init.py",
+        "whilly/cli/run.py",
+        "tests/unit/test_cli_init_proxy.py"
+      ],
+      "description": "Флаги в whilly init и whilly run + probe один раз на старте если settings.url not None и WHILLY_CLAUDE_PROXY_PROBE=1. Probe fail → exit 2 с подсказкой.",
+      "acceptance_criteria": [
+        "--claude-proxy URL переопределяет env",
+        "--no-claude-proxy отключает proxy даже если env set",
+        "Probe fail → exit 2",
+        "whilly init --help показывает оба флага"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_cli_init_proxy.py -v"
+      ],
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-6, SC-1, SC-3"
+    },
+    {
+      "id": "TASK-109-5",
+      "title": "Whilly-Claude-Proxy-Guide + README + CHANGELOG",
+      "category": "docs",
+      "priority": "medium",
+      "status": "pending",
+      "dependencies": [
+        "TASK-109-3",
+        "TASK-109-4"
+      ],
+      "key_files": [
+        "docs/Whilly-Claude-Proxy-Guide.md",
+        "README.md",
+        "CHANGELOG.md"
+      ],
+      "description": "Гайд: env vars, CLI flags, SSH tunnel пример, systemd unit, troubleshooting. README — короткая секция. CHANGELOG [Unreleased] — Added.",
+      "acceptance_criteria": [
+        "docs/Whilly-Claude-Proxy-Guide.md покрывает env vars + CLI flags + SSH tunnel + systemd + troubleshooting",
+        "README.md имеет секцию про proxy",
+        "CHANGELOG [Unreleased] содержит WHILLY_CLAUDE_PROXY_URL"
+      ],
+      "test_steps": [
+        "test -f docs/Whilly-Claude-Proxy-Guide.md",
+        "grep -q 'WHILLY_CLAUDE_PROXY_URL' docs/Whilly-Claude-Proxy-Guide.md README.md CHANGELOG.md"
+      ],
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md NFR-4, Definition of Done #4, #5"
+    },
+    {
       "id": "TASK-101",
       "title": "Per-worker bearer rotation",
       "category": "feat",
