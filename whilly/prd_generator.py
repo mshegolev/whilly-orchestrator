@@ -363,8 +363,14 @@ def _call_claude(prompt: str, model: str) -> str:
     # --disallowedTools: запрещаем file-writing tools, иначе claude в -p режиме
     # пытается сохранить JSON через Write и вместо stdout-ответа печатает
     # "couldn't save — permissions blocked". Нам нужен чистый stdout.
+    #
+    # CLAUDE_BIN override (TASK-104a-5): тесты подменяют claude на shell-stub
+    # (tests/fixtures/fake_claude_prd.sh) тем же способом, что и worker
+    # runner делает в whilly/adapters/runner/claude_cli.py — через env var.
+    # Default "claude" сохраняет v3 поведение для всех остальных вызовов.
+    claude_bin = os.environ.get("CLAUDE_BIN", "claude")
     cmd = [
-        "claude",
+        claude_bin,
         "--model",
         model,
         "--disallowedTools",

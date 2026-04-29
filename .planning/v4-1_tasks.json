@@ -231,7 +231,7 @@
       "title": "fake_claude_prd.sh fixture + integration test",
       "category": "test",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-104a-3"
       ],
@@ -250,7 +250,8 @@
         "test -x tests/fixtures/fake_claude_prd.sh",
         "pytest tests/integration/test_init_e2e.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md SC-1, SC-2, SC-6"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md SC-1, SC-2, SC-6",
+      "completion_notes": "Created tests/fixtures/fake_claude_prd.sh — deterministic stub that detects which prompt was sent (Senior Product Manager → PRD-Markdown; Technical Project Manager → tasks JSON). Separate from fake_claude.sh (worker-loop stub) since shape requirements differ. Stub exits 1 on unmatched prompts to fail loudly if accidentally pointed at non-PRD callers. Extended whilly/prd_generator.py::_call_claude to read CLAUDE_BIN env var (mirroring whilly.adapters.runner.claude_cli). Created tests/integration/test_init_e2e.py with 3 cases: (1) headless creates PRD + imports plan to Postgres + verifies plans/tasks/events table state; (2) --no-import writes PRD but skips DB; (3) existing PRD + no --force aborts cleanly. All drive python -m whilly.cli init as a subprocess against testcontainers Postgres + the stub for full e2e. Verification: 3 integration tests passed in 2.40s, 509 unit tests still green, ruff + mypy + lint-imports clean."
     },
     {
       "id": "TASK-104a-6",
