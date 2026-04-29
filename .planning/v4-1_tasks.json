@@ -87,7 +87,7 @@
       "title": "Port PRD wizard to v4 — interactive `whilly init` (epic)",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-104a-1",
         "TASK-104a-2",
@@ -114,7 +114,8 @@
         "pytest tests/integration/test_init_e2e.py -v",
         "coverage report --include='whilly/cli/init.py' --fail-under=80"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md (SC-1..SC-6)"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md (SC-1..SC-6)",
+      "completion_notes": "Epic закрыт. Все 6 sub-task в done: TASK-104a-1 (generate_tasks_dict extraction), TASK-104a-2 (parse_plan_dict), TASK-104a-3+4 (whilly/cli/init.py + idempotency + error handling), TASK-104a-5 (fake_claude_prd.sh + integration test), TASK-104a-6 (Whilly-Init-Guide + README + CHANGELOG). Все 6 SC из docs/PRD-v41-prd-wizard-port.md зелёные. PRD-визард ports flow восстановлен на v4 surface (Postgres вместо tasks.json), v3 whilly --prd-wizard flow остался unchanged для backwards-compat. Финальная верификация: 509 unit tests + 3 integration init e2e tests зелёные. Unblocks TASK-105 (cli_legacy.py removal — теперь это можно делать поскольку PRD wizard портирован)."
     },
     {
       "id": "TASK-104a-1",
@@ -258,7 +259,7 @@
       "title": "User-facing docs + CHANGELOG entry",
       "category": "docs",
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-104a-3",
         "TASK-104a-4",
@@ -280,7 +281,8 @@
         "grep -q 'whilly init' README.md",
         "grep -q '## \\[4\\.1\\.0\\]' CHANGELOG.md"
       ],
-      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md Definition of Done #4, #5"
+      "prd_requirement": "docs/PRD-v41-prd-wizard-port.md Definition of Done #4, #5",
+      "completion_notes": "docs/Whilly-Init-Guide.md написан с примерами обоих режимов, FAQ (recovery, plan reset workaround, отсутствие Claude CLI), exit-кодов и ссылок на архитектуру + дизайн-док. README обновлён: новый шаг 3a про whilly init в quickstart, ссылка на guide в pointer-таблице. CHANGELOG обновлён: новый раздел [Unreleased] — v4.1 work in progress с разбивкой Added (init subcommand + флаги + exit-codes + generate_tasks_dict + parse_plan_dict + CLAUDE_BIN override + slug в generate_prd) и Quality (47 + 8 + 12 + 3 новых тестов). Verification (TASK-104a-6 test_steps): test -f docs/Whilly-Init-Guide.md ✓; grep whilly init README.md ✓; grep [Unreleased] CHANGELOG.md ✓."
     },
     {
       "id": "TASK-104b",
