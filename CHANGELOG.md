@@ -5,6 +5,53 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v4.1 work in progress
+
+### Added — `whilly init` subcommand (TASK-104a)
+
+- New CLI subcommand `whilly init "<idea>"` that combines the v3
+  PRD-wizard flow with v4 Postgres-backed plan storage. Produces
+  `docs/PRD-<slug>.md` via Claude (interactive in TTY, single-shot
+  outside) and imports the resulting task plan straight into Postgres
+  — no `tasks.json` ever materialised on disk. See
+  [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) for the
+  full surface.
+- Flags: `--slug` (explicit plan_id), `--interactive` /
+  `--headless` (force mode override), `--no-import` (write PRD only),
+  `--force` (overwrite existing PRD), `--model`, `--output-dir`.
+  TTY detection picks the default mode via `sys.stdin.isatty()`.
+- Exit-code contract: `0` success, `1` user error (validation, wizard
+  failure, plan-import failure), `2` env error
+  (`WHILLY_DATABASE_URL` unset), `130` `KeyboardInterrupt`.
+- New `whilly.prd_generator.generate_tasks_dict(prd_path, plan_id,
+  model)` — in-memory counterpart to `generate_tasks` for the v4
+  flow. Existing `generate_tasks` (v3 file-based) keeps working
+  unchanged.
+- New `whilly.adapters.filesystem.plan_io.parse_plan_dict(payload,
+  plan_id)` — in-memory counterpart to `parse_plan`. Reuses the
+  existing private `_plan_from_dict` validation helper.
+- `whilly.prd_generator._call_claude` now reads `CLAUDE_BIN` from
+  env (default `"claude"`) — same override pattern that
+  `whilly.adapters.runner.claude_cli` already used. Lets integration
+  tests substitute a deterministic stub
+  (`tests/fixtures/fake_claude_prd.sh`) without monkeypatching.
+- `whilly.prd_generator.generate_prd` accepts an opt-in `slug`
+  keyword. Default (`None`) preserves the v3 auto-derivation path
+  so the legacy `whilly --prd-wizard` flow stays unchanged.
+
+### Quality
+
+- 47 new unit tests in `tests/unit/test_cli_init.py` covering FR-1..FR-8
+  of [`docs/PRD-v41-prd-wizard-port.md`](docs/PRD-v41-prd-wizard-port.md).
+- 8 new unit tests for `parse_plan_dict` in
+  `tests/unit/test_plan_io.py`.
+- 12 new unit tests for `generate_tasks_dict` in
+  `tests/unit/test_prd_generator_dict.py` (first time
+  `prd_generator.py` has any unit tests).
+- 3 new integration tests in `tests/integration/test_init_e2e.py`
+  driving `python -m whilly.cli init` as a subprocess against
+  testcontainers Postgres + the deterministic Claude stub.
+
 ## [4.0.0] - 2026-04-29
 
 > **v4.0 is a big-bang rewrite.** The single-process Ralph-Wiggum-style loop

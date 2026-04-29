@@ -27,7 +27,11 @@ export WHILLY_DATABASE_URL=postgresql://whilly:whilly@localhost:5432/whilly
 pip install -e '.[server,dev]'        # control-plane install closure
 alembic upgrade head                  # applies whilly/adapters/db/migrations/versions/
 
-# 3. Import a plan (JSON in the v4 schema — see docs/Whilly-v4-Migration-from-v3.md)
+# 3a. Have an idea, not a plan? Run the PRD wizard — it generates both.
+whilly init "build a CLI tool for monitoring API endpoints" --slug api-monitor
+#   → docs/PRD-api-monitor.md saved + plan 'api-monitor' imported into Postgres
+
+# 3b. Already have tasks.json? Import directly.
 whilly plan import path/to/tasks.json
 whilly plan show <plan_id>            # ASCII DAG of the imported plan
 
@@ -56,11 +60,12 @@ lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
 
 | Topic | Where |
 |---|---|
+| `whilly init` — interactive PRD wizard + plan import | [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) |
 | Hexagonal layout, core/adapters split, scheduling, locks | [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) |
 | HTTP wire protocol — endpoints, auth, long-polling, retries | [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) |
 | v3 → v4 migration — env-var mapping, breaking changes | [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) |
 | Release checklist (SC-1..SC-6 gates) | [`docs/v4.0-release-checklist.md`](docs/v4.0-release-checklist.md) |
-| What changed in 4.0 | [`CHANGELOG.md`](CHANGELOG.md#400---2026-04-29) |
+| What changed in 4.0 / 4.1 | [`CHANGELOG.md`](CHANGELOG.md) |
 
 > ⚠️ **The rest of this README documents v3.x and is preserved for reference until the v4.1
 > rewrite of this document.** The v3 examples below (`whilly --tasks tasks.json`, tmux runner,
