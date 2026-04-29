@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
+from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, parse_plan_dict, serialize_plan
 from whilly.core.models import Plan, Priority, Task, TaskStatus
 
 
@@ -429,3 +429,97 @@ def test_parse_plan_task_not_object(tmp_path: Path) -> None:
 
     with pytest.raises(PlanParseError, match="task at index 0 is not a JSON object"):
         parse_plan(target)
+
+
+# ---------------------------------------------------------------------------
+# parse_plan_dict — TASK-104a-2: in-memory counterpart for whilly init flow.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_plan_dict_returns_same_shape_as_parse_plan() -> None:
+    """Same input, same (Plan, [Task]) regardless of whether it came from disk."""
+    payload = _minimal_plan_dict()
+
+    plan, tasks = parse_plan_dict(payload)
+
+    assert isinstance(plan, Plan)
+    assert plan.id == "Workshop A"
+    assert plan.name == "Workshop A"
+    assert len(tasks) == 1
+    assert tasks[0] == Task(
+        id="TASK-001",
+        status=TaskStatus.PENDING,
+        priority=Priority.HIGH,
+        description="Do the thing.",
+    )
+    assert plan.tasks == tuple(tasks)
+
+
+def test_parse_plan_dict_keyword_plan_id_wins_over_payload() -> None:
+    """plan_id kwarg overrides whatever the payload carries.
+
+    Slug ownership lives in the CLI per PRD FR-3 — even if the wizard's
+    JSON output happens to set plan_id, the caller-provided value must
+    take precedence.
+    """
+    payload = _minimal_plan_dict(plan_id="from-payload")
+
+    plan, _ = parse_plan_dict(payload, plan_id="from-cli")
+
+    assert plan.id == "from-cli"
+
+
+def test_parse_plan_dict_no_plan_id_falls_back_to_project() -> None:
+    """Without an explicit plan_id (kwarg or in payload) — uses project as id.
+
+    Same fallback semantics as parse_plan; tested separately so a future
+    divergence between the two surfaces fails this test specifically.
+    """
+    payload = _minimal_plan_dict()  # no plan_id key
+
+    plan, _ = parse_plan_dict(payload)
+
+    assert plan.id == "Workshop A"
+
+
+def test_parse_plan_dict_does_not_mutate_caller_payload() -> None:
+    """Defensive: caller's dict must come back untouched after override.
+
+    The override path uses {**payload, "plan_id": ...} to apply the kwarg,
+    which builds a shallow copy. A naive payload[...]= would mutate the
+    caller's dict — this test pins the no-mutation contract.
+    """
+    payload = _minimal_plan_dict(plan_id="original")
+    snapshot = json.loads(json.dumps(payload))  # deep copy via JSON round-trip
+
+    parse_plan_dict(payload, plan_id="overridden")
+
+    assert payload == snapshot
+
+
+def test_parse_plan_dict_rejects_non_dict_input() -> None:
+    """Top-level not a dict → PlanParseError before we look at any field."""
+    with pytest.raises(PlanParseError, match="must be a dict"):
+        parse_plan_dict("not a dict")  # type: ignore[arg-type]
+
+
+def test_parse_plan_dict_rejects_empty_plan_id_kwarg() -> None:
+    """Empty plan_id override is a programming error — surface it loudly."""
+    with pytest.raises(PlanParseError, match="non-empty string"):
+        parse_plan_dict(_minimal_plan_dict(), plan_id="")
+
+
+def test_parse_plan_dict_propagates_validation_errors() -> None:
+    """Same validation as parse_plan — missing required field surfaces error."""
+    bad = _minimal_plan_dict(tasks=[{"id": "TASK-X", "status": "PENDING"}])
+
+    with pytest.raises(PlanParseError, match="missing required field"):
+        parse_plan_dict(bad)
+
+
+def test_parse_plan_dict_source_label_is_dict_marker() -> None:
+    """Error messages use ``<dict>`` instead of a path so operators see surface."""
+    bad = {"project": "X"}  # tasks missing entirely
+
+    with pytest.raises(PlanParseError, match=r"<dict>:"):
+        parse_plan_dict(bad)
