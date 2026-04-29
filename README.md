@@ -61,6 +61,7 @@ lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
 | Topic | Where |
 |---|---|
 | `whilly init` — interactive PRD wizard + plan import | [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) |
+| Claude API через HTTPS-proxy / SSH-tunnel (`WHILLY_CLAUDE_PROXY_URL`) | [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md) |
 | Hexagonal layout, core/adapters split, scheduling, locks | [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) |
 | HTTP wire protocol — endpoints, auth, long-polling, retries | [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) |
 | v3 → v4 migration — env-var mapping, breaking changes | [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) |
