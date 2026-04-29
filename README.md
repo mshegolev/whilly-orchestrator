@@ -1,5 +1,73 @@
 # Whilly Orchestrator
 
+> 🚀 **v4.0 has shipped.** Whilly is now a distributed orchestrator — Postgres-backed task queue,
+> FastAPI control plane, remote workers over HTTP. The README below covers the v4 quickstart;
+> v3.x lives at tag [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final)
+> with critical bugfixes only. **There is no backwards compatibility** with v3.x runtime state —
+> see [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) before upgrading.
+
+## v4.0 quickstart
+
+Three boxes / containers / VMs talk to each other:
+
+```
+┌─────────────────────────┐         ┌────────────────────────┐         ┌────────────────────────┐
+│  Postgres 15+           │ ◄────── │  Control plane         │ ◄────── │  whilly-worker         │
+│  (task queue, audit log)│ asyncpg │  FastAPI + asyncpg     │  HTTP   │  httpx → claim → run   │
+└─────────────────────────┘         │  whilly run / dashboard│  TLS    │  Claude CLI subprocess │
+                                    └────────────────────────┘         └────────────────────────┘
+```
+
+```bash
+# 1. Postgres on the control-plane box (or any reachable host)
+docker compose up -d                  # boots postgres:15-alpine via docker-compose.yml
+export WHILLY_DATABASE_URL=postgresql://whilly:whilly@localhost:5432/whilly
+
+# 2. Schema migrations
+pip install -e '.[server,dev]'        # control-plane install closure
+alembic upgrade head                  # applies whilly/adapters/db/migrations/versions/
+
+# 3. Import a plan (JSON in the v4 schema — see docs/Whilly-v4-Migration-from-v3.md)
+whilly plan import path/to/tasks.json
+whilly plan show <plan_id>            # ASCII DAG of the imported plan
+
+# 4a. All-in-one local mode — control plane embedded in the worker process
+whilly run --plan <plan_id>
+
+# 4b. Distributed mode — control plane + remote worker on different hosts
+#     a) on the control-plane box:
+export WHILLY_WORKER_TOKEN=$(openssl rand -hex 32)
+export WHILLY_WORKER_BOOTSTRAP_TOKEN=$(openssl rand -hex 32)
+uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
+
+#     b) on the worker box (only needs httpx — pull the slim install):
+pip install whilly-worker             # meta-package; equivalent to whilly-orchestrator[worker]
+whilly-worker \
+    --connect https://control.example.com:8000 \
+    --token "$WHILLY_WORKER_TOKEN" \
+    --plan <plan_id>
+
+# 5. Watch progress live
+whilly dashboard --plan <plan_id>     # Rich Live TUI over the tasks table
+```
+
+A complete reproducible SC-3 demo (Postgres + control plane + remote worker, all on one host)
+lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
+
+| Topic | Where |
+|---|---|
+| Hexagonal layout, core/adapters split, scheduling, locks | [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) |
+| HTTP wire protocol — endpoints, auth, long-polling, retries | [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) |
+| v3 → v4 migration — env-var mapping, breaking changes | [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) |
+| Release checklist (SC-1..SC-6 gates) | [`docs/v4.0-release-checklist.md`](docs/v4.0-release-checklist.md) |
+| What changed in 4.0 | [`CHANGELOG.md`](CHANGELOG.md#400---2026-04-29) |
+
+> ⚠️ **The rest of this README documents v3.x and is preserved for reference until the v4.1
+> rewrite of this document.** The v3 examples below (`whilly --tasks tasks.json`, tmux runner,
+> plan-level workspace, etc.) **do not work on v4** — see the migration guide for replacements.
+
+---
+
 [![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![PyPI downloads](https://img.shields.io/pypi/dm/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)

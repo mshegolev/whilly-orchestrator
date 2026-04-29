@@ -5,6 +5,88 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-04-29
+
+> **v4.0 is a big-bang rewrite.** The single-process Ralph-Wiggum-style loop
+> from v3.x has been replaced by a distributed orchestrator: a Postgres-backed
+> task queue, a FastAPI control plane, and remote workers that talk to it
+> over HTTP. There is **no backwards compatibility** with v3.x runtime state —
+> see [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md)
+> for the migration path. The v3.x line stays available at tag
+> [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final)
+> for teams that need it.
+
+### Added
+
+- **Hexagonal architecture** (PRD TC-8 / SC-6). New top-level layout:
+  `whilly/core/` (pure domain — zero external deps), `whilly/adapters/`
+  (db / transport / runner / filesystem), `whilly/cli/` (v4 sub-CLI),
+  `whilly/worker/` (local + remote loops). The `.importlinter`
+  core-purity contract enforces the boundary: `whilly.core` cannot
+  import asyncpg, httpx, fastapi, subprocess, uvicorn, or alembic — CI
+  fails on regression.
+- **Postgres-backed task queue** with optimistic locking, `SKIP LOCKED`
+  claim, visibility-timeout sweep, heartbeat-driven offline detection.
+  Schema in `whilly/adapters/db/schema.sql`; migrations under
+  `whilly/adapters/db/migrations/` driven by Alembic.
+- **Remote-worker HTTP protocol** (PRD FR-1.x). Endpoints:
+  `POST /workers/register`, `POST /workers/{id}/heartbeat`,
+  `POST /tasks/claim` (long-polled), `POST /tasks/{id}/complete`,
+  `POST /tasks/{id}/fail`, `POST /tasks/{id}/release`. Bearer + bootstrap
+  token auth split. Full spec in
+  [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md).
+- **`whilly-worker` console script** — standalone remote-worker entry
+  point. Two equivalent install routes: `pip install whilly-orchestrator[worker]`
+  (httpx-only extras) or `pip install whilly-worker` (meta-package).
+- **New CLI surface**: `whilly plan {import,export,show}`, `whilly run`
+  (local worker composition root), `whilly dashboard` (Rich Live TUI
+  over the tasks table).
+- **End-to-end gates** for each PRD success criterion:
+  `tests/integration/test_phase{1..6}*.py` plus
+  `tests/integration/test_release_smoke.py`.
+- **Operator-facing demo**: `docs/demo-remote-worker.sh` reproduces SC-3
+  on a single host (control plane + remote worker over loopback HTTP).
+
+### Changed (BREAKING)
+
+- **`requires-python = ">=3.12"`** (was `>=3.10`). v4 uses
+  `asyncio.TaskGroup` and `@override` from `typing` which need 3.12+.
+  3.10/3.11 cells were removed from the CI matrix.
+- **Plan storage moved off disk into Postgres.** `tasks.json` is now an
+  *import format*, not the runtime source of truth. v3.x state files
+  (`.whilly_state.json`, `.whilly_workspaces/`) are not read by v4 —
+  re-import via `whilly plan import path/to/tasks.json`.
+- **Dependency closure split into extras.** `pip install whilly-orchestrator`
+  no longer pulls every backend; pick `[worker]` (httpx) or `[server]`
+  (asyncpg + fastapi + uvicorn + alembic + sqlalchemy) or `[all]`
+  based on deployment shape.
+- **State machine: `(COMPLETE, CLAIMED) → DONE` is now a valid edge**
+  (was rejected in v3). Required for the remote-worker shape since
+  the HTTP transport doesn't expose `/tasks/{id}/start` — see
+  `whilly/core/state_machine.py` docstring.
+- **Removed surface**: tmux runner, plan-level workspace, per-task
+  worktrees, `--workspace` / `--worktree` flags, interactive menu.
+  Legacy v3 CLI lives in `whilly/cli_legacy.py` for one release cycle
+  and will be removed in a v4.1+ follow-up.
+
+### Quality gates
+
+- **`mypy --strict whilly/core/`** — pure domain layer is strictly
+  typed; CI fails on any new untyped def. Currently green: 5 source
+  files, 0 issues.
+- **`coverage report --include='whilly/core/*' --fail-under=80`** —
+  coverage gate live in CI; actual coverage 100% (233 stmts, 74
+  branches, 0 misses).
+- **`lint-imports`** — import-linter contract `core-purity` blocks
+  `whilly.core` from importing I/O / transport modules.
+- **`grep -rnE '\bos\.(chdir|getcwd)\b' whilly/core/`** — CI grep step
+  catches stdlib I/O regressions that import-linter can't see.
+
+See also: [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md),
+[`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md),
+[`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md),
+[`docs/v4.0-release-checklist.md`](docs/v4.0-release-checklist.md).
+
 ## [3.3.0] - 2026-04-24
 
 ### Changed (BREAKING)
