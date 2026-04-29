@@ -1212,12 +1212,50 @@ async def _async_apply(
     own per-row transactions inside :meth:`skip_task`. The gate
     iteration intentionally does *not* share the import transaction:
     we want every task imported even if a later ``skip_task`` raises.
+
+    Cross-plan safety (round-2 scrutiny fix)
+    ----------------------------------------
+    ``tasks.id`` is the schema's primary key — globally unique across
+    all plans. Combined with the import path's ``ON CONFLICT (id) DO
+    NOTHING`` semantics, a task id present in this plan's JSON file
+    might already exist in the database under a *different* ``plan_id``
+    (e.g. an operator copy-pasted ``T-OK-1`` between two plan files).
+    In that case the row in ``tasks`` belongs to the other plan, and
+    ``--strict`` calling :meth:`skip_task` against ``task.id`` would
+    flip *that* row to SKIPPED — a cross-plan mutation bug.
+
+    Mitigation: after the INSERT transaction commits, fetch the set of
+    task ids that actually live under *our* ``plan_id`` and gate-iterate
+    only those. Any parsed-from-file task whose id does not appear in
+    that set is reported as a collision warning (stderr) instead of
+    being skipped. This covers three observable scenarios cleanly:
+
+    * tasks freshly inserted by this apply → present in ``ours_ids``;
+    * tasks pre-existing for *this* plan (idempotent re-run) → present;
+    * tasks colliding with another plan's id → absent → never skipped.
+
+    The follow-up SELECT runs once per apply (cheap; one round trip
+    after the import transaction). It uses the same ``plan_id``
+    ``WHERE`` clause that ``_select_plan_with_tasks`` uses, so a future
+    refactor would only need to touch one SQL string.
     """
     pool = await create_pool(dsn)
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await _insert_plan_and_tasks(conn, plan, tasks)
+
+            # Snapshot the set of task ids that actually live under
+            # our plan_id *after* the import committed. Used by the
+            # strict iteration below to refuse to skip tasks whose
+            # primary-key row belongs to a different plan (round-2
+            # scrutiny finding B1 — see the docstring section
+            # "Cross-plan safety" above).
+            owned_id_rows = await conn.fetch(
+                "SELECT id FROM tasks WHERE plan_id = $1",
+                plan.id,
+            )
+            owned_ids: set[TaskId] = {row["id"] for row in owned_id_rows}
 
         repo = TaskRepository(pool)
         skipped: list[TaskId] = []
@@ -1227,6 +1265,28 @@ async def _async_apply(
             if verdict.kind == GateVerdictKind.ALLOW:
                 continue
             if strict:
+                # Cross-plan safety guard: if the task id from the
+                # parsed file is not present under *our* plan_id in
+                # the database (because ``ON CONFLICT (id) DO NOTHING``
+                # left a pre-existing row owned by a different plan
+                # untouched), refuse to skip it — the SKIPPED transition
+                # would mutate the other plan's row. Surface a
+                # structured warning so the operator can investigate
+                # the id collision in their plan files.
+                if task.id not in owned_ids:
+                    logger.warning(
+                        "plan apply --strict: task %s not owned by plan %s "
+                        "(primary-key collision with another plan); refusing to skip",
+                        task.id,
+                        plan.id,
+                    )
+                    print(
+                        "whilly plan apply: warning: refusing to skip "
+                        f"{task.id!r} — task id collides with another plan's "
+                        f"row (this plan {plan.id!r} did not insert it).",
+                        file=sys.stderr,
+                    )
+                    continue
                 # ``task.version`` is the version we just inserted (0
                 # by default); the row was created in this same call
                 # so no other writer can have advanced it. The
