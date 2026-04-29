@@ -8,6 +8,7 @@ Public surface is re-exported here for ergonomic ``from whilly.core import ...``
 usage, but the canonical home of each symbol is its submodule (e.g. ``models``).
 """
 
+from whilly.core.gates import GateVerdict, GateVerdictKind, evaluate_decision_gate
 from whilly.core.models import (
     Event,
     Plan,
@@ -23,6 +24,8 @@ from whilly.core.state_machine import StateError, Transition, apply_transition
 
 __all__ = [
     "Event",
+    "GateVerdict",
+    "GateVerdictKind",
     "Plan",
     "PlanId",
     "Priority",
@@ -34,4 +37,5 @@ __all__ = [
     "WorkerHandle",
     "WorkerId",
     "apply_transition",
+    "evaluate_decision_gate",
 ]
