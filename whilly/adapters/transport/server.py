@@ -164,6 +164,19 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
+from whilly.api.event_flusher import (
+    DEFAULT_BATCH_LIMIT as EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
+)
+from whilly.api.event_flusher import (
+    DEFAULT_DRAIN_TIMEOUT_SECONDS as EVENT_FLUSHER_DEFAULT_DRAIN_TIMEOUT_SECONDS,
+)
+from whilly.api.event_flusher import (
+    DEFAULT_FLUSH_INTERVAL_SECONDS as EVENT_FLUSHER_DEFAULT_FLUSH_INTERVAL_SECONDS,
+)
+from whilly.api.event_flusher import (
+    EVENT_FLUSHER_TASK_NAME,
+    EventFlusher,
+)
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
@@ -571,6 +584,10 @@ def create_app(
     sweep_interval_seconds: float = SWEEP_INTERVAL_DEFAULT_SECONDS,
     heartbeat_timeout_seconds: int = HEARTBEAT_TIMEOUT_DEFAULT_SECONDS,
     offline_worker_sweep_interval_seconds: float = OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS,
+    event_flush_interval_seconds: float = EVENT_FLUSHER_DEFAULT_FLUSH_INTERVAL_SECONDS,
+    event_batch_limit: int = EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
+    event_drain_timeout_seconds: float = EVENT_FLUSHER_DEFAULT_DRAIN_TIMEOUT_SECONDS,
+    event_checkpoint_dir: str | None = None,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -718,6 +735,13 @@ def create_app(
     bearer_dep: IdentityBindingAuthDependency = make_db_bearer_auth(repo, legacy_token=legacy_worker_token)
     bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
 
+    # Event flusher (TASK-106). Construction is cheap and non-async — it
+    # just allocates an :class:`asyncio.Queue` and stashes config. The
+    # actual coroutine is spawned inside the lifespan TaskGroup below.
+    flusher_checkpoint_dir = (
+        event_checkpoint_dir if event_checkpoint_dir is not None else os.environ.get("WHILLY_EVENT_FLUSHER_STATE_DIR")
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Stash pool + repo + auth deps on app.state so handlers added
@@ -738,6 +762,23 @@ def create_app(
         # reflective inspection.
         sweep_stop = asyncio.Event()
         app.state.sweep_stop = sweep_stop
+        # Construct the flusher inside the lifespan so its
+        # :class:`asyncio.Queue` is bound to the running event loop
+        # (constructing it at module import time would bind the queue
+        # to whatever loop happened to be current then — fine in tests
+        # but a foot-gun in multi-loop deployments).
+        flusher = EventFlusher(
+            pool,
+            batch_limit=event_batch_limit,
+            flush_interval=event_flush_interval_seconds,
+            drain_timeout=event_drain_timeout_seconds,
+            checkpoint_dir=flusher_checkpoint_dir,
+        )
+        app.state.event_flusher = flusher
+        app.state.event_queue = flusher.queue
+        # ``event_flusher_idle_polls`` lives on the flusher instance
+        # itself (see :class:`EventFlusher.idle_polls`); validators read
+        # it via ``app.state.event_flusher.idle_polls`` (VAL-OBS-013).
         try:
             # ``asyncio.TaskGroup`` owns the periodic background sweeps
             # for the duration of the app's lifespan. Tasks are created
@@ -778,6 +819,16 @@ def create_app(
                     ),
                     name="whilly-offline-worker-sweep",
                 )
+                # Lifespan event flusher (TASK-106, VAL-OBS-001..017).
+                # Owned by the same TaskGroup so a hard crash in any of
+                # the three coroutines unwinds the whole supervision
+                # boundary; ``stop`` is shared so a single signal stops
+                # all three at once.
+                event_flusher_task = tg.create_task(
+                    flusher.run(sweep_stop),
+                    name=EVENT_FLUSHER_TASK_NAME,
+                )
+                app.state.event_flusher_task = event_flusher_task
                 try:
                     yield
                 finally:
@@ -788,6 +839,19 @@ def create_app(
                     # audit events). Setting the event is idempotent;
                     # safe under normal-path and crash-path exits alike.
                     sweep_stop.set()
+                    # Drain the flusher queue *before* the TaskGroup
+                    # awaits the run coroutine — events enqueued just
+                    # before SIGTERM must reach the DB before the app
+                    # exits (VAL-OBS-007 / VAL-OBS-015). This call is
+                    # bounded by ``drain_timeout`` so a wedged Postgres
+                    # cannot hold the process forever.
+                    try:
+                        await flusher.drain()
+                    except Exception:
+                        # Defensive: drain() must not raise out of the
+                        # finally block (would mask the original
+                        # exception). Log and let the TaskGroup unwind.
+                        logger.exception("event_flusher drain raised on shutdown")
         finally:
             # Pool ownership is the caller's; we just drop our reference
             # so handlers don't keep a dangling pointer if the caller
@@ -796,6 +860,9 @@ def create_app(
             app.state.pool = None
             app.state.repo = None
             app.state.sweep_stop = None
+            app.state.event_flusher = None
+            app.state.event_queue = None
+            app.state.event_flusher_task = None
             logger.info("Whilly control-plane app stopped")
 
     app = FastAPI(
