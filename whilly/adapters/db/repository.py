@@ -271,6 +271,41 @@ RETURNING
 """
 
 
+# Optimistic-locking SKIP: ``PENDING`` | ``CLAIMED`` | ``IN_PROGRESS`` →
+# ``SKIPPED`` (TASK-104c). Mirrors the SKIP edges in
+# :func:`whilly.core.state_machine.apply_transition`. The Decision Gate
+# (``whilly.core.gates``) drives this primitive in ``--strict`` mode: a
+# REJECT verdict on a freshly-imported plan transitions the offending
+# row to SKIPPED without ever spawning a worker for it. The status
+# filter intentionally excludes the terminal states ``DONE`` /
+# ``FAILED`` / ``SKIPPED`` so a buggy caller cannot drag a finished
+# task back through the lifecycle (idempotency on already-SKIPPED is
+# handled at the Python layer — see :meth:`TaskRepository.skip_task`,
+# which probes the row first and short-circuits to a no-op).
+_SKIP_SQL: str = """
+UPDATE tasks
+SET status = 'SKIPPED',
+    claimed_by = NULL,
+    claimed_at = NULL,
+    version = tasks.version + 1,
+    updated_at = NOW()
+WHERE id = $1
+  AND version = $2
+  AND status IN ('PENDING', 'CLAIMED', 'IN_PROGRESS')
+RETURNING
+    tasks.id,
+    tasks.status,
+    tasks.dependencies,
+    tasks.key_files,
+    tasks.priority,
+    tasks.description,
+    tasks.acceptance_criteria,
+    tasks.test_steps,
+    tasks.prd_requirement,
+    tasks.version
+"""
+
+
 # Heartbeat update for the worker liveness signal (PRD FR-1.6, NFR-1,
 # TASK-019b1). Stamps ``last_heartbeat = NOW()`` for the row keyed by
 # ``worker_id``. Single-row UPDATE — no transaction wrapper, no audit event:
@@ -857,6 +892,153 @@ class TaskRepository:
                 )
                 logger.info(
                     "release_task: task=%s version=%d reason=%r → PENDING",
+                    row["id"],
+                    row["version"],
+                    reason,
+                )
+                return _row_to_task(row)
+
+    async def skip_task(
+        self,
+        task_id: TaskId,
+        version: int,
+        reason: str,
+        detail: dict[str, Any] | None = None,
+    ) -> Task:
+        """Atomically transition ``task_id`` to ``SKIPPED`` (TASK-104c).
+
+        Drives the Decision Gate ``--strict`` mode (``whilly plan apply
+        --strict``): a REJECT verdict from
+        :func:`whilly.core.gates.evaluate_decision_gate` calls this
+        method to mark the offending row SKIPPED without ever spawning
+        a worker for it. The state machine
+        (:func:`whilly.core.state_machine.apply_transition`) allows the
+        SKIP edge from ``PENDING``, ``CLAIMED`` and ``IN_PROGRESS``;
+        the SQL filter in :data:`_SKIP_SQL` mirrors that lattice.
+
+        Side effects on success:
+
+        * ``tasks`` row: ``status = 'SKIPPED'``, ``claimed_by`` /
+          ``claimed_at`` cleared (so the SKIPPED row no longer
+          appears under any worker's claim), ``version`` incremented,
+          ``updated_at = NOW()``.
+        * ``events`` row: ``event_type = 'SKIP'`` with payload
+          ``{"version": <new>, "reason": <reason>, **detail}``. The
+          ``detail`` dict (typically ``{"missing": [...]}`` from the
+          gate verdict) is *merged* into the payload at the top
+          level so audit-time queries can ``payload->'missing'`` /
+          ``payload->>'reason'`` without a deeper jsonb walk. Reserved
+          keys (``version`` / ``reason``) are *not* overwritten by
+          ``detail`` — the canonical fields stay authoritative.
+
+        Both writes happen inside one ``async with conn.transaction()``
+        so an observer never sees a SKIPPED row without its
+        corresponding SKIP event, and a failed event INSERT rolls the
+        row update back with no half-state to clean up.
+
+        Idempotency
+        -----------
+        Re-invoking ``skip_task`` on a row that is already ``SKIPPED``
+        returns the existing :class:`Task` value (with whatever
+        ``version`` it currently has) **without** writing a duplicate
+        event row and **without** raising. This is required by the
+        PRD AC ("idempotent on already-skipped") and matches the
+        operational reality that the strict gate may run multiple
+        times against the same plan during operator iteration. The
+        idempotency check happens *before* the optimistic-lock
+        UPDATE, so the caller's ``version`` argument can stale —
+        once a row is terminal-SKIPPED, the version no longer
+        matters.
+
+        Errors
+        ------
+        * :class:`VersionConflictError` — raised in three cases (same
+          three-way classification as :meth:`complete_task` /
+          :meth:`fail_task`):
+
+            * ``actual_version is None`` → the row was deleted (FK
+              cascade in tests, or a misconfigured caller).
+            * ``actual_version != expected_version`` → another writer
+              advanced the counter first.
+            * ``actual_version == expected_version`` → the row is in a
+              terminal state (``DONE`` / ``FAILED``) that disallows
+              SKIP. This satisfies the AC "raises on terminal".
+
+        Args
+        ----
+        task_id:
+            The task to skip. Must currently be ``PENDING``,
+            ``CLAIMED``, ``IN_PROGRESS``, or already ``SKIPPED`` (the
+            no-op idempotent path).
+        version:
+            Caller's last-seen version. Ignored when the row is
+            already ``SKIPPED`` (idempotent short-circuit); used as
+            the optimistic-lock guard otherwise.
+        reason:
+            Short string identifying the source of the skip; persisted
+            into the ``payload->>'reason'`` field. Conventional
+            values: ``"decision_gate_failed"`` (the strict gate
+            uses this), ``"manual_skip"`` (operator-driven).
+        detail:
+            Optional extra payload keys to merge into the SKIP event
+            (typically ``{"missing": [...]}`` from a
+            :class:`whilly.core.gates.GateVerdict`). Reserved keys
+            ``version`` / ``reason`` are not overridable from
+            ``detail`` — they always carry the post-update values.
+
+        Returns
+        -------
+        Task
+            The post-update :class:`Task` with ``status = SKIPPED``;
+            ``version`` is the row's current value (incremented on
+            the first call, preserved as-is on idempotent replays).
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                # Idempotency probe: a row already in SKIPPED returns
+                # the canonical Task value without re-writing the
+                # status or appending another event row. Probing
+                # before the UPDATE means a stale ``version`` argument
+                # on a re-run still hits the no-op path — operators
+                # re-running the gate after editing the JSON file
+                # don't need to worry about version drift.
+                probe = await conn.fetchrow(
+                    """
+                    SELECT id, status, dependencies, key_files, priority,
+                           description, acceptance_criteria, test_steps,
+                           prd_requirement, version
+                    FROM tasks WHERE id = $1
+                    """,
+                    task_id,
+                )
+                if probe is not None and probe["status"] == TaskStatus.SKIPPED.value:
+                    logger.info(
+                        "skip_task: task=%s already SKIPPED — no-op (idempotent)",
+                        task_id,
+                    )
+                    return _row_to_task(probe)
+
+                row = await conn.fetchrow(_SKIP_SQL, task_id, version)
+                if row is None:
+                    await self._raise_version_conflict(conn, task_id, version)
+
+                # Build the SKIP event payload. Reserved fields go
+                # last so they cannot be overwritten by a malicious /
+                # buggy ``detail`` dict.
+                payload_dict: dict[str, Any] = {}
+                if detail:
+                    payload_dict.update(detail)
+                payload_dict["version"] = row["version"]
+                payload_dict["reason"] = reason
+                payload = json.dumps(payload_dict)
+                await conn.execute(
+                    _INSERT_EVENT_SQL,
+                    row["id"],
+                    Transition.SKIP.value,
+                    payload,
+                )
+                logger.info(
+                    "skip_task: task=%s version=%d reason=%r → SKIPPED",
                     row["id"],
                     row["version"],
                     reason,
