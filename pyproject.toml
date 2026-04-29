@@ -66,7 +66,13 @@ dev = [
     "pytest-asyncio>=0.23",
     "testcontainers>=4.0",
     "ruff==0.11.5",
-    "mypy>=1.8",
+    # mypy 1.11.0 (Aug 2024) is the first release with PEP 695 ``type``-statement
+    # support; whilly.core.models pins three PEP 695 aliases (``type TaskId =
+    # str``, etc.). Floors below 1.11 emit ``[valid-type] PEP 695 type aliases
+    # are not yet supported`` against ``whilly/core/models.py`` and break the
+    # ``mypy --strict whilly/core`` CI gate locally even though a fresh CI
+    # runner resolves to a newer mypy. See PR fixing M1 scrutiny blockers.
+    "mypy>=1.11",
     "import-linter>=2.0",
     "coverage[toml]>=7.4",
 ]
