@@ -38,7 +38,7 @@
       "title": "whilly/adapters/runner/proxy.py — pure helpers",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [],
       "key_files": [
         "whilly/adapters/runner/proxy.py",
@@ -54,14 +54,15 @@
       "test_steps": [
         "pytest tests/unit/test_claude_proxy_helpers.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-1, FR-5, FR-6"
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-1, FR-5, FR-6",
+      "completion_notes": "Created whilly/adapters/runner/proxy.py with ProxySettings frozen dataclass + resolve_proxy_settings (priority chain: cli_disabled > cli_url > WHILLY_CLAUDE_PROXY_URL > inherited HTTPS_PROXY > None) + build_subprocess_env (no-op when settings.is_active=False, returns env+HTTPS_PROXY+NO_PROXY when active; never mutates parent_env). _resolve_no_proxy honours explicit empty WHILLY_CLAUDE_NO_PROXY (operator opt-out). 19 unit tests in tests/unit/test_claude_proxy_helpers.py covering each branch of priority chain, no_proxy resolution edge cases, no-mutation contract, frozen dataclass."
     },
     {
       "id": "TASK-109-2",
       "title": "Pre-flight TCP probe with friendly error",
       "category": "feat",
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-109-1"
       ],
@@ -78,7 +79,8 @@
       "test_steps": [
         "pytest tests/unit/test_claude_proxy_probe.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-3, SC-3"
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-3, SC-3",
+      "completion_notes": "Added probe_proxy_or_raise(url, timeout=0.5) to whilly/adapters/runner/proxy.py. Parses URL via urlparse, defaults port to 80/443 by scheme (or rejects unknown schemes), socket.create_connection. On TimeoutError/OSError raises RuntimeError with concrete actionable hint (ssh -fN -L PORT:127.0.0.1:8888 gpt-proxy + WHILLY_CLAUDE_PROXY_PROBE=0 opt-out). 7 unit tests in tests/unit/test_claude_proxy_probe.py with real listening/closed-port fixtures (no mocks — actual TCP roundtrip), covering success path, fail path with hint content, unparseable URL, missing-port + unknown scheme, timeout bounds."
     },
     {
       "id": "TASK-109-3",
