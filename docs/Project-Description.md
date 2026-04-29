@@ -10,6 +10,8 @@ permalink: /project-description
 
 📎 [GitHub](https://github.com/mshegolev/whilly-orchestrator) · 📦 PyPI: [whilly-orchestrator](https://pypi.org/project/whilly-orchestrator/) · 🏷 [v4.0.0](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v4.0.0)
 
+> Эта страница про **v4** — распределённую версию. Если ищешь **v3** (single-process loop с TRIZ-анализатором, PRD-визардом, tmux-параллелизмом) — она [тут]({{ site.baseurl }}/project-description-v3).
+
 ## Зачем это нужно
 
 Представь, что у тебя есть список из 30 задач для AI-агента — например, «исправить эти 30 багов в репозитории» или «написать unit-тесты для каждого модуля». Запускать их по одной в Claude вручную — скучно, забываешь где остановился, никакого учёта токенов, и если на 17-й задаче процесс упал — поздравляю, начинай сначала.
