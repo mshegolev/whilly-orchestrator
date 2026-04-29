@@ -22,13 +22,16 @@ Day 1 still composes together".
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 from alembic import command
@@ -117,6 +120,61 @@ _DOCKER_REQUIRED = pytest.mark.skipif(
 )
 
 
+# ─── Colima/testcontainers port-forwarding flake mitigation (sibling of
+# the helper in ``tests/conftest.py``; this fixture is module-scoped and
+# predates the shared session-scoped fixture, so it gets its own copy
+# rather than importing from ``tests.conftest`` — keeps the smoke test
+# self-contained per its module docstring). ─────────────────────────────
+
+_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
+_TC_REMEDIATION_HINT: str = (
+    "Hint: this is the documented colima/testcontainers port-forwarding flake "
+    "(see AGENTS.md → 'Known pre-existing issues'). Run `colima restart` and "
+    "retry."
+)
+_TC_LOG = logging.getLogger("whilly.tests.colima_retry")
+
+_T = TypeVar("_T")
+
+
+def _retry_colima_flake(
+    fn: Callable[[], _T],
+    *,
+    op: str,
+    backoffs: tuple[float, ...] = _TC_RETRY_BACKOFFS,
+) -> _T:
+    """3-attempt exponential-backoff retry around colima-flake-prone ops.
+
+    Same semantics as the sibling helper in ``tests/conftest.py``. See that
+    module's docstring for rationale and timing.
+    """
+    last_exc: BaseException | None = None
+    attempts = 1 + len(backoffs)
+    for attempt_idx in range(attempts):
+        try:
+            return fn()
+        except BaseException as exc:  # noqa: BLE001 — we re-raise below
+            last_exc = exc
+            if attempt_idx == attempts - 1:
+                break
+            sleep_s = backoffs[attempt_idx]
+            _TC_LOG.warning(
+                "%s failed on attempt %d/%d (%s: %s); retrying after %.1fs",
+                op,
+                attempt_idx + 1,
+                attempts,
+                type(exc).__name__,
+                exc,
+                sleep_s,
+            )
+            time.sleep(sleep_s)
+    assert last_exc is not None  # narrow the type for mypy
+    raise RuntimeError(
+        f"{op} failed after {attempts} attempts (backoffs={list(backoffs)}). "
+        f"Last error: {type(last_exc).__name__}: {last_exc}. {_TC_REMEDIATION_HINT}"
+    ) from last_exc
+
+
 # ─── 1. Core import purity (programmatic SC-6) ────────────────────────────
 
 
@@ -139,6 +197,34 @@ _CORE_PURITY_EXEMPTIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Sibling table to :data:`_CORE_PURITY_EXEMPTIONS`, but keyed by **dotted module
+# name** instead of file path. Consumed by
+# :func:`test_whilly_core_is_importable_without_io_dependencies`, which scans
+# ``sys.modules`` for forbidden top-level attributes — that test cannot use the
+# path-keyed table because ``sys.modules`` keys are ``"whilly.core.triz"``, not
+# ``"whilly/core/triz.py"``.
+#
+# Any earlier test in the same pytest session that imports
+# ``whilly.core.triz`` (e.g. ``tests/unit/core/test_triz.py``,
+# ``tests/integration/test_triz_hook.py``, or via the lazy
+# ``from whilly.core.triz import …`` inside the executor's TRIZ hook in
+# ``whilly.adapters.db.repository``) leaves the module cached in
+# ``sys.modules`` with ``triz.subprocess`` and ``triz.shutil`` resolvable as
+# attributes. Without this table, the smoke test trips on those attributes and
+# fails the whole CI gate even though the imports are deliberately documented
+# under ``[importlinter:contract:core-purity] ignore_imports`` in
+# ``.importlinter`` (TASK-104b / VAL-TRIZ-006: the per-task TRIZ analyzer is
+# contract-pinned to live in :mod:`whilly.core.triz` and to spawn the
+# ``claude`` CLI via ``subprocess.run``).
+#
+# Keep entries tightly scoped — every exemption is a deliberate,
+# contract-anchored allowance, not a general escape hatch. New violations in
+# any *other* :mod:`whilly.core` submodule still trip the test.
+_CORE_NAMESPACE_EXEMPTIONS: dict[str, frozenset[str]] = {
+    "whilly.core.triz": frozenset({"subprocess", "shutil"}),
+}
+
+
 def test_whilly_core_is_importable_without_io_dependencies() -> None:
     """``whilly.core`` and its submodules import without pulling in I/O deps.
 
@@ -147,6 +233,14 @@ def test_whilly_core_is_importable_without_io_dependencies() -> None:
     module attribute. Catches the case where someone adds
     ``import asyncpg`` to ``whilly.core.foo`` and the import-linter step
     happens to be skipped.
+
+    Documented narrow exceptions are recorded in
+    :data:`_CORE_NAMESPACE_EXEMPTIONS` and mirror the
+    ``[importlinter:contract:core-purity] ignore_imports`` block in
+    ``.importlinter`` — currently only ``whilly.core.triz`` (TASK-104b /
+    VAL-TRIZ-006: per-task TRIZ analyzer pinned to subprocess the
+    ``claude`` CLI from this module). Any *new* :mod:`whilly.core`
+    submodule that imports a forbidden module will still trip this test.
     """
     # Force-import every submodule so the asserts below see them in sys.modules.
     import whilly.core  # noqa: F401 — re-import for explicitness
@@ -160,7 +254,13 @@ def test_whilly_core_is_importable_without_io_dependencies() -> None:
 
     for mod_name in sorted(core_modules):
         module = sys.modules[mod_name]
+        exempted = _CORE_NAMESPACE_EXEMPTIONS.get(mod_name, frozenset())
         for forbidden in _FORBIDDEN_IN_CORE:
+            if forbidden in exempted:
+                # Documented per-module exception (see _CORE_NAMESPACE_EXEMPTIONS
+                # and .importlinter's [importlinter:contract:core-purity]
+                # ignore_imports block).
+                continue
             assert not hasattr(module, forbidden), (
                 f"{mod_name} appears to import forbidden top-level module {forbidden!r}; "
                 "whilly.core must remain pure (PRD SC-6 / TC-8)."
@@ -337,16 +437,30 @@ def postgres_dsn() -> Iterator[str]:
 
     # Match the docker-compose image (TASK-003) so behaviour parity with
     # local dev is guaranteed.
+    #
+    # Wrap the testcontainers Postgres start in a 3-attempt exponential-backoff
+    # retry loop (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
+    # port-forwarding flake documented in AGENTS.md ("Known pre-existing
+    # issues"). The container is started imperatively (not via ``with``) so
+    # we can retry; cleanup is in the outer ``finally`` block.
+    pg = PostgresContainer("postgres:15-alpine")
+    started = False
     try:
-        with PostgresContainer("postgres:15-alpine") as pg:
-            # testcontainers' default DSN uses the psycopg2 driver suffix. We
-            # rip it back to plain ``postgresql://`` so env.py does the
-            # asyncpg coercion itself — exercises the same code path
-            # operators hit.
-            raw = pg.get_connection_url()
-            dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
-            yield dsn
+        _retry_colima_flake(pg.start, op="PostgresContainer('postgres:15-alpine').start()")
+        started = True
+        # testcontainers' default DSN uses the psycopg2 driver suffix. We
+        # rip it back to plain ``postgresql://`` so env.py does the
+        # asyncpg coercion itself — exercises the same code path
+        # operators hit.
+        raw = pg.get_connection_url()
+        dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
+        yield dsn
     finally:
+        if started:
+            try:
+                pg.stop()
+            except Exception:  # noqa: BLE001 — teardown best effort
+                _TC_LOG.warning("PostgresContainer.stop() raised during teardown", exc_info=True)
         # Restore DOCKER_HOST to whatever the developer had (or unset it).
         if prior_docker_host is None:
             os.environ.pop("DOCKER_HOST", None)
@@ -377,13 +491,41 @@ def test_alembic_upgrade_head_creates_all_tables(postgres_dsn: str) -> None:
     prior = os.environ.get("WHILLY_DATABASE_URL")
     os.environ["WHILLY_DATABASE_URL"] = postgres_dsn
     try:
-        command.upgrade(cfg, "head")
+        # Alembic's first SQL contact also rides through colima's port-forward
+        # — same flake surface as the container start. Wrap with the same
+        # 3-attempt exponential-backoff retry helper.
+        _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="alembic.command.upgrade(head)")
 
         async def _inspect() -> dict[str, list[str]]:
             # asyncpg refuses the SQLAlchemy ``+asyncpg`` driver hint; strip
             # if env.py's coercion pushed it back into the env var.
             asyncpg_dsn = os.environ["WHILLY_DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://")
-            conn = await asyncpg.connect(asyncpg_dsn)
+            # asyncpg.connect rides the same colima port-forward — wrap with
+            # an inline async retry mirroring _retry_colima_flake's policy.
+            conn: asyncpg.Connection | None = None
+            last_exc: BaseException | None = None
+            for attempt_idx, sleep_s in enumerate((*_TC_RETRY_BACKOFFS, None)):
+                try:
+                    conn = await asyncpg.connect(asyncpg_dsn)
+                    break
+                except BaseException as exc:  # noqa: BLE001 — re-raise below
+                    last_exc = exc
+                    if sleep_s is None:
+                        raise RuntimeError(
+                            f"asyncpg.connect failed after {attempt_idx + 1} attempts. "
+                            f"Last error: {type(exc).__name__}: {exc}. {_TC_REMEDIATION_HINT}"
+                        ) from exc
+                    _TC_LOG.warning(
+                        "asyncpg.connect failed on attempt %d (%s: %s); retrying after %.1fs",
+                        attempt_idx + 1,
+                        type(exc).__name__,
+                        exc,
+                        sleep_s,
+                    )
+                    import asyncio as _asyncio_inline
+
+                    await _asyncio_inline.sleep(sleep_s)
+            assert conn is not None, last_exc
             try:
                 tables = await conn.fetch(
                     "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
@@ -443,9 +585,11 @@ def test_alembic_round_trip_downgrade_then_upgrade(postgres_dsn: str) -> None:
     prior = os.environ.get("WHILLY_DATABASE_URL")
     os.environ["WHILLY_DATABASE_URL"] = postgres_dsn
     try:
+        # Alembic's SQL contact also rides through colima's port-forward.
+        # Wrap with the same 3-attempt exponential-backoff retry helper.
         # The previous test left us at head; downgrade then re-upgrade.
-        command.downgrade(cfg, "base")
-        command.upgrade(cfg, "head")
+        _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="alembic.command.downgrade(base)")
+        _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="alembic.command.upgrade(head)")
     finally:
         if prior is None:
             os.environ.pop("WHILLY_DATABASE_URL", None)
