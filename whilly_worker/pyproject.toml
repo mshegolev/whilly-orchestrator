@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# `whilly-worker` — meta-package shim for TASK-023 / PRD FR-1.5.
+#
+# This package ships zero Python source. Its only job is to make
+# `pip install whilly-worker` resolve to `whilly-orchestrator[worker]`,
+# i.e. the minimal worker dep closure (httpx + pydantic + whilly.core +
+# whilly.adapters.transport.client) without dragging in fastapi / asyncpg
+# / sqlalchemy / uvicorn / alembic from the control-plane stack.
+#
+# Operators who deploy a remote worker VM thus have two equivalent
+# install routes — both yield the same dep tree and the same
+# `whilly-worker` console script (which is registered by
+# `whilly-orchestrator` itself):
+#
+#     pip install whilly-worker                     # via this shim
+#     pip install whilly-orchestrator[worker]       # via the extras
+#
+# The shim exists so the package name on PyPI matches the operator's
+# mental model ("I am deploying a worker, so I install whilly-worker"),
+# and so a future `whilly-worker` Docker image FROM python:3.12-slim
+# can run a single `pip install whilly-worker` instead of remembering
+# the [worker] extras suffix. Keeping the actual code in
+# `whilly-orchestrator` avoids forking the codebase across two PyPI
+# distributions; the import-linter contract (TASK-029) is what
+# guarantees the worker import closure stays minimal regardless of
+# which install route is used.
+[project]
+name = "whilly-worker"
+version = "4.0.0"
+description = "Whilly v4.0 remote-worker — meta-package that installs the minimal worker dep closure (httpx + pydantic + whilly.core + whilly.adapters.transport.client). Provides the `whilly-worker` console script via whilly-orchestrator[worker]."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Mikhail Shchegolev", email = "mshegolev@gmail.com" }]
+license = { text = "MIT" }
+keywords = ["whilly", "whilly-wiggum", "whilly-worker", "llm", "orchestrator", "remote-worker", "claude", "ai-agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# Pinned exactly to whilly-orchestrator's version — the wire protocol
+# (RemoteWorkerClient ↔ FastAPI endpoints) is part of the same release
+# train, so a worker deploy must always match its control plane's minor
+# version. Bumped together with `whilly/__init__.py` and the parent
+# pyproject.toml in TASK-033a (v4.0.0 release).
+dependencies = ["whilly-orchestrator[worker]==4.0.0"]
+
+[project.urls]
+Homepage = "https://mshegolev.github.io/whilly-orchestrator/"
+Documentation = "https://mshegolev.github.io/whilly-orchestrator/"
+Repository = "https://github.com/mshegolev/whilly-orchestrator"
+Issues = "https://github.com/mshegolev/whilly-orchestrator/issues"
+
+# Empty-package incantation: tell setuptools to build a distribution
+# with no Python modules and no discovered packages. The `whilly-worker`
+# console script is *not* registered here — it is registered by
+# whilly-orchestrator's own [project.scripts], and pip resolves it via
+# the dependency edge above. Without this stanza setuptools 68+ would
+# fall back to auto-discovery and either error on "no packages found"
+# or accidentally pick up README.md as a flat-layout module.
+[tool.setuptools]
+py-modules = []
+packages = []

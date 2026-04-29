@@ -66,3 +66,5 @@ htmlcov/
 
 # Workflow mapping is a *committed* artefact — do NOT ignore .whilly/.
 # (Listed here so nobody re-adds it by muscle memory.)
+.env-v4
+.venv-v4/

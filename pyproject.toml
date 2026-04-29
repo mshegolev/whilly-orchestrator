@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whilly-orchestrator"
-version = "3.3.0"
-description = "Whilly Wiggum loop — Ralph's smarter brother technique for continuous AI agent loops: TRIZ analyzer, Decision Gate, PRD wizard, Rich TUI dashboard, tmux/git-worktree parallelism, self-healing system"
+version = "4.0.0"
+description = "Whilly v4.0 — distributed orchestrator with Postgres-backed task queue, FastAPI control plane, and remote workers"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [{ name = "Mikhail Shchegolev", email = "mshegolev@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["whilly", "whilly-wiggum", "llm", "orchestrator", "agent-loop", "claude", "ai-agents"]
@@ -15,24 +15,60 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Quality Assurance",
 ]
 dependencies = [
+    # Base closure — always installed. Covers `whilly.core` (zero external deps
+    # by design — see PRD SC-6) plus the bits of the CLI / TUI that are shared
+    # by both deployment shapes: rich for output, pydantic for the wire DTOs
+    # that whilly.adapters.transport.client and the FastAPI control plane both
+    # round-trip, typer for the v4 sub-CLI argument parser.
     "rich>=13.0.0",
-    "psutil>=5.9.0",           # System resource monitoring
-    "platformdirs>=4.0",       # OS-native user config / data directories
-    "tomli>=2.0; python_version<'3.11'",  # TOML parsing on 3.10 (stdlib tomllib on 3.11+)
-    "keyring>=24.0",           # OS secret store (macOS Keychain / libsecret / Windows Credential Manager)
+    "pydantic>=2.6",
+    "typer>=0.12",
+    # Legacy v3.x runtime deps (kept until cli_legacy.py is removed in TASK-033+).
+    "psutil>=5.9.0",
+    "platformdirs>=4.0",
+    "keyring>=24.0",
 ]
 
 [project.optional-dependencies]
+# Remote-worker dep closure (TASK-023, PRD FR-1.5, SC-6). Only httpx — the
+# whilly-worker console script's entire transitive import path is
+# whilly.core + whilly.adapters.transport.client + httpx + pydantic (the
+# last lives in base). The .importlinter contract (TASK-029) enforces that
+# this stays true; the extras split is the install-time guarantee that
+# `pip install whilly-orchestrator[worker]` on a worker VM never pulls
+# asyncpg / fastapi / sqlalchemy by accident.
+worker = [
+    "httpx>=0.27",
+]
+# Control-plane + scheduler stack. `pip install whilly-orchestrator[server]`
+# is what an operator runs on the box that hosts FastAPI + Postgres. Alembic
+# ships SQLAlchemy as a dep; the [asyncio] extra adds `greenlet`, which
+# env.py needs to drive asyncpg from a sync Alembic context (TASK-007).
+server = [
+    "asyncpg>=0.29",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "alembic>=1.13",
+    "sqlalchemy[asyncio]>=2.0",
+]
+# Convenience: install both deployment shapes in one go (e.g. for an
+# all-in-one demo or for CI that drives both the server and a remote
+# worker through the same venv).
+all = ["whilly-orchestrator[worker,server]"]
 dev = [
-    "pytest>=7.0",
+    "whilly-orchestrator[worker,server]",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "testcontainers>=4.0",
     "ruff==0.11.5",
     "mypy>=1.8",
+    "import-linter>=2.0",
+    "coverage[toml]>=7.4",
 ]
 
 [project.urls]
@@ -44,18 +80,59 @@ Changelog = "https://github.com/mshegolev/whilly-orchestrator/blob/main/CHANGELO
 
 [project.scripts]
 whilly = "whilly.cli:main"
+# Standalone remote-worker entry (TASK-022c, PRD FR-1.5/TC-6). Separate
+# binary so an operator can deploy a worker box without invoking the v3
+# legacy parser, and so the worker process never needs the asyncpg /
+# FastAPI import path (PRD SC-6, enforced via .importlinter).
+whilly-worker = "whilly.cli.worker:main"
 
 [tool.setuptools.packages.find]
 include = ["whilly", "whilly.*"]
-exclude = ["tests*"]
+exclude = ["tests*", "whilly_worker*"]
 
 [tool.setuptools.package-data]
 whilly = ["py.typed"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+
+# Strict mypy for the pure domain layer (whilly.core.*) — see PRD NFR-4.
+# Replicates the per-module subset of `mypy --strict` so plain `mypy whilly/core/`
+# is strict; global-only flags (warn_redundant_casts, warn_unused_configs)
+# are set in [tool.mypy] above.
+[[tool.mypy.overrides]]
+module = "whilly.core.*"
+disallow_untyped_defs = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_return_any = true
+strict_equality = true
+extra_checks = true
+
+[tool.coverage.run]
+branch = true
+source = ["whilly"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

@@ -1,0 +1,38 @@
+# Whilly v4.0 — local development Postgres
+#
+# Single-service compose for the v4.0 distributed orchestrator. The control
+# plane (FastAPI) and workers connect through this DB; tests use
+# testcontainers and do NOT depend on this stack.
+#
+# Usage:
+#   ./scripts/db-up.sh           # idempotent: start, wait for healthy
+#   docker-compose down          # stop
+#   docker-compose down -v       # stop + drop the persistent volume
+#
+# Connection (matches .env.example WHILLY_DATABASE_URL default):
+#   postgresql://whilly:whilly@localhost:5432/whilly
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: whilly-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-whilly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whilly}
+      POSTGRES_DB: ${POSTGRES_DB:-whilly}
+    ports:
+      # Bind to loopback only — dev laptop should not expose Postgres on LAN.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - whilly_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whilly} -d ${POSTGRES_DB:-whilly}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  whilly_pgdata:
+    name: whilly_pgdata
