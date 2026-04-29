@@ -99,6 +99,7 @@ import asyncpg
 from rich.console import Console
 
 from whilly.adapters.db import close_pool, create_pool
+from whilly.adapters.db.repository import TaskRepository
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
 from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
@@ -250,6 +251,38 @@ def build_plan_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force plain ASCII output (default: auto-detect via isatty).",
     )
+
+    # ── plan reset ───────────────────────────────────────────────────────
+    # Operator-facing recovery primitive (TASK-103). Two modes:
+    #   --keep-tasks → soft: tasks → PENDING, events purged, RESET row
+    #                  per task with reason=manual_reset.
+    #   --hard       → DELETE plan row; cascades to tasks + events.
+    # Without --yes, the handler prompts y/N (interactive only —
+    # non-TTY callers pipeline `--yes` to skip the prompt).
+    p_reset = sub.add_parser(
+        "reset",
+        help="Reset a plan to PENDING (--keep-tasks) or DELETE it (--hard).",
+    )
+    p_reset.add_argument(
+        "plan_id",
+        help="Plan id to reset (matches the 'plan_id' field in the original JSON).",
+    )
+    mode_group = p_reset.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument(
+        "--keep-tasks",
+        action="store_true",
+        help="Soft reset: tasks → PENDING, events purged, RESET audit row per task.",
+    )
+    mode_group.add_argument(
+        "--hard",
+        action="store_true",
+        help="Hard reset: DELETE plan row (cascades to tasks + events).",
+    )
+    p_reset.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive y/N confirmation prompt.",
+    )
     return parser
 
 
@@ -268,6 +301,13 @@ def run_plan_command(argv: Sequence[str]) -> int:
         return _run_export(args.plan_id)
     if args.action == "show":
         return _run_show(args.plan_id, no_color=bool(args.no_color))
+    if args.action == "reset":
+        return _run_reset(
+            args.plan_id,
+            keep_tasks=bool(args.keep_tasks),
+            hard=bool(args.hard),
+            yes=bool(args.yes),
+        )
     # argparse's ``required=True`` already surfaces a 2-exit on missing
     # action; this branch is defensive for future subcommands added without
     # an explicit handler here.
@@ -917,3 +957,114 @@ def _should_use_color(*, no_color: bool) -> bool:
     except (io.UnsupportedOperation, ValueError):
         # Closed buffer / detached file descriptor.
         return False
+
+
+# ── plan reset (TASK-103) ────────────────────────────────────────────────
+
+
+def _run_reset(plan_id: str, *, keep_tasks: bool, hard: bool, yes: bool) -> int:
+    """Implement ``whilly plan reset <plan_id> --keep-tasks|--hard [--yes]``.
+
+    Two-step compose: a SELECT-side preflight to check the plan exists
+    and count its tasks (so the y/N prompt can show the operator what
+    they're about to wipe), then a single :meth:`TaskRepository.reset_plan`
+    call to do the real work. The preflight reuses the :func:`_async_export`
+    SELECT path so a future schema change only needs to be made in one
+    place.
+
+    Mode invariant: argparse's ``mutually_exclusive_group(required=True)``
+    guarantees exactly one of ``--keep-tasks`` / ``--hard`` is set, so we
+    don't validate that pair again here — the assertion is loud-fail
+    only as a guard against future refactors that disable the argparse
+    group.
+
+    Confirmation flow:
+        Without ``--yes``, the handler reads a y/N answer from stdin.
+        Anything other than ``y`` / ``Y`` / ``yes`` aborts with
+        :data:`EXIT_OK` (a deliberate decision by the operator is not an
+        error). Non-TTY stdin (CI / piped invocation) without ``--yes``
+        is treated as "no answer" → abort. Operators automating the
+        reset should pass ``--yes`` explicitly so the intent is in the
+        command line.
+
+    Returns
+    -------
+    EXIT_OK
+        Reset succeeded, or operator aborted at the prompt.
+    EXIT_ENVIRONMENT_ERROR
+        DSN unset, or plan_id not found.
+    """
+    assert keep_tasks ^ hard, "argparse mutex group should make this unreachable"
+
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan reset: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    # Preflight: confirm the plan exists and grab the task count for the
+    # confirmation prompt. Reuses _async_export's SELECT path.
+    preflight = asyncio.run(_async_export(dsn, plan_id))
+    if preflight is None:
+        print(
+            f"whilly plan reset: plan {plan_id!r} not found — check the id matches the "
+            "'plan_id' you used at import time.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+    plan, tasks = preflight
+    mode_label = "keep-tasks" if keep_tasks else "hard"
+    summary = f"plan {plan.id!r} ({plan.name}) — {len(tasks)} task(s), mode={mode_label}"
+
+    if not yes and not _confirm_reset(summary, hard=hard):
+        print("whilly plan reset: aborted by operator (no --yes).", file=sys.stderr)
+        return EXIT_OK
+
+    affected = asyncio.run(_async_reset(dsn, plan_id, keep_tasks=keep_tasks))
+    verb = "reset" if keep_tasks else "deleted"
+    print(f"whilly plan reset: {verb} {summary} ({affected} task(s) affected).")
+    return EXIT_OK
+
+
+def _confirm_reset(summary: str, *, hard: bool) -> bool:
+    """Prompt the operator with a y/N question; return True iff they said yes.
+
+    Hard-mode prompts use a stronger wording (``DELETE``) to reflect
+    the irrecoverable nature of the operation: with --keep-tasks an
+    operator who confirms by mistake still has the plan rows on disk;
+    with --hard the plan is gone, FK-cascaded events and all.
+
+    Non-TTY stdin (CI / piped invocation) is treated as "no answer" →
+    return False. Operators automating the reset should pass ``--yes``
+    so the intent is explicit at the command line; falling through
+    silently here would be the worst of both worlds.
+    """
+    is_tty = getattr(sys.stdin, "isatty", None)
+    if not callable(is_tty) or not is_tty():
+        return False
+    verb = "DELETE" if hard else "RESET"
+    prompt = f"About to {verb} {summary}. Continue? [y/N]: "
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
+async def _async_reset(dsn: str, plan_id: str, *, keep_tasks: bool) -> int:
+    """Open a pool, call :meth:`TaskRepository.reset_plan`, close the pool.
+
+    Mirrors :func:`_async_import` lifecycle: short-lived pool, ``SELECT 1``
+    health check on construction, ``finally`` always closes. Returns the
+    number of tasks affected (reset to PENDING in keep-tasks mode, or
+    scheduled for deletion in hard mode).
+    """
+    pool = await create_pool(dsn)
+    try:
+        repo = TaskRepository(pool)
+        return await repo.reset_plan(plan_id, keep_tasks=keep_tasks)
+    finally:
+        await close_pool(pool)
