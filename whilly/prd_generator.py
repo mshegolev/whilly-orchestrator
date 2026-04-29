@@ -24,6 +24,8 @@ import threading
 import time
 from pathlib import Path
 
+from whilly.adapters.runner import proxy
+
 log = logging.getLogger("whilly.prd")
 
 _PRD_SYSTEM_PROMPT = """\
@@ -399,10 +401,7 @@ def _call_claude(prompt: str, model: str) -> str:
     # The PRD-wizard caller (whilly init) holds Postgres / httpx
     # connections in this same parent process when the import phase
     # runs; we mustn't route those through the Claude proxy.
-    from whilly.adapters.runner import proxy as _proxy
-
-    _settings = _proxy.resolve_proxy_settings()
-    _child_env = _proxy.build_subprocess_env(os.environ, _settings)
+    child_env = proxy.spawn_env_for_claude()
 
     try:
         proc = subprocess.Popen(
@@ -410,7 +409,7 @@ def _call_claude(prompt: str, model: str) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=_child_env,
+            env=child_env,
         )
     except FileNotFoundError:
         log.error("Claude CLI not found. Install: npm install -g @anthropic-ai/claude-code")
