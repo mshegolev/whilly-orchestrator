@@ -151,7 +151,6 @@ requests.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import secrets
@@ -169,8 +168,9 @@ from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
     AuthDependency,
-    make_bearer_auth,
+    hash_bearer_token,
     make_bootstrap_auth,
+    make_db_bearer_auth,
 )
 from whilly.adapters.transport.schemas import (
     ClaimRequest,
@@ -467,21 +467,15 @@ async def _offline_worker_sweep_loop(
     logger.info("offline_worker sweep stopped")
 
 
-def _hash_token(plaintext: str) -> str:
-    """Return the canonical hash of a per-worker bearer token (PRD NFR-3).
-
-    Plain SHA-256 over UTF-8 bytes, hex-encoded. The output is what lands
-    in ``workers.token_hash``; the plaintext token is returned to the
-    worker exactly once via :class:`RegisterResponse` and then discarded
-    by the server. See the module docstring for why bcrypt isn't the
-    right primitive for *random* bearer tokens.
-
-    Centralising the encoding here means a future migration to a salted
-    or KDF-based scheme (argon2 / scrypt) can change the hash format
-    without touching the route handlers — they call :func:`_hash_token`
-    and let this function decide what goes on disk.
-    """
-    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+# Bearer-token hashing has moved to :mod:`whilly.adapters.transport.auth`
+# (TASK-101) — both the *write* path (registration) and the *read* path
+# (per-worker bearer dep, :func:`make_db_bearer_auth`) need the same
+# encoding, and centralising it next to the auth dep guarantees they
+# stay synchronised across future scheme changes (argon2 / scrypt). The
+# legacy module-private name is preserved as an alias so any direct
+# importer ``from whilly.adapters.transport.server import _hash_token``
+# keeps working without an import-graph churn.
+_hash_token = hash_bearer_token
 
 
 def _generate_worker_id() -> str:
@@ -493,6 +487,40 @@ def _generate_worker_id() -> str:
     across any plausible cluster size (see :data:`_WORKER_ID_ENTROPY_BYTES`).
     """
     return f"{_WORKER_ID_PREFIX}{secrets.token_urlsafe(_WORKER_ID_ENTROPY_BYTES)}"
+
+
+def _resolve_optional_token(arg: str | None, env_name: str) -> str | None:
+    """Resolve an *optional* token from an explicit kwarg or the environment.
+
+    Sister of :func:`_resolve_token` for tokens whose absence is a
+    legitimate operational state — specifically the legacy
+    ``WHILLY_WORKER_TOKEN`` shared bearer (TASK-101). Returns ``None``
+    when neither the kwarg nor the env var is set, signalling to
+    :func:`make_db_bearer_auth` that the legacy fallback should be
+    disabled. Whitespace-only env values are normalised to ``None`` —
+    same rule as :func:`_resolve_token`'s loud rejection — so an
+    operator leaving ``WHILLY_WORKER_TOKEN= `` in ``.env`` doesn't
+    silently re-enable the legacy path.
+
+    Why a separate helper rather than catching :class:`RuntimeError`
+    from :func:`_resolve_token`?
+        Exception flow for an *optional* config value is misleading —
+        the missing-env case here is the v4.2 future shape, not a
+        misconfiguration. A dedicated path makes the contract
+        legible and keeps :func:`_resolve_token` strict for the
+        bootstrap token (which is genuinely required).
+    """
+    if arg is not None:
+        # An explicit empty kwarg is still a misconfiguration —
+        # callers should pass ``None`` to disable, not ``""``.
+        if not arg.strip():
+            raise RuntimeError(
+                f"create_app: explicit token for {env_name} must be non-empty when provided; "
+                f"pass None (or omit the kwarg) to disable the legacy fallback."
+            )
+        return arg
+    raw = (os.environ.get(env_name) or "").strip()
+    return raw or None
 
 
 def _resolve_token(arg: str | None, env_name: str) -> str:
@@ -666,21 +694,28 @@ def create_app(
         # legal test override (flips every online worker every tick);
         # only genuinely negative values are rejected.
         raise ValueError(f"create_app: heartbeat_timeout_seconds must be >= 0, got {heartbeat_timeout_seconds!r}.")
-    resolved_worker_token = _resolve_token(worker_token, WORKER_TOKEN_ENV)
+    # ``WHILLY_WORKER_TOKEN`` is *optional* since TASK-101: the
+    # steady-state RPC surface validates per-worker tokens against
+    # ``workers.token_hash`` first, and only falls back to the legacy
+    # shared bearer when the env var is set (with a one-shot
+    # deprecation warning). The bootstrap token remains mandatory —
+    # ``POST /workers/register`` is the only thing that can mint
+    # per-worker tokens, so without it the cluster cannot grow.
+    legacy_worker_token = _resolve_optional_token(worker_token, WORKER_TOKEN_ENV)
     resolved_bootstrap_token = _resolve_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
-    # Bind the auth dependencies *now*, at app-construction time, so a
-    # bad token surfaces during ``create_app`` rather than on the first
-    # 401 in production. Both factories also reject empty tokens
-    # internally, giving us defence in depth against
-    # ``_resolve_token`` ever returning an empty string by accident.
-    bearer_dep: AuthDependency = make_bearer_auth(resolved_worker_token)
-    bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
     # Construct the repository once at app build time. The repo is a
     # thin wrapper around the pool, so reusing one instance across all
     # requests is both correct and cheaper than instantiating per
     # request. Stashed on app.state below so handlers added in
     # TASK-021c reach the same instance via ``request.app.state``.
     repo = TaskRepository(pool)
+    # Bind the auth dependencies *now*, at app-construction time, so a
+    # bad token surfaces during ``create_app`` rather than on the first
+    # 401 in production. ``make_db_bearer_auth`` is the per-worker
+    # bearer surface (TASK-101); legacy ``WHILLY_WORKER_TOKEN`` rides
+    # along as the optional one-minor-version fallback.
+    bearer_dep: AuthDependency = make_db_bearer_auth(repo, legacy_token=legacy_worker_token)
+    bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

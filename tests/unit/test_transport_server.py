@@ -374,18 +374,23 @@ def test_create_app_falls_back_to_env_when_kwargs_omitted(
     assert isinstance(app, FastAPI)
 
 
-def test_create_app_raises_when_worker_token_missing_everywhere(
+def test_create_app_accepts_missing_worker_token(
     monkeypatch: pytest.MonkeyPatch,
     healthy_pool: _FakePool,
 ) -> None:
-    """Fail-fast at startup, not on first 401 in production."""
+    """Per TASK-101, ``WHILLY_WORKER_TOKEN`` is optional.
+
+    The steady-state RPC surface validates per-worker bearers against
+    ``workers.token_hash`` (TASK-101 / PRD FR-1.2). The legacy shared
+    bearer is opt-in via the env var and emits a one-shot deprecation
+    warning when it fires; without it the dep is purely DB-backed.
+    Therefore ``create_app`` must NOT raise when the env var is unset,
+    even though it still requires the bootstrap secret.
+    """
     monkeypatch.delenv(WORKER_TOKEN_ENV, raising=False)
     monkeypatch.setenv(BOOTSTRAP_TOKEN_ENV, "b")
-    with pytest.raises(RuntimeError) as excinfo:
-        create_app(_as_pool(healthy_pool))
-    # Error must name the env var so operators can grep / fix without
-    # having to read the codebase.
-    assert WORKER_TOKEN_ENV in str(excinfo.value)
+    app = create_app(_as_pool(healthy_pool))
+    assert isinstance(app, FastAPI)
 
 
 def test_create_app_raises_when_bootstrap_token_missing_everywhere(
@@ -401,7 +406,16 @@ def test_create_app_raises_when_bootstrap_token_missing_everywhere(
 
 
 def test_create_app_rejects_explicit_blank_worker_token(healthy_pool: _FakePool) -> None:
-    """An explicit empty string must not silently disable auth."""
+    """An explicit blank string is still a misconfiguration even though the
+    legacy bearer is now optional (TASK-101).
+
+    The intent for "disable the legacy fallback" is expressed by passing
+    ``None`` (or omitting the kwarg + leaving the env unset). An
+    explicit ``"   "`` is far more likely to be ``.env`` line noise
+    than a deliberate "disable auth" toggle, and we surface it loudly
+    so the operator can fix the misconfiguration rather than silently
+    accept it.
+    """
     with pytest.raises(RuntimeError) as excinfo:
         create_app(
             _as_pool(healthy_pool),

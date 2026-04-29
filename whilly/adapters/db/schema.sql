@@ -21,7 +21,11 @@ CREATE TABLE workers (
     worker_id      TEXT PRIMARY KEY,
     hostname       TEXT NOT NULL,
     last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    token_hash     TEXT NOT NULL,
+    -- ``token_hash`` is nullable since migration 004 (TASK-101): operators
+    -- revoke a worker by setting it to NULL, and the per-worker bearer
+    -- dep treats NULL as "revoked → 401". A partial UNIQUE index
+    -- (below) keeps issued hashes unambiguous on the lookup path.
+    token_hash     TEXT,
     registered_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- Offline-worker recovery (TASK-025b, PRD FR-1.4 / NFR-1 / SC-2). The
     -- offline-worker sweep flips this to 'offline' once last_heartbeat
@@ -37,6 +41,13 @@ CREATE INDEX ix_workers_last_heartbeat ON workers (last_heartbeat);
 -- scanning them.
 CREATE INDEX ix_workers_status_online_heartbeat ON workers (last_heartbeat)
     WHERE status = 'online';
+-- Partial UNIQUE on issued hashes (TASK-101, migration 004). Per-worker
+-- bearer validation issues SELECT ... WHERE token_hash = $1 on every
+-- RPC; uniqueness over non-NULL hashes makes the lookup deterministic
+-- at the schema level. Revoked rows (token_hash = NULL) are excluded
+-- from the index so revocation does not collide on a single sentinel.
+CREATE UNIQUE INDEX ix_workers_token_hash_unique ON workers (token_hash)
+    WHERE token_hash IS NOT NULL;
 
 -- ─── plans ───────────────────────────────────────────────────────────────
 CREATE TABLE plans (

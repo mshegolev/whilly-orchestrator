@@ -371,6 +371,22 @@ VALUES ($1, $2, $3)
 """
 
 
+# Per-worker bearer validation lookup (TASK-101). Maps a token-hash to the
+# owning worker_id. ``LIMIT 1`` is defence-in-depth: migration 004's partial
+# UNIQUE index on ``workers (token_hash) WHERE token_hash IS NOT NULL``
+# already guarantees at most one row, but the LIMIT keeps the SQL safe even
+# in the unlikely scenario where the index has been dropped manually.
+# ``token_hash IS NOT NULL`` is implicit (``WHERE token_hash = $1`` cannot
+# match a NULL via ``=``) — a revoked worker's row is not selected because
+# a NULL never equals anything in SQL.
+_LOOKUP_WORKER_BY_TOKEN_HASH_SQL: str = """
+SELECT worker_id
+FROM workers
+WHERE token_hash = $1
+LIMIT 1
+"""
+
+
 # Probe used after an optimistic-lock UPDATE returns 0 rows: differentiates
 # "row vanished" (FK cascade or test bug) from "version moved" / "wrong
 # status". Cheaper than a second UPDATE attempt and gives us enough context
@@ -1381,6 +1397,44 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash)
         logger.info("register_worker: registered worker %s on %s", worker_id, hostname)
+
+    async def get_worker_id_by_token_hash(self, token_hash: str) -> WorkerId | None:
+        """Resolve a presented bearer's hash to the owning ``worker_id`` (TASK-101).
+
+        Used by the per-worker bearer FastAPI dependency in
+        :mod:`whilly.adapters.transport.auth` on every steady-state RPC.
+        ``token_hash`` is the SHA-256 hex digest of the plaintext bearer
+        the worker presented (computed by the dep — not by this method,
+        so the repository surface remains hashing-scheme-agnostic).
+
+        Returns the matching ``worker_id`` on hit, or ``None`` when no
+        row carries that hash. The latter covers three operationally
+        distinct cases — the auth layer treats them all as 401 because
+        from the wire's perspective they are indistinguishable:
+
+        * the token was never issued (random / forged bearer);
+        * the worker was revoked via ``UPDATE workers SET token_hash =
+          NULL`` (NULL ≠ anything under SQL three-valued logic, so the
+          equality predicate fails);
+        * the worker row was deleted (e.g. test cleanup, FK cascade).
+
+        Returning ``None`` rather than raising keeps the dep simple —
+        the 401 path is built once in :func:`_bearer_401` and the
+        repository never raises for "didn't find anything".
+
+        Why no audit event?
+            Auth lookups fire on every RPC; logging each one would
+            bloat ``events`` by orders of magnitude with no extra
+            audit value (the per-RPC handlers already log success /
+            failure with ``worker_id`` context). The 401 path is a
+            transport concern, not a domain transition.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchval(_LOOKUP_WORKER_BY_TOKEN_HASH_SQL, token_hash)
+        # ``WorkerId`` is a ``str`` type alias (``whilly.core.models``), so
+        # the asyncpg-returned ``str`` is already the right shape — no
+        # constructor wrapping needed.
+        return row
 
     async def update_heartbeat(self, worker_id: WorkerId) -> bool:
         """Stamp ``workers.last_heartbeat = NOW()`` for ``worker_id``.
