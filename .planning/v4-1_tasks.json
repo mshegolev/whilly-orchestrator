@@ -114,7 +114,7 @@
       "title": "CLI flags --claude-proxy / --no-claude-proxy + probe wiring",
       "category": "feat",
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "dependencies": [
         "TASK-109-2",
         "TASK-109-3"
@@ -134,7 +134,8 @@
       "test_steps": [
         "pytest tests/unit/test_cli_init_proxy.py -v"
       ],
-      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-6, SC-1, SC-3"
+      "prd_requirement": "docs/PRD-v41-claude-proxy.md FR-6, SC-1, SC-3",
+      "completion_notes": "Added --claude-proxy URL и --no-claude-proxy flags в whilly init parser (mutually exclusive group). Probe step (Step 0) добавлен в run_init_command перед wizard launch: resolve_proxy_settings из (cli_url, cli_disabled) затем — если settings.is_active и WHILLY_CLAUDE_PROXY_PROBE!=0 — probe_proxy_or_raise. Probe fail → exit 2 (env error) с уже-форматированным сообщением (URL + ssh tunnel hint + opt-out hint). 9 unit-тестов в tests/unit/test_cli_init_proxy.py: argparse layout (3), probe success path against ephemeral listener, probe fail path with friendly message, WHILLY_CLAUDE_PROXY_PROBE=0 opt-out, no-proxy regression-free path, --no-claude-proxy disables, CLI flag overrides env. whilly init --help показывает оба флага."
     },
     {
       "id": "TASK-109-5",

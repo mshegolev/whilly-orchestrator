@@ -179,6 +179,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default="docs",
         help='Directory for the generated PRD file. Default: "docs".',
     )
+    proxy_group = parser.add_mutually_exclusive_group()
+    proxy_group.add_argument(
+        "--claude-proxy",
+        default=None,
+        help=(
+            "HTTPS proxy URL for Claude only (e.g. http://127.0.0.1:11112). "
+            "Overrides WHILLY_CLAUDE_PROXY_URL env var. Whilly's own asyncpg / "
+            "httpx connections stay direct via NO_PROXY."
+        ),
+    )
+    proxy_group.add_argument(
+        "--no-claude-proxy",
+        action="store_true",
+        help=("Force-disable Claude proxy even if WHILLY_CLAUDE_PROXY_URL or HTTPS_PROXY is set in the environment."),
+    )
     return parser
 
 
@@ -249,6 +264,28 @@ def run_init_command(
 
     mode = _resolve_mode(args.interactive, args.headless)
     logger.info("whilly init: idea=%r slug=%r mode=%s", idea[:60], slug, mode)
+
+    # ── Step 0: resolve + (optionally) probe Claude proxy ──────────────
+    # TASK-109-4: if the operator has a proxy configured (CLI flag, env
+    # var, or inherited HTTPS_PROXY), probe the TCP endpoint *once*
+    # before we burn time on a real Claude call. The probe surfaces
+    # "tunnel not up" as a clear actionable message instead of a
+    # confusing connection-refused buried inside Claude's HTTP client.
+    # WHILLY_CLAUDE_PROXY_PROBE=0 opts out (e.g. weird proxies that
+    # reject TCP probes; we trust the operator).
+    from whilly.adapters.runner import proxy as _proxy
+
+    _settings = _proxy.resolve_proxy_settings(
+        cli_url=args.claude_proxy,
+        cli_disabled=args.no_claude_proxy,
+    )
+    if _settings.is_active and os.environ.get(_proxy.WHILLY_PROBE_ENV, "1") != "0":
+        try:
+            assert _settings.url is not None
+            _proxy.probe_proxy_or_raise(_settings.url)
+        except RuntimeError as probe_exc:
+            print(str(probe_exc), file=sys.stderr)
+            return EXIT_ENVIRONMENT_ERROR
 
     # ── Step 1: produce PRD file ────────────────────────────────────────
     try:
