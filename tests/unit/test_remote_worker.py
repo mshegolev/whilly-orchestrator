@@ -138,7 +138,7 @@ class FakeRemoteClient:
         self.fail_results: list[Task | VersionConflictError] = []
 
         self.claim_calls: list[tuple[str, str]] = []
-        self.complete_calls: list[tuple[TaskId, str, int]] = []
+        self.complete_calls: list[tuple[TaskId, str, int, object]] = []
         self.fail_calls: list[tuple[TaskId, str, int, str]] = []
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
@@ -147,8 +147,14 @@ class FakeRemoteClient:
             raise AssertionError("FakeRemoteClient.claim called more times than scripted")
         return self.claim_results.pop(0)
 
-    async def complete(self, task_id: TaskId, worker_id: str, version: int) -> object:
-        self.complete_calls.append((task_id, worker_id, version))
+    async def complete(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        cost_usd: object = None,  # TASK-102
+    ) -> object:
+        self.complete_calls.append((task_id, worker_id, version, cost_usd))
         if not self.complete_results:
             raise AssertionError("FakeRemoteClient.complete called more times than scripted")
         result = self.complete_results.pop(0)
@@ -272,7 +278,7 @@ async def test_completes_one_task_happy_path(fake_sleep: list[float]) -> None:
     # Note: the AC for TASK-022b1 says the remote loop is claim → run →
     # complete/fail. complete sees the *post-claim* version (1) — there's
     # no start hop on the wire today (see module docstring "protocol gap").
-    assert client.complete_calls == [("T-001", WORKER_ID, 1)]
+    assert client.complete_calls == [("T-001", WORKER_ID, 1, 0.0)]
     assert client.fail_calls == []
     # Prompt smoke check: the task id and plan name flow through.
     assert len(captured_prompt) == 1
@@ -305,7 +311,7 @@ async def test_versions_thread_through_to_complete(fake_sleep: list[float]) -> N
         max_iterations=1,
     )
 
-    assert client.complete_calls == [("T-9", WORKER_ID, 7)]
+    assert client.complete_calls == [("T-9", WORKER_ID, 7, 0.0)]
 
 
 # --------------------------------------------------------------------------- #
@@ -435,7 +441,7 @@ async def test_claim_none_then_task_continues_processing(fake_sleep: list[float]
     )
 
     assert stats == RemoteWorkerStats(iterations=2, completed=1, failed=0, idle_polls=1)
-    assert client.complete_calls == [("T-004", WORKER_ID, 1)]
+    assert client.complete_calls == [("T-004", WORKER_ID, 1, 0.0)]
 
 
 # --------------------------------------------------------------------------- #
@@ -481,7 +487,7 @@ async def test_complete_version_conflict_is_logged_and_loop_continues(
 
     # The first complete lost the race → not counted; the second succeeded.
     assert stats == RemoteWorkerStats(iterations=2, completed=1, failed=0, idle_polls=0)
-    assert client.complete_calls == [("T-005", WORKER_ID, 1), ("T-006", WORKER_ID, 2)]
+    assert client.complete_calls == [("T-005", WORKER_ID, 1, 0.0), ("T-006", WORKER_ID, 2, 0.0)]
     assert any("remote complete lost the race" in record.message for record in caplog.records)
 
 
@@ -744,7 +750,7 @@ async def test_max_processed_skips_lost_race_409(fake_sleep: list[float]) -> Non
     )
 
     assert stats == RemoteWorkerStats(iterations=2, completed=1, failed=0, idle_polls=0)
-    assert client.complete_calls == [(first.id, WORKER_ID, 1), (second.id, WORKER_ID, 1)]
+    assert client.complete_calls == [(first.id, WORKER_ID, 1, 0.0), (second.id, WORKER_ID, 1, 0.0)]
 
 
 async def test_max_processed_none_is_uncapped(fake_sleep: list[float]) -> None:

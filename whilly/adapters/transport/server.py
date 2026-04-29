@@ -1086,7 +1086,7 @@ def create_app(
             the correct shape on the conflict path.
         """
         try:
-            updated = await repo.complete_task(task_id, payload.version)
+            updated = await repo.complete_task(task_id, payload.version, payload.cost_usd)
         except VersionConflictError as exc:
             logger.info(
                 "complete_task conflict: worker=%s task=%s expected_version=%d actual_version=%s actual_status=%s",
@@ -1098,10 +1098,11 @@ def create_app(
             )
             return _conflict_response(exc)
         logger.info(
-            "complete_task: worker=%s task=%s version=%d → DONE",
+            "complete_task: worker=%s task=%s version=%d cost_usd=%s → DONE",
             payload.worker_id,
             updated.id,
             updated.version,
+            payload.cost_usd,
         )
         return CompleteResponse(task=TaskPayload.from_task(updated))
 

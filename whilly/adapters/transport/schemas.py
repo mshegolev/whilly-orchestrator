@@ -73,6 +73,7 @@ generated ``__init__`` / ``__eq__``.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -309,10 +310,35 @@ class CompleteRequest(_FrozenModel):
     $2 AND status = 'IN_PROGRESS'`` filter sees exactly the version the
     worker last observed. ``worker_id`` is echoed for the same defence-
     in-depth reason as :class:`ClaimRequest`.
+
+    Plan budget guard (TASK-102)
+    ----------------------------
+    ``cost_usd`` is the optional spend amount the worker accumulated
+    while running this task — typically the value parsed from
+    ``AgentResult.usage.cost_usd`` (Claude CLI's ``total_cost_usd``).
+    The server forwards it into
+    :meth:`whilly.adapters.db.repository.TaskRepository.complete_task`,
+    which atomically increments ``plans.spent_usd`` by this amount in
+    the same transaction as the task → DONE flip. ``None`` (or the
+    field omitted entirely) is treated as ``0`` — the no-op spend
+    path (VAL-BUDGET-032). Negative values are rejected at the schema
+    layer (the strict-monotonic spend invariant lives on the
+    repository contract, but rejecting at the wire is cheaper).
+
+    The field is typed as ``Decimal | None`` so a worker that knows
+    its cost in exact form (e.g. echoed from a billing system) can
+    skip the float round-trip; pydantic 2.x serialises ``Decimal`` as
+    a JSON string by default which round-trips losslessly through
+    asyncpg's NUMERIC adapter.
     """
 
     worker_id: NonEmptyShortStr
     version: NonNegativeVersion
+    # Spend echo (TASK-102). ``ge=0`` rejects negatives at the wire so
+    # the strict-monotonic invariant on ``plans.spent_usd`` is enforced
+    # before the SQL UPDATE even fires. ``None`` (default) → repository
+    # treats as ``0`` (no-op spend).
+    cost_usd: Decimal | None = Field(default=None, ge=0)
 
 
 class CompleteResponse(_FrozenModel):

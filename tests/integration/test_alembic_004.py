@@ -173,10 +173,20 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 
 
 def test_004_is_head_revision() -> None:
-    """The alembic script directory reports ``004_per_worker_bearer`` as the head."""
+    """The alembic script directory advertises ``004_per_worker_bearer`` as a known revision.
+
+    Originally pinned ``004_per_worker_bearer`` as the head, but TASK-102's
+    ``005_plan_budget`` migration shifted the head forward (see
+    ``AGENTS.md → Migration Coordination``). The remaining contract for
+    VAL-AUTH-001 is that 004 is reachable from base — it is, since the
+    chain still runs ``003_events_detail → 004_per_worker_bearer →
+    005_plan_budget``. Asserting on script.walk_revisions() makes the
+    invariant we actually care about explicit.
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "004_per_worker_bearer"
+    revisions = {r.revision for r in script.walk_revisions()}
+    assert "004_per_worker_bearer" in revisions
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +197,10 @@ def test_004_is_head_revision() -> None:
 def test_upgrade_makes_token_hash_nullable(base_002_dsn: str) -> None:
     """After ``upgrade head``, ``information_schema`` reports nullable=YES."""
     cfg = _build_cfg(base_002_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (002→head)")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "004_per_worker_bearer"),
+        op="upgrade 004_per_worker_bearer (002→004)",
+    )
     is_nullable = asyncio.run(
         _fetchval(
             base_002_dsn,
@@ -212,8 +225,15 @@ def test_downgrade_restores_not_null(base_002_dsn: str) -> None:
     after the downgrade.
     """
     cfg = _build_cfg(base_002_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
-    _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
+    # Stop at 004 explicitly — TASK-102's 005 migration shifted ``head``
+    # forward, so a plain ``upgrade head; downgrade -1`` would now
+    # land at 004 (still nullable) instead of 003. We're testing 004's
+    # downgrade contract specifically.
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "004_per_worker_bearer"),
+        op="upgrade 004_per_worker_bearer",
+    )
+    _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1 (004→003)")
 
     async def _inspect() -> tuple[Any, Any]:
         is_nullable = await _fetchval(

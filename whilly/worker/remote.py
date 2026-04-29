@@ -459,7 +459,17 @@ async def run_remote_worker(
 
         if result.is_complete and result.exit_code == 0:
             try:
-                await client.complete(claimed.id, worker_id, claimed.version)
+                # Forward the agent's parsed ``cost_usd`` so the server-
+                # side ``complete_task`` can update ``plans.spent_usd``
+                # atomically with the task transition (TASK-102, PRD
+                # FR-2.4 / VAL-BUDGET-030). ``None`` / 0.0 short-circuits
+                # the spend update on the server side (VAL-BUDGET-032).
+                await client.complete(
+                    claimed.id,
+                    worker_id,
+                    claimed.version,
+                    cost_usd=result.usage.cost_usd,
+                )
             except VersionConflictError as exc:
                 # 409 on complete: lost race (peer / sweep grabbed the
                 # row), or the protocol gap surfacing as

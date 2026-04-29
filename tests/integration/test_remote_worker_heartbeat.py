@@ -131,7 +131,13 @@ class FakeRemoteClient:
     # The remaining surface — none of these should fire in a
     # heartbeat-composition test because the plan is empty. If one
     # does fire, the AssertionError makes the failure point obvious.
-    async def complete(self, task_id: TaskId, worker_id: str, version: int) -> object:  # pragma: no cover
+    async def complete(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        cost_usd: object = None,
+    ) -> object:  # pragma: no cover
         raise AssertionError("FakeRemoteClient.complete should not run with an empty plan")
 
     async def fail(self, task_id: TaskId, worker_id: str, version: int, reason: str) -> object:  # pragma: no cover
@@ -544,7 +550,12 @@ async def test_heartbeat_continues_during_main_loop_task_processing() -> None:
         client.claim_calls.append((worker_id, plan_id))
         return claimed
 
-    async def complete(task_id: TaskId, worker_id: str, version: int) -> object:
+    async def complete(
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        cost_usd: object = None,  # TASK-102 — accept and ignore
+    ) -> object:
         return done
 
     client.claim = claim  # type: ignore[method-assign]
