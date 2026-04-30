@@ -1,0 +1,114 @@
+# Whilly Orchestrator — worker-only stack (M1 split-host deployment).
+#
+# ADDITIVE: docker-compose.demo.yml (single-host workshop) is byte-for-byte
+# unchanged. This file deploys a single `whilly-worker` against a
+# control-plane that lives on a DIFFERENT host (typically a VPS running
+# `docker-compose.control-plane.yml`). Pairs with the control-plane file for
+# the cross-host demo path described in docs/Distributed-Setup.md.
+#
+# Topology:
+#
+#       +-------------------+              +---------------------+
+#       |  Host A: VPS      |  HTTP(S)     |  Host B: laptop /   |
+#       |  postgres + CP    |◄────────────►|  peer VM (this file)|
+#       |  (control-plane)  |   register   |  whilly-worker      |
+#       +-------------------+   long-poll  +---------------------+
+#
+# All connection params come from .env.worker (copy .env.worker.example to
+# .env.worker and fill in the values). Compose auto-loads ".env" from the
+# repo root; the template lives at .env.worker.example because each host
+# has different secrets and we never want to commit them.
+#
+# Quick start (after copying .env.worker.example → .env.worker):
+#   docker-compose -f docker-compose.worker.yml --env-file .env.worker up -d
+#   docker logs whilly-worker     # look for "registered worker_id=w-XXXXXXXX"
+#
+# Local-build override (for development without pulling the published image):
+#   WHILLY_IMAGE=whilly:dev docker-compose -f docker-compose.worker.yml \
+#       --env-file .env.worker up -d
+#
+# Workspace volume (./workspace:/work) is declared as a PLACEHOLDER for the
+# M4 plan-workspace work (per-worker git scratch + push-branch). At M1 the
+# worker does not read or write to it; the directory is created so an
+# operator can pre-stage data without re-running compose.
+#
+# Memory budget: worker capped at 256MB to mirror the control-plane / postgres
+# caps from docker-compose.control-plane.yml. On the 964MB VPS profile the
+# whole stack stays under 600MB even when the worker shares the host.
+#
+# See docs/Distributed-Setup.md for the multi-host walkthrough.
+
+services:
+  # ─── App: whilly-worker (HTTP-client). No DB, no API — pure pull-loop. ────
+  worker:
+    # Default to the published image (matches v4.3.1 release artifact). The
+    # production Dockerfile installs `'.[server,worker]'`; the worker role
+    # never touches the server-only paths at runtime, so this is the same
+    # image used by docker-compose.control-plane.yml. Override with
+    # WHILLY_IMAGE=<tag> for dev / local-build workflows.
+    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.3.1}
+    container_name: whilly-worker
+    # Container hostname propagated to `whilly worker register --hostname`
+    # via the entrypoint's `$(hostname)` capture. Operators set this in
+    # .env.worker so the events table shows a meaningful identity in the
+    # multi-host audit log (e.g. "macbook-mvs", "vps-eu-1").
+    hostname: ${WHILLY_WORKER_HOSTNAME:-whilly-worker}
+    restart: unless-stopped
+    environment:
+      # Required: where the control-plane lives. NO default — operator
+      # must supply this in .env.worker (typically http://<vps-ip>:8000
+      # or https://<vps-host> behind Caddy / Tailscale Funnel at M2).
+      WHILLY_CONTROL_URL: ${WHILLY_CONTROL_URL:?WHILLY_CONTROL_URL is required (see .env.worker.example)}
+      # Cluster-join secret consumed by the entrypoint's `whilly worker
+      # register` flow. NO default — operator must supply this in
+      # .env.worker. Keep it out of git in real deployments; the bootstrap
+      # token is a shared cluster secret minted by the control-plane operator.
+      WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:?WHILLY_WORKER_BOOTSTRAP_TOKEN is required (see .env.worker.example)}
+      # Plan id this worker should drain. The control-plane is
+      # multi-tenant per plan; "demo" matches docker-compose.demo.yml's
+      # default so the same plan files work across topologies.
+      WHILLY_PLAN_ID: ${WHILLY_PLAN_ID:-demo}
+      # ─── Claude / LLM настройки (mirrored from docker-compose.demo.yml) ──
+      # Worker calls CLAUDE_BIN to execute tasks. Default keeps the
+      # zero-cost fake stub so a plain `up -d` against the control-plane
+      # demonstrates state-machine flow without burning real tokens.
+      CLAUDE_BIN: ${CLAUDE_BIN:-/opt/whilly/tests/fixtures/fake_claude_demo.sh}
+      FAKE_CLAUDE_DEMO_DELAY: "${FAKE_CLAUDE_DEMO_DELAY:-2.5}"
+      # Agentic CLI mode (--cli claude-code|opencode|gemini|codex) routed
+      # through cli_adapter.py. Leave empty for the legacy claude_cli.py
+      # backend (the v3 path).
+      WHILLY_CLI: ${WHILLY_CLI:-}
+      WHILLY_FORCE_COMPLETE: ${WHILLY_FORCE_COMPLETE:-1}
+      # Provider credentials (read natively by each agentic CLI).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCODE_DEFAULT_PROVIDER: ${OPENCODE_DEFAULT_PROVIDER:-}
+      # Raw LLM shim mode (--llm groq|openrouter|cerebras|...).
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TIER_OVERRIDE: ${LLM_TIER_OVERRIDE:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-120}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+      LLM_HTTP_REFERER: ${LLM_HTTP_REFERER:-}
+      LLM_X_TITLE: ${LLM_X_TITLE:-}
+      LLM_FORCE_COMPLETE: ${LLM_FORCE_COMPLETE:-0}
+      WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+    volumes:
+      # PLACEHOLDER for M4 (per-worker plan-workspace topology — see
+      # docs/Workspace-Topology.md). At M1 this mount is declared but
+      # unused: the worker never reads or writes /work. Reserving the
+      # path now means an operator who pre-creates ./workspace today
+      # will not have to re-run compose when M4 lands.
+      - ./workspace:/work
+    # Mission §4 cap: 256MB per service. Worker's footprint is dominated
+    # by the agentic CLI subprocess (claude/gemini/opencode), not by the
+    # whilly-worker python loop itself, so the cap is intentionally
+    # generous compared to the long-poll process alone (~80MB RSS).
+    mem_limit: 256m
+    mem_reservation: 64m
+    command: ["worker"]
