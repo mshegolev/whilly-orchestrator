@@ -1,0 +1,203 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mshegolev/whilly/schemas/events_payload_v4.3.1.json",
+  "title": "Whilly v4.3.1 events.payload baseline",
+  "description": "Per-event_type baseline JSON-Schema for the events.payload jsonb column as emitted by Whilly v4.3.1. Future minor versions (v4.4+) MUST keep this schema as a backwards-compatible subset — additions are allowed, but required fields and field types must not change.",
+  "version": "4.3.1",
+  "captured_from": [
+    "whilly/adapters/db/repository.py",
+    "whilly/api/event_flusher.py",
+    "whilly/api/main.py",
+    "whilly/worker/local.py"
+  ],
+  "event_types": {
+    "CLAIM": {
+      "type": "object",
+      "required": [
+        "worker_id",
+        "version"
+      ],
+      "properties": {
+        "worker_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "COMPLETE": {
+      "type": "object",
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "FAIL": {
+      "type": "object",
+      "required": [
+        "version",
+        "reason"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RELEASE": {
+      "type": "object",
+      "required": [
+        "version",
+        "reason"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "visibility_timeout",
+            "worker_offline",
+            "manual_reset",
+            "timeout",
+            "shutdown"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "RESET": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "manual_reset"
+          ]
+        },
+        "mode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "task.created": {
+      "type": "object",
+      "required": [
+        "plan_id"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "task.skipped": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "enum": [
+            "decision_gate_failed",
+            "deadlock"
+          ]
+        },
+        "missing_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "plan.applied": {
+      "type": "object",
+      "required": [
+        "plan_id"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "task_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "plan.budget_exceeded": {
+      "type": "object",
+      "required": [
+        "plan_id"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "threshold_pct": {
+          "type": "number"
+        },
+        "cost_usd": {
+          "type": "number"
+        },
+        "budget_usd": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
+    },
+    "triz.contradiction": {
+      "type": "object",
+      "required": [
+        "contradiction_type"
+      ],
+      "properties": {
+        "contradiction_type": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "triz.error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

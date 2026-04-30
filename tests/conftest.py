@@ -46,13 +46,15 @@ its declared footprint.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 import subprocess
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
-from typing import TypeVar
+from pathlib import Path
+from typing import Any, TypeVar
 
 import asyncpg
 import pytest
@@ -60,6 +62,52 @@ from alembic import command
 from alembic.config import Config
 
 from whilly.adapters.db import MIGRATIONS_DIR, TaskRepository, close_pool, create_pool
+
+# ─── Fixture-file loader (M1 readiness baseline) ─────────────────────────
+#
+# ``tests/fixtures/`` ships frozen fixtures for the v5 mission's
+# backwards-compat suite (v3-era + v4.0-era ``tasks.json`` snapshots, the
+# v4.3.1 ``events.payload`` JSON-Schema baseline, and a representative
+# ``.whilly_state.json`` round-trip snapshot). ``load_fixture`` is the
+# single read-side entry point — both as an importable function and as a
+# pytest fixture — so tests don't need to assemble paths from
+# ``__file__`` themselves.
+#
+# Behaviour:
+#   * ``.json`` files are parsed with :func:`json.loads`.
+#   * Any other extension (including ``.md``) is returned as a UTF-8
+#     :class:`str`.
+#   * Names may include sub-paths (e.g. ``"baselines/events_payload_v4.3.1.json"``).
+#
+# Re-creation of these fixtures is owned by ``scripts/m1_baseline_fixtures.py``
+# (idempotent re-run produces no diff).
+
+FIXTURES_DIR: Path = Path(__file__).resolve().parent / "fixtures"
+
+
+def load_fixture(name: str) -> Any:
+    """Load a fixture file from ``tests/fixtures/`` by relative name.
+
+    JSON files are parsed; everything else is returned as text.
+    """
+    path = FIXTURES_DIR / name
+    if not path.is_file():
+        raise FileNotFoundError(f"fixture not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".json":
+        return json.loads(text)
+    return text
+
+
+@pytest.fixture
+def load_fixture_fn() -> Callable[[str], Any]:
+    """Pytest fixture wrapper around :func:`load_fixture`.
+
+    Tests that prefer fixture-injection over module imports can request
+    ``load_fixture_fn`` and call it with a relative fixture name.
+    """
+    return load_fixture
+
 
 # ─── Colima/testcontainers port-forwarding flake mitigation ───────────────
 #
