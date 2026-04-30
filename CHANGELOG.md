@@ -5,6 +5,48 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-04-30
+
+> **Docker distribution release.** Adds official multi-arch (linux/amd64 +
+> linux/arm64) container images on Docker Hub (`mshegolev/whilly`) and GHCR
+> (`ghcr.io/mshegolev/whilly`), a presentation-ready 2-container demo
+> (compose + script + checklist + plans) and a tag-driven publish pipeline
+> with SBOM + provenance attestations. No Python source changes — this is
+> infrastructure-only.
+
+### Added
+
+- **Production Docker image.** `Dockerfile` builds a lean multi-stage image
+  with `[server,worker]` extras, non-root user `whilly:1000`, tini PID 1,
+  HEALTHCHECK on `/health`, OCI labels via build-args. Single image,
+  multiple roles via entrypoint dispatch (`control-plane` / `worker` /
+  `migrate` / `shell`).
+- **Multi-arch publish pipeline.** `.github/workflows/docker-publish.yml`
+  triggers on `v*.*.*` tag push and manual `workflow_dispatch`. Uses QEMU
+  + buildx for `linux/amd64` + `linux/arm64`. Publishes to Docker Hub
+  (`mshegolev/whilly`) and GHCR (`ghcr.io/mshegolev/whilly`) in parallel.
+  Generates SBOM and provenance attestations. Syncs Docker Hub README
+  from `docs/dockerhub-README.md` after a real `v*.*.*` push.
+- **Demo infrastructure.** `Dockerfile.demo` + `docker-compose.demo.yml`
+  + `docker/entrypoint.sh` give a 3-service stack (Postgres + control-plane
+  + scalable workers) for workshops and presentations. Each worker replica
+  auto-registers via bootstrap-token. `docker compose up --scale worker=N`
+  brings up N parallel workers.
+- **Workshop runner.** `workshop-demo.sh` is a one-command end-to-end
+  driver: pre-flight → build → up → import plan → wait for parallel claim
+  → audit log dump → cleanup. Flags: `--workers N`, `--skip-build`,
+  `--keep-running`.
+- **Demo plans.** `examples/demo/parallel.json` (2 independent tasks for
+  parallel-claim demo) and `examples/demo/tasks.json` (4-task DAG).
+- **Documentation.** `DEMO.md` (Russian, primary), `DEMO.en.md` (English,
+  brief), `DEMO-CHECKLIST.md` (9-step parallel-2-worker checklist with
+  troubleshooting matrix and slide storyboard), `docs/dockerhub-README.md`
+  (Hub-specific quickstart that's auto-synced to the registry).
+
+### Changed
+
+- **`.gitignore`** ignores `.remember/` (local Factory CLI session state).
+
 ## [4.1.0] - 2026-04-30
 
 > **v4.1 cleanup release.** Builds on the v4.0 distributed orchestrator with a
