@@ -1,0 +1,89 @@
+{
+  "project": "demo",
+  "plan_id": "demo",
+  "prd_file": "examples/demo/PRD-demo.md",
+  "tasks": [
+    {
+      "id": "DEMO-001",
+      "phase": "Phase 1 — Hello",
+      "category": "doc",
+      "priority": "high",
+      "status": "pending",
+      "description": "Создать файл DEMO-HELLO.md с одной строкой 'Hello from Whilly demo!'.",
+      "dependencies": [],
+      "key_files": ["DEMO-HELLO.md"],
+      "acceptance_criteria": [
+        "DEMO-HELLO.md существует в корне рабочего каталога",
+        "Содержимое — ровно одна строка 'Hello from Whilly demo!'"
+      ],
+      "test_steps": [
+        "test -s DEMO-HELLO.md",
+        "head -1 DEMO-HELLO.md | grep -q '^Hello from Whilly demo!$'"
+      ],
+      "prd_requirement": "demo-step-1"
+    },
+    {
+      "id": "DEMO-002",
+      "phase": "Phase 1 — Notes",
+      "category": "doc",
+      "priority": "medium",
+      "status": "pending",
+      "description": "Добавить файл NOTES.md в две строки: первая 'Notes', вторая — список из трёх bullet'ов.",
+      "dependencies": [],
+      "key_files": ["NOTES.md"],
+      "acceptance_criteria": [
+        "NOTES.md существует",
+        "Первая строка — 'Notes'",
+        "В файле есть ровно три bullet'а ('-')"
+      ],
+      "test_steps": [
+        "test -s NOTES.md",
+        "head -1 NOTES.md | grep -q '^Notes$'",
+        "test \"$(grep -c '^-' NOTES.md)\" = '3'"
+      ],
+      "prd_requirement": "demo-step-2"
+    },
+    {
+      "id": "DEMO-003",
+      "phase": "Phase 2 — Quality gate",
+      "category": "test",
+      "priority": "medium",
+      "status": "pending",
+      "description": "Сделать минимальный pytest-тест tests/test_demo_smoke.py, который проверяет 1+1==2 и существование DEMO-HELLO.md.",
+      "dependencies": ["DEMO-001"],
+      "key_files": ["tests/test_demo_smoke.py"],
+      "acceptance_criteria": [
+        "Файл tests/test_demo_smoke.py существует",
+        "Содержит test_arithmetic и test_hello_exists",
+        "pytest -q tests/test_demo_smoke.py проходит"
+      ],
+      "test_steps": [
+        "test -s tests/test_demo_smoke.py",
+        "grep -q 'def test_arithmetic' tests/test_demo_smoke.py",
+        "grep -q 'def test_hello_exists' tests/test_demo_smoke.py"
+      ],
+      "prd_requirement": "demo-step-3"
+    },
+    {
+      "id": "DEMO-004",
+      "phase": "Phase 3 — Wrap-up",
+      "category": "doc",
+      "priority": "low",
+      "status": "pending",
+      "description": "Создать SUMMARY.md с тремя пунктами: что было сделано, как это запускалось, что дальше.",
+      "dependencies": ["DEMO-001", "DEMO-002"],
+      "key_files": ["SUMMARY.md"],
+      "acceptance_criteria": [
+        "SUMMARY.md существует",
+        "Есть три bullet'а",
+        "Длина файла не больше 30 строк"
+      ],
+      "test_steps": [
+        "test -s SUMMARY.md",
+        "test \"$(grep -c '^-' SUMMARY.md)\" = '3'",
+        "test \"$(wc -l < SUMMARY.md)\" -le 30"
+      ],
+      "prd_requirement": "demo-step-4"
+    }
+  ]
+}

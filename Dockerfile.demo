@@ -1,0 +1,92 @@
+# Whilly Orchestrator — demo image (control-plane + worker in one Dockerfile)
+#
+# Multi-stage сборка единого образа, который умеет работать в двух ролях:
+#   1. control-plane (FastAPI / uvicorn)            — `docker run … control-plane`
+#   2. whilly-worker (HTTP-клиент к control-plane)  — `docker run … worker`
+#
+# Используется в docker-compose.demo.yml как два разных сервиса с одним и тем же
+# image и разными CMD. Это намеренно: для презентации удобнее показать одну
+# сборку, чем поддерживать два почти одинаковых Dockerfile'а.
+#
+# Build:
+#   docker build -f Dockerfile.demo -t whilly-demo:latest .
+#
+# Run (control-plane):
+#   # Подставьте свой DSN; defaults в docker-compose.demo.yml — POSTGRES_USER /
+#   # POSTGRES_PASSWORD оба whilly.
+#   docker run --rm -p 8000:8000 \
+#     -e WHILLY_DATABASE_URL="$WHILLY_DATABASE_URL" \
+#     -e WHILLY_WORKER_TOKEN=demo-bearer \
+#     -e WHILLY_WORKER_BOOTSTRAP_TOKEN=demo-bootstrap \
+#     whilly-demo:latest control-plane
+#
+# Run (worker):
+#   docker run --rm \
+#     -e WHILLY_CONTROL_URL=http://host.docker.internal:8000 \
+#     -e WHILLY_WORKER_TOKEN=demo-bearer \
+#     -e WHILLY_PLAN_ID=demo \
+#     whilly-demo:latest worker
+
+ARG PYTHON_VERSION=3.12
+
+# ─── Stage 1: build wheels in a fat image ────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /build
+
+# Compile-time deps (asyncpg / psycopg-style wheels не нужны, asyncpg идёт
+# готовым колесом). Ставим build-essential на всякий случай — если кто-то
+# добавит зависимость без prebuilt wheel'а на python:slim.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Сначала копируем только pyproject.toml чтобы кэшировать слой с deps
+# отдельно от исходников. Layer-cache рулит на CI и при итеративных правках.
+COPY pyproject.toml README.md ./
+COPY whilly/__init__.py whilly/__init__.py
+
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip \
+    && /opt/venv/bin/pip install '.[all]'
+
+# Теперь копируем весь код и ставим whilly в editable-режиме поверх.
+# Это даёт image, в котором правки кода видны без полной пересборки слоя
+# зависимостей (важно для итераций во время разработки демо).
+COPY . .
+RUN /opt/venv/bin/pip install --no-deps -e .
+
+# ─── Stage 2: slim runtime ───────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/opt/venv/bin:$PATH \
+    WHILLY_LOG_LEVEL=INFO
+
+# tini — корректный PID 1 для контейнеров (правильно ловит SIGTERM, не зомбирует
+# дочерние процессы). curl — для healthcheck. ca-certificates — для HTTPS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 1000 whilly \
+    && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /build /opt/whilly
+
+WORKDIR /opt/whilly
+
+# Точка входа диспатчит на нужную команду — control-plane или worker.
+COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
+RUN chmod +x /usr/local/bin/whilly-entrypoint \
+    && chown -R whilly:whilly /opt/whilly /home/whilly
+
+USER whilly
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
+CMD ["control-plane"]

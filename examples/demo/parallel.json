@@ -1,0 +1,45 @@
+{
+  "project": "parallel-demo",
+  "plan_id": "parallel",
+  "prd_file": "examples/demo/PRD-demo.md",
+  "tasks": [
+    {
+      "id": "PAR-001",
+      "phase": "Parallel",
+      "category": "doc",
+      "priority": "high",
+      "status": "pending",
+      "description": "Создать файл PAR-A.md с одной строкой 'A done'.",
+      "dependencies": [],
+      "key_files": ["PAR-A.md"],
+      "acceptance_criteria": [
+        "PAR-A.md существует",
+        "Содержимое — строка 'A done'"
+      ],
+      "test_steps": [
+        "test -s PAR-A.md",
+        "head -1 PAR-A.md | grep -q '^A done$'"
+      ],
+      "prd_requirement": "parallel-A"
+    },
+    {
+      "id": "PAR-002",
+      "phase": "Parallel",
+      "category": "doc",
+      "priority": "high",
+      "status": "pending",
+      "description": "Создать файл PAR-B.md с одной строкой 'B done'.",
+      "dependencies": [],
+      "key_files": ["PAR-B.md"],
+      "acceptance_criteria": [
+        "PAR-B.md существует",
+        "Содержимое — строка 'B done'"
+      ],
+      "test_steps": [
+        "test -s PAR-B.md",
+        "head -1 PAR-B.md | grep -q '^B done$'"
+      ],
+      "prd_requirement": "parallel-B"
+    }
+  ]
+}
