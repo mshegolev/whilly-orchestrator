@@ -1,0 +1,182 @@
+name: Docker Publish
+
+# Триггеры:
+#   * push tag v*.*.*       → multi-arch build + push в Hub и GHCR + sync README на Hub
+#   * workflow_dispatch     → ручной запуск из UI (для теста workflow'а перед релизом
+#                              или для пере-публикации без нового тэга)
+#
+# Что нужно прописать в repo settings → Secrets and variables → Actions:
+#
+#   DOCKERHUB_USERNAME      — ваш Docker Hub username (например, mshegolev)
+#   DOCKERHUB_TOKEN         — Access Token из https://hub.docker.com/settings/security
+#                              (создать с правом Read/Write/Delete для нужного namespace'а)
+#
+# GHCR работает через встроенный GITHUB_TOKEN, отдельных secrets не нужно —
+# но пакету нужен `permissions: packages: write` (см. ниже).
+#
+# Тэги, которые получит Docker Hub после `git tag v4.1.0 && git push --tags`:
+#   mshegolev/whilly:4.1.0     ← immutable (привязан к git-tag'у)
+#   mshegolev/whilly:4.1       ← floating: последний 4.1.x
+#   mshegolev/whilly:4         ← floating: последний 4.x.x
+#   mshegolev/whilly:latest    ← head стабильных релизов
+#   ghcr.io/mshegolev/whilly:<те же>
+#
+# Pre-release теги (v4.1.0-rc.1 и т.п.) НЕ получают `latest`, `4.1`, `4` —
+# только свой `4.1.0-rc.1`. Это поведение `docker/metadata-action` по умолчанию.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Tag override (e.g. dev-foo). Empty = use git ref."
+        required: false
+        default: ""
+      push_to_dockerhub:
+        description: "Push to Docker Hub"
+        type: boolean
+        default: true
+      push_to_ghcr:
+        description: "Push to GHCR"
+        type: boolean
+        default: true
+
+# Защита от гонки: одновременно идёт только один publish-запуск, новый
+# отменяет предыдущий. Без этого два push'а тэгов подряд могут начать
+# наперегонки переписывать `latest`.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write   # для push в ghcr.io (через GITHUB_TOKEN)
+
+env:
+  DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME && format('{0}/whilly', secrets.DOCKERHUB_USERNAME) || '' }}
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/whilly
+
+jobs:
+  publish:
+    name: Build & Publish (multi-arch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU нужен, чтобы x86 ranner мог собирать arm64-слои (binfmt-misc
+      # эмулирует cross-architecture syscalls для buildx).
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      # Buildx с docker-container driver — нужен для multi-platform манифеста
+      # и для cache export type=gha. На ranner'ах GitHub Actions buildx 0.17+
+      # уже стоит — никаких локальных проблем.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: github.event_name == 'push' || inputs.push_to_dockerhub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        if: github.event_name == 'push' || inputs.push_to_ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # metadata-action генерит набор тэгов из git-ref'а:
+      #   v4.1.0  → 4.1.0, 4.1, 4, latest
+      #   v4.1.0-rc.1 → 4.1.0-rc.1   (без `latest` и floating'ов)
+      #   workflow_dispatch → "dev-<sha>" или inputs.tag_override
+      #
+      # Также подставляет OCI labels через --label в build-push-action.
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+            type=raw,value=${{ inputs.tag_override }},enable=${{ inputs.tag_override != '' }}
+            type=sha,prefix=sha-,enable=${{ github.event_name == 'workflow_dispatch' && inputs.tag_override == '' }}
+          labels: |
+            org.opencontainers.image.title=whilly-orchestrator
+            org.opencontainers.image.description=Whilly v4 — distributed orchestrator for AI coding agents (Postgres + FastAPI + remote workers)
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.vendor=mshegolev
+
+      - name: Compute build date
+        id: date
+        run: echo "iso=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (multi-arch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          # Push выполняется только если есть хотя бы один target. На
+          # forked PR'ах login fail'ится → tags пуст → push false.
+          push: ${{ steps.meta.outputs.tags != '' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            WHILLY_VERSION=${{ steps.meta.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ steps.date.outputs.iso }}
+          # Кэш через GitHub Actions cache backend — ускоряет повторные
+          # сборки при tag push после merge'а из main (когда основной слой
+          # с pip install уже собран в предыдущем CI run'е).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # SBOM + provenance attestations — Docker Hub и GHCR показывают их
+          # как отдельные манифесты в `docker buildx imagetools inspect`.
+          # `mode=max` включает full provenance (SLSA Level 2-ish).
+          provenance: mode=max
+          sbom: true
+
+      - name: Image digest
+        run: |
+          echo "Digests for the manifests just pushed:"
+          echo '${{ steps.meta.outputs.tags }}' | while IFS= read -r tag; do
+            [[ -z "$tag" ]] && continue
+            printf '  %s\n' "$tag"
+          done
+
+  sync-dockerhub-readme:
+    name: Sync Docker Hub README
+    needs: publish
+    runs-on: ubuntu-latest
+    # README sync делаем только при настоящем релизе (не на dispatch'ах с
+    # debug-тэгами) и только если в repo прописан DOCKERHUB_USERNAME.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Push README to Docker Hub
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/whilly
+          short-description: "Whilly v4 — distributed orchestrator for AI coding agents (Postgres + FastAPI + remote workers)"
+          readme-filepath: ./docs/dockerhub-README.md
+          enable-url-completion: true
