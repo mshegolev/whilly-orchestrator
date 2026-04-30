@@ -97,7 +97,14 @@ async def test_skip_task_pending_to_skipped(
     db_pool: asyncpg.Pool,
     task_repo: TaskRepository,
 ) -> None:
-    """skip_task on PENDING: status → SKIPPED, version+1, SKIP event row."""
+    """skip_task on PENDING: status → SKIPPED, version+1, ``task.skipped`` event row.
+
+    M3 fix-feature: the canonical event_type literal is the lowercase
+    dotted ``'task.skipped'`` (sourced from
+    :data:`whilly.adapters.db.repository.TASK_SKIPPED_EVENT_TYPE`);
+    the events.plan_id column is populated from tasks.plan_id via
+    ``_SKIP_SQL`` RETURNING.
+    """
     await _seed_plan_and_task(db_pool, status=TaskStatus.PENDING, version=0)
 
     skipped = await task_repo.skip_task(
@@ -115,14 +122,23 @@ async def test_skip_task_pending_to_skipped(
         assert status == "SKIPPED"
 
         rows = await conn.fetch(
-            "SELECT event_type, payload FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT event_type, plan_id, payload FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert len(rows) == 1
+    # Defence-in-depth: events.plan_id is populated from tasks.plan_id.
+    assert rows[0]["plan_id"] == PLAN_ID
     payload = json.loads(rows[0]["payload"]) if isinstance(rows[0]["payload"], str) else rows[0]["payload"]
     assert payload["reason"] == "decision_gate_failed"
     assert payload["missing"] == ["acceptance_criteria"]
     assert payload["version"] == 1
+
+    # Anti-regression: zero rows of the legacy uppercase 'SKIP' literal.
+    async with db_pool.acquire() as conn:
+        legacy_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM events WHERE event_type = 'SKIP'",
+        )
+    assert legacy_count == 0, "regression: legacy uppercase 'SKIP' event_type leaked into events table"
 
 
 # ─── VAL-GATES-010: CLAIMED → SKIPPED ───────────────────────────────────
@@ -155,7 +171,7 @@ async def test_skip_task_claimed_to_skipped(
         assert row["claimed_at"] is None
 
         skip_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert skip_count == 1
@@ -181,7 +197,7 @@ async def test_skip_task_in_progress_to_skipped(
 
     async with db_pool.acquire() as conn:
         skip_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert skip_count == 1
@@ -203,7 +219,7 @@ async def test_skip_task_idempotent_on_already_skipped(
 
     async with db_pool.acquire() as conn:
         before = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert before == 1
@@ -216,7 +232,7 @@ async def test_skip_task_idempotent_on_already_skipped(
 
     async with db_pool.acquire() as conn:
         after = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert after == 1, "second skip must not write a duplicate audit row"
@@ -238,7 +254,7 @@ async def test_skip_task_rejects_from_done(
     async with db_pool.acquire() as conn:
         status = await conn.fetchval("SELECT status FROM tasks WHERE id = $1", TASK_ID)
         skip_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert status == "DONE"
@@ -261,7 +277,7 @@ async def test_skip_task_rejects_from_failed(
     async with db_pool.acquire() as conn:
         status = await conn.fetchval("SELECT status FROM tasks WHERE id = $1", TASK_ID)
         skip_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert status == "FAILED"
@@ -287,7 +303,7 @@ async def test_skip_task_respects_version_conflict(
             TASK_ID,
         )
         skip_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT COUNT(*) FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert row["status"] == "PENDING"
@@ -314,7 +330,7 @@ async def test_skip_task_detail_does_not_override_reason_or_version(
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT payload FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+            "SELECT payload FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
             TASK_ID,
         )
     assert len(rows) == 1
