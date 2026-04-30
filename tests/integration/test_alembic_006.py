@@ -132,11 +132,17 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_006_is_head_revision() -> None:
-    """The alembic script directory reports ``006_plan_github_ref`` as the head."""
+def test_006_is_in_revision_chain() -> None:
+    """``006_plan_github_ref`` is a known revision in the chain.
+
+    The current chain head is ``007_plan_prd_file`` (M3 fix-feature),
+    so this test pins 006's mere presence in the script directory's
+    revision walk rather than asserting it is the head.
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "006_plan_github_ref"
+    revisions = {rev.revision for rev in script.walk_revisions()}
+    assert "006_plan_github_ref" in revisions
 
 
 def test_upgrade_adds_github_issue_ref_nullable_text(base_005_dsn: str) -> None:
@@ -191,10 +197,18 @@ def test_upgrade_adds_github_issue_ref_nullable_text(base_005_dsn: str) -> None:
 
 
 def test_downgrade_removes_github_issue_ref_column(base_005_dsn: str) -> None:
-    """After ``upgrade head`` then ``downgrade -1``, the column + index are gone."""
+    """After ``upgrade head`` then ``downgrade 005_plan_budget``, the column + index are gone.
+
+    The chain head is now ``007_plan_prd_file`` (M3 fix-feature), so
+    the targeted downgrade target is the named revision rather than a
+    relative ``-1`` step.
+    """
     cfg = _build_cfg(base_005_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
-    _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
+    _retry_colima_flake(
+        lambda: command.downgrade(cfg, "005_plan_budget"),
+        op="downgrade 005_plan_budget",
+    )
 
     async def _inspect() -> tuple[int, int, str | None]:
         col_count = await _fetchval(

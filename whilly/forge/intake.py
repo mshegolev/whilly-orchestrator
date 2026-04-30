@@ -188,8 +188,8 @@ SELECT id FROM plans WHERE github_issue_ref = $1
 
 
 _INSERT_PLAN_WITH_GH_REF_SQL: Final[str] = """
-INSERT INTO plans (id, name, github_issue_ref)
-VALUES ($1, $2, $3)
+INSERT INTO plans (id, name, github_issue_ref, prd_file)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (id) DO NOTHING
 RETURNING id
 """
@@ -467,6 +467,7 @@ def run_forge_intake_command(
                 plan_id=slug,
                 plan_name=plan.name,
                 github_issue_ref=canonical_ref,
+                prd_file=str(prd_path),
                 tasks=tasks,
             )
         )
@@ -556,9 +557,10 @@ async def _async_intake_insert(
     plan_id: str,
     plan_name: str,
     github_issue_ref: str,
+    prd_file: str,
     tasks: list,
 ) -> tuple[str, bool]:
-    """Insert plan (with ``github_issue_ref``) + tasks + ``plan.created`` event atomically.
+    """Insert plan (with ``github_issue_ref`` + ``prd_file``) + tasks + ``plan.created`` event atomically.
 
     Mirrors :func:`whilly.cli.plan._async_import` but uses the new
     ``_INSERT_PLAN_WITH_GH_REF_SQL`` for the plan row, reuses the
@@ -591,13 +593,14 @@ async def _async_intake_insert(
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
-                # First, attempt to insert the plan with github_issue_ref.
+                # First, attempt to insert the plan with github_issue_ref + prd_file.
                 try:
                     inserted_id = await conn.fetchval(
                         _INSERT_PLAN_WITH_GH_REF_SQL,
                         plan_id,
                         plan_name,
                         github_issue_ref,
+                        prd_file,
                     )
                 except asyncpg.UniqueViolationError:
                     # Concurrent intake won — the partial UNIQUE on
@@ -643,6 +646,15 @@ async def _async_intake_insert(
                             "github_issue_ref": github_issue_ref,
                             "name": plan_name,
                             "tasks_count": len(tasks),
+                            # Defence-in-depth for VAL-CROSS-053:
+                            # the prd_file is also persisted on the
+                            # ``plans`` row (VAL-FORGE-005), but
+                            # mirroring it into the event payload
+                            # gives the cross-flow evidence query a
+                            # second match surface that is not
+                            # subject to the plans-row retention
+                            # policy.
+                            "prd_file": prd_file,
                         }
                     ),
                 )

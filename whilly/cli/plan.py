@@ -159,6 +159,39 @@ VALUES (
     $1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb, $10, $11
 )
 ON CONFLICT (id) DO NOTHING
+RETURNING id
+"""
+
+
+# Audit-event INSERT for the per-task ``task.created`` row emitted by
+# ``whilly plan apply`` (M3 fix-feature). Mirrors the shape of the
+# repository-side ``_INSERT_TASK_EVENT_WITH_PLAN_SQL``: BOTH ``task_id``
+# and ``plan_id`` populated so the cross-flow evidence query
+# (``WHERE plan_id=$1 GROUP BY event_type``) sees the row.
+#
+# Emission is gated on the task INSERT actually returning a row id
+# (i.e. ON CONFLICT DO NOTHING did NOT fire) so a re-run of ``apply``
+# against the same plan emits zero new ``task.created`` rows. This is
+# the gate VAL-CROSS-005 idempotency relies on for this event type.
+_INSERT_TASK_CREATED_EVENT_SQL: str = """
+INSERT INTO events (task_id, plan_id, event_type, payload)
+VALUES ($1, $2, 'task.created', $3::jsonb)
+"""
+
+
+# Audit-event INSERT for the per-apply ``plan.applied`` sentinel row
+# (M3 fix-feature). One row per ``whilly plan apply`` /
+# ``apply --strict`` invocation, written *after* the strict gate
+# iteration completes so its ``created_at`` is strictly later than
+# any ``task.skipped`` row from the same call. Reuses
+# :data:`whilly.adapters.db.repository._INSERT_PLAN_EVENT_SQL`'s shape
+# locally to keep the SQL string in this module's adapter site (the
+# repository-level constant is imported only via the repository's
+# public surface; copying the literal here keeps the module
+# self-contained).
+_INSERT_PLAN_APPLIED_EVENT_SQL: str = """
+INSERT INTO events (task_id, plan_id, event_type, payload)
+VALUES (NULL, $1, 'plan.applied', $2::jsonb)
 """
 
 
@@ -614,7 +647,14 @@ async def _insert_plan_and_tasks(
     await conn.execute(_INSERT_PLAN_SQL, plan.id, plan.name)
     inserted = 0
     for task in tasks:
-        await conn.execute(
+        # Use ``fetchval`` on the RETURNING-augmented task INSERT so a
+        # row that was actually written returns its id, while a row
+        # that hit ``ON CONFLICT (id) DO NOTHING`` returns ``None`` —
+        # the latter case is the canonical idempotency path: a re-run
+        # of ``whilly plan apply`` against the same plan must NOT emit
+        # a duplicate ``task.created`` event for already-imported
+        # rows (VAL-CROSS-005).
+        new_id = await conn.fetchval(
             _INSERT_TASK_SQL,
             task.id,
             plan.id,
@@ -627,6 +667,34 @@ async def _insert_plan_and_tasks(
             json.dumps(list(task.test_steps)),
             task.prd_requirement,
             task.version,
+        )
+        if new_id is None:
+            # ON CONFLICT (id) DO NOTHING — pre-existing row owned by
+            # this plan (idempotent re-run) or by a different plan
+            # (cross-plan id collision; the strict-apply path's
+            # cross-plan safety guard handles the SKIPPED transition,
+            # but here we simply skip the audit emission). No event
+            # row written ⇒ ``task.created`` count stays stable across
+            # reruns.
+            continue
+        # M3 fix-feature: emit one ``task.created`` event per
+        # newly-inserted task row. The payload carries diagnostic
+        # fields (priority, dependencies) that mirror the
+        # ``plan.created`` event's diagnostic shape so a downstream
+        # observer can render a human-readable line without
+        # re-querying ``tasks``. Both ``task_id`` and ``plan_id`` are
+        # populated so VAL-CROSS-004's per-plan distribution query
+        # (``GROUP BY event_type WHERE plan_id=$1``) sees the row.
+        await conn.execute(
+            _INSERT_TASK_CREATED_EVENT_SQL,
+            new_id,
+            plan.id,
+            json.dumps(
+                {
+                    "priority": task.priority.value,
+                    "dependencies": list(task.dependencies),
+                }
+            ),
         )
         inserted += 1
     logger.info("plan import: inserted plan %s with %d task(s)", plan.id, inserted)
@@ -1480,6 +1548,30 @@ async def _async_apply(
                     file=sys.stderr,
                 )
                 warned.append(task.id)
+
+        # M3 fix-feature: emit exactly one ``plan.applied`` audit
+        # event per ``apply`` invocation, after the gate iteration
+        # finishes. Carries a small diagnostic payload identifying
+        # how many tasks the call processed, how many were skipped,
+        # how many surfaced a warning, and whether ``--strict`` was
+        # set. Emitted on every apply invocation — VAL-CROSS-005's
+        # idempotency invariant only constrains ``plan.created`` /
+        # ``task.created`` / ``task.skipped``; ``plan.applied``
+        # naturally accumulates one row per apply call so operators
+        # can audit how many times an apply was run.
+        async with pool.acquire() as conn:
+            await conn.execute(
+                _INSERT_PLAN_APPLIED_EVENT_SQL,
+                plan.id,
+                json.dumps(
+                    {
+                        "tasks_count": len(tasks),
+                        "skipped_count": len(skipped),
+                        "warned_count": len(warned),
+                        "strict": strict,
+                    }
+                ),
+            )
         return skipped, warned
     finally:
         await close_pool(pool)

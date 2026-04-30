@@ -71,6 +71,15 @@ CREATE TABLE plans (
     -- contract — exactly one plan row per canonical issue ref
     -- (VAL-FORGE-007 / VAL-FORGE-019).
     github_issue_ref TEXT,
+    -- Absolute filesystem path of the PRD markdown file that
+    -- generated this plan (M3 fix-feature, migration 007). NULL for
+    -- plans without a generated PRD (created via ``whilly init`` /
+    -- ``whilly plan create``); set to the absolute path of
+    -- ``docs/PRD-<slug>.md`` for plans created via ``whilly forge
+    -- intake``. Pins VAL-FORGE-005 ("Path(plan.prd_file).is_file()
+    -- is True") at the plan-row level — a stable point-in-time
+    -- fact that does not depend on the events log retention policy.
+    prd_file TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

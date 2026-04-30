@@ -183,14 +183,14 @@ def test_strict_apply_does_not_mutate_other_plans_task(
     assert post_row["status"] == "PENDING", "cross-plan mutation: T-SHARED must remain PENDING"
     assert post_row["version"] == pre_version, "cross-plan mutation: T-SHARED version must not advance"
 
-    # No SKIP event row references T-SHARED — the strict path refused
-    # to call skip_task on the colliding id.
+    # No task.skipped event row references T-SHARED — the strict path
+    # refused to call skip_task on the colliding id.
     skip_events = _query_db(
         database_url,
-        "SELECT task_id FROM events WHERE task_id = $1 AND event_type = 'SKIP'",
+        "SELECT task_id FROM events WHERE task_id = $1 AND event_type = 'task.skipped'",
         "T-SHARED",
     )
-    assert skip_events == [], "cross-plan mutation: SKIP event row was written for T-SHARED"
+    assert skip_events == [], "cross-plan mutation: task.skipped event row was written for T-SHARED"
 
     # Plan A is recorded but contributed no tasks (the only task id
     # collided and was skipped at INSERT time).
@@ -254,6 +254,6 @@ def test_strict_apply_still_skips_own_failing_tasks(
 
     skip_events = _query_db(
         database_url,
-        "SELECT task_id FROM events WHERE event_type = 'SKIP'",
+        "SELECT task_id FROM events WHERE event_type = 'task.skipped'",
     )
     assert {row["task_id"] for row in skip_events} == {"T-BAD-EMPTY-AC"}

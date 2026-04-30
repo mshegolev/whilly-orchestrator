@@ -195,13 +195,20 @@ async def test_init_headless_creates_prd_and_imports_plan(
     assert task["priority"] == "critical"
     assert "Synthetic task" in task["description"]
 
-    # No events yet — worker hasn't run; init only imports.
+    # M3 fix-feature: ``init`` shares the ``_insert_plan_and_tasks``
+    # adapter helper with ``plan apply`` and now emits exactly one
+    # ``task.created`` audit event per inserted task row. No worker /
+    # state-machine events should appear yet (the worker hasn't run);
+    # only the import-time audit event.
     async with db_pool.acquire() as conn:
-        event_count = await conn.fetchval(
-            "SELECT COUNT(*) FROM events e JOIN tasks t ON t.id = e.task_id WHERE t.plan_id = $1",
+        rows = await conn.fetch(
+            "SELECT event_type, count(*)::int AS c "
+            "FROM events e JOIN tasks t ON t.id = e.task_id "
+            "WHERE t.plan_id = $1 GROUP BY event_type",
             PLAN_SLUG,
         )
-    assert event_count == 0, f"expected no events, got {event_count}{diag}"
+    by_type = {r["event_type"]: r["c"] for r in rows}
+    assert by_type == {"task.created": 1}, f"expected only task.created import audit events, got {by_type}{diag}"
 
 
 async def test_init_headless_no_import_skips_db(
