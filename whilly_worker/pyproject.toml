@@ -29,7 +29,7 @@ build-backend = "setuptools.build_meta"
 # which install route is used.
 [project]
 name = "whilly-worker"
-version = "4.1.0"
+version = "4.3.0"
 description = "Whilly v4.0 remote-worker — meta-package that installs the minimal worker dep closure (httpx + pydantic + whilly.core + whilly.adapters.transport.client). Provides the `whilly-worker` console script via whilly-orchestrator[worker]."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -49,7 +49,7 @@ classifiers = [
 # train, so a worker deploy must always match its control plane's minor
 # version. Bumped together with `whilly/__init__.py` and the parent
 # pyproject.toml in TASK-033a (v4.0.0 release).
-dependencies = ["whilly-orchestrator[worker]==4.1.0"]
+dependencies = ["whilly-orchestrator[worker]==4.3.0"]
 
 [project.urls]
 Homepage = "https://mshegolev.github.io/whilly-orchestrator/"
