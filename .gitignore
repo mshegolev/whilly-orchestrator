@@ -29,6 +29,7 @@ whilly.toml
 .DS_Store
 *.swp
 .claude/
+.remember/
 
 # Whilly runtime artifacts
 whilly.log
