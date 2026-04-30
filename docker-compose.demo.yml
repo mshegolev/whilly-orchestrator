@@ -1,0 +1,143 @@
+# Whilly Orchestrator — multi-container demo (для презентаций / самообучения).
+#
+# Цель: показать живьём v4-распределённую архитектуру —
+#   Postgres ◄── control-plane (FastAPI) ◄── whilly-worker (HTTP)
+# на одном хосте, тремя docker-сервисами.
+#
+# Логически это «БД + 2 application контейнера whilly»:
+#   - postgres        — служебная БД (state machine + audit log)
+#   - control-plane   — FastAPI / uvicorn, единственный знает про SQL
+#   - worker          — отдельный процесс, как «второй VM», только httpx + whilly.core
+#
+# Команды:
+#   docker compose -f docker-compose.demo.yml up --build
+#   docker compose -f docker-compose.demo.yml exec control-plane whilly plan import examples/demo/tasks.json
+#   docker compose -f docker-compose.demo.yml exec control-plane whilly plan show demo
+#   docker compose -f docker-compose.demo.yml logs -f worker
+#   docker compose -f docker-compose.demo.yml down -v
+#
+# ВАЖНО: для работы реальных задач worker'у нужен Claude CLI на PATH (или
+# stub `tests/fixtures/fake_claude.sh`). По умолчанию контейнер worker
+# использует stub из репозитория — этого достаточно, чтобы продемонстрировать
+# state-machine переходы, audit-log и distributed-claim'ы без расхода токенов
+# реального Claude. Чтобы подключить настоящий Claude — пробросьте бинарник
+# через volume и переопределите `CLAUDE_BIN`.
+
+services:
+  # ─── 1. БД (state machine + append-only events log) ─────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: whilly-demo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-whilly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whilly}
+      POSTGRES_DB: ${POSTGRES_DB:-whilly}
+    ports:
+      # Loopback only — даём psql-доступ для отладки прямо с хоста, но не
+      # светим Postgres в LAN (одна из мин в docker-демо в open-офисах).
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - whilly_demo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whilly} -d ${POSTGRES_DB:-whilly}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # ─── 2. Application контейнер #1: control-plane (FastAPI / uvicorn) ────────
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    image: whilly-demo:latest
+    # Никогда не пытаться пулить из registry — образ собран локально
+    # (см. шаг сборки в DEMO-CHECKLIST.md). Без этого compose на чистой
+    # машине пытается `docker pull whilly-demo` и падает с
+    # "pull access denied".
+    pull_policy: never
+    container_name: whilly-demo-control-plane
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+      # Per-worker bearer (FR-1.2). В демо хардкодим — в проде это секрет, который
+      # проходит через `whilly worker register`.
+      WHILLY_WORKER_TOKEN: ${WHILLY_WORKER_TOKEN:-demo-bearer}
+      # Cluster-join secret (тоже хардкод для демо).
+      WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
+      WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:${WHILLY_CONTROL_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    command: ["control-plane"]
+    volumes:
+      # Чтобы хост-машинский `whilly plan import examples/demo/tasks.json`
+      # внутри контейнера работал — пробрасываем репо в контейнер read-only.
+      # Этот mount нужен только для удобства exec'ов из compose; при сборке
+      # код уже скопирован в /opt/whilly из Dockerfile.demo.
+      - ./examples:/opt/whilly/examples:ro
+
+  # ─── 3. Application контейнер #2: whilly-worker (HTTP-клиент) ──────────────
+  #
+  # Поддерживает `docker compose -f docker-compose.demo.yml up --scale worker=N`:
+  # entrypoint.sh видит, что WHILLY_WORKER_TOKEN не задан, и регистрируется
+  # через WHILLY_WORKER_BOOTSTRAP_TOKEN — каждая реплика получает свой
+  # уникальный worker_id и per-worker bearer.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    image: whilly-demo:latest
+    pull_policy: never
+    # `container_name` намеренно НЕ указан — иначе compose откажется делать
+    # вторую реплику при `--scale worker=2` (имя контейнера должно быть
+    # уникальным).
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      WHILLY_CONTROL_URL: http://control-plane:8000
+      # Bootstrap-токен — entrypoint.sh использует его для `whilly worker register`,
+      # если WHILLY_WORKER_TOKEN не задан явно.
+      WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
+      WHILLY_PLAN_ID: ${WHILLY_PLAN_ID:-demo}
+      # Stub Claude — состояние-машина и аудит работают без реальной модели.
+      # Чтобы запустить с настоящим Claude: уберите эту строку и пробросьте
+      # /usr/local/bin/claude через volume.
+      CLAUDE_BIN: /opt/whilly/tests/fixtures/fake_claude.sh
+      WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+    command: ["worker"]
+
+  # ─── 4. (Опционально) одноразовый seed-runner ──────────────────────────────
+  # Импортирует demo-план в БД сразу после старта control-plane. Поднимается
+  # отдельным сервисом с `restart: 'no'` — в `docker compose up` он сделает
+  # своё дело и завершится; повторный `up` не запустит его снова без
+  # `--force-recreate`. Можно отключить с `--scale seed=0`.
+  seed:
+    image: whilly-demo:latest
+    pull_policy: never
+    container_name: whilly-demo-seed
+    profiles: ["seed"]
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+    volumes:
+      - ./examples:/opt/whilly/examples:ro
+    command: ["whilly", "plan", "apply", "examples/demo/tasks.json"]
+    restart: "no"
+
+volumes:
+  whilly_demo_pgdata:
+    name: whilly_demo_pgdata
