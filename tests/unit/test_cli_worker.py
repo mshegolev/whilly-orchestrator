@@ -141,7 +141,7 @@ def test_build_worker_parser_accepts_all_flags() -> None:
     args = parser.parse_args(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "secret",
             "--plan",
@@ -155,7 +155,7 @@ def test_build_worker_parser_accepts_all_flags() -> None:
             "3",
         ]
     )
-    assert args.connect_url == "http://control:8000"
+    assert args.connect_url == "http://127.0.0.1:8000"
     assert args.token == "secret"
     assert args.plan_id == "P-1"
     assert args.worker_id == "test-worker-x"
@@ -234,7 +234,7 @@ def test_missing_token_exits_2_with_hint(
     TASK-022c — this test is the canonical regression guard for it.
     """
     _clear_worker_env(monkeypatch)
-    code = run_worker_command(["--connect", "http://control:8000", "--plan", "P-1"])
+    code = run_worker_command(["--connect", "http://127.0.0.1:8000", "--plan", "P-1"])
     assert code == EXIT_ENVIRONMENT_ERROR
     captured = capsys.readouterr()
     assert WORKER_TOKEN_ENV in captured.err
@@ -254,7 +254,7 @@ def test_missing_plan_exits_2_with_hint(
     schema error is the right shape.
     """
     _clear_worker_env(monkeypatch)
-    code = run_worker_command(["--connect", "http://control:8000", "--token", "X"])
+    code = run_worker_command(["--connect", "http://127.0.0.1:8000", "--token", "X"])
     assert code == EXIT_ENVIRONMENT_ERROR
     captured = capsys.readouterr()
     assert PLAN_ID_ENV in captured.err
@@ -276,7 +276,7 @@ def test_env_vars_satisfy_required_inputs(
     env. A regression that ignored env in any one of the three inputs
     would surface as a missing-required diagnostic here.
     """
-    monkeypatch.setenv(CONTROL_URL_ENV, "http://env-control:9000")
+    monkeypatch.setenv(CONTROL_URL_ENV, "http://127.0.0.1:9000")
     monkeypatch.setenv(WORKER_TOKEN_ENV, "env-token")
     monkeypatch.setenv(PLAN_ID_ENV, "env-plan")
     monkeypatch.setenv(WORKER_ID_ENV, "env-worker")
@@ -288,7 +288,7 @@ def test_env_vars_satisfy_required_inputs(
     assert code == EXIT_OK
     assert len(captured) == 1
     kwargs = captured[0]
-    assert kwargs["connect_url"] == "http://env-control:9000"
+    assert kwargs["connect_url"] == "http://127.0.0.1:9000"
     assert kwargs["token"] == "env-token"
     assert kwargs["plan_id"] == "env-plan"
     assert kwargs["worker_id"] == "env-worker"
@@ -303,7 +303,7 @@ def test_cli_flags_override_env(monkeypatch: pytest.MonkeyPatch) -> None:
     operator's one-off override (the same foot-gun :mod:`whilly.cli.run`
     avoids).
     """
-    monkeypatch.setenv(CONTROL_URL_ENV, "http://env-control:9000")
+    monkeypatch.setenv(CONTROL_URL_ENV, "http://127.0.0.1:9000")
     monkeypatch.setenv(WORKER_TOKEN_ENV, "env-token")
     monkeypatch.setenv(PLAN_ID_ENV, "env-plan")
 
@@ -313,7 +313,7 @@ def test_cli_flags_override_env(monkeypatch: pytest.MonkeyPatch) -> None:
     code = run_worker_command(
         [
             "--connect",
-            "http://cli-control:8000",
+            "http://localhost:8000",
             "--token",
             "cli-token",
             "--plan",
@@ -322,7 +322,7 @@ def test_cli_flags_override_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert code == EXIT_OK
     kwargs = captured[0]
-    assert kwargs["connect_url"] == "http://cli-control:8000"
+    assert kwargs["connect_url"] == "http://localhost:8000"
     assert kwargs["token"] == "cli-token"
     assert kwargs["plan_id"] == "cli-plan"
 
@@ -347,7 +347,7 @@ def test_once_flag_sets_max_processed_to_one(monkeypatch: pytest.MonkeyPatch) ->
     code = run_worker_command(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "X",
             "--plan",
@@ -373,7 +373,7 @@ def test_no_once_flag_leaves_max_processed_none(monkeypatch: pytest.MonkeyPatch)
     code = run_worker_command(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "X",
             "--plan",
@@ -400,7 +400,7 @@ def test_default_heartbeat_interval_is_loop_default(monkeypatch: pytest.MonkeyPa
     captured, fake = _make_async_worker_recorder()
     monkeypatch.setattr(cli_worker, "_async_worker", fake)
 
-    code = run_worker_command(["--connect", "u", "--token", "t", "--plan", "p"])
+    code = run_worker_command(["--connect", "http://127.0.0.1:8000", "--token", "t", "--plan", "p"])
     assert code == EXIT_OK
     assert captured[0]["heartbeat_interval"] == pytest.approx(DEFAULT_HEARTBEAT_INTERVAL)
 
@@ -414,7 +414,7 @@ def test_max_iterations_defaults_to_none(monkeypatch: pytest.MonkeyPatch) -> Non
     captured, fake = _make_async_worker_recorder()
     monkeypatch.setattr(cli_worker, "_async_worker", fake)
 
-    code = run_worker_command(["--connect", "u", "--token", "t", "--plan", "p"])
+    code = run_worker_command(["--connect", "http://127.0.0.1:8000", "--token", "t", "--plan", "p"])
     assert code == EXIT_OK
     assert captured[0]["max_iterations"] is None
 
@@ -450,7 +450,7 @@ def test_stats_summary_goes_to_stderr(
     code = run_worker_command(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "X",
             "--plan",
@@ -491,7 +491,7 @@ def test_runner_kwarg_reaches_async_worker(monkeypatch: pytest.MonkeyPatch) -> N
     code = run_worker_command(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "X",
             "--plan",
@@ -518,7 +518,7 @@ def test_install_signal_handlers_kwarg_forwards(monkeypatch: pytest.MonkeyPatch)
     code = run_worker_command(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "X",
             "--plan",
@@ -544,7 +544,7 @@ def test_main_returns_run_worker_command_exit_code(monkeypatch: pytest.MonkeyPat
     code would surface here.
     """
     _clear_worker_env(monkeypatch)
-    code = main(["--connect", "http://control:8000", "--token", "X"])
+    code = main(["--connect", "http://127.0.0.1:8000", "--token", "X"])
     # No --plan and no env var → exit 2 from the validation branch.
     assert code == EXIT_ENVIRONMENT_ERROR
 
@@ -560,7 +560,7 @@ def test_main_reads_sys_argv_when_argv_is_none(monkeypatch: pytest.MonkeyPatch) 
     _clear_worker_env(monkeypatch)
     monkeypatch.setattr(
         "sys.argv",
-        ["whilly-worker", "--connect", "http://control:8000"],
+        ["whilly-worker", "--connect", "http://127.0.0.1:8000"],
     )
     # Token still missing → exit 2; the assertion is that main() pulled
     # argv from sys.argv (not the connect / token mismatch — the env
@@ -598,7 +598,7 @@ def test_asyncio_run_is_used_for_async_path(monkeypatch: pytest.MonkeyPatch) -> 
     code = run_worker_command(
         [
             "--connect",
-            "http://control:8000",
+            "http://127.0.0.1:8000",
             "--token",
             "X",
             "--plan",
