@@ -350,6 +350,36 @@ async def test_intake_happy_path_creates_plan_and_flips_label(
     assert len(rows) == 1
     assert rows[0]["github_issue_ref"] == "owner/repo/123"
 
+    # VAL-CROSS-001 / VAL-CROSS-053 — exactly one ``plan.created`` event row
+    # is emitted with payload carrying the canonical issue ref. Defence in
+    # depth: every successful intake should now have this event (added as
+    # part of the M3 r1 scrutiny unblocker for task-108a).
+    async with db_pool.acquire() as conn:
+        plan_id = rows[0]["id"]
+        event_count = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            plan_id,
+        )
+        assert event_count == 1
+        ref_value = await conn.fetchval(
+            "SELECT payload->>'github_issue_ref' FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            plan_id,
+        )
+        assert ref_value == "owner/repo/123"
+        # Diagnostic payload fields are present per the implementation
+        # contract (name, tasks_count) so downstream observers can render
+        # a human-readable line without re-querying ``plans``/``tasks``.
+        name_value = await conn.fetchval(
+            "SELECT payload->>'name' FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            plan_id,
+        )
+        assert isinstance(name_value, str) and name_value
+        tasks_count_value = await conn.fetchval(
+            "SELECT (payload->>'tasks_count')::int FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            plan_id,
+        )
+        assert isinstance(tasks_count_value, int) and tasks_count_value >= 0
+
 
 # ── VAL-FORGE-007: idempotent re-run ─────────────────────────────────────
 async def test_intake_idempotent_re_run_no_duplicate_no_extra_label_call(
@@ -554,3 +584,278 @@ async def test_api_plans_endpoint_exposes_github_issue_ref(
             # 404 for missing plan id.
             missing = await client.get("/api/v1/plans/does-not-exist")
             assert missing.status_code == 404
+
+
+# ── VAL-CROSS-001 / VAL-CROSS-053: plan.created event within 200 ms ──────
+async def test_intake_emits_plan_created_event_within_200ms(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_workdir: Path,
+    fake_claude: Path,
+    database_url: str,
+    db_pool: asyncpg.Pool,
+    gh_recorder,
+) -> None:
+    """Successful intake writes exactly one ``plan.created`` row in ≤ 200 ms.
+
+    Pins both VAL-CROSS-001 (count == 1, latency ≤ 0.2 s) and the
+    VAL-CROSS-053 evidence query
+    (``payload->>'github_issue_ref' = 'owner/repo/123'``).
+    """
+    import json as _json
+    import time as _time
+
+    monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: "/usr/local/bin/gh")
+    gh_recorder.queue(_completed(stdout=_json.dumps(_canned_issue_payload(123))))
+    gh_recorder.queue(_completed(stdout="https://github.com/example/repo/issues/123"))
+
+    rc = await _run_intake(["owner/repo/123"])
+    # VAL-CROSS-001: the latency budget is "within 200 ms AFTER the CLI
+    # exits 0" — i.e. row visibility post-CLI, not total CLI runtime
+    # (the CLI also drives the PRD pipeline + tasks generation + two
+    # short-lived asyncpg pools, all contract-irrelevant). Measure the
+    # window between CLI return and the first successful row read.
+    t_after_cli = _time.monotonic()
+
+    assert rc == forge_intake.EXIT_OK
+
+    slug = forge_intake._slug_for_issue("owner", "repo", 123)
+    async with db_pool.acquire() as conn:
+        # VAL-CROSS-001: exactly one plan.created row for this plan_id.
+        count_by_plan = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            slug,
+        )
+        t_after_query = _time.monotonic()
+        assert count_by_plan == 1
+        # The same-transaction direct INSERT means the row is committed
+        # before the CLI returns; this assertion documents the latency
+        # budget rather than gating on the (zero) intra-transaction
+        # delay. We allow generous slack for Colima/testcontainers
+        # round-trip variance while still pinning VAL-CROSS-001's 200 ms
+        # ceiling.
+        post_cli_latency = t_after_query - t_after_cli
+        assert post_cli_latency < 0.2, (
+            f"plan.created row visibility {post_cli_latency * 1000:.1f} ms "
+            "after CLI exit — slower than VAL-CROSS-001's 200 ms budget"
+        )
+
+        # VAL-CROSS-053: evidence query — exactly one row with the
+        # payload-bound issue ref.
+        count_by_ref = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE event_type='plan.created' AND payload->>'github_issue_ref'=$1",
+            "owner/repo/123",
+        )
+        assert count_by_ref == 1
+
+        # Migration 005 made events.task_id nullable to support the
+        # plan-level sentinel; assert the new event respects that
+        # convention so an accidental NOT NULL regression would fail.
+        task_id = await conn.fetchval(
+            "SELECT task_id FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            slug,
+        )
+        assert task_id is None
+
+
+# ── Idempotent re-run does NOT double-emit plan.created ──────────────────
+async def test_intake_idempotent_re_run_emits_only_one_plan_created(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_workdir: Path,
+    fake_claude: Path,
+    database_url: str,
+    db_pool: asyncpg.Pool,
+    gh_recorder,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Re-running the same intake leaves ``plan.created`` count at exactly 1.
+
+    The Step-1 short-circuit (existing-plan lookup) returns before the
+    new INSERT path, so the event emission is naturally skipped on the
+    second run — and the loser path under concurrent intake also skips
+    it (covered by ``test_intake_concurrent_runs_loser_skips_plan_created_event``).
+    """
+    import json as _json
+
+    monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: "/usr/local/bin/gh")
+    gh_recorder.queue(_completed(stdout=_json.dumps(_canned_issue_payload(123))))
+    gh_recorder.queue(_completed(stdout="https://github.com/example/repo/issues/123"))
+
+    rc1 = await _run_intake(["owner/repo/123"])
+    capsys.readouterr()
+    assert rc1 == forge_intake.EXIT_OK
+
+    # Second run — no canned responses queued; the Step-1 short-circuit
+    # must fire before any ``gh`` invocation.
+    rc2 = await _run_intake(["owner/repo/123"])
+    captured = capsys.readouterr()
+    assert rc2 == forge_intake.EXIT_OK
+    assert "already exists" in captured.out
+
+    slug = forge_intake._slug_for_issue("owner", "repo", 123)
+    async with db_pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            slug,
+        )
+    assert count == 1
+
+
+# ── VAL-FORGE-019 / VAL-CROSS-002: concurrent intake at-most-once edit ───
+class _ConcurrentGhRecorder:
+    """Thread-safe ``gh_recorder`` for ``asyncio.gather`` of two intake calls.
+
+    The default ``gh_recorder`` fixture pops a per-call canned response
+    off a queue, which doesn't fit the concurrent shape (we don't know
+    a priori which thread calls ``gh`` first, and the loser may not
+    call ``gh issue edit`` at all). This recorder dispatches by argv
+    shape:
+
+    * ``["issue", "view", ...]`` → canned issue payload (always).
+    * ``["issue", "edit", ...]`` → canned URL stdout (always).
+
+    A ``threading.Lock`` guards the ``calls`` list so concurrent
+    ``__call__`` invocations from two intake threads append cleanly.
+    """
+
+    def __init__(self, issue_number: int) -> None:
+        import threading as _threading
+
+        self._lock = _threading.Lock()
+        self._issue_number = issue_number
+        self.calls: list[list[str]] = []
+
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        timeout: float = forge_gh.DEFAULT_GH_TIMEOUT_SECONDS,
+    ) -> subprocess.CompletedProcess[str]:
+        del timeout
+        if shutil.which("gh") is None:
+            raise forge_gh.GHCLIMissingError(
+                "gh CLI is not on PATH; install via `brew install gh` or see https://cli.github.com."
+            )
+        with self._lock:
+            self.calls.append(list(args))
+        if len(args) >= 2 and args[0] == "issue" and args[1] == "view":
+            import json as _json
+
+            return _completed(stdout=_json.dumps(_canned_issue_payload(self._issue_number)))
+        if len(args) >= 2 and args[0] == "issue" and args[1] == "edit":
+            return _completed(stdout=f"https://github.com/example/repo/issues/{self._issue_number}")
+        raise AssertionError(f"_ConcurrentGhRecorder: unexpected gh argv {args!r}")
+
+
+async def test_intake_concurrent_runs_at_most_one_gh_edit_call(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_workdir: Path,
+    fake_claude: Path,
+    database_url: str,
+    db_pool: asyncpg.Pool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``asyncio.gather`` of two intakes → 1 plan, ≤ 1 edit, 1 plan.created event.
+
+    Pins VAL-FORGE-019 (exactly one plans row, at most one
+    ``gh issue edit`` invocation) and VAL-CROSS-002 (exactly one
+    label-mutation call) and VAL-CROSS-001 (exactly one
+    ``plan.created`` event). Both invocations exit ``EXIT_OK``; the
+    loser's stdout names the same plan id as the winner.
+    """
+    monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: "/usr/local/bin/gh")
+    recorder = _ConcurrentGhRecorder(issue_number=200)
+    monkeypatch.setattr(forge_gh, "_run_gh", recorder)
+
+    # Two concurrent intakes against the same Postgres.
+    results = await asyncio.gather(
+        _run_intake(["owner/repo/200"]),
+        _run_intake(["owner/repo/200"]),
+        return_exceptions=False,
+    )
+    captured = capsys.readouterr()
+
+    # Both invocations exit cleanly — losers print the existing plan id
+    # and exit 0 per VAL-FORGE-019's "the losing invocation either
+    # exits 0 ... printing the existing plan_id" branch.
+    assert results == [forge_intake.EXIT_OK, forge_intake.EXIT_OK], (
+        f"both intakes must exit EXIT_OK; got {results!r}; stderr={captured.err}"
+    )
+
+    # VAL-FORGE-019: exactly one plans row for the canonical ref.
+    slug = forge_intake._slug_for_issue("owner", "repo", 200)
+    async with db_pool.acquire() as conn:
+        plan_count = await conn.fetchval(
+            "SELECT count(*) FROM plans WHERE github_issue_ref=$1",
+            "owner/repo/200",
+        )
+        assert plan_count == 1
+
+        # VAL-CROSS-001 / VAL-CROSS-053: exactly one plan.created event.
+        event_count = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            slug,
+        )
+        assert event_count == 1
+
+    # VAL-FORGE-019 / VAL-CROSS-002: at most one ``gh issue edit`` call.
+    edit_calls = [c for c in recorder.calls if len(c) >= 2 and c[0:2] == ["issue", "edit"]]
+    assert len(edit_calls) <= 1, (
+        f"VAL-FORGE-019 / VAL-CROSS-002: at most one `gh issue edit` invocation; got {len(edit_calls)}: {edit_calls!r}"
+    )
+    # Sanity: at least one ``gh issue view`` was made (the winner's
+    # path goes through fetch_issue). The loser may also issue a
+    # view if it raced past Step 1; either is allowed.
+    view_calls = [c for c in recorder.calls if len(c) >= 2 and c[0:2] == ["issue", "view"]]
+    assert len(view_calls) >= 1
+
+    # Loser's stdout includes the same plan_id as the winner's. Both
+    # branches (Step-1 short-circuit and Step-5b race-loser) print the
+    # plan id followed by "already exists" or "already exists ... nothing
+    # to do" — assert the slug appears in stdout.
+    assert slug in captured.out
+
+
+async def test_intake_concurrent_runs_loser_skips_plan_created_event(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_workdir: Path,
+    fake_claude: Path,
+    database_url: str,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Concurrent intake yields exactly one ``plan.created`` event row.
+
+    Tighter sibling of ``test_intake_concurrent_runs_at_most_one_gh_edit_call``
+    focused purely on Part A × Part B interaction: the loser must skip
+    BOTH the label flip AND the event emission; the audit log must not
+    acquire a duplicate ``plan.created`` row even under the race.
+    """
+    monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: "/usr/local/bin/gh")
+    recorder = _ConcurrentGhRecorder(issue_number=201)
+    monkeypatch.setattr(forge_gh, "_run_gh", recorder)
+
+    results = await asyncio.gather(
+        _run_intake(["owner/repo/201"]),
+        _run_intake(["owner/repo/201"]),
+        return_exceptions=False,
+    )
+    assert results == [forge_intake.EXIT_OK, forge_intake.EXIT_OK]
+
+    slug = forge_intake._slug_for_issue("owner", "repo", 201)
+    async with db_pool.acquire() as conn:
+        # Part A × Part B interaction: exactly one plan.created row
+        # even under race (loser skipped emission).
+        event_count = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            slug,
+        )
+        assert event_count == 1
+
+        # Defence in depth: across the entire events table for this
+        # canonical ref (in case a future regression silently skipped
+        # the plan_id binding and dropped the row under a different
+        # plan_id), the count is still 1.
+        count_by_ref = await conn.fetchval(
+            "SELECT count(*) FROM events WHERE event_type='plan.created' AND payload->>'github_issue_ref'=$1",
+            "owner/repo/201",
+        )
+        assert count_by_ref == 1

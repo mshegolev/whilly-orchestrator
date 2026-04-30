@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import re
@@ -191,6 +192,25 @@ INSERT INTO plans (id, name, github_issue_ref)
 VALUES ($1, $2, $3)
 ON CONFLICT (id) DO NOTHING
 RETURNING id
+"""
+
+
+# Plan-level audit event written immediately after a successful Forge intake
+# INSERT. Mirrors :data:`whilly.adapters.db.repository._INSERT_PLAN_EVENT_SQL`
+# (used by the budget sentinel) — both populate ``plan_id`` and leave
+# ``task_id`` NULL, which migration 005 made legal by relaxing the
+# ``events.task_id NOT NULL`` constraint.
+#
+# The event is written from the same transaction as the plan/tasks INSERTs
+# inside :func:`_async_intake_insert` so the row becomes visible
+# atomically with the plan: VAL-CROSS-001 / VAL-CROSS-053 require exactly
+# one ``plan.created`` row per intake within 200 ms of the CLI exiting 0,
+# and a same-transaction direct INSERT trivially meets the latency budget
+# without spinning a full FastAPI lifespan inside the short-lived CLI
+# subprocess.
+_INSERT_PLAN_CREATED_EVENT_SQL: Final[str] = """
+INSERT INTO events (task_id, plan_id, event_type, payload)
+VALUES (NULL, $1, 'plan.created', $2::jsonb)
 """
 
 
@@ -441,7 +461,7 @@ def run_forge_intake_command(
         return EXIT_USER_ERROR
 
     try:
-        plan_id = asyncio.run(
+        plan_id, created = asyncio.run(
             _async_intake_insert(
                 dsn=dsn,
                 plan_id=slug,
@@ -457,9 +477,29 @@ def run_forge_intake_command(
         )
         return EXIT_USER_ERROR
 
+    # ── Step 5b: concurrent-intake loser short-circuit ─────────────────
+    # If the DB-level partial UNIQUE on ``github_issue_ref`` told us a
+    # concurrent intake won the race (VAL-FORGE-019), we are the loser:
+    # the winner's transaction already inserted the plan, the tasks,
+    # and the ``plan.created`` event row. Do NOT emit the label flip
+    # (VAL-CROSS-002 — at most one ``gh issue edit``) and exit 0 with
+    # the existing plan id printed to stdout — mirroring the Step-1
+    # short-circuit message so the operator sees a uniform "plan
+    # already exists" line regardless of which side of the race
+    # detected the duplicate.
+    if not created:
+        print(
+            f"whilly forge intake: plan {plan_id!r} already exists for "
+            f"github_issue_ref={canonical_ref!r}; concurrent intake won the race; "
+            "nothing to do."
+        )
+        return EXIT_OK
+
     # ── Step 6: label transition ───────────────────────────────────────
     # Last step on purpose (VAL-FORGE-018): if anything earlier fails,
     # we exit before the label flip and the issue stays untouched.
+    # Additionally gated on ``created=True`` (VAL-FORGE-019 /
+    # VAL-CROSS-002) — concurrent-intake losers short-circuited above.
     if args.no_label_flip:
         logger.info(
             "forge.intake: skipping label flip for %s (--no-label-flip)",
@@ -517,22 +557,35 @@ async def _async_intake_insert(
     plan_name: str,
     github_issue_ref: str,
     tasks: list,
-) -> str:
-    """Insert plan (with ``github_issue_ref``) + tasks atomically.
+) -> tuple[str, bool]:
+    """Insert plan (with ``github_issue_ref``) + tasks + ``plan.created`` event atomically.
 
     Mirrors :func:`whilly.cli.plan._async_import` but uses the new
-    ``_INSERT_PLAN_WITH_GH_REF_SQL`` for the plan row and reuses the
+    ``_INSERT_PLAN_WITH_GH_REF_SQL`` for the plan row, reuses the
     existing :func:`_insert_plan_and_tasks` helper for the per-task
-    INSERTs. Returns the persisted plan id.
+    INSERTs, and emits a single ``plan.created`` audit event row
+    (VAL-CROSS-001 / VAL-CROSS-053) inside the same transaction.
+
+    Returns:
+        A two-tuple ``(plan_id, created)`` where ``created`` is
+        ``True`` iff this caller's INSERT actually wrote the plan
+        row. Concurrent intake losers receive ``(plan_id, False)``
+        — the ``plan_id`` is the winner's id read back from the
+        partial UNIQUE conflict, and ``created=False`` lets the
+        caller skip the label flip *and* the ``plan.created`` event
+        emission so neither the audit log nor the GitHub label
+        history acquires duplicates (VAL-FORGE-019 / VAL-CROSS-002).
 
     Idempotency under concurrent runs (VAL-FORGE-019)
     -------------------------------------------------
     The partial UNIQUE on ``plans.github_issue_ref`` (migration 006)
     lets us tolerate the race where two concurrent intake processes
     both pass the existence check (Step 1 above) but only one wins
-    the INSERT. The loser catches :class:`asyncpg.UniqueViolationError`
-    and reads back the winner's row. Either subprocess exits 0 with
-    the same ``plan_id``.
+    the INSERT. The loser hits ``ON CONFLICT (id) DO NOTHING`` (slug
+    derived from ref → same id) or :class:`asyncpg.UniqueViolationError`
+    (different slug, same ref) and reads back the winner's row.
+    Either subprocess exits 0 with the same ``plan_id``; only the
+    creator emits the audit event and flips the label.
     """
     pool = await create_pool(dsn)
     try:
@@ -556,7 +609,11 @@ async def _async_intake_insert(
                 if inserted_id is None:
                     existing = await _existing_plan_for_ref(conn, github_issue_ref)
                     if existing is not None:
-                        return existing
+                        # Loser path: the row already belongs to a
+                        # concurrent winner. Do NOT emit the
+                        # ``plan.created`` event or insert tasks —
+                        # the winner is responsible for both.
+                        return existing, False
                     # ON CONFLICT (id) — same plan_id slug but a
                     # different github_issue_ref already claims it.
                     # This is a slug collision (extremely unlikely
@@ -570,7 +627,26 @@ async def _async_intake_insert(
                 # Insert the tasks alongside the plan in the same
                 # transaction (matches ``whilly plan import`` shape).
                 await _insert_plan_and_tasks(conn, _PlanProxy(plan_id, plan_name), tasks)
-                return inserted_id
+                # VAL-CROSS-001 / VAL-CROSS-053: emit exactly one
+                # ``plan.created`` audit event row. Same transaction
+                # as the plan INSERT so the row is visible
+                # atomically with the plan (no flusher latency
+                # window). Payload carries the canonical issue ref
+                # (machine-checkable evidence query) plus diagnostic
+                # ``name`` and ``tasks_count`` for downstream
+                # observability.
+                await conn.execute(
+                    _INSERT_PLAN_CREATED_EVENT_SQL,
+                    inserted_id,
+                    json.dumps(
+                        {
+                            "github_issue_ref": github_issue_ref,
+                            "name": plan_name,
+                            "tasks_count": len(tasks),
+                        }
+                    ),
+                )
+                return inserted_id, True
     finally:
         await close_pool(pool)
 
