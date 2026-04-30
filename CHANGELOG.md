@@ -5,6 +5,63 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] - 2026-04-30
+
+> **Agentic CLIs ship in the box.** Production Docker image
+> (`mshegolev/whilly:4.3.0`) теперь включает три полноценных кодинг-агента
+> — Claude Code, Gemini CLI, OpenCode — со своими sub-agents, skills,
+> MCP-серверами и file-tools. Whilly worker внутри контейнера может зайти
+> в любой из них через единый adapter без правки кода. Раньше нужно было
+> либо ставить агента наружу и пробрасывать как volume, либо собирать
+> custom image — теперь pull-and-go.
+
+### Added
+
+- **Agentic CLI mode (`--cli claude-code|opencode|gemini`).**
+  `docker/cli_adapter.py` — Python adapter, который whilly-worker зовёт
+  как `$CLAUDE_BIN`. Транслирует whilly-style argv (`--output-format json
+  -p "<prompt>"`) в native argv каждого CLI и парсит native output в
+  whilly envelope. claude-code — passthrough (whilly изначально под него
+  заточен); opencode — JSONL stream → result event; gemini — single
+  `{response, stats}`. Tier-aware model selection через
+  `llm_resource_picker` работает для всех трёх.
+- **Three agentic CLIs preinstalled в production Docker image.**
+  `npm install -g @anthropic-ai/claude-code @google/gemini-cli opencode-ai`
+  встроен в `Dockerfile`. Размер образа вырос с ~250 MB до ~1.5 GB,
+  но pull-and-go работает с любым из трёх агентов out-of-the-box.
+- **`workshop-demo.sh --cli <agent>`** — выбор agentic CLI для demo.
+  Маппит на `WHILLY_CLI` env + правильный credentials env (для
+  claude-code: `ANTHROPIC_API_KEY`; для opencode: `OPENROUTER_API_KEY`
+  по умолчанию или `ANTHROPIC_API_KEY` / `GROQ_API_KEY`; для gemini:
+  `GEMINI_API_KEY`). Опция `--cli stub` сохраняет старый default.
+- **`docker/cli_adapter.py`** покрыт unit-тестами:
+  `tests/unit/test_cli_adapter.py` — 24 cases (dispatch, claude
+  passthrough, opencode JSONL parser, gemini single-JSON parser, argv
+  compat, force-complete, model resolution).
+
+### Changed
+
+- **Production `Dockerfile` ставит agentic CLIs.** Если нужен slim
+  образ — собирайте локально с `--build-arg INCLUDE_CLIS=false` (TODO:
+  пока CLI'и встроены безусловно). Альтернатива — использовать v4.2.x.
+- **Default `--cli` поведение в `workshop-demo.sh`.** Если ни `--cli`,
+  ни `--llm` не заданы — используется `--cli stub` (был `--llm stub`).
+  Поведение идентично, но семантика правильнее: stub — это «не agentic
+  CLI», а не «не raw LLM».
+- **DEMO.md** дополнен секцией «Agentic CLI workflow» с описанием
+  sub-agents, skills, MCP, volume-mount'ов для конфигов
+  `~/.claude/`, `.opencode/`, `.gemini/`. Сравнительная таблица CLI и
+  feature-matrix (provider lock, sub-agents, skills, MCP, file-tools,
+  free path).
+
+### Documentation
+
+- README не трогали (whilly orchestrator API не изменился).
+- Все примеры из CHANGELOG протестированы вручную:
+  `docker run -e WHILLY_CLI=claude-code mshegolev/whilly:4.3.0 …`
+  корректно стартует и упирается в `Not logged in` без `ANTHROPIC_API_KEY`
+  (а с ним — отрабатывает реальный agentic workflow).
+
 ## [4.2.1] - 2026-04-30
 
 > **Hotfix for v4.2.0 Docker images.** The `mshegolev/whilly:4.2.0`

@@ -129,6 +129,19 @@ services:
       # workshop-demo.sh с флагом --llm <provider> делает это за вас.
       CLAUDE_BIN: ${CLAUDE_BIN:-/opt/whilly/tests/fixtures/fake_claude_demo.sh}
       FAKE_CLAUDE_DEMO_DELAY: "${FAKE_CLAUDE_DEMO_DELAY:-2.5}"
+      # ─── Agentic CLI mode (--cli claude-code|opencode|gemini) ────────────
+      # cli_adapter.py транслирует whilly's argv в native argv каждого CLI
+      # и парсит native output. WHILLY_CLI выбирает adapter route.
+      WHILLY_CLI: ${WHILLY_CLI:-}
+      WHILLY_FORCE_COMPLETE: ${WHILLY_FORCE_COMPLETE:-1}
+      # Credentials для каждого agentic CLI (читаются нативно):
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENCODE_DEFAULT_PROVIDER: ${OPENCODE_DEFAULT_PROVIDER:-}
+      # ─── Raw LLM shim mode (--llm groq|openrouter|cerebras|...) ──────────
       LLM_PROVIDER: ${LLM_PROVIDER:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}

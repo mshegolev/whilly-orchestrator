@@ -23,14 +23,30 @@
 #   --workers N          сколько реплик воркера запускать (default: 2)
 #   --plan <slug>        какой план использовать (default: parallel)
 #   --plan-file <path>   путь к JSON плана (default: examples/demo/parallel.json)
-#   --llm <provider>     какой LLM использовать (default: stub):
-#                          stub       — быстрый sleep + COMPLETE (без LLM)
+#   --cli <agent>        agentic CLI с sub-agents/skills/MCP (рекомендуется):
+#                          stub          — fake_claude_demo.sh, без LLM (default)
+#                          claude-code   — Anthropic CLI, нужен ANTHROPIC_API_KEY
+#                          opencode      — open-source CLI, любой provider
+#                          gemini        — Google CLI, free 1500 req/day
+#                        agentic CLI'и сами умеют read/write файлов, исполнять
+#                        bash, держать sub-agents и skills (~/.claude/skills,
+#                        .opencode/agent), MCP-серверы. Это «настоящие»
+#                        кодинг-агенты в контейнере воркера.
+#
+#   --llm <provider>     raw OpenAI-API без agentic capabilities (fallback):
+#                          stub       — alias to --cli stub
 #                          groq       — нужен GROQ_API_KEY
 #                          openrouter — нужен OPENROUTER_API_KEY
 #                          cerebras   — нужен CEREBRAS_API_KEY
 #                          gemini     — нужен GEMINI_API_KEY
 #                          ollama     — нужен запущенный ollama на хосте
 #                          claude     — нужен ANTHROPIC_API_KEY (платный)
+#                        --llm даёт «модель в вакууме» — пишет ответ, но
+#                        НЕ умеет file-tools / sub-agents / skills. Полезно
+#                        чтобы быстро увидеть как whilly state-machine
+#                        реагирует на реальные ответы LLM, без полной
+#                        agentic-стеки. Для production workflow всегда
+#                        предпочтительнее --cli.
 #                        Модель подбирается автоматически под cgroup-лимиты
 #                        контейнера (см. docker/llm_resource_picker.py).
 #                        Override модели: LLM_MODEL=...
@@ -47,7 +63,8 @@ KEEP_RUNNING=0
 WORKERS=2
 PLAN_ID="parallel"
 PLAN_FILE="examples/demo/parallel.json"
-LLM_BACKEND="stub"
+LLM_BACKEND=""    # выставляется через --llm; если выбран --cli, остаётся пустым
+CLI_BACKEND=""    # выставляется через --cli
 TIER_OVERRIDE=""
 USE_COLOR=1
 DEBUG=0
@@ -64,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --workers)       WORKERS="${2:?--workers needs a number}"; shift 2 ;;
     --plan)          PLAN_ID="${2:?--plan needs a slug}"; shift 2 ;;
     --plan-file)     PLAN_FILE="${2:?--plan-file needs a path}"; shift 2 ;;
+    --cli)           CLI_BACKEND="${2:?--cli needs an agent name}"; shift 2 ;;
     --llm)           LLM_BACKEND="${2:?--llm needs a provider}"; shift 2 ;;
     --tier)          TIER_OVERRIDE="${2:?--tier needs tiny|small|medium|large}"; shift 2 ;;
     --no-color)      USE_COLOR=0; shift ;;
@@ -73,12 +91,74 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# По умолчанию — stub. --cli и --llm взаимоисключающие; если оба заданы,
+# --cli приоритетнее (agentic > raw model для real workflow).
+if [[ -z "$CLI_BACKEND" && -z "$LLM_BACKEND" ]]; then
+  CLI_BACKEND="stub"
+elif [[ -n "$CLI_BACKEND" && -n "$LLM_BACKEND" ]]; then
+  echo "Использовано и --cli и --llm — выбираю --cli $CLI_BACKEND (--llm игнорируется)" >&2
+  LLM_BACKEND=""
+fi
+
 [[ "$DEBUG" == "1" ]] && set -x
 
-# ─── LLM backend resolution ──────────────────────────────────────────────────
-# Маппим --llm <provider> в конкретные env vars, которые читает
-# docker-compose.demo.yml и пробрасывает worker'у. Модель НЕ задаём — её
-# подберёт docker/llm_resource_picker.py из entrypoint'а под cgroup-лимиты.
+# ─── CLI / LLM backend resolution ────────────────────────────────────────────
+# --cli <agent> выставляет CLAUDE_BIN на cli_adapter.py + WHILLY_CLI=<name>.
+# Adapter транслирует whilly's argv в native argv нужного CLI и парсит
+# native output. Эти CLI'и тащат свои sub-agents, skills, MCP, file-tools.
+configure_cli_backend() {
+  case "$CLI_BACKEND" in
+    stub)
+      # alias на старый stub-режим
+      export CLAUDE_BIN="/opt/whilly/tests/fixtures/fake_claude_demo.sh"
+      ;;
+    claude-code)
+      : "${ANTHROPIC_API_KEY:?--cli claude-code нужен ANTHROPIC_API_KEY}"
+      export CLAUDE_BIN="/opt/whilly/docker/cli_adapter.py"
+      export WHILLY_CLI="claude-code"
+      export ANTHROPIC_API_KEY
+      # claude-code сам читает ANTHROPIC_API_KEY из env. Auth через
+      # `claude login` тоже работает, но в demo проще через env.
+      export LLM_PROVIDER="${LLM_PROVIDER:-claude}"  # для picker'а в entrypoint
+      ;;
+    opencode)
+      # opencode умеет любых providers. По умолчанию — OpenRouter free
+      # tier (DeepSeek, Llama-3.3-70b бесплатно).
+      if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+        export OPENROUTER_API_KEY
+        export OPENCODE_DEFAULT_PROVIDER="openrouter"
+        export LLM_PROVIDER="${LLM_PROVIDER:-openrouter}"
+      elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        export ANTHROPIC_API_KEY
+        export LLM_PROVIDER="${LLM_PROVIDER:-claude}"
+      elif [[ -n "${GROQ_API_KEY:-}" ]]; then
+        export GROQ_API_KEY
+        export LLM_PROVIDER="${LLM_PROVIDER:-groq}"
+      else
+        err "--cli opencode нужен один из: OPENROUTER_API_KEY (рекомендуется, free), ANTHROPIC_API_KEY, GROQ_API_KEY"
+        exit 1
+      fi
+      export CLAUDE_BIN="/opt/whilly/docker/cli_adapter.py"
+      export WHILLY_CLI="opencode"
+      ;;
+    gemini)
+      : "${GEMINI_API_KEY:?--cli gemini нужен GEMINI_API_KEY (https://aistudio.google.com/apikey)}"
+      export CLAUDE_BIN="/opt/whilly/docker/cli_adapter.py"
+      export WHILLY_CLI="gemini"
+      export GEMINI_API_KEY
+      export LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
+      ;;
+    *)
+      err "unknown --cli $CLI_BACKEND (expected: stub|claude-code|opencode|gemini)"
+      exit 1
+      ;;
+  esac
+}
+
+# --llm <provider> — старый raw shim (без agentic capabilities). Маппим
+# в env vars, которые читает docker-compose.demo.yml и пробрасывает
+# worker'у. Модель НЕ задаём — её подберёт docker/llm_resource_picker.py
+# из entrypoint'а под cgroup-лимиты.
 configure_llm_backend() {
   case "$LLM_BACKEND" in
     stub)
@@ -222,13 +302,25 @@ require_bin docker
 detect_compose
 ok "compose CLI: ${COMPOSE[*]}"
 
-step "конфигурируем LLM backend: --llm $LLM_BACKEND"
-configure_llm_backend
-if [[ "$LLM_BACKEND" == "stub" ]]; then
-  ok "stub Claude (fake_claude_demo.sh, sleep 2.5s) — без расхода токенов"
-else
-  ok "real LLM: provider=$LLM_BACKEND, model подбирается автоматически в контейнере"
+if [[ -n "$CLI_BACKEND" ]]; then
+  step "конфигурируем agentic CLI: --cli $CLI_BACKEND"
+  configure_cli_backend
+  case "$CLI_BACKEND" in
+    stub)    ok "stub Claude (fake_claude_demo.sh, sleep 2.5s) — без расхода токенов" ;;
+    claude-code) ok "claude-code (Anthropic CLI с sub-agents, skills, MCP)" ;;
+    opencode)    ok "opencode (open-source agentic CLI с sub-agents, skills, MCP)" ;;
+    gemini)      ok "gemini-cli (Google CLI, sub-agents, skills, MCP, free-tier)" ;;
+  esac
   [[ -n "$TIER_OVERRIDE" ]] && dim "  tier override: $TIER_OVERRIDE"
+else
+  step "конфигурируем raw LLM backend: --llm $LLM_BACKEND"
+  configure_llm_backend
+  if [[ "$LLM_BACKEND" == "stub" ]]; then
+    ok "stub Claude (fake_claude_demo.sh, sleep 2.5s) — без расхода токенов"
+  else
+    ok "raw LLM: provider=$LLM_BACKEND (без sub-agents/skills — для real workflow используйте --cli)"
+    [[ -n "$TIER_OVERRIDE" ]] && dim "  tier override: $TIER_OVERRIDE"
+  fi
 fi
 
 if ! docker info >/dev/null 2>&1; then

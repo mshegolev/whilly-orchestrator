@@ -82,11 +82,53 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # tini — корректный PID 1 (forwarding SIGTERM, reaping zombies).
 # curl — для healthcheck'а и ожидания control-plane'a в worker entrypoint'е.
 # ca-certificates — TLS-связь с PyPI / Anthropic API / etc.
+# nodejs/npm/git/unzip нужны для agentic CLI'ев (claude-code / gemini-cli /
+# opencode) и их runtime-зависимостей (git для diff/commit, unzip для
+# opencode'овского postinstall script'а).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tini curl ca-certificates \
+    && apt-get install -y --no-install-recommends \
+         tini curl ca-certificates git unzip \
+         nodejs npm \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
     && groupadd --system --gid 1000 whilly \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
+
+# ─── Agentic CLI tools (опционально, но включены в production image) ─────
+# Three production-ready coding agents shipped в образ:
+#
+# 1) @anthropic-ai/claude-code — Anthropic's official CLI. Whilly изначально
+#    под него заточен (см. whilly/adapters/runner/claude_cli.py); whilly's
+#    argv совпадает 1-в-1, native output уже в Whilly-shape envelope.
+#    Sub-agents, skills (~/.claude/skills), MCP servers, hooks.
+#    Авторизация: ANTHROPIC_API_KEY env или `claude login` (OAuth).
+#
+# 2) @google/gemini-cli — Google's official CLI с free-tier (1500 req/day
+#    на gemini-2.0-flash). Sub-agents, skills, MCP, file-tools, code search.
+#    Headless: `gemini -p "<prompt>" --output-format json --model X`.
+#    Авторизация: GEMINI_API_KEY env (https://aistudio.google.com/apikey).
+#
+# 3) opencode-ai — open source agentic CLI поддерживающий ЛЮБЫХ providers
+#    (Anthropic, OpenAI, Groq, OpenRouter, Cerebras, Ollama, Gemini etc.)
+#    через models.dev. Sub-agents, skills (читает .claude/skills для
+#    совместимости с claude-code), MCP, ACP (Agent Client Protocol).
+#    Headless: `opencode run --format json --model provider/model "..."`.
+#    Авторизация: per-provider env (OPENROUTER_API_KEY / ANTHROPIC_API_KEY
+#    / GROQ_API_KEY / etc) — opencode сам разберётся.
+#
+# Whilly-worker зовёт один из них через CLAUDE_BIN+WHILLY_CLI (см.
+# docker/cli_adapter.py). Если установка увеличит размер образа сверх
+# приемлемого — можно будет вынести в отдельный target `whilly:agents`.
+RUN npm install -g --omit=dev \
+        @anthropic-ai/claude-code \
+        @google/gemini-cli \
+        opencode-ai \
+    && npm cache clean --force \
+    && rm -rf /root/.npm
+
+# Sanity build-time: все три CLI должны быть в PATH. Падаем здесь, а не
+# на runtime в чужом проекте, если npm-пакет переименовали.
+RUN command -v claude && command -v gemini && command -v opencode \
+    && echo "agentic CLIs ready: claude / gemini / opencode"
 
 # Копируем уже установленный venv. Multi-arch это переживает: buildx делает
 # отдельный builder-слой для каждой arch, и runtime тоже per-arch — пути
@@ -103,9 +145,24 @@ COPY docker/alembic.prod.ini /opt/whilly/alembic.ini
 # здесь и зовём create_app(pool) явно — same shape as integration tests.
 COPY docker/control_plane.py /opt/whilly/docker/control_plane.py
 
+# Adapter + raw shim + cgroup-aware model picker для agentic CLI workflow:
+#   - cli_adapter.py: транслирует whilly's argv в native argv каждого CLI
+#     (claude-code/opencode/gemini), парсит native output → whilly envelope.
+#   - llm_shim.py: raw OpenAI-compatible API call (без agentic capabilities).
+#     Drop-in замена CLAUDE_BIN для случая «нужно быстро + дёшево + без
+#     файловых операций».
+#   - llm_resource_picker.py: подбирает модель под cgroup-лимиты контейнера.
+#     Используется обоими режимами (shim + adapter).
+COPY docker/cli_adapter.py /opt/whilly/docker/cli_adapter.py
+COPY docker/llm_shim.py /opt/whilly/docker/llm_shim.py
+COPY docker/llm_resource_picker.py /opt/whilly/docker/llm_resource_picker.py
+
 # Точка входа — диспатчер ролей (control-plane / worker / migrate / shell).
 COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
 RUN chmod +x /usr/local/bin/whilly-entrypoint \
+    /opt/whilly/docker/cli_adapter.py \
+    /opt/whilly/docker/llm_shim.py \
+    /opt/whilly/docker/llm_resource_picker.py \
     && chown -R whilly:whilly /opt/whilly /home/whilly
 
 # OCI labels — Docker Hub и GHCR показывают их на странице тэгов;
