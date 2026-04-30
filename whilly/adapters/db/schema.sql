@@ -63,8 +63,26 @@ CREATE TABLE plans (
     -- a CHECK constraint (see migration 005's docstring).
     budget_usd NUMERIC(10, 4),
     spent_usd  NUMERIC(10, 4) NOT NULL DEFAULT 0,
+    -- Forge intake back-reference (TASK-108a, migration 006). NULL
+    -- for plans not generated from a GitHub issue (e.g. plans created
+    -- via ``whilly init``); for Forge-originated plans, the canonical
+    -- ``owner/repo/<number>`` triple captured by ``whilly forge
+    -- intake``. The partial UNIQUE index below pins the idempotency
+    -- contract — exactly one plan row per canonical issue ref
+    -- (VAL-FORGE-007 / VAL-FORGE-019).
+    github_issue_ref TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Partial UNIQUE on Forge-originated plans (TASK-108a, migration
+-- 006). Re-running ``whilly forge intake owner/repo/<N>`` MUST NOT
+-- create a duplicate plan row for the same issue. The partial form
+-- (``WHERE github_issue_ref IS NOT NULL``) excludes plans without a
+-- GitHub origin so they don't all collide on a single NULL pseudo-
+-- value (Postgres treats NULLs as distinct in a regular UNIQUE
+-- index, but the partial predicate makes the intent obvious).
+CREATE UNIQUE INDEX ix_plans_github_issue_ref_unique ON plans (github_issue_ref)
+    WHERE github_issue_ref IS NOT NULL;
 
 -- ─── tasks ───────────────────────────────────────────────────────────────
 CREATE TABLE tasks (
