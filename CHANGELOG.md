@@ -5,6 +5,58 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.1] - 2026-04-30
+
+> **Hotfix for v4.2.0 Docker images.** The `mshegolev/whilly:4.2.0`
+> (and `ghcr.io/mshegolev/whilly:4.2.0`) image crashed on `control-plane`
+> startup with `create_app() missing 1 required positional argument: 'pool'`.
+> Root cause: `uvicorn whilly.adapters.transport.server:create_app --factory`
+> in the README and entrypoint cannot pass an asyncpg pool — uvicorn
+> calls the factory with no args, but `create_app(pool, ...)` requires
+> one. This release ships the production launcher and a working demo
+> image. PyPI 4.2.0 was unaffected (Python source is identical).
+
+### Fixed
+
+- **Production Docker image: control-plane now starts.** New
+  `docker/control_plane.py` opens the asyncpg pool, calls
+  `create_app(pool)`, and runs `uvicorn.Server` in-process — same shape
+  as `tests/integration/test_phase5_remote.py`. Both `Dockerfile` and
+  `Dockerfile.demo` COPY this module and `docker/entrypoint.sh` exec's
+  it for the `control-plane` role.
+- **Demo image: `whilly` package importable at runtime.** Switched from
+  editable pip install (whose `.pth` pointed at `/build`, which doesn't
+  exist in the runtime stage) to non-editable install. Added explicit
+  COPY of `docker/`, `examples/`, `alembic.prod.ini`, and
+  `tests/fixtures/fake_claude*.sh` to runtime stage.
+- **Demo image: `alembic upgrade head` finds migrations.** Set
+  `ALEMBIC_CONFIG=/opt/whilly/alembic.ini` and use the production
+  variant of `alembic.ini` (absolute migrations path inside venv) instead
+  of the source-checkout-relative one.
+- **`workshop-demo.sh`: workers start before plan import.** Bringing
+  workers up first means both replicas are long-polling `/tasks/claim`
+  when tasks land — `FOR UPDATE SKIP LOCKED` then distributes them
+  cleanly across workers (the v4 distributed-claim contract).
+- **`workshop-demo.sh`: events SELECT uses `created_at`.** Was
+  referencing a non-existent `ts` column.
+- **`docker-compose.demo.yml`: dropped `./examples` volume mount.** On
+  Colima/Docker-Desktop-on-macOS the host path isn't shared with the
+  VM by default, leaving the directory empty inside the container.
+  Files come from the COPY in `Dockerfile.demo` instead.
+
+### Added
+
+- **`docker/control_plane.py`.** Production launcher. Reads
+  `WHILLY_DATABASE_URL` / `WHILLY_HOST` / `WHILLY_PORT` /
+  `WHILLY_LOG_LEVEL` from the environment and owns the pool lifecycle
+  (open before `create_app`, close after `server.serve()` returns).
+- **`tests/fixtures/fake_claude_demo.sh`.** Demo-only Claude stub that
+  sleeps `FAKE_CLAUDE_DEMO_DELAY` seconds (default 2.5s) before emitting
+  the `<promise>COMPLETE</promise>` envelope. The instant
+  `fake_claude.sh` next to it is preserved unchanged for unit /
+  integration tests; this stub is workshop-only and lets the audience
+  see the parallel-claim "money frame" before tasks finish.
+
 ## [4.2.0] - 2026-04-30
 
 > **Docker distribution release.** Adds official multi-arch (linux/amd64 +
