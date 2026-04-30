@@ -217,6 +217,18 @@ class EventFlusher:
         # depth is observable (VAL-OBS-006) and the 1000-events/sec
         # throughput target keeps it bounded under realistic load.
         self.queue: asyncio.Queue[EventRecord] = asyncio.Queue()
+        # Wake-on-threshold signal (TASK-106 / VAL-OBS-003 fix). Set by
+        # :meth:`enqueue` whenever the queue depth crosses
+        # :data:`batch_limit`; awaited by :meth:`run` alongside the
+        # 100 ms timer so a 500-row burst is flushed within ≤ 50 ms of
+        # the threshold-crossing enqueue rather than waiting up to one
+        # full timer interval. Cleared inside the run loop after every
+        # wake-driven drain. Constructed eagerly because
+        # :class:`asyncio.Event` no longer binds to a loop at
+        # construction time on Python 3.10+, so the eager allocation
+        # is safe even though :meth:`run` is what binds it to the
+        # running loop's wait queue.
+        self._wake: asyncio.Event = asyncio.Event()
         self.idle_polls: int = 0
         self.last_flushed_seq: int = 0
         self.last_batch_size: int = 0
@@ -239,8 +251,22 @@ class EventFlusher:
             backpressure; using the sync variant keeps the hot path
             usable from sync handlers (e.g. CLI helpers) without an
             ``asyncio.run`` indirection.
+
+        Wake-on-threshold (VAL-OBS-003 contract pin)
+            Once the queue depth reaches :data:`batch_limit`, set
+            ``self._wake`` so :meth:`run` skips the remainder of its
+            current 100 ms timer slice and drains immediately. The
+            check uses ``>=`` rather than ``==`` so a producer that
+            outruns the loop (multiple enqueues between two iterations)
+            still wakes the loop on every threshold crossing, not just
+            the first one. Sub-batch volume (``qsize() < batch_limit``)
+            does **not** set the wake — VAL-OBS-004 requires the timer
+            to remain the cadence floor for sparse traffic, otherwise
+            the loop would degenerate into a busy spin on every put.
         """
         self.queue.put_nowait(record)
+        if self.queue.qsize() >= self._batch_limit:
+            self._wake.set()
 
     # ─── lifespan loop ───────────────────────────────────────────────────
 
@@ -261,17 +287,56 @@ class EventFlusher:
         )
         try:
             while not stop.is_set():
-                # Wait either for the interval timer or for a quick
-                # signal that the queue is full enough to flush. A
-                # tight ``asyncio.sleep(self._flush_interval)`` is
-                # fine for the cadence floor; the batch-size trigger
-                # is checked after the sleep.
+                # Wait for the FIRST of three signals: the interval
+                # timer (cadence floor for sub-batch traffic —
+                # VAL-OBS-004), the wake event (set by ``enqueue``
+                # when queue depth crosses ``batch_limit`` —
+                # VAL-OBS-003), or the lifespan ``stop`` event
+                # (graceful shutdown — VAL-OBS-007 / VAL-OBS-015).
+                # ``asyncio.wait`` with ``FIRST_COMPLETED`` returns as
+                # soon as any one fires; we then cancel the others so
+                # they don't hang around on the loop's task queue
+                # until the next iteration.
+                stop_task = asyncio.ensure_future(stop.wait())
+                wake_task = asyncio.ensure_future(self._wake.wait())
+                timer_task = asyncio.ensure_future(asyncio.sleep(self._flush_interval))
                 try:
-                    await asyncio.wait_for(stop.wait(), timeout=self._flush_interval)
+                    done, _pending = await asyncio.wait(
+                        {stop_task, wake_task, timer_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                finally:
+                    # Cancel whichever waiters didn't fire so they
+                    # don't accumulate on the loop. ``gather`` with
+                    # ``return_exceptions=True`` swallows the
+                    # synthetic ``CancelledError``s without polluting
+                    # logs / breaking the lifespan teardown.
+                    for t in (stop_task, wake_task, timer_task):
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(
+                        stop_task,
+                        wake_task,
+                        timer_task,
+                        return_exceptions=True,
+                    )
+                if stop_task in done or stop.is_set():
                     # ``stop`` fired during the wait — break to drain.
                     break
-                except TimeoutError:
-                    pass
+                if wake_task in done:
+                    # Threshold crossed: drain immediately and clear
+                    # the wake so we re-arm for the next crossing.
+                    # Crucially: do NOT bump ``idle_polls`` — the wake
+                    # path is not a timer tick (VAL-OBS-013 counts only
+                    # idle timer cycles, not threshold-driven flushes).
+                    self._wake.clear()
+                    if not self.queue.empty():
+                        await self._drain_once()
+                    continue
+                # Timer fired (the only remaining branch): cadence
+                # floor for sub-batch traffic. Same accounting as the
+                # original loop: empty queue → idle poll, non-empty →
+                # drain.
                 if self.queue.empty():
                     self.idle_polls += 1
                     continue

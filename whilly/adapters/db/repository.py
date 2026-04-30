@@ -65,20 +65,59 @@ import json
 import logging
 import os
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import asyncpg
 
 from whilly.core.models import PlanId, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
 
+if TYPE_CHECKING:  # pragma: no cover — type-only import to avoid import cycles.
+    from whilly.api.event_flusher import EventRecord
+
 __all__ = [
     "BUDGET_EXCEEDED_EVENT_TYPE",
     "BUDGET_EXCEEDED_REASON",
     "BUDGET_EXCEEDED_THRESHOLD_PCT",
+    "EventFlusherProtocol",
     "TaskRepository",
     "VersionConflictError",
 ]
+
+
+class EventFlusherProtocol(Protocol):
+    """Structural contract for the lifespan-managed event flusher (TASK-106).
+
+    :class:`TaskRepository` accepts any object satisfying this protocol via
+    its optional ``event_flusher`` kwarg so the per-task TRIZ hook
+    (:meth:`TaskRepository._maybe_emit_triz_event`) can route
+    ``triz.contradiction`` / ``triz.error`` rows through the lifespan
+    flusher's bulk-INSERT batcher rather than issuing a single direct
+    ``INSERT INTO events`` (VAL-CROSS-021 contract pin: "row is **flushed
+    via lifespan flusher** within 200 ms of the FAIL RPC's HTTP 200
+    response").
+
+    The protocol is intentionally narrow — only :meth:`enqueue` is
+    required — so import-graph hygiene is preserved: this module does
+    not import :mod:`whilly.api.event_flusher` at runtime, only
+    structurally references its enqueue surface. The concrete
+    :class:`whilly.api.event_flusher.EventFlusher` class satisfies it
+    by virtue of having the matching method.
+
+    Why a Protocol and not a direct import?
+        :mod:`whilly.adapters.db.repository` is loaded by every entry
+        point that touches Postgres (CLI commands, local worker, API
+        server). :mod:`whilly.api.event_flusher` is part of the HTTP
+        composition root and pulls in :mod:`fastapi` transitively via
+        the api package's ``__init__``. A direct import here would
+        force every CLI invocation to pay FastAPI's import cost.
+        :class:`Protocol` defers the type/contract check to the
+        single call site that actually uses the flusher (the FastAPI
+        lifespan), so the import graph stays minimal.
+    """
+
+    def enqueue(self, record: EventRecord) -> None:  # pragma: no cover — structural type.
+        ...
 
 
 # Sentinel event type emitted exactly once when ``plans.spent_usd``
@@ -819,8 +858,57 @@ class TaskRepository:
     pool's lifecycle.
     """
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        *,
+        event_flusher: EventFlusherProtocol | None = None,
+    ) -> None:
+        """Bind the asyncpg pool and (optionally) the lifespan event flusher.
+
+        Args
+        ----
+        pool:
+            Already-opened :class:`asyncpg.Pool`. Lifecycle is the
+            caller's; the repository never opens or closes it.
+        event_flusher:
+            Optional :class:`EventFlusherProtocol` (typically the
+            FastAPI lifespan's :class:`whilly.api.event_flusher.EventFlusher`
+            instance). When provided, the per-task TRIZ FAIL hook
+            routes ``triz.contradiction`` / ``triz.error`` rows
+            through the flusher's bulk-INSERT batcher
+            (:meth:`_maybe_emit_triz_event`) — VAL-CROSS-021 names the
+            flusher as the canonical carrier. When ``None`` (the
+            default for local workers, CLI helpers, and direct test
+            fixtures), the TRIZ hook falls back to the original
+            direct ``INSERT INTO events`` so VAL-CROSS-020's 200 ms
+            latency budget is met for callers that have no lifespan
+            flusher.
+        """
         self._pool = pool
+        self._event_flusher: EventFlusherProtocol | None = event_flusher
+
+    def attach_event_flusher(self, event_flusher: EventFlusherProtocol | None) -> None:
+        """Late-bind the lifespan event flusher onto an already-constructed repo.
+
+        :func:`whilly.adapters.transport.server.create_app` builds the
+        :class:`TaskRepository` at app-construction time (so
+        :func:`make_db_bearer_auth` can resolve per-worker tokens
+        synchronously) but the :class:`EventFlusher` is allocated
+        inside the lifespan (so its :class:`asyncio.Queue` binds to
+        the running event loop). This setter bridges the two — the
+        lifespan calls it after constructing the flusher so all
+        subsequent ``fail_task`` calls route TRIZ events through the
+        flusher path.
+
+        Idempotent: calling twice with the same flusher (or with
+        ``None`` to clear it) is safe. Mutating ``_event_flusher``
+        from outside the loop is allowed because the per-event
+        ``self._event_flusher is not None`` check inside
+        :meth:`_maybe_emit_triz_event` re-reads the attribute each
+        invocation.
+        """
+        self._event_flusher = event_flusher
 
     async def claim_task(self, worker_id: WorkerId, plan_id: PlanId) -> Task | None:
         """Atomically claim one ``PENDING`` task from ``plan_id`` for ``worker_id``.
@@ -1195,6 +1283,45 @@ class TaskRepository:
             # surface as an event row (VAL-TRIZ-003 / VAL-TRIZ-005).
             return
 
+        # Lifespan-flusher path (VAL-CROSS-021 contract pin: "row is
+        # **flushed via lifespan flusher** within 200 ms"). When the
+        # API process composed us with an :class:`EventFlusher`
+        # reference, hand the row to the flusher's bulk-INSERT
+        # batcher so it lands on the same audit-log carrier the
+        # cross-area assertions name. The flusher copy of the row
+        # carries an explicit ``payload={}`` to match the original
+        # direct-INSERT shape (VAL-TRIZ-001 expects
+        # ``events.payload`` non-null jsonb).
+        if self._event_flusher is not None:
+            # Lazy-import keeps the import graph clean: CLI / local-
+            # worker code paths that never construct an
+            # :class:`EventFlusher` never pay the cost of loading
+            # :mod:`whilly.api.event_flusher` (which transitively
+            # pulls FastAPI through the api package).
+            from whilly.api.event_flusher import EventRecord  # noqa: PLC0415 — see comment above
+
+            try:
+                self._event_flusher.enqueue(
+                    EventRecord(
+                        event_type=event_type,
+                        task_id=task.id,
+                        payload={},
+                        detail=detail_payload,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — fail-open contract
+                logger.warning(
+                    "triz hook: failed to enqueue %s event for task=%s via flusher: %r",
+                    event_type,
+                    task.id,
+                    exc,
+                )
+            return
+
+        # Local-worker fallback (no lifespan flusher available).
+        # Preserves VAL-CROSS-020's 200 ms latency budget for callers
+        # that have no FastAPI lifespan / TaskGroup-bound flusher
+        # (CLI helpers, ``run_local_worker``, direct test fixtures).
         try:
             async with self._pool.acquire() as conn:
                 await conn.execute(
