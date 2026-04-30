@@ -779,6 +779,19 @@ def create_app(
         # ``event_flusher_idle_polls`` lives on the flusher instance
         # itself (see :class:`EventFlusher.idle_polls`); validators read
         # it via ``app.state.event_flusher.idle_polls`` (VAL-OBS-013).
+        # Late-bind the flusher onto the repo so the per-task TRIZ FAIL
+        # hook routes ``triz.contradiction`` / ``triz.error`` rows
+        # through the bulk-INSERT batcher (VAL-CROSS-021 contract pin:
+        # the cross-area assertion explicitly names the lifespan
+        # flusher as the canonical carrier). The repo was constructed
+        # before lifespan entry — we cannot pass the flusher in via
+        # :class:`TaskRepository.__init__` because the flusher's
+        # :class:`asyncio.Queue` must bind to the running loop, which
+        # only exists inside the lifespan. The setter is idempotent
+        # and lifespan teardown re-clears it via ``None`` so subsequent
+        # lifespan cycles (test harnesses re-entering the same app)
+        # don't accumulate stale references.
+        repo.attach_event_flusher(flusher)
         try:
             # ``asyncio.TaskGroup`` owns the periodic background sweeps
             # for the duration of the app's lifespan. Tasks are created
@@ -863,6 +876,10 @@ def create_app(
             app.state.event_flusher = None
             app.state.event_queue = None
             app.state.event_flusher_task = None
+            # Drop the repo's flusher reference so subsequent lifespan
+            # cycles (e.g. test harnesses re-entering the same app)
+            # don't pick up the now-defunct queue / coroutine.
+            repo.attach_event_flusher(None)
             logger.info("Whilly control-plane app stopped")
 
     app = FastAPI(
