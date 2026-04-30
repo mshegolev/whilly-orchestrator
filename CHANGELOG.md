@@ -5,7 +5,63 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v4.1 work in progress
+## [4.1.0] - 2026-04-30
+
+> **v4.1 cleanup release.** Builds on the v4.0 distributed orchestrator with a
+> pure Decision Gate, per-task TRIZ contradiction analyzer, per-worker bearer
+> auth, plan-level budget guard, lifespan-managed event flusher, GitHub-issue
+> Forge intake, the `whilly init` PRD pipeline port, and Claude HTTPS_PROXY
+> support. The v3.x legacy CLI (`whilly/cli_legacy.py`) is removed and the
+> `WHILLY_WORKTREE` / `WHILLY_USE_WORKSPACE` env vars are now silent no-ops.
+
+### Added
+
+- **TASK-104c — pure Decision Gate.** New `whilly/core/gates.py` keeps the
+  gate logic dependency-free. New `whilly plan apply --strict` rejects plans
+  that contain skip-flagged tasks; non-strict mode warns and continues.
+  `repo.skip_task` emits `task.skipped` events scoped to the current
+  `plan_id` so audit trails stay plan-local.
+- **TASK-104b — per-task TRIZ analyzer.** New `whilly/core/triz.py` runs a
+  TRIZ contradiction pass per task; results land in the new `events.detail
+  jsonb` column. Gated by `WHILLY_TRIZ_ENABLED`; subprocess timeout 25 s;
+  fail-open on missing/timeout/malformed JSON (a `triz.error` event with
+  `detail.reason="timeout"` is still emitted on timeout per the validation
+  contract).
+- **TASK-101 — per-worker bearer auth.** Migration `004_per_worker_bearer`
+  makes `workers.token_hash` nullable and adds a partial UNIQUE index on
+  non-NULL values. Deprecates the global `WHILLY_WORKER_TOKEN` (one-shot
+  log warning, suppress with `WHILLY_SUPPRESS_WORKER_TOKEN_WARNING=1`).
+  New `whilly worker register` CLI mints per-worker tokens; bearer-token
+  identity is now bound to the request `worker_id` (cross-worker mismatch
+  → 403). `POST /workers/register` stays bootstrap-gated by
+  `WHILLY_WORKER_BOOTSTRAP_TOKEN`.
+- **TASK-102 — plan budget guard.** Migration `005_plan_budget` adds
+  `plans.budget_usd` / `plans.spent_usd`, makes `events.plan_id NOT NULL`,
+  and relaxes `events.task_id` to nullable for plan-scoped sentinels. New
+  `whilly plan create --budget USD` flag. Atomic spend accumulator via
+  `_INCREMENT_SPEND_SQL` with `FOR UPDATE OF t SKIP LOCKED`. A
+  `plan.budget_exceeded` sentinel is emitted exactly once per crossing
+  with payload `{plan_id, budget_usd, spent_usd, crossing_task_id, reason:
+  "budget_threshold", threshold_pct: 100}`.
+- **TASK-106 — lifespan-managed event flusher.** New
+  `whilly/api/event_flusher.py` runs as a FastAPI lifespan task. Bounded
+  `asyncio.Queue`, flushes on (100 ms timer OR 500-row threshold)
+  whichever-first via an `asyncio.Event` wake. Checkpoint persistence uses
+  tempfile + `os.replace` for atomicity; SIGTERM/SIGINT trigger a graceful
+  drain.
+- **TASK-108a — GitHub-issue Forge intake.** Migrations `006_plan_github_ref`
+  (`plans.github_issue_ref text NULL` + partial UNIQUE) and
+  `007_plan_prd_file` (`plans.prd_file text NULL`). New
+  `whilly forge intake owner/repo/N` subcommand shells out to `gh` via
+  `gh_subprocess_env()`. Idempotent re-run via the partial UNIQUE; concurrent
+  intake is at-most-once `gh issue edit` via creator-vs-loser flag. A
+  `plan.created` event is emitted with payload `{github_issue_ref, name,
+  tasks_count, prd_file}`. Label transitions `whilly-pending` →
+  `whilly-in-progress`. `GET /api/v1/plans/{id}` now exposes
+  `github_issue_ref` and `prd_file`.
+- **Cross-area events.** A `task.created` event is emitted per inserted
+  task row, and a `plan.applied` event is emitted per `whilly plan apply`
+  invocation with `{tasks_count, skipped_count, warned_count, strict}`.
 
 ### Added — Claude HTTPS_PROXY support (TASK-109)
 
@@ -61,6 +117,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyword. Default (`None`) preserves the v3 auto-derivation path
   so the legacy `whilly --prd-wizard` flow stays unchanged.
 
+### Removed
+
+- **TASK-107 — v3 legacy CLI removed.** `whilly/cli_legacy.py` is gone, one
+  release after the v4.0 deprecation window. The `WHILLY_WORKTREE` and
+  `WHILLY_USE_WORKSPACE` env vars are now silent no-ops (kept for backward
+  compatibility with shell wrappers that set them unconditionally).
+
+### Migration chain
+
+- Final state after v4.1: `001 → 002 → 003_events_detail → 004_per_worker_bearer
+  → 005_plan_budget → 006_plan_github_ref → 007_plan_prd_file`.
+
 ### Quality
 
 - 47 new unit tests in `tests/unit/test_cli_init.py` covering FR-1..FR-8
@@ -73,6 +141,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 3 new integration tests in `tests/integration/test_init_e2e.py`
   driving `python -m whilly.cli init` as a subprocess against
   testcontainers Postgres + the deterministic Claude stub.
+- Suite-wide: 1530+ tests passing; `mypy --strict whilly/core/` clean;
+  `ruff check`, `ruff format --check`, and `lint-imports` all green.
+  CI parity enforced by `pip install -e '.[dev]'` at session start.
 
 ## [4.0.0] - 2026-04-29
 
