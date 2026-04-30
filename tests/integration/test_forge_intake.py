@@ -526,6 +526,114 @@ async def test_intake_plan_has_prd_or_zero_tasks(
     assert prd_path.exists()
 
 
+# ── VAL-FORGE-005: plans.prd_file linkage (M3 fix-feature) ───────────────
+async def test_intake_persists_prd_file_path_on_plans_row(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_workdir: Path,
+    fake_claude: Path,
+    database_url: str,
+    db_pool: asyncpg.Pool,
+    gh_recorder,
+) -> None:
+    """``plans.prd_file`` is set to the absolute path of the generated PRD file.
+
+    Pins VAL-FORGE-005's contract verbatim:
+      * ``plan.prd_file`` is non-empty;
+      * ``Path(plan.prd_file).is_file() is True``;
+      * the file's first line matches ``^# PRD: ``.
+
+    Defence-in-depth: the same path is also mirrored into the
+    ``plan.created`` event payload (VAL-CROSS-053).
+    """
+    import json as _json
+
+    monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: "/usr/local/bin/gh")
+    gh_recorder.queue(_completed(stdout=_json.dumps(_canned_issue_payload(305))))
+    gh_recorder.queue(_completed(stdout="https://github.com/example/repo/issues/305"))
+
+    rc = await _run_intake(["owner/repo/305"])
+    assert rc == forge_intake.EXIT_OK
+
+    slug = forge_intake._slug_for_issue("owner", "repo", 305)
+    async with db_pool.acquire() as conn:
+        prd_file = await conn.fetchval(
+            "SELECT prd_file FROM plans WHERE id = $1",
+            slug,
+        )
+
+    # Contract: plan.prd_file is non-empty AND points at an existing file.
+    assert prd_file is not None and prd_file != ""
+    prd_path = Path(prd_file)
+    assert prd_path.is_absolute(), f"plans.prd_file must be absolute; got {prd_file!r}"
+    assert prd_path.is_file(), f"plans.prd_file must point at an existing file; got {prd_file!r}"
+
+    # Contract: first line matches '^# PRD: '.
+    with prd_path.open(encoding="utf-8") as fh:
+        first_line = fh.readline()
+    assert first_line.startswith("# PRD: "), f"first line of {prd_file!r} must match '^# PRD: '; got {first_line!r}"
+
+    # Defence-in-depth (VAL-CROSS-053 / event payload): the
+    # plan.created event payload mirrors the prd_file path.
+    async with db_pool.acquire() as conn:
+        event_prd_file = await conn.fetchval(
+            "SELECT payload->>'prd_file' FROM events WHERE plan_id=$1 AND event_type='plan.created'",
+            slug,
+        )
+    assert event_prd_file == prd_file
+
+
+# ── VAL-FORGE-005: GET /api/v1/plans/<id> exposes prd_file ──────────────
+async def test_api_plans_endpoint_exposes_prd_file(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_workdir: Path,
+    fake_claude: Path,
+    database_url: str,
+    db_pool: asyncpg.Pool,
+    gh_recorder,
+) -> None:
+    """``GET /api/v1/plans/<id>`` returns 200 with ``prd_file`` in the body."""
+    import json as _json
+
+    monkeypatch.setattr(shutil, "which", lambda *_args, **_kwargs: "/usr/local/bin/gh")
+    monkeypatch.setenv("WHILLY_WORKER_BOOTSTRAP_TOKEN", "test-bootstrap-token")
+    gh_recorder.queue(_completed(stdout=_json.dumps(_canned_issue_payload(306))))
+    gh_recorder.queue(_completed(stdout="https://github.com/example/repo/issues/306"))
+
+    rc = await _run_intake(["owner/repo/306"])
+    assert rc == forge_intake.EXIT_OK
+
+    slug = forge_intake._slug_for_issue("owner", "repo", 306)
+
+    app: FastAPI = create_app(
+        db_pool,
+        worker_token="test-worker-token",
+        bootstrap_token="test-bootstrap-token",
+        sweep_interval_seconds=60.0,
+        offline_worker_sweep_interval_seconds=60.0,
+    )
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/v1/plans/{slug}")
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert body["id"] == slug
+            assert isinstance(body["prd_file"], str) and body["prd_file"]
+            assert Path(body["prd_file"]).is_file()
+
+            # Pre-existing plans (no Forge intake) carry prd_file=null.
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO plans (id, name) VALUES ($1, $2)",
+                    "plain-plan-prd",
+                    "Plain Plan",
+                )
+            plain = await client.get("/api/v1/plans/plain-plan-prd")
+            assert plain.status_code == 200
+            plain_body = plain.json()
+            assert plain_body["prd_file"] is None
+
+
 # ── VAL-FORGE-012: GET /api/v1/plans/<id> returns github_issue_ref ───────
 async def test_api_plans_endpoint_exposes_github_issue_ref(
     monkeypatch: pytest.MonkeyPatch,

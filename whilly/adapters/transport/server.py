@@ -1356,12 +1356,15 @@ def create_app(
         # slots in here without touching the response shape.
     )
     async def get_plan(plan_id: str) -> JSONResponse:
-        """Return ``{id, name, github_issue_ref}`` for a single plan (VAL-FORGE-012).
+        """Return ``{id, name, github_issue_ref, prd_file}`` for a single plan (VAL-FORGE-012).
 
         404 if the plan does not exist. The ``github_issue_ref`` field
         is ``null`` for plans created via ``whilly init`` (no GitHub
         anchor) and the canonical ``owner/repo/<number>`` triple for
-        plans created via ``whilly forge intake``.
+        plans created via ``whilly forge intake``. The ``prd_file``
+        field carries the absolute path of the generated PRD markdown
+        file for Forge-originated plans (VAL-FORGE-005); ``null`` for
+        plans without a generated PRD.
 
         Why a single endpoint and not a list / collection surface?
             VAL-FORGE-012 only pins single-row lookups by id; a
@@ -1372,7 +1375,7 @@ def create_app(
         """
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, name, github_issue_ref FROM plans WHERE id = $1",
+                "SELECT id, name, github_issue_ref, prd_file FROM plans WHERE id = $1",
                 plan_id,
             )
         if row is None:
@@ -1385,6 +1388,7 @@ def create_app(
                 "id": row["id"],
                 "name": row["name"],
                 "github_issue_ref": row["github_issue_ref"],
+                "prd_file": row["prd_file"],
             }
         )
 

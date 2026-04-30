@@ -242,11 +242,20 @@ def test_strict_accepts_healthy_plan(
     assert {row["id"] for row in tasks} == {"T-OK-1", "T-OK-2"}
     assert all(row["status"] == "PENDING" for row in tasks)
 
+    # M3 fix-feature anti-regression: the canonical literal is
+    # 'task.skipped' (lowercase dotted); zero rows of that literal AND
+    # zero rows of the legacy 'SKIP' literal must exist after a
+    # healthy plan apply.
     skip_events = _query_db(
+        database_url,
+        "SELECT id FROM events WHERE event_type = 'task.skipped'",
+    )
+    assert skip_events == []
+    legacy_skip_events = _query_db(
         database_url,
         "SELECT id FROM events WHERE event_type = 'SKIP'",
     )
-    assert skip_events == []
+    assert legacy_skip_events == [], "regression: legacy uppercase 'SKIP' event_type leaked into events table"
 
 
 # ─── VAL-CROSS-003 + feature description: --strict skips REJECT tasks ───
@@ -276,12 +285,33 @@ def test_strict_skips_reject_verdict_tasks(
         "T-BAD-EMPTY-STEPS": "SKIPPED",
     }
 
-    # SKIP events: one per failing task, payload carries reason + missing.
+    # M3 fix-feature: events.event_type is the contract literal
+    # 'task.skipped' (lowercase dotted); events.plan_id is populated
+    # from tasks.plan_id (RETURNING tasks.plan_id was added to
+    # _SKIP_SQL specifically for this assertion).
     events = _query_db(
         database_url,
-        "SELECT task_id, event_type, payload FROM events WHERE event_type = 'SKIP' ORDER BY task_id",
+        "SELECT task_id, plan_id, event_type, payload FROM events WHERE event_type = 'task.skipped' ORDER BY task_id",
     )
     assert {e["task_id"] for e in events} == {"T-BAD-EMPTY-AC", "T-BAD-EMPTY-STEPS"}
+    # Every skip event row carries the parent plan_id (cross-flow
+    # contract VAL-CROSS-003 / VAL-CROSS-004).
+    for row in events:
+        assert row["plan_id"] == "plan-strict-mixed", (
+            f"task.skipped event for task={row['task_id']} missing plan_id; got {row['plan_id']!r}"
+        )
+
+    # Anti-regression: zero rows of the legacy uppercase 'SKIP'
+    # literal must exist; the contract literal is the lowercase
+    # dotted form (M3 fix-feature, drop the 'OR SKIP' permissiveness).
+    legacy_rows = _query_db(
+        database_url,
+        "SELECT id FROM events WHERE event_type = 'SKIP'",
+    )
+    assert legacy_rows == [], (
+        "regression: legacy uppercase 'SKIP' event_type was written "
+        "by skip_task; the canonical literal is 'task.skipped'"
+    )
 
     payload_by_task: dict[str, dict[str, Any]] = {}
     for row in events:
@@ -338,15 +368,33 @@ def test_default_mode_writes_zero_skip_events(
     mixed_plan_payload: dict[str, Any],
     tmp_path: Path,
 ) -> None:
-    """Default mode: events table has zero ``SKIP`` rows after apply."""
+    """Default mode: events table has zero ``task.skipped`` rows after apply.
+
+    M3 fix-feature: the contract literal is the lowercase dotted
+    form. The ``OR 'SKIP'`` permissiveness was a transitional cover
+    that masked the M1 implementation drift; with the implementation
+    now writing ``'task.skipped'`` exclusively, the strict query
+    catches both the canonical zero-count contract AND the
+    no-legacy-leak regression invariant in one read.
+    """
     plan_file = _write_plan(tmp_path, mixed_plan_payload)
     assert run_plan_command(["apply", str(plan_file)]) == EXIT_OK
 
     rows = _query_db(
         database_url,
-        "SELECT id FROM events WHERE event_type = 'SKIP' OR event_type = 'task.skipped'",
+        "SELECT id FROM events WHERE event_type = 'task.skipped'",
     )
-    assert rows == [], f"default mode wrote {len(rows)} SKIP/task.skipped events"
+    assert rows == [], f"default mode wrote {len(rows)} task.skipped events"
+
+    # Defence in depth: also assert zero rows of the legacy literal
+    # — this is the explicit anti-regression guard requested by
+    # VAL-GATES-022's M3 fix-feature update (drop the transitional
+    # ``IN ('task.skipped', 'SKIP')`` permissiveness).
+    legacy_rows = _query_db(
+        database_url,
+        "SELECT id FROM events WHERE event_type = 'SKIP'",
+    )
+    assert legacy_rows == [], f"regression: default mode leaked {len(legacy_rows)} legacy 'SKIP' events"
 
 
 # ─── VAL-GATES-019: --strict cycle errors at exit 1 ─────────────────────
@@ -421,7 +469,7 @@ def test_skipped_tasks_remain_skipped_across_reruns(
     )
     skip_count_before = _query_db(
         database_url,
-        "SELECT COUNT(*) AS c FROM events WHERE event_type = 'SKIP'",
+        "SELECT COUNT(*) AS c FROM events WHERE event_type = 'task.skipped'",
     )[0]["c"]
 
     # Second strict run — must be idempotent.
@@ -434,7 +482,7 @@ def test_skipped_tasks_remain_skipped_across_reruns(
     )
     skip_count_after = _query_db(
         database_url,
-        "SELECT COUNT(*) AS c FROM events WHERE event_type = 'SKIP'",
+        "SELECT COUNT(*) AS c FROM events WHERE event_type = 'task.skipped'",
     )[0]["c"]
 
     # Status preserved on every SKIPPED task.
@@ -451,7 +499,102 @@ def test_skipped_tasks_remain_skipped_across_reruns(
     versions_after = {r["id"]: r["version"] for r in rows_after}
     assert versions_before == versions_after
 
-    # Exactly one SKIP event per failing task — no duplicates after
-    # the re-run.
+    # Exactly one task.skipped event per failing task — no duplicates
+    # after the re-run.
     assert skip_count_before == 2
     assert skip_count_after == 2
+
+
+# ─── M3 fix-feature: plan.applied event emitted on each apply ────────────
+
+
+def test_strict_apply_emits_plan_applied_event(
+    database_url: str,
+    mixed_plan_payload: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """``apply --strict`` writes exactly one ``plan.applied`` event."""
+    plan_file = _write_plan(tmp_path, mixed_plan_payload)
+    assert run_plan_command(["apply", "--strict", str(plan_file)]) == EXIT_OK
+
+    rows = _query_db(
+        database_url,
+        "SELECT plan_id, payload FROM events WHERE plan_id=$1 AND event_type='plan.applied'",
+        "plan-strict-mixed",
+    )
+    assert len(rows) == 1
+    payload_raw = rows[0]["payload"]
+    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+    assert payload["tasks_count"] == 4  # 4 tasks in the mixed plan
+    assert payload["skipped_count"] == 2
+    assert payload["warned_count"] == 0
+    assert payload["strict"] is True
+
+
+def test_default_apply_emits_plan_applied_event(
+    database_url: str,
+    mixed_plan_payload: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """Default ``apply`` (no --strict) writes exactly one ``plan.applied`` event."""
+    plan_file = _write_plan(tmp_path, mixed_plan_payload)
+    assert run_plan_command(["apply", str(plan_file)]) == EXIT_OK
+
+    rows = _query_db(
+        database_url,
+        "SELECT plan_id, payload FROM events WHERE plan_id=$1 AND event_type='plan.applied'",
+        "plan-strict-mixed",
+    )
+    assert len(rows) == 1
+    payload_raw = rows[0]["payload"]
+    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+    assert payload["strict"] is False
+    # Default mode: zero skipped, two warned (for the two reject
+    # tasks).
+    assert payload["skipped_count"] == 0
+    assert payload["warned_count"] == 2
+
+
+# ─── M3 fix-feature: task.created event emitted per inserted task ────────
+
+
+def test_apply_emits_one_task_created_per_inserted_task(
+    database_url: str,
+    healthy_plan_payload: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """``apply`` writes exactly one ``task.created`` event per newly-inserted task row."""
+    plan_file = _write_plan(tmp_path, healthy_plan_payload)
+    assert run_plan_command(["apply", str(plan_file)]) == EXIT_OK
+
+    rows = _query_db(
+        database_url,
+        "SELECT task_id, plan_id FROM events WHERE plan_id=$1 AND event_type='task.created' ORDER BY task_id",
+        "plan-strict-healthy",
+    )
+    assert {r["task_id"] for r in rows} == {"T-OK-1", "T-OK-2"}
+    for row in rows:
+        assert row["plan_id"] == "plan-strict-healthy"
+
+
+def test_apply_does_not_duplicate_task_created_on_rerun(
+    database_url: str,
+    healthy_plan_payload: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    """``apply`` rerun on the same plan does not duplicate ``task.created`` events.
+
+    Pins VAL-CROSS-005 idempotency for the task.created event: ON
+    CONFLICT (id) DO NOTHING returns NULL on the task INSERT, so
+    the event emission is skipped on subsequent runs.
+    """
+    plan_file = _write_plan(tmp_path, healthy_plan_payload)
+    assert run_plan_command(["apply", str(plan_file)]) == EXIT_OK
+    assert run_plan_command(["apply", str(plan_file)]) == EXIT_OK
+
+    count = _query_db(
+        database_url,
+        "SELECT COUNT(*) AS c FROM events WHERE plan_id=$1 AND event_type='task.created'",
+        "plan-strict-healthy",
+    )[0]["c"]
+    assert count == 2  # not 4 — second run was idempotent

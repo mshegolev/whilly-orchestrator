@@ -1,11 +1,11 @@
-"""End-to-end alembic chain test (TASK-108a).
+"""End-to-end alembic chain test (TASK-108a + M3 fix-feature).
 
 Pins the assertion that ``alembic upgrade head`` applies migrations
-``001 → 002 → 003 → 004 → 005 → 006`` in order on a fresh Postgres
-and ``alembic downgrade base`` reverts every step cleanly. Mirrors
-the per-migration tests but exercises the whole linear chain in one
-go so a single broken edge between revisions surfaces here even when
-each per-migration test passes in isolation.
+``001 → 002 → 003 → 004 → 005 → 006 → 007`` in order on a fresh
+Postgres and ``alembic downgrade base`` reverts every step cleanly.
+Mirrors the per-migration tests but exercises the whole linear
+chain in one go so a single broken edge between revisions surfaces
+here even when each per-migration test passes in isolation.
 
 Note that ``information_schema`` is the source of truth for column
 shape; ``alembic_version`` is the source of truth for the recorded
@@ -48,6 +48,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "004_per_worker_bearer",
     "005_plan_budget",
     "006_plan_github_ref",
+    "007_plan_prd_file",
 )
 
 
@@ -133,9 +134,9 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "006_plan_github_ref"
+    assert head_version == "007_plan_prd_file"
 
-    # ── Step 3: 006-specific deltas exist ────────────────────────────
+    # ── Step 3: 006- and 007-specific deltas exist ──────────────────
     column_count = asyncio.run(
         _fetchval(
             empty_postgres_dsn,
@@ -158,6 +159,18 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
         )
     )
     assert int(index_count) == 1
+
+    # 007: ``plans.prd_file`` text NULL exists.
+    prd_file_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'plans' AND column_name = 'prd_file'
+            """,
+        )
+    )
+    assert int(prd_file_column_count) == 1
 
     # Confirm the whilly tables are present (sanity).
     tables = {
@@ -211,8 +224,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "006_plan_github_ref"
+    assert first_version == "007_plan_prd_file"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "006_plan_github_ref"
+    assert second_version == "007_plan_prd_file"

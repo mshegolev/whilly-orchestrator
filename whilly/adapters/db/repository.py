@@ -80,6 +80,9 @@ __all__ = [
     "BUDGET_EXCEEDED_REASON",
     "BUDGET_EXCEEDED_THRESHOLD_PCT",
     "EventFlusherProtocol",
+    "PLAN_APPLIED_EVENT_TYPE",
+    "TASK_CREATED_EVENT_TYPE",
+    "TASK_SKIPPED_EVENT_TYPE",
     "TaskRepository",
     "VersionConflictError",
 ]
@@ -139,6 +142,31 @@ BUDGET_EXCEEDED_EVENT_TYPE: str = "plan.budget_exceeded"
 # literal-search across the codebase.
 BUDGET_EXCEEDED_REASON: str = "budget_threshold"
 BUDGET_EXCEEDED_THRESHOLD_PCT: int = 100
+
+
+# Canonical event_type literal for Decision-Gate-driven skip transitions
+# (M3 fix-feature: VAL-CROSS-003 / VAL-CROSS-004 / VAL-CROSS-005). The
+# validation contract is normative — the lowercase dotted form is the
+# audit-log identifier; the uppercase ``SKIP`` literal on
+# :class:`whilly.core.state_machine.Transition` is a *state-machine
+# transition name* (a different namespace) and stays as-is. Defining
+# this as a module-level constant lets callers and tests assert against
+# a single literal site, mirroring :data:`BUDGET_EXCEEDED_EVENT_TYPE`.
+TASK_SKIPPED_EVENT_TYPE: str = "task.skipped"
+
+# Canonical event_type literal for "task row inserted into the database"
+# audit events (M3 fix-feature, gates VAL-CROSS-004's task.created count
+# and VAL-CROSS-005's idempotency invariant on rerun). Emitted exactly
+# once per newly-inserted ``tasks`` row by ``whilly plan apply`` /
+# ``apply --strict``; ``ON CONFLICT (id) DO NOTHING`` skips the event
+# emission for pre-existing rows so a re-run keeps the count stable.
+TASK_CREATED_EVENT_TYPE: str = "task.created"
+
+# Canonical event_type literal for "plan apply finished" audit events
+# (M3 fix-feature, gates VAL-CROSS-004's plan.applied count). Emitted
+# exactly once per ``whilly plan apply`` invocation after the strict
+# gate iteration completes.
+PLAN_APPLIED_EVENT_TYPE: str = "plan.applied"
 
 
 # Quantum used to coerce a Python float-ish ``cost_usd`` into a stable
@@ -419,6 +447,19 @@ VALUES (NULL, $1, $2, $3::jsonb)
 """
 
 
+# Combined task+plan event insert (M3 fix-feature). Used by
+# :meth:`TaskRepository.skip_task` so the audit row carries BOTH the
+# ``task_id`` (for the per-task evidence query) AND the ``plan_id``
+# (for the cross-flow evidence query in VAL-CROSS-003 /
+# VAL-CROSS-004). ``events.plan_id`` was relaxed-then-added in
+# migration 005, but no skip-path call site populated it before this
+# fix; the cross-flow contract is the first to require it.
+_INSERT_TASK_EVENT_WITH_PLAN_SQL: str = """
+INSERT INTO events (task_id, plan_id, event_type, payload)
+VALUES ($1, $2, $3, $4::jsonb)
+"""
+
+
 # Optimistic-locking FAIL: ``CLAIMED`` | ``IN_PROGRESS`` → ``FAILED``. FAIL
 # is allowed from CLAIMED because a worker can crash before issuing START
 # (claim → run → die before run_task even forks the subprocess); the
@@ -506,6 +547,7 @@ WHERE id = $1
   AND status IN ('PENDING', 'CLAIMED', 'IN_PROGRESS')
 RETURNING
     tasks.id,
+    tasks.plan_id,
     tasks.status,
     tasks.dependencies,
     tasks.key_files,
@@ -1444,7 +1486,15 @@ class TaskRepository:
           ``claimed_at`` cleared (so the SKIPPED row no longer
           appears under any worker's claim), ``version`` incremented,
           ``updated_at = NOW()``.
-        * ``events`` row: ``event_type = 'SKIP'`` with payload
+        * ``events`` row: ``event_type = 'task.skipped'`` (the
+          canonical lowercase dotted literal — sourced from
+          :data:`TASK_SKIPPED_EVENT_TYPE`; the uppercase
+          ``Transition.SKIP`` literal stays as the *state-machine
+          transition name* only). ``task_id`` and ``plan_id`` are
+          BOTH populated (``plan_id`` sourced from ``tasks.plan_id``
+          via the ``RETURNING`` clause) so cross-flow evidence
+          queries (``WHERE plan_id=$1 GROUP BY event_type``) catch
+          the row. Payload carries
           ``{"version": <new>, "reason": <reason>, **detail}``. The
           ``detail`` dict (typically ``{"missing": [...]}`` from the
           gate verdict) is *merged* into the payload at the top
@@ -1553,15 +1603,29 @@ class TaskRepository:
                 payload_dict["version"] = row["version"]
                 payload_dict["reason"] = reason
                 payload = json.dumps(payload_dict)
+                # Write the audit row with BOTH task_id and plan_id
+                # populated. The contract literal (M3 fix-feature) is
+                # the lowercase dotted ``task.skipped`` (sourced from
+                # :data:`TASK_SKIPPED_EVENT_TYPE`); the uppercase
+                # ``Transition.SKIP`` literal stays as the
+                # state-machine transition name only — the event
+                # taxonomy and the state-machine taxonomy are
+                # different namespaces (AGENTS.md "Strict-mode and
+                # SKIP semantics"). ``row['plan_id']`` was added to
+                # _SKIP_SQL's RETURNING clause specifically so this
+                # row's plan_id is sourced from the same MVCC snapshot
+                # that produced the SKIPPED transition.
                 await conn.execute(
-                    _INSERT_EVENT_SQL,
+                    _INSERT_TASK_EVENT_WITH_PLAN_SQL,
                     row["id"],
-                    Transition.SKIP.value,
+                    row["plan_id"],
+                    TASK_SKIPPED_EVENT_TYPE,
                     payload,
                 )
                 logger.info(
-                    "skip_task: task=%s version=%d reason=%r → SKIPPED",
+                    "skip_task: task=%s plan=%s version=%d reason=%r → SKIPPED",
                     row["id"],
+                    row["plan_id"],
                     row["version"],
                     reason,
                 )
