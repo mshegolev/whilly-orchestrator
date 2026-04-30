@@ -5,6 +5,58 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.1] - 2026-04-30
+
+> **Hotfix: Node 22 LTS + четвёртый agentic CLI (Codex).** Production-образ
+> v4.3.0 ронял `gemini --version` с `SyntaxError: Invalid regular
+> expression flags` потому что Debian bookworm даёт ноду 18, а
+> `@google/gemini-cli` использует regex-флаги недоступные до Node 20.
+> Bump базы → Node 22 LTS через NodeSource. Добавлен **OpenAI Codex CLI**
+> (gpt-5.x семейство) как четвёртый --cli; общий dispatcher
+> (`docker/cli_adapter.py`) теперь умеет `claude-code | gemini | opencode
+> | codex`.
+
+### Fixed
+
+- **`@google/gemini-cli` поднимается в production-образе.** Заменили
+  Debian'овский `apt install nodejs npm` (даёт Node 18.20 на bookworm)
+  на NodeSource `setup_22.x` + `nodejs` (Node 22 LTS включает npm).
+  Затрагивает оба `Dockerfile` и `Dockerfile.demo`. Build-time sanity
+  check теперь дополнительно дёргает `--version` у каждого CLI — мы
+  поймаем такой регресс на сборке, а не на runtime.
+
+### Added
+
+- **Codex CLI (`--cli codex`).** OpenAI's official Codex CLI (`@openai/codex`,
+  v0.128+) теперь часть production-образа. Поддерживает sub-agents, skills,
+  MCP, plugins, AGENTS.md, hooks, sandbox modes — то же самое, что и
+  остальные три CLI. `docker/cli_adapter.py:run_codex` парсит JSONL-stream
+  событий (`thread.started` / `turn.started` / `item.completed` /
+  `turn.completed`), читает финальный agent message из `--output-last-message`
+  файла, суммирует `usage.input_tokens` + `output_tokens` +
+  `reasoning_output_tokens` из всех `turn.completed` events. Permission/sandbox
+  off через `--dangerously-bypass-approvals-and-sandbox` (analog claude's
+  `--dangerously-skip-permissions`).
+- **`openai` provider в `llm_resource_picker`.** Tier→model map для codex:
+  TINY/SMALL → `gpt-5.4-mini` (fast/cheap), MEDIUM/LARGE → `gpt-5.4`
+  (флагман для API-key auth; `gpt-5.5` lock'нут на ChatGPT subscription
+  и поэтому не используется в default map). Override через `LLM_MODEL`.
+- **`workshop-demo.sh --cli codex`.** Ожидает `OPENAI_API_KEY`. Также
+  выставляет `CODEX_HOME=/home/whilly/.codex` для config + auth cache
+  (можно volume-mount'ить read-only снаружи для skills/plugins).
+- **Unit-тесты codex adapter'а.** `tests/unit/test_cli_adapter.py`
+  пополнился классом `TestCodexAdapter` (10 cases: argv, single/multi-turn
+  usage, last-msg fallback на stream events, auth/general/timeout/missing
+  failure modes, model resolution через picker).
+
+### Changed
+
+- Image-side версия CLI обвязки теперь четыре: claude / gemini / opencode /
+  codex. Размер production-образа подрос примерно на ~150 MB
+  (codex bundle), итого ~1.6 GB.
+- `cli_adapter.SUPPORTED_CLIS` добавился `codex`; `_RUNNERS` keys теперь
+  `{claude-code, opencode, gemini, codex}`.
+
 ## [4.3.0] - 2026-04-30
 
 > **Agentic CLIs ship in the box.** Production Docker image

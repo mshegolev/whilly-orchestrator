@@ -1,8 +1,8 @@
 """Unit tests for ``docker/cli_adapter.py``.
 
 Adapter — это shim, который whilly-worker зовёт как ``$CLAUDE_BIN`` для
-agentic CLI'ев (claude-code / opencode / gemini). Внутри adapter спавнит
-native CLI subprocess и парсит native output → whilly envelope.
+agentic CLI'ев (claude-code / opencode / gemini / codex). Внутри adapter
+спавнит native CLI subprocess и парсит native output → whilly envelope.
 
 Что покрываем:
 
@@ -15,6 +15,9 @@ native CLI subprocess и парсит native output → whilly envelope.
 * gemini adapter: парсит single-JSON `{response, stats}` → envelope. Stats
   парсятся в input/output tokens. Exit 42 = permanent (input error),
   остальные ≠ 0 = retriable.
+* codex adapter: парсит JSONL events (turn.completed/item.completed),
+  читает финальный agent message из ``-o`` файла; auth-failures (401/403)
+  классифицируются как permanent.
 * COMPLETE marker: автоматически добавляется (default), отключается
   через ``WHILLY_FORCE_COMPLETE=0``.
 * Argv compat: те же флаги whilly-worker'а (``-p``,
@@ -322,6 +325,227 @@ class TestGeminiAdapter:
         assert rc == 1
         envelope = json.loads(capsys.readouterr().out)
         assert "malformed JSON" in envelope["result"]
+
+
+class TestCodexAdapter:
+    """codex exec --json + -o <file> integration."""
+
+    @staticmethod
+    def _make_run_with_last_msg(last_msg_text: str, jsonl_events: list[dict], returncode: int = 0):
+        """subprocess.run mock который заодно пишет last_msg_text в файл из ``-o`` arg."""
+
+        def fake_run(cmd, **kwargs):
+            # Найти позицию `-o` в argv и записать текст в указанный путь —
+            # это эмулирует поведение настоящего codex exec.
+            if "-o" in cmd:
+                idx = cmd.index("-o")
+                if idx + 1 < len(cmd):
+                    Path(cmd[idx + 1]).write_text(last_msg_text)
+            return _mock_run(
+                stdout="\n".join(json.dumps(e) for e in jsonl_events),
+                returncode=returncode,
+            )
+
+        return fake_run
+
+    def test_jsonl_stream_with_last_message_file(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        events = [
+            {"type": "thread.started", "thread_id": "t1"},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "Done."}},
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 20,
+                    "output_tokens": 50,
+                    "reasoning_output_tokens": 10,
+                },
+            },
+        ]
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            self._make_run_with_last_msg("Done.", events, returncode=0),
+        )
+
+        rc = adapter.main(["-p", "do thing"])
+        assert rc == 0
+        envelope = json.loads(capsys.readouterr().out)
+        assert "Done." in envelope["result"]
+        # output_tokens включает reasoning_output_tokens (50 + 10 = 60)
+        assert envelope["usage"]["input_tokens"] == 100
+        assert envelope["usage"]["output_tokens"] == 60
+
+    def test_invokes_codex_with_correct_argv(self, adapter, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            if "-o" in cmd:
+                Path(cmd[cmd.index("-o") + 1]).write_text("ok")
+            return _mock_run(
+                stdout=json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+                returncode=0,
+            )
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        adapter.main(["--model", "gpt-5.4-mini", "-p", "task"])
+        cmd = captured["cmd"]
+        assert cmd[0] == "codex"
+        assert cmd[1] == "exec"
+        assert "--skip-git-repo-check" in cmd
+        assert "--dangerously-bypass-approvals-and-sandbox" in cmd
+        assert "--ephemeral" in cmd
+        assert "--json" in cmd
+        assert "-o" in cmd
+        assert "-m" in cmd and cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
+        assert cmd[-1] == "task"  # prompt — позиционный аргумент в конце
+
+    def test_multiple_turns_sum_usage(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        events = [
+            {"type": "thread.started", "thread_id": "t1"},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "First reply."}},
+            {"type": "turn.completed", "usage": {"input_tokens": 50, "output_tokens": 25}},
+            {"type": "turn.started"},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "Second reply."}},
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 60, "output_tokens": 30, "reasoning_output_tokens": 5},
+            },
+        ]
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            self._make_run_with_last_msg("Second reply.", events, returncode=0),
+        )
+
+        rc = adapter.main(["-p", "x"])
+        assert rc == 0
+        envelope = json.loads(capsys.readouterr().out)
+        # 50 + 60 = 110 input; (25 + 30) + 5 = 60 output (с reasoning)
+        assert envelope["usage"]["input_tokens"] == 110
+        assert envelope["usage"]["output_tokens"] == 60
+        # последний message выигрывает (он в `-o` файле, который мокаем)
+        assert "Second reply." in envelope["result"]
+
+    def test_empty_last_msg_falls_back_to_stream_messages(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        events = [
+            {"type": "thread.started", "thread_id": "t1"},
+            {"type": "item.completed", "item": {"type": "agent_message", "text": "Streamed result"}},
+            {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
+        ]
+        # last_msg_text = "" — эмулируем пустой -o файл
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            self._make_run_with_last_msg("", events, returncode=0),
+        )
+
+        rc = adapter.main(["-p", "x"])
+        assert rc == 0
+        envelope = json.loads(capsys.readouterr().out)
+        assert "Streamed result" in envelope["result"]
+
+    def test_auth_failure_returns_permanent(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            MagicMock(
+                return_value=_mock_run(
+                    stdout="",
+                    stderr="Error: Unauthorized — invalid API key (401)",
+                    returncode=1,
+                )
+            ),
+        )
+        rc = adapter.main(["-p", "x"])
+        assert rc == 2  # permanent
+        envelope = json.loads(capsys.readouterr().out)
+        assert "failed to authenticate" in envelope["result"]
+
+    def test_general_failure_returns_retriable(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            MagicMock(return_value=_mock_run(stdout="", stderr="API down 502", returncode=1)),
+        )
+        rc = adapter.main(["-p", "x"])
+        assert rc == 1  # retriable
+
+    def test_codex_binary_missing_returns_permanent(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            MagicMock(side_effect=FileNotFoundError("codex not found")),
+        )
+        rc = adapter.main(["-p", "x"])
+        assert rc == 2
+        envelope = json.loads(capsys.readouterr().out)
+        assert "failed to authenticate" in envelope["result"]
+
+    def test_timeout_returns_retriable(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            MagicMock(side_effect=subprocess.TimeoutExpired(cmd="codex", timeout=600)),
+        )
+        rc = adapter.main(["-p", "x"])
+        assert rc == 1
+        envelope = json.loads(capsys.readouterr().out)
+        assert "timeout" in envelope["result"]
+
+    def test_empty_response_returns_retriable(self, adapter, capsys, monkeypatch):
+        """Ни последний-msg файл, ни stream events не дали текста."""
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            self._make_run_with_last_msg("", [], returncode=0),
+        )
+        rc = adapter.main(["-p", "x"])
+        assert rc == 1
+        envelope = json.loads(capsys.readouterr().out)
+        assert "empty response" in envelope["result"]
+
+    def test_default_model_yields_to_picker(self, adapter, monkeypatch):
+        """LLM_MODEL env переопределяет whilly's DEFAULT_MODEL."""
+        monkeypatch.setenv("WHILLY_CLI", "codex")
+        monkeypatch.setenv("LLM_MODEL", "gpt-5.4")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            if "-o" in cmd:
+                Path(cmd[cmd.index("-o") + 1]).write_text("ok")
+            return _mock_run(
+                stdout=json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}}),
+                returncode=0,
+            )
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        adapter.main(
+            [
+                "--output-format",
+                "json",
+                "--model",
+                "claude-opus-4-6[1m]",  # whilly's DEFAULT_MODEL — выкидывается
+                "-p",
+                "x",
+            ]
+        )
+        cmd = captured["cmd"]
+        assert "-m" in cmd
+        assert cmd[cmd.index("-m") + 1] == "gpt-5.4"
 
 
 class TestForceComplete:

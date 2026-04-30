@@ -285,8 +285,10 @@ Agentic CLI'и — это полноценные кодинг-агенты со 
 - Подгружать skills (`.claude/skills/*.md` — markdown-инструкции для агента)
 - Подключать MCP-серверы (database access, browser, filesystem, etc.)
 
-В образе `mshegolev/whilly:4.3.0+` встроены три CLI: **claude-code**,
-**gemini-cli**, **opencode**. Выбор через `--cli` флаг:
+В образе `mshegolev/whilly:4.3.1+` встроены **четыре** agentic CLI:
+**claude-code**, **gemini-cli**, **opencode**, **codex**. Образ работает на
+Node 22 LTS (раньше bookworm-ный node18 ронял gemini-cli и был
+несовместим с codex). Выбор через `--cli` флаг:
 
 ```bash
 # Claude Code (Anthropic) — best agentic capabilities, платно:
@@ -300,6 +302,10 @@ export OPENROUTER_API_KEY=YOUR_OPENROUTER_KEY_HERE   # https://openrouter.ai/key
 # Gemini CLI (Google) — free 1500 req/day на gemini-2.0-flash:
 export GEMINI_API_KEY=YOUR_GEMINI_KEY_HERE   # https://aistudio.google.com/apikey
 ./workshop-demo.sh --workers 2 --cli gemini
+
+# OpenAI Codex (gpt-5.x, sub-agents/skills/MCP/plugins) — paid OpenAI API:
+export OPENAI_API_KEY=YOUR_OPENAI_KEY_HERE   # https://platform.openai.com/api-keys
+./workshop-demo.sh --workers 2 --cli codex
 ```
 
 ### Сравнение CLI
@@ -309,10 +315,11 @@ export GEMINI_API_KEY=YOUR_GEMINI_KEY_HERE   # https://aistudio.google.com/apike
 | **claude-code**| Anthropic only     | yes       | yes    | yes | yes        | нет (paid Anthropic API)        |
 | **gemini-cli** | Google Gemini only | yes       | yes    | yes | yes        | 1500 req/day Gemini 2.0 Flash   |
 | **opencode**   | любой через models.dev | yes   | yes    | yes | yes        | OpenRouter `:free` модели       |
+| **codex**      | OpenAI only        | yes       | yes    | yes | yes        | нет (paid OpenAI API; gpt-5.5 — ChatGPT Pro/Plus OAuth) |
 
 ### Как настраивать sub-agents и skills
 
-Все три CLI читают конфигурацию из стандартизированных директорий
+Все четыре CLI читают конфигурацию из стандартизированных директорий
 (совместимость заложена claude-code'ом):
 
 - **`~/.claude/CLAUDE.md`** — глобальный системный промпт для всех агентов
@@ -331,12 +338,14 @@ worker:
     - ~/.claude:/home/whilly/.claude:ro          # claude-code agents/skills
     - ./.opencode:/home/whilly/.opencode:ro      # opencode-specific overrides
     - ./.gemini:/home/whilly/.gemini:ro          # gemini-specific overrides
+    - ~/.codex:/home/whilly/.codex:ro            # codex agents/skills/plugins/MCP
 ```
 
 OpenCode дополнительно понимает `.opencode/agent/<name>.md` (см.
 `opencode agent create`); gemini-cli — `.gemini/AGENTS.md` и
-`~/.gemini/`. Все три CLI делятся одним базовым форматом markdown с
-YAML frontmatter:
+`~/.gemini/`; codex — `~/.codex/agents/`, `~/.codex/skills/`,
+`~/.codex/plugins/` (см. `codex plugin --help`). Все четыре CLI
+делятся одним базовым форматом markdown с YAML frontmatter:
 
 ```markdown
 ---
@@ -386,6 +395,7 @@ CLI поддерживают его. Конфиг лежит в `~/.claude/mcp.j
 | Быстрый smoke-test что задача попадёт в LLM       | `--llm groq` (raw, без файлов) |
 | Локальная offline-разработка                      | OpenCode + локальная Ollama |
 | CI / scripted automation                          | `--cli gemini` (free 1500 req/day) |
+| OpenAI / GPT-5.x ecosystem (skills + plugins)     | `--cli codex` (paid OpenAI API; gpt-5.5 — ChatGPT Pro/Plus OAuth) |
 
 `--cli` тащит весь agentic стек (sub-agents/skills/MCP/file-tools) — это
 **всегда** правильнее для production. `--llm` — это «голая модель без
@@ -433,12 +443,12 @@ export ANTHROPIC_API_KEY=YOUR_ANTHROPIC_KEY_HERE
 Скрипт **не задаёт** конкретную модель — entrypoint в контейнере читает
 cgroup-лимиты (RAM + CPU) и подбирает модель из таблицы под provider+tier:
 
-| Tier   | RAM     | CPU   | Groq                       | OpenRouter (free)                        | Ollama                  |
-|--------|---------|-------|----------------------------|------------------------------------------|-------------------------|
-| TINY   | <4GB    | <2    | llama-3.1-8b-instant       | llama-3.2-3b-instruct:free               | qwen2.5-coder:1.5b      |
-| SMALL  | 4-8GB   | 2-4   | llama-3.1-8b-instant       | llama-3.1-8b-instruct:free               | qwen2.5-coder:7b        |
-| MEDIUM | 8-16GB  | 4-8   | llama-3.3-70b-versatile    | llama-3.3-70b-instruct:free              | qwen2.5-coder:14b       |
-| LARGE  | ≥16GB   | ≥8    | llama-3.3-70b-versatile    | deepseek-chat-v3.1:free                  | qwen2.5-coder:32b       |
+| Tier   | RAM     | CPU   | Groq                       | OpenRouter (free)                        | Ollama                  | OpenAI (codex)    |
+|--------|---------|-------|----------------------------|------------------------------------------|-------------------------|-------------------|
+| TINY   | <4GB    | <2    | llama-3.1-8b-instant       | llama-3.2-3b-instruct:free               | qwen2.5-coder:1.5b      | gpt-5.4-mini      |
+| SMALL  | 4-8GB   | 2-4   | llama-3.1-8b-instant       | llama-3.1-8b-instruct:free               | qwen2.5-coder:7b        | gpt-5.4-mini      |
+| MEDIUM | 8-16GB  | 4-8   | llama-3.3-70b-versatile    | llama-3.3-70b-instruct:free              | qwen2.5-coder:14b       | gpt-5.4           |
+| LARGE  | ≥16GB   | ≥8    | llama-3.3-70b-versatile    | deepseek-chat-v3.1:free                  | qwen2.5-coder:32b       | gpt-5.4           |
 
 Эффективный tier берётся как **min** из mem-tier и cpu-tier, чтобы не
 получить «96 cores но 2GB RAM → запустили 70B и упали в OOM».

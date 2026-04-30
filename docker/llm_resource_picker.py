@@ -83,6 +83,17 @@ PROVIDER_MODEL_MAP: dict[str, dict[SizeTier, str]] = {
         SizeTier.MEDIUM: "gemini-2.0-flash-exp",
         SizeTier.LARGE: "gemini-2.0-flash-exp",
     },
+    # OpenAI Codex CLI — gpt-5.x семейство. По умолчанию для API-key auth,
+    # gpt-5.5 требует ChatGPT auth и поэтому не используется (он lock'нут на
+    # ChatGPT Plus/Pro), gpt-5.4 — флагман для API. mini — fast/cheap,
+    # codex — coding-specialized snapshot. Источник: developers.openai.com/
+    # codex/models (2026-04).
+    "openai": {
+        SizeTier.TINY: "gpt-5.4-mini",
+        SizeTier.SMALL: "gpt-5.4-mini",
+        SizeTier.MEDIUM: "gpt-5.4",
+        SizeTier.LARGE: "gpt-5.4",
+    },
     # Локальная Ollama — критично подбирать под RAM, иначе OOM.
     # Числа в имени = миллиарды параметров; квантованные q4 ≈ N×0.55 GB.
     "ollama": {
