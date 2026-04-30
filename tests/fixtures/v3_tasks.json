@@ -1,0 +1,69 @@
+{
+  "project": "v3-fixture-sample",
+  "prd_file": "PRD-v3-sample.md",
+  "created_at": "2025-08-12T00:00:00Z",
+  "agent_instructions": {
+    "before": [
+      "Прочитай tasks.json и progress.txt прежде чем начать.",
+      "Работай только над задачей с указанным id."
+    ],
+    "after": [
+      "Если test_steps не прошли, не помечай задачу done.",
+      "Допиши <promise>COMPLETE</promise> в конец отчёта только при успехе."
+    ]
+  },
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "phase": "Phase 1 — Bootstrap",
+      "category": "doc",
+      "priority": "high",
+      "description": "Pre-key_files representative task — only legacy fields.",
+      "status": "pending",
+      "dependencies": [],
+      "acceptance_criteria": [
+        "Documentation file produced at the location agreed upon in the PRD"
+      ],
+      "test_steps": [
+        "test -s docs/v3-sample.md"
+      ],
+      "prd_requirement": "v3-step-1"
+    },
+    {
+      "id": "TASK-002",
+      "phase": "Phase 1 — Bootstrap",
+      "category": "infra",
+      "priority": "medium",
+      "description": "Second representative task with a dependency, still no key_files.",
+      "status": "pending",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "acceptance_criteria": [
+        "Sequence runs after TASK-001 reaches done"
+      ],
+      "test_steps": [
+        "grep -q 'TASK-001' tasks.json"
+      ],
+      "prd_requirement": "v3-step-2"
+    },
+    {
+      "id": "TASK-003",
+      "phase": "Phase 2 — Quality gate",
+      "category": "test",
+      "priority": "low",
+      "description": "Smoke pytest demonstrating the v3 pipeline shape.",
+      "status": "done",
+      "dependencies": [
+        "TASK-002"
+      ],
+      "acceptance_criteria": [
+        "pytest exits 0 against the produced module"
+      ],
+      "test_steps": [
+        "pytest -q tests/test_v3_smoke.py"
+      ],
+      "prd_requirement": "v3-step-3"
+    }
+  ]
+}

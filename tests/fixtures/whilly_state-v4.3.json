@@ -1,0 +1,30 @@
+{
+  "plan_file": ".planning/v4-1_tasks.json",
+  "iteration": 7,
+  "cost_usd": 1.234,
+  "active_agents": [
+    {
+      "task_id": "TASK-003",
+      "session_name": "whilly-TASK-003",
+      "started_at": 1714521600.0
+    },
+    {
+      "task_id": "TASK-004",
+      "session_name": "whilly-TASK-004",
+      "started_at": 1714521610.5
+    }
+  ],
+  "task_status": {
+    "TASK-001": "done",
+    "TASK-002": "done",
+    "TASK-003": "in_progress",
+    "TASK-004": "in_progress",
+    "TASK-005": "pending",
+    "TASK-006": "pending",
+    "TASK-007": "skipped"
+  },
+  "paused": false,
+  "pause_reason": "",
+  "paused_at": null,
+  "saved_at": 1714521700.0
+}
