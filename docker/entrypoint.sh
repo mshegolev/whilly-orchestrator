@@ -72,6 +72,30 @@ case "$ROLE" in
     : "${WHILLY_CONTROL_URL:?WHILLY_CONTROL_URL is required}"
     : "${WHILLY_PLAN_ID:?WHILLY_PLAN_ID is required}"
 
+    # ─── Auto-pick LLM model based on container resources ────────────────
+    # Если оператор задал LLM_PROVIDER (groq/openrouter/cerebras/gemini/
+    # ollama/claude) но НЕ зафиксировал LLM_MODEL — подбираем модель под
+    # cgroup-лимиты текущего контейнера. На больших машинах включается
+    # тяжёлая модель, на тонких — лёгкая. Для cloud-провайдеров это
+    # экономит free-tier rate-limit'ы; для локальной Ollama —
+    # принципиально, иначе OOM.
+    #
+    # Жёсткий escape-hatch: если LLM_MODEL уже выставлена — picker не
+    # вызывается, пропускаем этот блок целиком.
+    if [[ -n "${LLM_PROVIDER:-}" && -z "${LLM_MODEL:-}" ]]; then
+      log "auto-picking LLM_MODEL for provider=$LLM_PROVIDER"
+      if picked="$(python /opt/whilly/docker/llm_resource_picker.py "$LLM_PROVIDER" --verbose 2>&1 1>/tmp/.picked_model)"; then
+        LLM_MODEL="$(cat /tmp/.picked_model)"
+        export LLM_MODEL
+        # diagnostics из picker'а попадают в наш stderr через --verbose
+        printf '%s\n' "$picked" >&2
+        log "auto-picked LLM_MODEL=$LLM_MODEL"
+      else
+        log "WARNING: llm_resource_picker failed, shim will use its own fallback"
+        printf '%s\n' "$picked" >&2
+      fi
+    fi
+
     # Дадим control-plane время подняться. compose `depends_on: condition: service_healthy`
     # обычно справляется, но если control-plane стартует с длинной миграцией —
     # лучше подождать /health тут тоже.

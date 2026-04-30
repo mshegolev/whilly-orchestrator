@@ -23,6 +23,18 @@
 #   --workers N          сколько реплик воркера запускать (default: 2)
 #   --plan <slug>        какой план использовать (default: parallel)
 #   --plan-file <path>   путь к JSON плана (default: examples/demo/parallel.json)
+#   --llm <provider>     какой LLM использовать (default: stub):
+#                          stub       — быстрый sleep + COMPLETE (без LLM)
+#                          groq       — нужен GROQ_API_KEY
+#                          openrouter — нужен OPENROUTER_API_KEY
+#                          cerebras   — нужен CEREBRAS_API_KEY
+#                          gemini     — нужен GEMINI_API_KEY
+#                          ollama     — нужен запущенный ollama на хосте
+#                          claude     — нужен ANTHROPIC_API_KEY (платный)
+#                        Модель подбирается автоматически под cgroup-лимиты
+#                        контейнера (см. docker/llm_resource_picker.py).
+#                        Override модели: LLM_MODEL=...
+#   --tier <tier>        принудительный tier подбора модели (tiny|small|medium|large)
 #   --no-color           отключить ANSI-цвета (для логов CI / pipe в файл)
 #   --debug              `set -x`
 #   -h | --help          справка
@@ -35,6 +47,8 @@ KEEP_RUNNING=0
 WORKERS=2
 PLAN_ID="parallel"
 PLAN_FILE="examples/demo/parallel.json"
+LLM_BACKEND="stub"
+TIER_OVERRIDE=""
 USE_COLOR=1
 DEBUG=0
 
@@ -50,6 +64,8 @@ while [[ $# -gt 0 ]]; do
     --workers)       WORKERS="${2:?--workers needs a number}"; shift 2 ;;
     --plan)          PLAN_ID="${2:?--plan needs a slug}"; shift 2 ;;
     --plan-file)     PLAN_FILE="${2:?--plan-file needs a path}"; shift 2 ;;
+    --llm)           LLM_BACKEND="${2:?--llm needs a provider}"; shift 2 ;;
+    --tier)          TIER_OVERRIDE="${2:?--tier needs tiny|small|medium|large}"; shift 2 ;;
     --no-color)      USE_COLOR=0; shift ;;
     --debug)         DEBUG=1; shift ;;
     -h|--help)       usage 0 ;;
@@ -58,6 +74,77 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$DEBUG" == "1" ]] && set -x
+
+# ─── LLM backend resolution ──────────────────────────────────────────────────
+# Маппим --llm <provider> в конкретные env vars, которые читает
+# docker-compose.demo.yml и пробрасывает worker'у. Модель НЕ задаём — её
+# подберёт docker/llm_resource_picker.py из entrypoint'а под cgroup-лимиты.
+configure_llm_backend() {
+  case "$LLM_BACKEND" in
+    stub)
+      # дефолт: fake_claude_demo.sh с задержкой 2.5s
+      export CLAUDE_BIN="/opt/whilly/tests/fixtures/fake_claude_demo.sh"
+      ;;
+    groq)
+      : "${GROQ_API_KEY:?--llm groq нужен GROQ_API_KEY (https://console.groq.com/keys)}"
+      export CLAUDE_BIN="/opt/whilly/docker/llm_shim.py"
+      export LLM_PROVIDER="groq"
+      export LLM_BASE_URL="https://api.groq.com/openai/v1"
+      export LLM_API_KEY="$GROQ_API_KEY"
+      ;;
+    openrouter)
+      : "${OPENROUTER_API_KEY:?--llm openrouter нужен OPENROUTER_API_KEY (https://openrouter.ai/keys)}"
+      export CLAUDE_BIN="/opt/whilly/docker/llm_shim.py"
+      export LLM_PROVIDER="openrouter"
+      export LLM_BASE_URL="https://openrouter.ai/api/v1"
+      export LLM_API_KEY="$OPENROUTER_API_KEY"
+      export LLM_HTTP_REFERER="${LLM_HTTP_REFERER:-https://github.com/mshegolev/whilly-orchestrator}"
+      export LLM_X_TITLE="${LLM_X_TITLE:-Whilly Workshop Demo}"
+      ;;
+    cerebras)
+      : "${CEREBRAS_API_KEY:?--llm cerebras нужен CEREBRAS_API_KEY (https://inference.cerebras.ai)}"
+      export CLAUDE_BIN="/opt/whilly/docker/llm_shim.py"
+      export LLM_PROVIDER="cerebras"
+      export LLM_BASE_URL="https://api.cerebras.ai/v1"
+      export LLM_API_KEY="$CEREBRAS_API_KEY"
+      ;;
+    gemini)
+      : "${GEMINI_API_KEY:?--llm gemini нужен GEMINI_API_KEY (https://aistudio.google.com/apikey)}"
+      export CLAUDE_BIN="/opt/whilly/docker/llm_shim.py"
+      export LLM_PROVIDER="gemini"
+      # Google AI Studio предоставляет OpenAI-compatible endpoint:
+      export LLM_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai"
+      export LLM_API_KEY="$GEMINI_API_KEY"
+      ;;
+    ollama)
+      # Локальная Ollama на хосте. Контейнер worker'а ходит через
+      # host.docker.internal (на macOS / Docker Desktop работает из коробки;
+      # на Linux нужен `--add-host=host.docker.internal:host-gateway`,
+      # который docker-compose v2.6+ ставит автоматически).
+      export CLAUDE_BIN="/opt/whilly/docker/llm_shim.py"
+      export LLM_PROVIDER="ollama"
+      export LLM_BASE_URL="${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}"
+      export LLM_API_KEY="ollama"  # Ollama не проверяет токен, но shim его требует
+      export LLM_TIMEOUT="${OLLAMA_TIMEOUT:-300}"  # local inference медленнее
+      ;;
+    claude)
+      : "${ANTHROPIC_API_KEY:?--llm claude нужен ANTHROPIC_API_KEY}"
+      export CLAUDE_BIN="/opt/whilly/docker/llm_shim.py"
+      export LLM_PROVIDER="claude"
+      # Anthropic OpenAI-compatible endpoint:
+      export LLM_BASE_URL="https://api.anthropic.com/v1"
+      export LLM_API_KEY="$ANTHROPIC_API_KEY"
+      ;;
+    *)
+      err "unknown --llm $LLM_BACKEND (expected: stub|groq|openrouter|cerebras|gemini|ollama|claude)"
+      exit 1
+      ;;
+  esac
+
+  if [[ -n "$TIER_OVERRIDE" ]]; then
+    export LLM_TIER_OVERRIDE="$TIER_OVERRIDE"
+  fi
+}
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -134,6 +221,15 @@ step "pre-flight"
 require_bin docker
 detect_compose
 ok "compose CLI: ${COMPOSE[*]}"
+
+step "конфигурируем LLM backend: --llm $LLM_BACKEND"
+configure_llm_backend
+if [[ "$LLM_BACKEND" == "stub" ]]; then
+  ok "stub Claude (fake_claude_demo.sh, sleep 2.5s) — без расхода токенов"
+else
+  ok "real LLM: provider=$LLM_BACKEND, model подбирается автоматически в контейнере"
+  [[ -n "$TIER_OVERRIDE" ]] && dim "  tier override: $TIER_OVERRIDE"
+fi
 
 if ! docker info >/dev/null 2>&1; then
   err "docker daemon не отвечает — запустите Docker Desktop / dockerd"

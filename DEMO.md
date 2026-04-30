@@ -32,8 +32,9 @@
 1. [Подготовка](#подготовка)
 2. [Сценарий A — локально на хост-машине](#сценарий-a--локально-на-хост-машине)
 3. [Сценарий B — в Docker (2 application-контейнера + БД)](#сценарий-b--в-docker-2-application-контейнера--бд)
-4. [Что показывать на презентации](#что-показывать-на-презентации)
-5. [FAQ и траблшутинг](#faq-и-траблшутинг)
+4. [Real LLM modes (бесплатные / платные провайдеры)](#real-llm-modes-бесплатные--платные-провайдеры)
+5. [Что показывать на презентации](#что-показывать-на-презентации)
+6. [FAQ и траблшутинг](#faq-и-траблшутинг)
 
 ---
 
@@ -263,6 +264,95 @@ docker compose -f docker-compose.demo.yml down
 # Снести вместе с томом (полный сброс БД)
 docker compose -f docker-compose.demo.yml down -v
 ```
+
+---
+
+## Real LLM modes (бесплатные / платные провайдеры)
+
+По умолчанию `workshop-demo.sh` использует **stub Claude** — фиктивный
+скрипт, который через 2.5 секунды выдаёт `<promise>COMPLETE</promise>`
+без реального LLM. Этого достаточно чтобы показать state-machine,
+distributed-claim и audit-log. Чтобы подключить реальный LLM, передайте
+`--llm <provider>` и нужный API-ключ через env:
+
+```bash
+# Самый быстрый бесплатный путь — Groq (14400 req/day на free-tier):
+export GROQ_API_KEY=gsk_...                     # https://console.groq.com/keys
+./workshop-demo.sh --workers 2 --llm groq
+
+# Локальная Ollama (нужен запущенный ollama serve на хосте):
+ollama pull qwen2.5-coder:7b
+./workshop-demo.sh --workers 2 --llm ollama
+
+# Платный Claude (Anthropic):
+export ANTHROPIC_API_KEY=sk-ant-...
+./workshop-demo.sh --workers 2 --llm claude
+```
+
+### Поддерживаемые провайдеры
+
+| `--llm`      | Required env var       | Cost       | Кому подходит                    |
+|--------------|------------------------|------------|----------------------------------|
+| `stub`       | —                      | $0         | дефолт; быстро, без LLM          |
+| `groq`       | `GROQ_API_KEY`         | $0 free    | live-демо, fastest TTFB          |
+| `openrouter` | `OPENROUTER_API_KEY`   | $0 на `:free` | свободный выбор моделей       |
+| `cerebras`   | `CEREBRAS_API_KEY`     | $0 free    | очень быстрый inference          |
+| `gemini`     | `GEMINI_API_KEY`       | $0 free    | 1500 req/day Gemini 2.0 Flash    |
+| `ollama`     | —                      | $0 local   | offline, без cloud-зависимостей  |
+| `claude`     | `ANTHROPIC_API_KEY`    | $$$ paid   | production-quality вывод         |
+
+### Auto-pick модели под ресурсы контейнера
+
+Скрипт **не задаёт** конкретную модель — entrypoint в контейнере читает
+cgroup-лимиты (RAM + CPU) и подбирает модель из таблицы под provider+tier:
+
+| Tier   | RAM     | CPU   | Groq                       | OpenRouter (free)                        | Ollama                  |
+|--------|---------|-------|----------------------------|------------------------------------------|-------------------------|
+| TINY   | <4GB    | <2    | llama-3.1-8b-instant       | llama-3.2-3b-instruct:free               | qwen2.5-coder:1.5b      |
+| SMALL  | 4-8GB   | 2-4   | llama-3.1-8b-instant       | llama-3.1-8b-instruct:free               | qwen2.5-coder:7b        |
+| MEDIUM | 8-16GB  | 4-8   | llama-3.3-70b-versatile    | llama-3.3-70b-instruct:free              | qwen2.5-coder:14b       |
+| LARGE  | ≥16GB   | ≥8    | llama-3.3-70b-versatile    | deepseek-chat-v3.1:free                  | qwen2.5-coder:32b       |
+
+Эффективный tier берётся как **min** из mem-tier и cpu-tier, чтобы не
+получить «96 cores но 2GB RAM → запустили 70B и упали в OOM».
+
+Принудительно зафиксировать tier:
+```bash
+./workshop-demo.sh --workers 2 --llm openrouter --tier large
+```
+
+Принудительно зафиксировать модель (минуя picker):
+```bash
+LLM_MODEL=meta-llama/llama-3.1-405b:free ./workshop-demo.sh --workers 2 --llm openrouter
+```
+
+### Как это устроено внутри
+
+Whilly worker всегда зовёт `$CLAUDE_BIN` ровно одной командой:
+
+```bash
+$CLAUDE_BIN --dangerously-skip-permissions --output-format json \
+            --model <model> -p "<prompt>"
+```
+
+И ждёт на stdout single-envelope JSON с полем `result`, в котором есть
+маркер `<promise>COMPLETE</promise>`. Реальный Claude это умеет искаропки.
+Для всех остальных провайдеров используется `docker/llm_shim.py` — это
+~150 строк Python (httpx + stdlib), которые:
+
+1. Принимают тот же argv что и Claude CLI (whilly не отличает).
+2. Дёргают любой OpenAI-compatible endpoint (`/v1/chat/completions`).
+3. Конвертят OpenAI-shape ответ в Claude-shape envelope.
+4. Корректно сигналят whilly retry-логике через те же substrings
+   (`failed to authenticate`, `API Error: 5xx`).
+
+`docker/llm_resource_picker.py` читает cgroup v2 (`memory.max`, `cpu.max`)
+с fallback'ом на cgroup v1 и хост-уровневый `/proc/meminfo`. Маппинг
+provider→tier→model задан в одной таблице — добавить нового провайдера =
+~10 строк (см. `PROVIDER_MODEL_MAP`).
+
+Обе утилиты покрыты unit-тестами (`tests/unit/test_llm_shim.py`,
+`tests/unit/test_llm_resource_picker.py` — 48 cases в сумме).
 
 ---
 

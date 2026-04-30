@@ -100,8 +100,16 @@ COPY examples/ ./examples/
 COPY tests/fixtures/fake_claude.sh ./tests/fixtures/fake_claude.sh
 COPY tests/fixtures/fake_claude_demo.sh ./tests/fixtures/fake_claude_demo.sh
 COPY docker/control_plane.py ./docker/control_plane.py
+# Universal LLM shim + cgroup-aware resource picker. Drop-in замена
+# CLAUDE_BIN для любого OpenAI-compatible провайдера (Groq, OpenRouter,
+# Cerebras, Gemini, локальная Ollama). Picker автоматически подбирает
+# модель под доступные контейнеру ресурсы (см. docker/llm_resource_picker.py).
+COPY docker/llm_shim.py ./docker/llm_shim.py
+COPY docker/llm_resource_picker.py ./docker/llm_resource_picker.py
 COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
 RUN chmod +x /usr/local/bin/whilly-entrypoint \
+    /opt/whilly/docker/llm_shim.py \
+    /opt/whilly/docker/llm_resource_picker.py \
     && chown -R whilly:whilly /opt/whilly /home/whilly
 
 USER whilly
