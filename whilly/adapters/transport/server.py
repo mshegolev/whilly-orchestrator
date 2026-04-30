@@ -1329,6 +1329,48 @@ def create_app(
         )
         return ReleaseResponse(task=TaskPayload.from_task(updated))
 
+    @app.get(
+        "/api/v1/plans/{plan_id}",
+        # Public read-only surface — no auth dependency. Operators
+        # can curl this from a dashboard / kubectl describe plan
+        # without minting a worker token, and the response carries
+        # only metadata that is already visible via ``whilly plan
+        # show``. If we later add per-tenant scoping the auth dep
+        # slots in here without touching the response shape.
+    )
+    async def get_plan(plan_id: str) -> JSONResponse:
+        """Return ``{id, name, github_issue_ref}`` for a single plan (VAL-FORGE-012).
+
+        404 if the plan does not exist. The ``github_issue_ref`` field
+        is ``null`` for plans created via ``whilly init`` (no GitHub
+        anchor) and the canonical ``owner/repo/<number>`` triple for
+        plans created via ``whilly forge intake``.
+
+        Why a single endpoint and not a list / collection surface?
+            VAL-FORGE-012 only pins single-row lookups by id; a
+            collection endpoint (``GET /api/v1/plans``) would expand
+            the auth surface (operator listing across tenants)
+            without serving any current contract. Keep the surface
+            minimal.
+        """
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, name, github_issue_ref FROM plans WHERE id = $1",
+                plan_id,
+            )
+        if row is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"plan {plan_id!r} not found"},
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        return JSONResponse(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "github_issue_ref": row["github_issue_ref"],
+            }
+        )
+
     return app
 
 
