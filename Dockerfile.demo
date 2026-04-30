@@ -73,11 +73,46 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # tini — корректный PID 1 для контейнеров (правильно ловит SIGTERM, не зомбирует
 # дочерние процессы). curl — для healthcheck. ca-certificates — для HTTPS.
+# nodejs + npm нужны для agentic CLI'ев (claude-code, gemini-cli) и
+# postinstall скриптов opencode-ai.
+# git нужен для opencode и aider (work с git-aware агентами).
+# unzip — opencode install script распаковывает Go-binary.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tini curl ca-certificates \
+    && apt-get install -y --no-install-recommends \
+         tini curl ca-certificates git unzip \
+         nodejs npm \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1000 whilly \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
+
+# ─── Agentic CLI tools ─────────────────────────────────────────────────────
+# Это полноценные кодинг-агенты со своими sub-agents, skills, tool-use,
+# MCP-серверами и file-операциями. Whilly worker зовёт один из них через
+# CLAUDE_BIN; докер-обёртка docker/cli_adapter.py транслирует whilly-style
+# argv (--output-format json -p '<prompt>') в native argv каждого CLI.
+#
+# 1) claude-code — официальный Anthropic CLI. Whilly изначально под него
+#    заточен, поэтому adapter для него — passthrough. Нужен ANTHROPIC_API_KEY.
+# 2) gemini-cli — Google's CLI с free-tier 1500 req/day на gemini-2.0-flash.
+#    Поддерживает sub-agents, skills, file-tools, MCP. Headless mode через
+#    `gemini -p "..." --output-format json`.
+# 3) opencode-ai — open-source CLI поддерживает любых LLM-провайдеров
+#    (Anthropic, OpenAI, OpenRouter, Groq, Ollama, etc) через models.dev.
+#    Sub-agents, skills (читает .claude/skills для совместимости с claude-code),
+#    MCP, ACP. Headless: `opencode run --format json --model X "..."`.
+#
+# Все три ставятся глобально, доступны по простым именам (claude / gemini /
+# opencode) на PATH.
+RUN npm install -g --omit=dev \
+        @anthropic-ai/claude-code \
+        @google/gemini-cli \
+        opencode-ai \
+    && npm cache clean --force \
+    && rm -rf /root/.npm
+
+# Sanity: убедимся, что все три CLI разрешаются в PATH при build'е
+# (если npm-пакет переименуют — fail здесь, а не на runtime в чужом проекте).
+RUN command -v claude && command -v gemini && command -v opencode && echo "all CLIs installed"
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -100,16 +135,24 @@ COPY examples/ ./examples/
 COPY tests/fixtures/fake_claude.sh ./tests/fixtures/fake_claude.sh
 COPY tests/fixtures/fake_claude_demo.sh ./tests/fixtures/fake_claude_demo.sh
 COPY docker/control_plane.py ./docker/control_plane.py
-# Universal LLM shim + cgroup-aware resource picker. Drop-in замена
-# CLAUDE_BIN для любого OpenAI-compatible провайдера (Groq, OpenRouter,
-# Cerebras, Gemini, локальная Ollama). Picker автоматически подбирает
-# модель под доступные контейнеру ресурсы (см. docker/llm_resource_picker.py).
+# Whilly использует один из трёх режимов (выбирается через CLAUDE_BIN env):
+#
+#   1. cli_adapter.py + WHILLY_CLI=<claude-code|opencode|gemini> — agentic CLI
+#      с sub-agents и skills (рекомендуется для real workflow).
+#   2. llm_shim.py — raw OpenAI-compatible API call без agentic capabilities,
+#      для случая «нужно быстро, дёшево, без файловых операций».
+#   3. fake_claude_demo.sh — stub, без реального LLM (для архитектурного демо).
+#
+# llm_resource_picker.py подхватывается обоими режимами и подбирает модель
+# под cgroup-лимиты контейнера.
 COPY docker/llm_shim.py ./docker/llm_shim.py
 COPY docker/llm_resource_picker.py ./docker/llm_resource_picker.py
+COPY docker/cli_adapter.py ./docker/cli_adapter.py
 COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
 RUN chmod +x /usr/local/bin/whilly-entrypoint \
     /opt/whilly/docker/llm_shim.py \
     /opt/whilly/docker/llm_resource_picker.py \
+    /opt/whilly/docker/cli_adapter.py \
     && chown -R whilly:whilly /opt/whilly /home/whilly
 
 USER whilly

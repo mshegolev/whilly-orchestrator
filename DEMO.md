@@ -32,9 +32,10 @@
 1. [Подготовка](#подготовка)
 2. [Сценарий A — локально на хост-машине](#сценарий-a--локально-на-хост-машине)
 3. [Сценарий B — в Docker (2 application-контейнера + БД)](#сценарий-b--в-docker-2-application-контейнера--бд)
-4. [Real LLM modes (бесплатные / платные провайдеры)](#real-llm-modes-бесплатные--платные-провайдеры)
-5. [Что показывать на презентации](#что-показывать-на-презентации)
-6. [FAQ и траблшутинг](#faq-и-траблшутинг)
+4. [Agentic CLI workflow (рекомендуемый production-режим)](#agentic-cli-workflow-рекомендуемый-production-режим)
+5. [Real LLM modes (raw, без agentic capabilities)](#real-llm-modes-raw-без-agentic-capabilities)
+6. [Что показывать на презентации](#что-показывать-на-презентации)
+7. [FAQ и траблшутинг](#faq-и-траблшутинг)
 
 ---
 
@@ -267,17 +268,143 @@ docker compose -f docker-compose.demo.yml down -v
 
 ---
 
-## Real LLM modes (бесплатные / платные провайдеры)
+## Agentic CLI workflow (рекомендуемый production-режим)
+
+Whilly worker внутри контейнера зовёт `$CLAUDE_BIN` — это может быть
+**stub** (для архитектурного демо), **agentic CLI** (рекомендуется для
+real workflow) или **raw LLM shim** (для случая «нужно быстро/дёшево, без
+file-tools»).
+
+Agentic CLI'и — это полноценные кодинг-агенты со своими **sub-agents**,
+**skills**, **MCP-серверами**, file-операциями и tool-use. В отличие от
+голого OpenAI-API call'а, они умеют:
+
+- Читать/писать файлы в рабочей директории контейнера
+- Запускать bash-команды (тесты, линтеры, билды)
+- Делегировать суб-задачи специализированным sub-agent'ам
+- Подгружать skills (`.claude/skills/*.md` — markdown-инструкции для агента)
+- Подключать MCP-серверы (database access, browser, filesystem, etc.)
+
+В образе `mshegolev/whilly:4.3.0+` встроены три CLI: **claude-code**,
+**gemini-cli**, **opencode**. Выбор через `--cli` флаг:
+
+```bash
+# Claude Code (Anthropic) — best agentic capabilities, платно:
+export ANTHROPIC_API_KEY=YOUR_ANTHROPIC_KEY_HERE
+./workshop-demo.sh --workers 2 --cli claude-code
+
+# OpenCode (open source) — любой provider, бесплатно через OpenRouter free:
+export OPENROUTER_API_KEY=YOUR_OPENROUTER_KEY_HERE   # https://openrouter.ai/keys
+./workshop-demo.sh --workers 2 --cli opencode
+
+# Gemini CLI (Google) — free 1500 req/day на gemini-2.0-flash:
+export GEMINI_API_KEY=YOUR_GEMINI_KEY_HERE   # https://aistudio.google.com/apikey
+./workshop-demo.sh --workers 2 --cli gemini
+```
+
+### Сравнение CLI
+
+| CLI            | Provider lock      | Sub-agents | Skills | MCP | File-tools | Free path                       |
+|----------------|--------------------|----------:|-------:|----:|-----------:|---------------------------------|
+| **claude-code**| Anthropic only     | yes       | yes    | yes | yes        | нет (paid Anthropic API)        |
+| **gemini-cli** | Google Gemini only | yes       | yes    | yes | yes        | 1500 req/day Gemini 2.0 Flash   |
+| **opencode**   | любой через models.dev | yes   | yes    | yes | yes        | OpenRouter `:free` модели       |
+
+### Как настраивать sub-agents и skills
+
+Все три CLI читают конфигурацию из стандартизированных директорий
+(совместимость заложена claude-code'ом):
+
+- **`~/.claude/CLAUDE.md`** — глобальный системный промпт для всех агентов
+  (правила code style, любимые библиотеки, политика комментариев).
+- **`~/.claude/agents/<name>.md`** — определение sub-agent'а
+  (system prompt + permissions + tools list).
+- **`~/.claude/skills/<name>.md`** — переиспользуемая skill (markdown
+  инструкция вида «как делать X»).
+
+В Docker-контейнере воркера эти файлы пробрасываются через volume mount.
+Пример docker-compose.demo.yml:
+
+```yaml
+worker:
+  volumes:
+    - ~/.claude:/home/whilly/.claude:ro          # claude-code agents/skills
+    - ./.opencode:/home/whilly/.opencode:ro      # opencode-specific overrides
+    - ./.gemini:/home/whilly/.gemini:ro          # gemini-specific overrides
+```
+
+OpenCode дополнительно понимает `.opencode/agent/<name>.md` (см.
+`opencode agent create`); gemini-cli — `.gemini/AGENTS.md` и
+`~/.gemini/`. Все три CLI делятся одним базовым форматом markdown с
+YAML frontmatter:
+
+```markdown
+---
+name: code-reviewer
+description: Reviews diffs for security and style issues
+mode: subagent
+tools: [read, grep, edit]
+---
+
+You are a code reviewer. Read the diff in .git/changes.diff and respond
+with a markdown bulleted list of issues. Severity tags: [critical], [high],
+[low]. Do not modify any files.
+```
+
+### MCP (Model Context Protocol) серверы
+
+MCP — стандарт от Anthropic для подключения tools к LLM agents. Все три
+CLI поддерживают его. Конфиг лежит в `~/.claude/mcp.json` (общий) или в
+конкретных `.opencode/mcp.json` / `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": { "POSTGRES_URL": "postgresql://localhost/mydb" }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
+    }
+  }
+}
+```
+
+После этого агент может через MCP читать БД и файлы. Подключите volume с
+конфигом MCP к контейнеру воркера и оба воркера получат идентичный набор
+инструментов.
+
+### Когда использовать --cli vs --llm
+
+| Сценарий                                          | Рекомендация              |
+|---------------------------------------------------|---------------------------|
+| Архитектурное демо state-machine                  | `--cli stub` (default)    |
+| Реальный код-генерационный workflow               | `--cli claude-code` (paid) или `--cli opencode` + free OpenRouter |
+| Быстрый smoke-test что задача попадёт в LLM       | `--llm groq` (raw, без файлов) |
+| Локальная offline-разработка                      | OpenCode + локальная Ollama |
+| CI / scripted automation                          | `--cli gemini` (free 1500 req/day) |
+
+`--cli` тащит весь agentic стек (sub-agents/skills/MCP/file-tools) — это
+**всегда** правильнее для production. `--llm` — это «голая модель без
+рук», полезна только для быстрых demo и проверки connectivity.
+
+---
+
+## Real LLM modes (raw, без agentic capabilities)
 
 По умолчанию `workshop-demo.sh` использует **stub Claude** — фиктивный
 скрипт, который через 2.5 секунды выдаёт `<promise>COMPLETE</promise>`
 без реального LLM. Этого достаточно чтобы показать state-machine,
-distributed-claim и audit-log. Чтобы подключить реальный LLM, передайте
+distributed-claim и audit-log. Чтобы подключить реальный raw LLM (без
+agentic стека — для этого см. секцию выше), передайте
 `--llm <provider>` и нужный API-ключ через env:
 
 ```bash
 # Самый быстрый бесплатный путь — Groq (14400 req/day на free-tier):
-export GROQ_API_KEY=gsk_...                     # https://console.groq.com/keys
+export GROQ_API_KEY=YOUR_GROQ_KEY_HERE           # https://console.groq.com/keys
 ./workshop-demo.sh --workers 2 --llm groq
 
 # Локальная Ollama (нужен запущенный ollama serve на хосте):
@@ -285,7 +412,7 @@ ollama pull qwen2.5-coder:7b
 ./workshop-demo.sh --workers 2 --llm ollama
 
 # Платный Claude (Anthropic):
-export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=YOUR_ANTHROPIC_KEY_HERE
 ./workshop-demo.sh --workers 2 --llm claude
 ```
 
