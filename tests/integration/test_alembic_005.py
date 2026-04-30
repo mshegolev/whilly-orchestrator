@@ -132,11 +132,27 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_005_is_head_revision() -> None:
-    """The alembic script directory reports ``005_plan_budget`` as the head."""
+def test_005_is_in_chain_with_known_down_revision() -> None:
+    """``005_plan_budget`` is reachable from 004 (chain pinning).
+
+    Before TASK-108a's migration 006 landed, ``005`` was head. After
+    006, head is ``006_plan_github_ref`` and 005 is its
+    ``down_revision``. We pin both relationships here:
+
+    * 005 has ``down_revision == "004_per_worker_bearer"`` (unchanged).
+    * 005 is *not* head anymore — head is 006.
+
+    This keeps VAL-BUDGET-001 pinning (005 sits in the chain at the
+    expected position) without making the chain head an immutable
+    invariant that every future migration would have to update.
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "005_plan_budget"
+    rev_005 = script.get_revision("005_plan_budget")
+    assert rev_005 is not None
+    assert rev_005.down_revision == "004_per_worker_bearer"
+    # 005 is no longer the head (006 took it over).
+    assert script.get_current_head() != "005_plan_budget"
 
 
 # ---------------------------------------------------------------------------
@@ -219,9 +235,15 @@ def test_upgrade_adds_spent_usd_not_null_default_zero(base_004_dsn: str) -> None
 
 
 def test_downgrade_removes_budget_columns(base_004_dsn: str) -> None:
-    """After ``upgrade head`` then ``downgrade -1``, neither column exists."""
+    """After ``upgrade 005`` then ``downgrade -1``, neither column exists.
+
+    Pinned to revision ``005_plan_budget`` rather than ``head`` so that
+    later migrations (006+) don't perturb the per-migration test: we
+    are exercising the 005 downgrade path specifically, not "whatever
+    head is".
+    """
     cfg = _build_cfg(base_004_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, "005_plan_budget"), op="upgrade 005")
     _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
 
     async def _inspect() -> tuple[int, str | None]:
