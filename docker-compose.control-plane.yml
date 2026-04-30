@@ -1,0 +1,118 @@
+# Whilly Orchestrator — control-plane only stack (M1 split-host deployment).
+#
+# ADDITIVE: docker-compose.demo.yml (single-host workshop) is byte-for-byte
+# unchanged. This file deploys postgres + control-plane on a VPS / lab host
+# so multiple workers (laptops, peer VMs) can join via `whilly worker connect`
+# from a different machine. Pairs with `docker-compose.worker.yml` (sibling
+# feature) for the cross-host demo path.
+#
+# Sized for the 964MB-RAM Hetzner-class VPS profile (mission §4):
+#   - postgres mem_limit 256MB, shared_buffers=64MB, work_mem=4MB
+#   - control-plane mem_limit 256MB
+#   - (Caddy adds 64MB at M2 → ~600MB total stack budget)
+#
+# WHILLY_BIND_HOST chooses which host interface receives the 8000 port mapping.
+# Default 127.0.0.1 (loopback only — the LAN-safe default for Tailscale / VPN
+# scenarios where the public network must NOT see the API). Set 0.0.0.0 (IPv4
+# wildcard) or :: (IPv6 wildcard) to expose on all interfaces; any explicit
+# interface IP also works (e.g. 10.0.0.5 for a private LAN bind).
+#
+# Quick start (loopback only, safe default):
+#   docker-compose -f docker-compose.control-plane.yml up -d
+#   curl -fsS http://127.0.0.1:8000/health
+#
+# Cluster-exposing variant (LAN demo or public VPS):
+#   WHILLY_BIND_HOST=0.0.0.0 docker-compose -f docker-compose.control-plane.yml up -d
+#
+# IPv6 dual-stack:
+#   WHILLY_BIND_HOST=:: docker-compose -f docker-compose.control-plane.yml up -d
+#
+# Local-build override (for development without pulling the published image):
+#   WHILLY_IMAGE=whilly:dev docker-compose -f docker-compose.control-plane.yml up -d
+#
+# See docs/Distributed-Setup.md for the multi-host walkthrough.
+
+services:
+  # ─── DB: state machine + append-only events log ────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: whilly-cp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-whilly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-whilly}
+      POSTGRES_DB: ${POSTGRES_DB:-whilly}
+    ports:
+      # Postgres is always loopback-only on the VPS — talk to it through the
+      # control-plane HTTP API (or an SSH tunnel for forensics). Exposing PG
+      # to the LAN is one of the classic compose-demo footguns.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - whilly_cp_pgdata:/var/lib/postgresql/data
+    # PG tuning for the 256MB cap. Mission §4 invariant: shared_buffers=64MB
+    # (~25% of cap) + work_mem=4MB leaves headroom for ~10 backends without
+    # tipping the cgroup OOM-killer when a worker bursts a heartbeat.
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=64MB"
+      - "-c"
+      - "work_mem=4MB"
+    # mem_limit translates to HostConfig.Memory in `docker inspect` (asserted
+    # by VAL-M1-COMPOSE-006). 256m = 268_435_456 bytes — at the spec ceiling.
+    mem_limit: 256m
+    # Soft floor so a busy claim spike on the worker side can't starve PG
+    # of cgroup memory; the cap above is the hard ceiling.
+    mem_reservation: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-whilly} -d ${POSTGRES_DB:-whilly}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # ─── App: control-plane (FastAPI / uvicorn). No worker baked in here. ─────
+  control-plane:
+    # Default to the published image (matches v4.3.1 release artifact).
+    # Override with WHILLY_IMAGE=<tag> for dev / local-build workflows.
+    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.3.1}
+    container_name: whilly-cp-control-plane
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+      # Per-worker bearer baseline (FR-1.2). Hardcoded in demo profile; in
+      # production, real per-worker bearers are minted via `whilly worker
+      # connect` against the bootstrap token below.
+      WHILLY_WORKER_TOKEN: ${WHILLY_WORKER_TOKEN:-demo-bearer}
+      # Cluster-join secret consumed by `whilly worker connect`. Keep it out
+      # of git in real deployments; see docs/Distributed-Setup.md.
+      WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
+      WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+    ports:
+      # Long-form port mapping: host_ip is a SEPARATE field, which means
+      # IPv6 literals like `::` are parsed cleanly (the short-form
+      # `${WHILLY_BIND_HOST}:8000:8000` would expand to `:::8000:8000`,
+      # which is ambiguous). VAL-M1-BIND-901 specifically asserts that
+      # `WHILLY_BIND_HOST=::` works.
+      - target: 8000
+        published: "${WHILLY_CONTROL_PORT:-8000}"
+        host_ip: "${WHILLY_BIND_HOST:-127.0.0.1}"
+        protocol: tcp
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    # Mission §4 cap: 256MB. Combined with PG (256MB) and Caddy at M2 (64MB),
+    # total stack stays under the 600MB budget on the 964MB VPS.
+    mem_limit: 256m
+    mem_reservation: 128m
+    command: ["control-plane"]
+
+volumes:
+  whilly_cp_pgdata:
+    name: whilly_cp_pgdata
