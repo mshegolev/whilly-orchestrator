@@ -1,466 +1,258 @@
 # Whilly Orchestrator
 
-> 🚀 **v4.0 has shipped.** Whilly is now a distributed orchestrator — Postgres-backed task queue,
-> FastAPI control plane, remote workers over HTTP. The README below covers the v4 quickstart;
-> v3.x lives at tag [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final)
-> with critical bugfixes only. **There is no backwards compatibility** with v3.x runtime state —
-> see [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) before upgrading.
+> 🚀 **v4.1 — release-ready.** Whilly is a distributed orchestrator for AI coding agents:
+> Postgres-backed task queue, FastAPI control plane, remote workers over HTTP, and an
+> append-only `events` audit log. The legacy v3.x single-process loop has been retired —
+> it lives at tag [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final)
+> for teams that still need it. There is **no backwards compatibility** with v3.x runtime
+> state — see [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md).
 
-## v4.0 quickstart
+[![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+🇷🇺 [Краткое описание на русском](README-RU.md)
+
+> "I'm helping — and I've read TRIZ." — Whilly Wiggum
+
+## What's new in v4.1
+
+The v4.1 cleanup mission closed seven backlog items and brought the system to a
+release-ready state. Headline changes (full detail in [`CHANGELOG.md`](CHANGELOG.md)):
+
+- **Pure decision gate** (`whilly/core/gates.py`) + `whilly plan apply --strict` —
+  REJECT verdicts are skipped via `repo.skip_task` and emit `task.skipped` events
+  scoped to the current `plan_id` only (cross-plan collisions are refused).
+- **Per-task TRIZ analyzer** (`whilly/core/triz.py`) — replaces the v3 plan-level
+  analyzer. Subprocess to `claude` with a hard 25 s timeout (under the 30 s claim
+  visibility window), fail-open on missing CLI / timeout / malformed JSON, and an
+  `events.detail` jsonb column for findings. Opt in with `WHILLY_TRIZ_ENABLED=1`.
+- **Per-worker bearer auth** (migration `004_per_worker_bearer`) — `workers.token_hash`
+  is now nullable with a partial UNIQUE on non-null values. The `whilly worker register`
+  CLI mints plaintext bearers. Bearer identity is bound to the request `worker_id`
+  (403 on mismatch). Register stays bootstrap-gated by `WHILLY_WORKER_BOOTSTRAP_TOKEN`.
+  `WHILLY_WORKER_TOKEN` is **deprecated** — one-shot warning, suppress with
+  `WHILLY_SUPPRESS_WORKER_TOKEN_WARNING=1`.
+- **Plan budget guard** (migration `005_plan_budget`) — `plans.budget_usd` /
+  `plans.spent_usd`; `events.plan_id NOT NULL` and `events.task_id` nullable to
+  support the plan-level sentinel. `whilly plan create --budget USD` caps spend
+  strictly (claim gate uses `<`); `plan.budget_exceeded` is emitted exactly once
+  per crossing with `{plan_id, budget_usd, spent_usd, crossing_task_id, reason,
+  threshold_pct: 100}`. Concurrent claims serialise on `FOR UPDATE OF t SKIP LOCKED`.
+- **Lifespan event flusher** (`whilly/api/event_flusher.py`) — bounded asyncio.Queue
+  flushed on a 100 ms timer **or** 500-row threshold (whichever fires first via
+  `asyncio.Event`-driven wake), `tempfile + os.replace` checkpoint, graceful drain
+  on `SIGTERM`/`SIGINT`. TRIZ events route through the flusher when
+  `TaskRepository(event_flusher=...)` is wired; local-worker callers fall back to
+  direct `INSERT`.
+- **Forge intake** (migrations `006_plan_github_ref`, `007_plan_prd_file`) —
+  `whilly forge intake owner/repo/N` shells out to `gh issue view`, normalises the
+  issue into a Whilly plan via the PRD-wizard pipeline, persists it with
+  `plans.github_issue_ref` + `plans.prd_file`, then flips the issue label
+  `whilly-pending → whilly-in-progress`. Idempotent re-runs are enforced by a
+  partial UNIQUE; concurrent intake stays at-most-once on the GitHub side via a
+  creator-vs-loser flag. `plan.created` event emitted in the same transaction as
+  the inserts. `GET /api/v1/plans/{id}` exposes `github_issue_ref` and `prd_file`.
+- **Cleanup** — `whilly/cli_legacy.py` deleted; `WHILLY_WORKTREE` and
+  `WHILLY_USE_WORKSPACE` are silent no-ops on v4. `task.created` events emitted per
+  inserted task row; `plan.applied` events emitted once per `whilly plan apply`
+  invocation with `{tasks_count, skipped_count, warned_count, strict}`. The full
+  Flow A fingerprint (gate verdict → state-machine transition → audit row) is
+  observable within 200 ms.
+
+## Architecture
 
 Three boxes / containers / VMs talk to each other:
 
 ```
 ┌─────────────────────────┐         ┌────────────────────────┐         ┌────────────────────────┐
 │  Postgres 15+           │ ◄────── │  Control plane         │ ◄────── │  whilly-worker         │
-│  (task queue, audit log)│ asyncpg │  FastAPI + asyncpg     │  HTTP   │  httpx → claim → run   │
-└─────────────────────────┘         │  whilly run / dashboard│  TLS    │  Claude CLI subprocess │
-                                    └────────────────────────┘         └────────────────────────┘
+│  plans / tasks /        │ asyncpg │  FastAPI + asyncpg     │  HTTP   │  httpx → claim → run   │
+│  workers / events       │         │  + lifespan flusher    │  TLS    │  Claude CLI subprocess │
+└─────────────────────────┘         └────────────────────────┘         └────────────────────────┘
 ```
+
+Postgres is the single source of truth — operational tables (`plans`, `tasks`,
+`workers`) plus an append-only `events` audit log. The state machine
+(`whilly/core/state_machine.py`) gates every transition server-side. Workers are
+stateless pollers; the control plane is a transaction shaper. See
+[`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) for the
+hexagonal layout, the `core` / `adapters` split, scheduling, and lock semantics.
+
+## Migration chain
+
+```
+001_initial_schema
+ └→ 002_workers_status
+     └→ 003_events_detail        (events.detail jsonb NULL — TASK-104b)
+         └→ 004_per_worker_bearer   (workers.token_hash nullable + partial UNIQUE — TASK-101)
+             └→ 005_plan_budget       (plans.budget_usd / spent_usd; events.plan_id NOT NULL — TASK-102)
+                 └→ 006_plan_github_ref   (plans.github_issue_ref + partial UNIQUE — TASK-108a)
+                     └→ 007_plan_prd_file     (plans.prd_file — TASK-108a)
+```
+
+Every migration is round-trippable via `alembic upgrade head → downgrade base
+→ upgrade head` with byte-equal final schema.
+
+## Quick start
 
 ```bash
 # 1. Postgres on the control-plane box (or any reachable host)
 docker compose up -d                  # boots postgres:15-alpine via docker-compose.yml
 export WHILLY_DATABASE_URL=postgresql://whilly:whilly@localhost:5432/whilly
 
-# 2. Schema migrations
+# 2. Install + apply migrations
 pip install -e '.[server,dev]'        # control-plane install closure
-alembic upgrade head                  # applies whilly/adapters/db/migrations/versions/
+alembic upgrade head                  # applies every revision through 007
 
-# 3a. Have an idea, not a plan? Run the PRD wizard — it generates both.
+# 3a. Have an idea, not a plan? PRD wizard generates both.
 whilly init "build a CLI tool for monitoring API endpoints" --slug api-monitor
 #   → docs/PRD-api-monitor.md saved + plan 'api-monitor' imported into Postgres
 
-# 3b. Already have tasks.json? Import directly.
+# 3b. Already have tasks.json? Import directly. Add --strict to skip
+#     decision-gate REJECTs as they're imported.
 whilly plan import path/to/tasks.json
+whilly plan apply path/to/tasks.json --strict
 whilly plan show <plan_id>            # ASCII DAG of the imported plan
 
-# 4a. All-in-one local mode — control plane embedded in the worker process
+# 3c. Cap spend up-front (per-plan budget guard).
+whilly plan create --id my-plan --name "My plan" --budget 5.00
+
+# 3d. Pull a GitHub issue into a plan via Forge.
+whilly forge intake mshegolev/whilly-orchestrator/123
+
+# 4a. All-in-one local mode — control plane embedded in the worker process.
 whilly run --plan <plan_id>
 
-# 4b. Distributed mode — control plane + remote worker on different hosts
+# 4b. Distributed mode — control plane + remote worker on different hosts.
 #     a) on the control-plane box:
-export WHILLY_WORKER_TOKEN=$(openssl rand -hex 32)
 export WHILLY_WORKER_BOOTSTRAP_TOKEN=$(openssl rand -hex 32)
 uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
 
 #     b) on the worker box (only needs httpx — pull the slim install):
-pip install whilly-worker             # meta-package; equivalent to whilly-orchestrator[worker]
+pip install whilly-orchestrator[worker]
+WORKER_TOKEN=$(whilly worker register \
+    --connect https://control.example.com:8000 \
+    --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
+    --plan <plan_id>)
 whilly-worker \
     --connect https://control.example.com:8000 \
-    --token "$WHILLY_WORKER_TOKEN" \
+    --token "$WORKER_TOKEN" \
     --plan <plan_id>
 
 # 5. Watch progress live
 whilly dashboard --plan <plan_id>     # Rich Live TUI over the tasks table
 ```
 
-A complete reproducible SC-3 demo (Postgres + control plane + remote worker, all on one host)
-lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
+A complete reproducible single-host demo (Postgres + control plane + remote
+worker, all on loopback) lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
 
-| Topic | Where |
+## CLI surface
+
+`whilly <command>` dispatches to a sub-CLI; `whilly --help` prints the routing
+block.
+
+| Command | Purpose |
 |---|---|
-| `whilly init` — interactive PRD wizard + plan import | [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) |
-| Claude API через HTTPS-proxy / SSH-tunnel (`WHILLY_CLAUDE_PROXY_URL`) | [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md) |
-| Hexagonal layout, core/adapters split, scheduling, locks | [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) |
-| HTTP wire protocol — endpoints, auth, long-polling, retries | [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) |
-| v3 → v4 migration — env-var mapping, breaking changes | [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) |
-| Release checklist (SC-1..SC-6 gates) | [`docs/v4.0-release-checklist.md`](docs/v4.0-release-checklist.md) |
-| What changed in 4.0 / 4.1 | [`CHANGELOG.md`](CHANGELOG.md) |
-
-> ⚠️ **The rest of this README documents v3.x and is preserved for reference until the v4.1
-> rewrite of this document.** The v3 examples below (`whilly --tasks tasks.json`, tmux runner,
-> plan-level workspace, etc.) **do not work on v4** — see the migration guide for replacements.
-
----
-
-[![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Self-Healing](https://img.shields.io/badge/self--healing-enabled-green.svg)](docs/Self-Healing-Guide.md)
-[![Workshop kit](https://img.shields.io/badge/workshop-HackSprint1-blue.svg)](docs/workshop/INDEX.md)
-
-Python implementation of the **Whilly Wiggum loop** — Ralph Wiggum's smarter brother. Same family, same "I'm helping!" spirit, but with TRIZ contradiction analysis, a Decision Gate that refuses nonsense upfront, a PRD wizard, and a Rich TUI dashboard on top of the classic continuous agent loop.
-
-🇷🇺 [Краткое описание на русском](README-RU.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
-
-> "I'm helping — and I've read TRIZ." — Whilly Wiggum
-
-## What it does
-
-Whilly runs a loop: pick a pending task → hand it to an LLM agent → verify result → commit → next. It keeps running until the task board is empty, a budget is exhausted, or you stop it. Parallel mode dispatches multiple agents in tmux panes or git worktrees.
-
-The base technique was first described in [Ghuntley's post on the Ralph Wiggum loop](https://ghuntley.com/ralph/) and widely adopted across the Claude Code community. Whilly is the brainier sibling: all of Ralph's "pick task → try → repeat" stamina, plus a TRIZ analyzer for surfacing contradictions, a Decision Gate for refusing garbage tasks, and a PRD wizard for understanding the problem before swinging at it.
-
-## vNext — Whilly Forge (Issue → PR)
-
-> Whilly doesn't just *answer* your issue. It *delivers a reviewable Pull Request.*
-
-**Forge** is the direction Whilly is heading in vNext: an opinionated pipeline that takes a single GitHub Issue and produces a branch, a diff, and a PR a human can merge. Same continuous-loop backbone; more structure in front of and behind the agent.
-
-```
-Issue ──► Intake ──► Normalize ──► Readiness ──► Strategy ──► Plan ──► Execute ──► Verify ──► Repair ──► Compose PR ──► Timeline
-         (fetch)    (spec +       (Decision    (bugfix /    (per-     (agent    (tests +   (auto-fix   (what/why/    (board +
-                     classify)    Gate)         feature /    task)     loop)     lint)      loop)       validation)   dashboard)
-                                                refactor /
-                                                unknown)
-```
-
-| Stage | Ships today | vNext direction |
-|---|---|---|
-| **Intake** — pull an issue into a task plan | `whilly --from-issue owner/repo/N` | `whilly/intake_github.py` (FR-1) |
-| **Normalize** — explicit spec + task-type classifier | ad-hoc prompts | `whilly/spec.py` + classifier (FR-2) |
-| **Readiness** — refuse under-specified issues up front | `decision_gate.py` | `whilly/readiness.py` states (FR-3) |
-| **Strategy** — choose the right playbook per task type | single loop | 4 strategies (FR-4) |
-| **Plan** — per-task scoped plan (not whole-repo) | `decomposer.py` | `whilly/planner.py` (FR-5) |
-| **Execute** — agent loop, parallel / tmux / worktree | ✅ stable | — (core loop) |
-| **Verify** — structured verdict, repo-profile aware | `verifier.py` | structured verdict (FR-7) |
-| **Repair** — auto-fix loop on verify failure | partial (self-healing) | `whilly/repair.py` (FR-8) |
-| **Compose PR** — branch `whilly/issue-{N}-{slug}`, what/why/validation body | `github_pr.py` | full composition (FR-9 / FR-10) |
-| **Timeline** — every stage visible on board + dashboard | board columns only | full timeline events (FR-11) |
-
-**Why "Forge"?** A forge turns raw material into finished parts. Whilly turns a raw issue into a finished patch — with the same "I'm helping!" stamina, but now with receipts at every stage.
-
-**What you get today:** `scripts/whilly_e2e_demo.py` and `scripts/whilly_e2e_triz_prd.py` already demonstrate the end-to-end flow. The vNext refactor (tracked in issues `FR-1` through `FR-11`) breaks this into well-bounded modules so teams can swap strategies, verifiers, and PR composers for their own stack.
-
-**Not in scope:** Whilly does not ship code to production on its own. Forge produces a Draft PR by default for anything non-trivial; a human still merges. See [ADR-017](https://github.com/mshegolev/whilly-orchestrator/issues/158) for the Draft-vs-auto-merge policy.
-
-## Features
-
-- **Continuous agent loop** — pull tasks from a JSON plan, run Claude CLI on each, retry on transient errors
-- **Rich TUI dashboard** — live progress, token usage, cost totals, per-task status; hotkeys for pause/reset/skip
-- **Parallel execution** — tmux panes or git worktrees, up to N concurrent agents with budget/deadlock guards
-- **Self-healing system** 🛡️ — auto-detect crashes, fix common code errors (NameError, ImportError), restart pipeline
-- **Task decomposer** — LLM-based breakdown of oversized tasks into subtasks
-- **PRD wizard** — interactive Product Requirements Document generation, then auto-derive tasks from the PRD
-- **TRIZ analyzer** — surface contradictions and inventive principles for ambiguous tasks
-- **State store** — persistent task state across restarts, per-task per-iteration logs
-- **Notifications** — budget warnings, deadlock detection, auth/API error alerts
-
-## Install
-
-Two install variants — pick the one that matches your role.
-
-### For users (prod — default)
-
-Isolated CLI via [pipx](https://pipx.pypa.io/), latest release from PyPI:
-
-```bash
-pipx install whilly-orchestrator
-# or, if you don't have pipx:
-pip install whilly-orchestrator
-```
-
-### For contributors (dev)
-
-Editable link to your local checkout + `[dev]` extras (ruff, pytest, mypy). Edits in `whilly/` reflect immediately on the next `whilly` invocation — no reinstall needed:
-
-```bash
-git clone https://github.com/mshegolev/whilly-orchestrator
-cd whilly-orchestrator
-make install-dev
-# Equivalent to: pipx install --force --editable '.[dev]'
-# Without pipx:   python3 -m pip install -e '.[dev]'
-```
-
-Useful contributor targets (see `make help` for all): `make lint`, `make format`, `make test`, `make version` (diagnose install drift — shows source vs installed-CLI version), `make uninstall`.
-
-Both variants require [Claude CLI](https://docs.claude.com/en/docs/claude-code) on `PATH` (or set `CLAUDE_BIN`).
-
-## Quick start
-
-1. Create `tasks.json` describing the work:
-
-   ```json
-   {
-     "project": "health-endpoint",
-     "tasks": [
-       {
-         "id": "TASK-001",
-         "phase": "Phase 1",
-         "category": "functional",
-         "priority": "high",
-         "description": "Add a /health endpoint returning {\"status\":\"ok\"}",
-         "status": "pending",
-         "dependencies": [],
-         "key_files": ["app/server.py"],
-         "acceptance_criteria": ["GET /health returns 200 with {\"status\":\"ok\"}"],
-         "test_steps": ["curl -s localhost:8000/health"]
-       },
-       {
-         "id": "TASK-002",
-         "phase": "Phase 1",
-         "category": "test",
-         "priority": "high",
-         "description": "Write a pytest covering the new endpoint",
-         "status": "pending",
-         "dependencies": ["TASK-001"],
-         "key_files": ["tests/test_health.py"],
-         "acceptance_criteria": ["pytest tests/test_health.py passes"],
-         "test_steps": ["pytest -q tests/test_health.py"]
-       }
-     ]
-   }
-   ```
-
-2. Run Whilly (2 concurrent agents, $5 budget cap):
-
-   ```bash
-   WHILLY_MAX_PARALLEL=2 WHILLY_BUDGET_USD=5 whilly tasks.json
-   # straight from a checkout, no install:
-   ./whilly.py tasks.json
-   # or as a module:
-   python -m whilly tasks.json
-   # or just `whilly` with no args for the interactive plan-picker
-   ```
-
-3. Watch the dashboard. Press `q` to quit, `d` for task detail, `l` for the live log of a running agent, `t` for the task overview.
-
-## 🛡️ Self-Healing System
-
-Whilly includes a built-in self-healing system that automatically detects, analyzes, and fixes code errors to ensure pipeline resilience:
-
-```bash
-# Standard whilly (no crash protection)
-whilly tasks.json
-
-# Self-healing whilly (auto-fix + restart on crashes)
-python scripts/whilly_with_healing.py tasks.json
-```
-
-**Supported error types:**
-- ✅ `NameError` — missing variables/parameters (auto-fix)
-- ✅ `ImportError` — missing modules (auto pip install)  
-- ✅ `TypeError` — function parameter mismatches (diagnosis)
-- ⚠️ `AttributeError` — missing object attributes (suggestions)
-
-**Features:**
-- 🔍 **Smart error detection** via traceback pattern analysis
-- 🔧 **Automated fixes** for common coding errors
-- 🔄 **Auto-restart** with exponential backoff (max 3 retries)
-- 📊 **Learning from patterns** in historical error logs
-- 💡 **Recovery suggestions** for complex issues
-
-See [Self-Healing Guide](docs/Self-Healing-Guide.md) for complete documentation.
-
-## Modules
-
-| Module | Purpose |
-|---|---|
-| `orchestrator.py` | Main loop, batch planning, interface agreement between agents |
-| `agent_runner.py` | Claude CLI wrapper, JSON output parsing, usage accounting |
-| `tmux_runner.py` | Parallel agents in tmux panes |
-| `worktree_runner.py` | Parallel agents in isolated git worktrees |
-| `dashboard.py` | Rich TUI dashboard with hotkeys |
-| `task_manager.py` | Task lifecycle (pending → in_progress → done/failed) |
-| `state_store.py` | Persistent state across restarts |
-| `decomposer.py` | LLM-based task breakdown |
-| `prd_generator.py`, `prd_wizard.py`, `prd_launcher.py` | PRD generation and task derivation |
-| `triz_analyzer.py` | TRIZ contradiction analysis |
-| `self_healing.py` | 🛡️ Error detection, analysis, and automated fixing |
-| `recovery.py` | Task status synchronization and consistency validation |
-| `reporter.py` | Per-iteration reports, cost totals, summary markdown |
-| `verifier.py`, `notifications.py`, `history.py`, `config.py` | Infrastructure |
+| `whilly plan import <file>` | Validate + persist a plan JSON to Postgres (idempotent on `plan_id`). |
+| `whilly plan apply <file> [--strict]` | Import + run the decision gate. With `--strict`, REJECTs are skipped via `repo.skip_task` and emit `task.skipped` events. |
+| `whilly plan create --id <id> --name <name> [--budget USD]` | Mint an empty plan with an optional spend cap. |
+| `whilly plan export <plan_id>` | Round-trip canonical JSON to stdout. |
+| `whilly plan show <plan_id>` | ASCII dependency-graph render with status badges. |
+| `whilly plan reset <plan_id>` | Reset task statuses to `pending` (soft) or wipe rows (`--hard`). |
+| `whilly init "<idea>" --slug <slug>` | PRD wizard → plan import in one step. |
+| `whilly run --plan <id>` | All-in-one local worker (asyncpg-direct). |
+| `whilly dashboard --plan <id>` | Rich Live TUI over the tasks table. |
+| `whilly worker register --connect <url> --bootstrap-token <tok>` | Mint a per-worker bearer (TASK-101). |
+| `whilly-worker --connect <url> --token <bearer> --plan <id>` | Standalone remote-worker entry (httpx-only closure). |
+| `whilly forge intake owner/repo/N` | GitHub Issue → Whilly plan + label transition. |
 
 ## Configuration
 
-Whilly resolves config through layers (last wins):
+Almost everything is controlled by env vars (see [`whilly/config.py`](whilly/config.py)
+for the full set; `whilly --help` per subcommand for flag details).
 
-```
-defaults → user TOML → ./whilly.toml → .env → shell env (WHILLY_*) → CLI flags
-```
-
-Start from the committed template (works cross-platform — macOS / Linux / Windows):
-
-```bash
-cp whilly.example.toml whilly.toml           # project-local
-# or place settings at the OS-native user path:
-whilly --config path                         # shows the location
-whilly --config edit                         # opens it in $EDITOR
-
-# legacy .env users: one-shot migration that moves tokens into the OS keyring
-whilly --config migrate
-```
-
-See [docs/Whilly-Usage.md](docs/Whilly-Usage.md) for the full config guide (TOML fields, secret schemes, user-config paths per OS). The env-var table below is kept as a reference — every `WHILLY_*` variable has an equivalent TOML field of the same name.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `WHILLY_MODEL` | `claude-opus-4-6[1m]` | Claude model id |
-| `WHILLY_MAX_PARALLEL` | `3` | Concurrent agents (1 = sequential) |
-| `WHILLY_MAX_ITERATIONS` | `0` | Max work cycles per plan (0 = unlimited) |
-| `WHILLY_BUDGET_USD` | `0` | Hard cost cap; 80% triggers warning, 100% stops the run |
-| `WHILLY_TIMEOUT` | `0` | Wall-clock cap in seconds (0 = unlimited) |
-| `WHILLY_USE_TMUX` | `1` | Use tmux panes for parallel agents |
-| `WHILLY_WORKTREE` | `0` | Per-task git worktree isolation (needs `MAX_PARALLEL>1`) |
-| `WHILLY_LOG_DIR` | `whilly_logs` | Per-task log directory |
-| `WHILLY_STATE_FILE` | `.whilly_state.json` | Crash-recovery state file (`--resume` reads it) |
-| `WHILLY_HEADLESS` | auto | CI mode — JSON on stdout, exit codes |
-| `CLAUDE_BIN` | `claude` | Path to Claude CLI binary |
-| `WHILLY_AGENT_BACKEND` | `claude` | Active agent backend (`claude` or `opencode`) |
-| `WHILLY_OPENCODE_BIN` | `opencode` | Path to the OpenCode CLI binary |
-| `WHILLY_OPENCODE_SAFE` | `0` | `1` → drop `--dangerously-skip-permissions` for OpenCode |
-| `WHILLY_OPENCODE_SERVER_URL` | _(unset)_ | Optional remote OpenCode server URL |
-
-**New here?** Start with [`docs/Getting-Started.md`](docs/Getting-Started.md) — practical walkthroughs from install to first run.
-
-Key CLI flags: `--all`, `--headless`, `--timeout N`, `--resume`, `--reset PLAN.json`, `--init "desc" [--plan] [--go]`, `--plan PRD.md`, `--prd-wizard`, `--workspace` (opt into plan-level git worktree — off by default since v3.3.0), `--agent {claude,opencode,claude_handoff}`.
-
-### Task sources (pull issues into plans)
-
-```bash
-whilly --from-github whilly:ready --go          # all open issues with label
-whilly --from-github all --go                   # every open issue, no label filter
-whilly --from-issue owner/repo/42 --go          # one GitHub issue (slash form — shell-safe)
-whilly --from-issue 'owner/repo#42' --go        # same, with '#' (quote in zsh/bash)
-whilly --from-jira ABC-123 --go                 # one Jira ticket
-whilly --from-project <project-v2-url> --go     # GitHub Projects v2 board
-whilly --from-issues-project <url> --repo owner/name   # board-filtered issues
-```
-
-### Lifecycle sync (live board updates as whilly works)
-
-Enable in `whilly.toml`:
-```toml
-[project_board]                                  # GitHub Projects v2
-url = "https://github.com/users/you/projects/4"
-default_repo = "you/your-repo"
-
-[jira]                                           # Jira transitions (complements auto-close)
-server_url = "https://company.atlassian.net"
-username   = "you@example.com"
-token      = "keyring:whilly/jira"
-enable_board_sync = true
-```
-
-Task status → column mapping is identical for both: `pending → Todo/To Do`, `in_progress → In Progress`, `done → In Review`, `merged → Done`, `failed → Failed`, `skipped → Refused/Cancelled`, `blocked → On Hold/Blocked`, `human_loop → Human Loop/Waiting for Customer`. Override per-section via `[project_board.status_mapping]` / `[jira.status_mapping]`.
-
-One-off helpers:
-```bash
-whilly --ensure-board-statuses             # create any missing Status columns
-whilly --post-merge <plan.json>            # after an external merge, flush cards to Done
-python3 scripts/populate_board.py …        # bulk-add issues onto a Projects v2 board
-```
-
-### Human-in-the-loop backend (`claude_handoff`)
-
-```bash
-WHILLY_AGENT_BACKEND=claude_handoff whilly --from-issue alice/repo/42 --go
-```
-
-Each task's prompt lands in `.whilly/handoff/<task_id>/prompt.md`; whilly blocks until you write `result.json`. Three companion commands:
-
-```bash
-whilly --handoff-list                                  # see pending handoffs
-whilly --handoff-show GH-42                            # read the prompt
-whilly --handoff-complete GH-42 --status complete --message "done"
-```
-
-Accepted statuses: `complete` / `failed` / `blocked` / `human_loop` / `partial`. `blocked` and `human_loop` map to extra whilly statuses + board columns so tickets needing a decision land in a dedicated column instead of being misreported as failed.
-
-Exit codes in headless mode: `0` success, `1` some tasks failed, `2` budget exceeded, `3` timeout.
-
-See `docs/Whilly-Usage.md` for the full CLI reference.
-
-## Documentation
-
-- [Whilly-Usage.md](docs/Whilly-Usage.md) — CLI reference and flag catalog
-- [Whilly-Interfaces-and-Tasks.md](docs/Whilly-Interfaces-and-Tasks.md) — task file format, state store schema, agent output contract
-- [docs/workshop/INDEX.md](docs/workshop/INDEX.md) — Workshop kit (HackSprint1)
-
-## Workshop kit
-
-Whilly ships with a **HackSprint1 workshop kit** — a 90-minute hands-on tutorial that takes you from `pip install` to a running self-hosting bootstrap demo. Two tracks:
-
-- **Track A (`tasks.json`)** — works without GitHub auth, 30 min.
-- **Track B (GitHub Issues)** — full e2e with PR creation, 60 min.
-
-Includes BRD, PRD, 12 ADRs, sample plans, and a roadmap. See [docs/workshop/INDEX.md](docs/workshop/INDEX.md) for the full guide. RU/EN bilingual.
-
-## Backends
-
-Whilly ships with pluggable agent backends behind a single `AgentBackend` Protocol (see `whilly/agents/`).
-
-| Backend | Select | CLI wrapped | Notes |
-|---|---|---|---|
-| **Claude** (default) | `--agent claude` / `WHILLY_AGENT_BACKEND=claude` | `claude --output-format json -p "…"` | Requires [Claude CLI](https://docs.claude.com/en/docs/claude-code). Set `CLAUDE_BIN` to override path. |
-| **OpenCode** | `--agent opencode` / `WHILLY_AGENT_BACKEND=opencode` | `opencode run --format json --model <provider/id> "…"` | Requires [sst/opencode](https://github.com/sst/opencode) on `PATH` (or `WHILLY_OPENCODE_BIN`). Set `WHILLY_OPENCODE_SAFE=1` to respect its per-tool permission policy. |
-
-Model ids pass through normalization per backend — e.g. `claude-opus-4-6` automatically becomes `anthropic/claude-opus-4-6` for OpenCode. Completion is signalled identically (`<promise>COMPLETE</promise>`) so the main loop is backend-agnostic. Decision Gate, tmux runner, and the subprocess fallback all route through the active backend.
-
-## Workflow boards
-
-Whilly can sync a GitHub Projects v2 board as issues move through the pipeline (ready → picked_up → in_review → done / refused / failed). Board integration is Protocol-driven (`whilly/workflow/BoardSink`) — today one adapter ships (`GitHubProjectBoard` via `gh api graphql`); Jira/Linear/GitLab drop in as sibling implementations.
-
-Before first use, run the analyzer to map whilly's six lifecycle events to your board columns:
-
-```bash
-whilly --workflow-analyze https://github.com/users/<you>/projects/<N>
-```
-
-The analyzer prints matched / missing / ambiguous columns and walks you through `[A]dd / [M]ap / [S]kip` decisions. Output goes to `.whilly/workflow.json` — a committable artefact so teams share one contract. Extra flags: `--apply` (auto-add all missing columns, CI-friendly) and `--report` (dry-run, no writes).
-
-See [ADR-014](docs/workshop/adr/ADR-014-workflow-sink-protocol.md) for the design rationale and extension guide.
-
-## Self-hosting pipelines
-
-Two e2e scripts ship for "whilly processes its own GitHub issues end-to-end", differing in how much *thinking* they do before coding. Pick by issue complexity:
-
-| Script | Stages | Use when |
-|---|---|---|
-| [`scripts/whilly_e2e_demo.py`](scripts/whilly_e2e_demo.py) | fetch → Decision Gate → execute → PR → review-fix loop | Issue is crisp, single-file, "just do it" scoped. Ralph-loop reference. |
-| [`scripts/whilly_e2e_triz_prd.py`](scripts/whilly_e2e_triz_prd.py) | fetch → Gate → **TRIZ challenge** → **PRD** → **tasks decomp** → execute → quality gate → PR | Issue deserves decomposition. "Whilly Wiggum" smarter-brother variant. |
-
-Both honour the workflow board integration (`WHILLY_PROJECT_URL=...` → cards move at every stage) and share the hard `WHILLY_BUDGET_USD` cap.
-
-Typical invocation for the TRIZ+PRD pipeline:
-
-```bash
-unset GITHUB_TOKEN
-WHILLY_REPO=mshegolev/whilly-orchestrator \
-WHILLY_LABEL=whilly:ready \
-WHILLY_BUDGET_USD=30 \
-WHILLY_PROJECT_URL=https://github.com/users/mshegolev/projects/4 \
-python scripts/whilly_e2e_triz_prd.py --limit 1
-```
-
-`--limit N` caps issues per run; `--dry-run` skips all LLM / PR / merge work for plan-only inspection; `--allow-auto-merge` is OFF by default — a pipeline that modifies whilly's own code always leaves PRs for human review. Details + design rationale in [ADR-015](docs/workshop/adr/ADR-015-e2e-triz-prd-pipeline.md).
-
-## Troubleshooting / FAQ
-
-| Issue | Fix |
+| Variable | Purpose |
 |---|---|
-| `gh auth status` returns 401 ("token invalid") | `unset GITHUB_TOKEN` (env-based token overrides keyring auth), then `gh auth login` if needed. |
-| `claude: command not found` | Install Claude CLI from [docs.claude.com](https://docs.claude.com/en/docs/claude-code) or set `CLAUDE_BIN` to its path. |
-| Dashboard rendering broken on narrow terminal (<100 cols) | `WHILLY_HEADLESS=1 whilly tasks.json` — disables TUI, streams JSON events on stdout. |
-| Budget hits 0 unexpectedly | Set or raise `WHILLY_BUDGET_USD` (default unlimited; 0 also means unlimited). |
-| `tmux ls` shows no sessions after dispatch | Either tmux isn't installed, or `WHILLY_USE_TMUX=0` — whilly silently falls back to subprocess mode. |
-| Agent loops forever without marking done | Ensure prompt ends with the `<promise>COMPLETE</promise>` marker contract — `agent_runner.is_complete` checks that string. |
+| `WHILLY_DATABASE_URL` | asyncpg DSN — required for the control plane and `whilly run`. |
+| `WHILLY_WORKER_BOOTSTRAP_TOKEN` | Required for `POST /workers/register` and `whilly worker register`. |
+| `WHILLY_WORKER_TOKEN` | **Deprecated** legacy shared bearer; one-shot warning. Suppress with `WHILLY_SUPPRESS_WORKER_TOKEN_WARNING=1`. Use per-worker bearers instead. |
+| `WHILLY_TRIZ_ENABLED` | Opt-in to the per-task TRIZ analyzer hook on FAIL transitions. |
+| `WHILLY_RUN_LIVE_LLM` | Gate live `claude` CLI smoke tests (skipped by default). |
+| `WHILLY_BUDGET_USD` | Legacy global cap; per-plan budgets via `whilly plan create --budget` are the v4.1 way. |
+| `WHILLY_CLAUDE_PROXY_URL` | Inject `HTTPS_PROXY`/`NO_PROXY` into the spawned `claude` env only. See [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md). |
+| `CLAUDE_BIN` | Path to the `claude` CLI binary (default: `claude` on `PATH`). |
 
-## Workshop kit
+`WHILLY_WORKTREE` and `WHILLY_USE_WORKSPACE` are silent no-ops — the v3
+worktree / workspace machinery was removed in TASK-107.
 
-Running HackSprint1 or a self-paced walkthrough? The full workshop kit (BRD, PRD, ADRs, tutorial, roadmap) lives under [docs/workshop/INDEX.md](docs/workshop/INDEX.md).
+## Install
+
+Two install closures, picked by deployment shape:
+
+```bash
+# Control-plane box (FastAPI + asyncpg + alembic + sqlalchemy)
+pip install 'whilly-orchestrator[server]'
+
+# Remote-worker box (httpx-only — no asyncpg / FastAPI)
+pip install 'whilly-orchestrator[worker]'
+
+# Both, e.g. for a single-host demo or CI
+pip install 'whilly-orchestrator[all]'
+
+# Contributor / dev (editable, with ruff / mypy / pytest / testcontainers)
+pip install -e '.[dev]'
+```
+
+The `.importlinter` `core-purity` contract enforces the split: `whilly.core`
+cannot import asyncpg, fastapi, httpx, subprocess, uvicorn, or alembic — CI
+fails on regression. A worker VM that installs `[worker]` will never pull
+`asyncpg` / `fastapi` by accident.
+
+Both server and worker shapes need [Claude CLI](https://docs.claude.com/en/docs/claude-code)
+on `PATH` (or `CLAUDE_BIN`) to actually run agents.
 
 ## Development
 
-See **[Install → For contributors (dev)](#for-contributors-dev)** for the one-command setup (`make install-dev`). Day-to-day loops:
-
 ```bash
-make test          # pytest -q
-make lint          # ruff check + format --check (same command CI runs)
-make format        # ruff format + ruff check --fix
-make version       # show source version vs installed CLI — diagnoses install drift
+pip install -e '.[dev]'
+ruff check whilly tests              # lint (CI-equivalent)
+ruff format --check whilly tests     # format check
+mypy --strict whilly/core/           # strict types on the pure domain layer
+lint-imports                          # core-purity contract
+pytest -q                             # unit + integration (≈1530+ tests)
+alembic upgrade head                  # apply the migration chain on a dev DB
 ```
+
+Test layout:
+
+- `tests/unit/` — pure, no DB.
+- `tests/integration/` — testcontainers + asyncpg; per-test ephemeral Postgres.
+
+Live tests gated by `WHILLY_RUN_LIVE_LLM=1` (live `claude` smoke for the TRIZ
+analyzer) are skipped by default.
+
+Conventions in [`CLAUDE.md`](CLAUDE.md): line length 120, target `py312`, ruff
+is the source of truth, structured logging via `logging.getLogger(__name__)`,
+deprecation via `log.warning(...)` + env-flag suppression (not Python's
+`DeprecationWarning`).
+
+## Documentation
+
+- [`CLAUDE.md`](CLAUDE.md) — coding conventions and architecture pointers.
+- [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) — hexagonal layout, scheduling, locks.
+- [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) — HTTP wire protocol, auth, long-polling.
+- [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) — env-var mapping and breaking changes.
+- [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) — `whilly init` PRD-wizard flow.
+- [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md) — Claude CLI through HTTPS proxy / SSH tunnel.
+- [`CHANGELOG.md`](CHANGELOG.md) — full release notes.
 
 ## Credits
 
-- Technique lineage: [Ghuntley's original Ralph Wiggum loop post](https://ghuntley.com/ralph/) — the pattern whilly descends from.
-- Spirit of the family — Ralph's "I'm helping!" captures the essence of an agent that just keeps going, no matter what. Whilly is his smarter brother: same stamina, plus TRIZ, Decision Gate, PRD wizard.
-
-## Related work
-
-- Earlier Ralph-loop implementations exist across the Claude Code community. Whilly sets itself apart with a Rich TUI dashboard, TRIZ analyzer, Decision Gate pre-flight, PRD wizard, and tmux/git-worktree parallel execution — the "smarter brother" kit on top of the base loop.
+- Technique lineage: [Ghuntley's original Ralph Wiggum loop post](https://ghuntley.com/ralph/) — the
+  pattern Whilly descends from.
+- "I'm helping!" stamina, plus a Decision Gate, per-task TRIZ, and a PRD wizard
+  on top — Ralph's smarter brother.
 
 ## License
 
