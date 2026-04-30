@@ -79,12 +79,11 @@ services:
       retries: 20
       start_period: 10s
     command: ["control-plane"]
-    volumes:
-      # Чтобы хост-машинский `whilly plan import examples/demo/tasks.json`
-      # внутри контейнера работал — пробрасываем репо в контейнер read-only.
-      # Этот mount нужен только для удобства exec'ов из compose; при сборке
-      # код уже скопирован в /opt/whilly из Dockerfile.demo.
-      - ./examples:/opt/whilly/examples:ro
+    # Volume mount к ./examples умышленно убран: на macOS+Colima
+    # /opt/develop/... может не пробрасываться, и тогда examples
+    # становятся пустыми внутри контейнера. Файлы уже COPY'нуты в
+    # /opt/whilly/examples из Dockerfile.demo — этого достаточно для
+    # `compose exec control-plane whilly plan import ...`.
 
   # ─── 3. Application контейнер #2: whilly-worker (HTTP-клиент) ──────────────
   #
@@ -111,10 +110,14 @@ services:
       # если WHILLY_WORKER_TOKEN не задан явно.
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
       WHILLY_PLAN_ID: ${WHILLY_PLAN_ID:-demo}
-      # Stub Claude — состояние-машина и аудит работают без реальной модели.
-      # Чтобы запустить с настоящим Claude: уберите эту строку и пробросьте
-      # /usr/local/bin/claude через volume.
-      CLAUDE_BIN: /opt/whilly/tests/fixtures/fake_claude.sh
+      # Stub Claude с задержкой 2.5s, чтобы параллельность была видна
+      # «вживую» (мгновенный stub успевает обработать оба claim'а одним
+      # воркером, и middle frame ускользает). Можно подкрутить через
+      # FAKE_CLAUDE_DEMO_DELAY env var.
+      # Чтобы подключить настоящий Claude: уберите CLAUDE_BIN и
+      # пробросьте /usr/local/bin/claude через volume.
+      CLAUDE_BIN: /opt/whilly/tests/fixtures/fake_claude_demo.sh
+      FAKE_CLAUDE_DEMO_DELAY: "${FAKE_CLAUDE_DEMO_DELAY:-2.5}"
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
     command: ["worker"]
 
@@ -133,8 +136,8 @@ services:
         condition: service_healthy
     environment:
       WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
-    volumes:
-      - ./examples:/opt/whilly/examples:ro
+    # examples/ уже COPY'нуты в image (Dockerfile.demo), volume mount не нужен
+    # и портит UX на macOS+Colima.
     command: ["whilly", "plan", "apply", "examples/demo/tasks.json"]
     restart: "no"
 

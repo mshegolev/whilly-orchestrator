@@ -58,13 +58,13 @@ case "$ROLE" in
     log "applying alembic migrations"
     alembic upgrade head
 
-    log "starting uvicorn on 0.0.0.0:8000"
-    exec uvicorn 'whilly.adapters.transport.server:create_app' \
-      --factory \
-      --host 0.0.0.0 \
-      --port 8000 \
-      --log-level info \
-      "$@"
+    log "starting control plane on 0.0.0.0:8000"
+    # Don't use `uvicorn --factory` directly: create_app(pool) requires the
+    # pool to be passed in, and uvicorn factory-mode can't inject async-
+    # constructed args. control_plane.py opens the pool, calls create_app,
+    # and runs uvicorn.Server in-process — same shape as the v4 integration
+    # tests, but production-shaped (no testcontainers).
+    exec python /opt/whilly/docker/control_plane.py "$@"
     ;;
 
   worker)

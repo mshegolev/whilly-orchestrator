@@ -186,17 +186,11 @@ until curl -sf "$CONTROL_HEALTH_URL" >/dev/null 2>&1; do
 done
 ok "control-plane: $(curl -s "$CONTROL_HEALTH_URL")"
 
-# ─── 3. Import plan ──────────────────────────────────────────────────────────
-step "импортируем план $PLAN_ID из $PLAN_FILE"
-# Файл плана уже видно внутри control-plane через volume mount
-# (./examples:/opt/whilly/examples:ro в compose'е).
-compose exec -T control-plane whilly plan import "$PLAN_FILE"
-ok "план импортирован"
-
-step "DAG плана"
-compose exec -T control-plane whilly plan show "$PLAN_ID" || true
-
-# ─── 4. Workers ──────────────────────────────────────────────────────────────
+# ─── 3. Workers (СНАЧАЛА воркеры, потом план) ────────────────────────────────
+# Стартуем воркеров ДО импорта плана: оба сразу начинают long-poll'ить
+# /tasks/claim. Когда план появится в БД, оба воркера ровно в этот момент
+# увидят PENDING-задачи — FOR UPDATE SKIP LOCKED разведёт их по разным
+# задачам, и параллельность будет видна в "money frame".
 step "поднимаем $WORKERS воркер(а/ов) с WHILLY_PLAN_ID=$PLAN_ID"
 WHILLY_PLAN_ID="$PLAN_ID" compose up -d --scale "worker=$WORKERS" worker
 
@@ -219,6 +213,15 @@ done
 
 step "состав воркеров"
 compose_psql -c "SELECT worker_id, hostname, status FROM workers ORDER BY worker_id;"
+
+# ─── 4. Import plan (после того как воркеры стоят на long-poll'е) ────────────
+step "импортируем план $PLAN_ID из $PLAN_FILE"
+# Файл плана уже COPY'нут в /opt/whilly/examples/ внутри образа.
+compose exec -T control-plane whilly plan import "$PLAN_FILE"
+ok "план импортирован — воркеры мгновенно подхватят PENDING задачи"
+
+step "DAG плана"
+compose exec -T control-plane whilly plan show "$PLAN_ID" || true
 
 # ─── 5. «Money frame»: ловим момент, когда обе задачи в CLAIMED ──────────────
 step "ждём claim'ы (доказательство параллельности)"
@@ -276,7 +279,7 @@ compose exec -T control-plane whilly plan show "$PLAN_ID" || true
 
 step "audit log из events"
 compose_psql -c "
-  SELECT task_id, event_type, ts,
+  SELECT task_id, event_type, created_at AS ts,
          COALESCE(detail->>'worker_id','') AS worker_id
     FROM events
    WHERE plan_id='$PLAN_ID'
