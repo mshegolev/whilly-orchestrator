@@ -98,6 +98,11 @@ COPY --from=builder /opt/venv /opt/venv
 # через WORKDIR (см. комментарий в самом файле).
 COPY docker/alembic.prod.ini /opt/whilly/alembic.ini
 
+# Production launcher для control-plane'а. uvicorn --factory не может
+# передать pool в create_app(pool, ...), поэтому открываем asyncpg pool
+# здесь и зовём create_app(pool) явно — same shape as integration tests.
+COPY docker/control_plane.py /opt/whilly/docker/control_plane.py
+
 # Точка входа — диспатчер ролей (control-plane / worker / migrate / shell).
 COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
 RUN chmod +x /usr/local/bin/whilly-entrypoint \

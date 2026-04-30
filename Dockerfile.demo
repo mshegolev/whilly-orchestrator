@@ -45,8 +45,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Сначала копируем только pyproject.toml чтобы кэшировать слой с deps
-# отдельно от исходников. Layer-cache рулит на CI и при итеративных правках.
+# Сначала ставим только зависимости (по pyproject.toml + минимальный
+# whilly/__init__.py чтобы setuptools прочитал __version__). Этот слой
+# кэшируется и переиспользуется при изменениях только в исходниках.
 COPY pyproject.toml README.md ./
 COPY whilly/__init__.py whilly/__init__.py
 
@@ -54,11 +55,12 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
     && /opt/venv/bin/pip install '.[all]'
 
-# Теперь копируем весь код и ставим whilly в editable-режиме поверх.
-# Это даёт image, в котором правки кода видны без полной пересборки слоя
-# зависимостей (важно для итераций во время разработки демо).
+# Полный source. Ставим whilly второй раз без deps и НЕ editable —
+# editable .pth указывал бы на /build, который в runtime копируется
+# в /opt/whilly (другой путь), и импорты ломались бы. Non-editable
+# раскладывает whilly/ внутрь venv'а, и source в runtime больше не нужен.
 COPY . .
-RUN /opt/venv/bin/pip install --no-deps -e .
+RUN /opt/venv/bin/pip install --no-deps .
 
 # ─── Stage 2: slim runtime ───────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim AS runtime
@@ -66,7 +68,8 @@ FROM python:${PYTHON_VERSION}-slim AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH=/opt/venv/bin:$PATH \
-    WHILLY_LOG_LEVEL=INFO
+    WHILLY_LOG_LEVEL=INFO \
+    ALEMBIC_CONFIG=/opt/whilly/alembic.ini
 
 # tini — корректный PID 1 для контейнеров (правильно ловит SIGTERM, не зомбирует
 # дочерние процессы). curl — для healthcheck. ca-certificates — для HTTPS.
@@ -77,11 +80,26 @@ RUN apt-get update \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
 
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /build /opt/whilly
 
+# Минимальный набор source-файлов в /opt/whilly:
+#   - alembic.ini + alembic_versions для миграций (whilly/adapters/db/migrations
+#     уже внутри venv'а, но alembic.ini лежит в корне репо)
+#   - examples/ — чтобы plan import видел demo-планы через volume mount
+#   - docker/control_plane.py — production-launcher (uvicorn factory mode не
+#     умеет передать pool, поэтому открываем pool здесь и зовём create_app(pool))
 WORKDIR /opt/whilly
-
-# Точка входа диспатчит на нужную команду — control-plane или worker.
+# Используем production-вариант alembic.ini (с абсолютным путём к миграциям
+# внутри venv'а), а не корневой — он рассчитан на запуск из source-чекаута,
+# которого в этом образе нет.
+COPY docker/alembic.prod.ini ./alembic.ini
+COPY examples/ ./examples/
+# Stub Claude CLI: воркер запускает CLAUDE_BIN на каждой задаче. Stub
+# отвечает <promise>COMPLETE</promise> — без расхода реальных токенов.
+# Demo-вариант делает sleep 2.5s, чтобы параллельный claim был виден
+# на экране (insta-stub успевает обработать обе задачи одним воркером).
+COPY tests/fixtures/fake_claude.sh ./tests/fixtures/fake_claude.sh
+COPY tests/fixtures/fake_claude_demo.sh ./tests/fixtures/fake_claude_demo.sh
+COPY docker/control_plane.py ./docker/control_plane.py
 COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
 RUN chmod +x /usr/local/bin/whilly-entrypoint \
     && chown -R whilly:whilly /opt/whilly /home/whilly
