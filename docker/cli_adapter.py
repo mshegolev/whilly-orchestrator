@@ -33,6 +33,13 @@ Whilly worker (см. ``whilly/adapters/runner/claude_cli.py``) ждёт от
     gemini       — Google Gemini CLI (npm @google/gemini-cli).
                    Native: ``gemini -p "<prompt>" --output-format json
                    --model <model>`` → ``{response, stats}``.
+    codex        — OpenAI Codex CLI (npm @openai/codex).
+                   Native: ``codex exec --json --skip-git-repo-check
+                   --dangerously-bypass-approvals-and-sandbox --ephemeral
+                   -o <last-msg-file> -m <model> "<prompt>"`` → JSONL stream
+                   событий (``thread.started`` / ``turn.started`` /
+                   ``item.completed`` / ``turn.completed``) + finalная reply
+                   в ``<last-msg-file>``.
 
 В каждом из трёх режимов модель берётся из:
 1. CLI's --model arg, если whilly-worker передал явно;
@@ -53,6 +60,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 # llm_resource_picker — рядом, добавляем в sys.path для импорта.
@@ -327,6 +335,128 @@ def run_gemini(prompt: str, model: str | None) -> int:
     )
 
 
+# ─── codex (OpenAI) adapter ────────────────────────────────────────────────
+
+
+def run_codex(prompt: str, model: str | None) -> int:
+    """OpenAI Codex CLI — JSONL stream + ``--output-last-message``.
+
+    ``codex exec --json`` пишет JSONL stream событий:
+        {"type":"thread.started","thread_id":"..."}
+        {"type":"turn.started"}
+        {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"..."}}
+        {"type":"turn.completed","usage":{"input_tokens":N,"cached_input_tokens":N,
+                                          "output_tokens":N,"reasoning_output_tokens":N}}
+
+    Финальный assistant message всегда пишется в файл из ``-o <file>``
+    (это кратчайший reliable путь — не нужно собирать item.completed events
+    вручную). Usage суммируем из всех ``turn.completed`` events.
+
+    Флаги:
+      --skip-git-repo-check       — не паникуем если /workspace не git-repo
+      --dangerously-bypass-...    — analog claude's --dangerously-skip-permissions
+                                    (sandbox + approvals OFF; внутри контейнера
+                                    это безопасно — изоляция уже есть)
+      --ephemeral                 — не персистим session-state на диск
+      --json                      — JSONL events на stdout
+      -o <file>                   — последний agent message → файл
+    """
+    last_msg_file = tempfile.NamedTemporaryFile(  # noqa: SIM115 — closing вручную для retain on subprocess
+        mode="w",
+        suffix=".txt",
+        prefix="codex-last-",
+        delete=False,
+    )
+    last_msg_file.close()
+    try:
+        cmd = [
+            "codex",
+            "exec",
+            "--skip-git-repo-check",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--ephemeral",
+            "--json",
+            "-o",
+            last_msg_file.name,
+            "--color",
+            "never",
+        ]
+        if model:
+            cmd += ["-m", model]
+        cmd.append(prompt)
+
+        t0 = time.time()
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return _emit_error("codex: timeout after 600s", 1)
+        except FileNotFoundError:
+            return _emit_error("codex: 'codex' binary not found in PATH", 2)
+        duration_ms = int((time.time() - t0) * 1000)
+
+        sys.stderr.write(result.stderr)
+
+        if result.returncode != 0:
+            stderr_snippet = result.stderr.strip()[:300] or result.stdout.strip()[:300]
+            # codex sometimes пишет auth-failures с exit 1 и текстом в stderr
+            is_auth = any(kw in stderr_snippet.lower() for kw in ("unauthorized", "api key", "401", "403"))
+            return _emit_error(
+                f"codex: exit {result.returncode} — {stderr_snippet}",
+                2 if is_auth else 1,
+            )
+
+        # Финальное сообщение — из файла; fallback на сборку item.completed events.
+        try:
+            with open(last_msg_file.name) as fh:
+                final_text = fh.read().rstrip("\n")
+        except OSError:
+            final_text = ""
+
+        input_tokens = 0
+        output_tokens = 0
+        message_buffer = ""  # fallback если файл пустой
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            etype = event.get("type")
+            if etype == "turn.completed":
+                usage = event.get("usage") or {}
+                input_tokens += int(usage.get("input_tokens", 0) or 0)
+                # codex separately reports reasoning_output_tokens — суммируем
+                # их в output_tokens чтобы Whilly's accounting видел полную цену.
+                output_tokens += int(usage.get("output_tokens", 0) or 0)
+                output_tokens += int(usage.get("reasoning_output_tokens", 0) or 0)
+            elif etype == "item.completed":
+                item = event.get("item") or {}
+                if item.get("type") == "agent_message":
+                    text = item.get("text") or ""
+                    if text:
+                        message_buffer += ("\n" if message_buffer else "") + text
+
+        if not final_text:
+            final_text = message_buffer
+
+        if not final_text:
+            return _emit_error("codex: empty response (no agent_message in stream and -o file blank)", 1)
+
+        return _emit_envelope(
+            result_text=final_text,
+            duration_ms=duration_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+    finally:
+        try:
+            os.unlink(last_msg_file.name)
+        except OSError:
+            pass
+
+
 # ─── Dispatch ──────────────────────────────────────────────────────────────
 
 
@@ -334,6 +464,7 @@ _RUNNERS = {
     "claude-code": run_claude_code,
     "opencode": run_opencode,
     "gemini": run_gemini,
+    "codex": run_codex,
 }
 
 
@@ -353,9 +484,14 @@ def main(argv: list[str] | None = None) -> int:
             2,
         )
 
-    # Map cli_name → provider name for picker (1-in-1 для claude-code/gemini,
+    # Map cli_name → provider name for picker (1-in-1 для claude-code/gemini/codex,
     # для opencode провайдер задаётся внутри model string как "provider/model").
-    provider = {"claude-code": "claude", "gemini": "gemini", "opencode": "openrouter"}[cli_name]
+    provider = {
+        "claude-code": "claude",
+        "gemini": "gemini",
+        "opencode": "openrouter",
+        "codex": "openai",
+    }[cli_name]
     model = _resolve_model(provider, args.model)
     return runner(args.prompt, model)
 

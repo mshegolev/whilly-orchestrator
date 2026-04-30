@@ -101,7 +101,7 @@ class TestDetectTier:
 class TestPickModel:
     """Маппинг провайдер → tier → модель."""
 
-    KNOWN = ("groq", "openrouter", "cerebras", "gemini", "ollama", "claude")
+    KNOWN = ("groq", "openrouter", "cerebras", "gemini", "ollama", "claude", "openai")
 
     @pytest.mark.parametrize("provider", KNOWN)
     def test_every_provider_resolves_for_every_tier(self, picker, provider):
@@ -131,6 +131,20 @@ class TestPickModel:
         m2 = picker.pick_model("GROQ", tier=picker.SizeTier.SMALL)
         m3 = picker.pick_model("Groq", tier=picker.SizeTier.SMALL)
         assert m1 == m2 == m3
+
+    def test_openai_codex_models(self, picker):
+        """OpenAI/codex: tier→model шкала. TINY/SMALL — fast/cheap mini, MEDIUM/LARGE — flagship."""
+        models = {
+            tv: picker.pick_model("openai", tier=picker.SizeTier(tv)) for tv in ("tiny", "small", "medium", "large")
+        }
+        # Все из gpt-5.x семейства
+        for tier_value, model in models.items():
+            assert model.startswith("gpt-5"), f"{tier_value}={model} not gpt-5.x"
+        # mini для tiny/small (быстрее/дешевле), flagship для medium/large
+        assert "mini" in models["tiny"]
+        assert "mini" in models["small"]
+        assert "mini" not in models["medium"]
+        assert "mini" not in models["large"]
 
     def test_ollama_models_scale_with_tier(self, picker):
         """Ollama: модели должны увеличиваться от TINY к LARGE.

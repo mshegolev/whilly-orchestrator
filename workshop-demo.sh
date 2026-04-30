@@ -28,10 +28,11 @@
 #                          claude-code   — Anthropic CLI, нужен ANTHROPIC_API_KEY
 #                          opencode      — open-source CLI, любой provider
 #                          gemini        — Google CLI, free 1500 req/day
+#                          codex         — OpenAI CLI (gpt-5.x), нужен OPENAI_API_KEY
 #                        agentic CLI'и сами умеют read/write файлов, исполнять
 #                        bash, держать sub-agents и skills (~/.claude/skills,
-#                        .opencode/agent), MCP-серверы. Это «настоящие»
-#                        кодинг-агенты в контейнере воркера.
+#                        .opencode/agent, ~/.codex/skills), MCP-серверы. Это
+#                        «настоящие» кодинг-агенты в контейнере воркера.
 #
 #   --llm <provider>     raw OpenAI-API без agentic capabilities (fallback):
 #                          stub       — alias to --cli stub
@@ -148,8 +149,20 @@ configure_cli_backend() {
       export GEMINI_API_KEY
       export LLM_PROVIDER="${LLM_PROVIDER:-gemini}"
       ;;
+    codex)
+      : "${OPENAI_API_KEY:?--cli codex нужен OPENAI_API_KEY (https://platform.openai.com/api-keys)}"
+      export CLAUDE_BIN="/opt/whilly/docker/cli_adapter.py"
+      export WHILLY_CLI="codex"
+      export OPENAI_API_KEY
+      export LLM_PROVIDER="${LLM_PROVIDER:-openai}"
+      # Codex CLI persists session-state в ~/.codex/sessions; в demo-контейнере
+      # мы выставляем --ephemeral в adapter'е, так что состояние не пишется,
+      # но сам ~/.codex дир всё равно нужен (для config.toml + auth cache).
+      # CODEX_HOME можно переопределить если нужен read-only mount.
+      export CODEX_HOME="${CODEX_HOME:-/home/whilly/.codex}"
+      ;;
     *)
-      err "unknown --cli $CLI_BACKEND (expected: stub|claude-code|opencode|gemini)"
+      err "unknown --cli $CLI_BACKEND (expected: stub|claude-code|opencode|gemini|codex)"
       exit 1
       ;;
   esac
@@ -310,6 +323,7 @@ if [[ -n "$CLI_BACKEND" ]]; then
     claude-code) ok "claude-code (Anthropic CLI с sub-agents, skills, MCP)" ;;
     opencode)    ok "opencode (open-source agentic CLI с sub-agents, skills, MCP)" ;;
     gemini)      ok "gemini-cli (Google CLI, sub-agents, skills, MCP, free-tier)" ;;
+    codex)       ok "codex (OpenAI CLI, gpt-5.x, sub-agents, skills, MCP, plugins)" ;;
   esac
   [[ -n "$TIER_OVERRIDE" ]] && dim "  tier override: $TIER_OVERRIDE"
 else

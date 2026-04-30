@@ -85,16 +85,26 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # nodejs/npm/git/unzip нужны для agentic CLI'ев (claude-code / gemini-cli /
 # opencode) и их runtime-зависимостей (git для diff/commit, unzip для
 # opencode'овского postinstall script'а).
+#
+# Node 22 LTS via NodeSource APT repo (v4.3.1 hotfix): Debian bookworm ships
+# nodejs 18, but @google/gemini-cli requires Node ≥20 (uses regex flags
+# unsupported by V8 в node18 → "Invalid regular expression flags"). Node 22
+# LTS satisfies all three CLIs (claude-code ≥18, gemini ≥20, opencode ships
+# its own bundled bun binary). NodeSource pkg ships npm, поэтому убрали `npm`
+# из apt list. `gnupg` нужен только для setup_22.x (он ставит keyring); чистим
+# через `apt-get purge --auto-remove` после.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-         tini curl ca-certificates git unzip \
-         nodejs npm \
+         tini curl ca-certificates git unzip gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y --auto-remove gnupg \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
     && groupadd --system --gid 1000 whilly \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
 
 # ─── Agentic CLI tools (опционально, но включены в production image) ─────
-# Three production-ready coding agents shipped в образ:
+# Four production-ready coding agents shipped в образ:
 #
 # 1) @anthropic-ai/claude-code — Anthropic's official CLI. Whilly изначально
 #    под него заточен (см. whilly/adapters/runner/claude_cli.py); whilly's
@@ -115,6 +125,12 @@ RUN apt-get update \
 #    Авторизация: per-provider env (OPENROUTER_API_KEY / ANTHROPIC_API_KEY
 #    / GROQ_API_KEY / etc) — opencode сам разберётся.
 #
+# 4) @openai/codex — OpenAI's official Codex CLI (gpt-5.x семейство).
+#    Sub-agents, skills, MCP, plugins, AGENTS.md, hooks, sandbox modes.
+#    Headless: `codex exec --json -o <file> -m <model> "<prompt>"`.
+#    Авторизация: OPENAI_API_KEY env или `codex login` (ChatGPT OAuth для
+#    gpt-5.5; gpt-5.4/mini работают через API key).
+#
 # Whilly-worker зовёт один из них через CLAUDE_BIN+WHILLY_CLI (см.
 # docker/cli_adapter.py). Если установка увеличит размер образа сверх
 # приемлемого — можно будет вынести в отдельный target `whilly:agents`.
@@ -122,13 +138,21 @@ RUN npm install -g --omit=dev \
         @anthropic-ai/claude-code \
         @google/gemini-cli \
         opencode-ai \
+        @openai/codex \
     && npm cache clean --force \
     && rm -rf /root/.npm
 
-# Sanity build-time: все три CLI должны быть в PATH. Падаем здесь, а не
-# на runtime в чужом проекте, если npm-пакет переименовали.
-RUN command -v claude && command -v gemini && command -v opencode \
-    && echo "agentic CLIs ready: claude / gemini / opencode"
+# Sanity build-time: все четыре CLI должны быть в PATH. Падаем здесь, а не
+# на runtime в чужом проекте, если npm-пакет переименовали. Дополнительно
+# валидируем что `--version` отрабатывает у каждого: gemini-cli на node18
+# падал с "Invalid regular expression flags" — именно этот failure mode
+# мы поймали бы здесь и заглушили fix, если кто-то откатит Node-bump.
+RUN command -v claude && command -v gemini && command -v opencode && command -v codex \
+    && claude --version >/dev/null \
+    && gemini --version >/dev/null \
+    && opencode --version >/dev/null \
+    && codex --version >/dev/null \
+    && echo "agentic CLIs ready: claude / gemini / opencode / codex"
 
 # Копируем уже установленный venv. Multi-arch это переживает: buildx делает
 # отдельный builder-слой для каждой arch, и runtime тоже per-arch — пути

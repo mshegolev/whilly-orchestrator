@@ -77,11 +77,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # postinstall скриптов opencode-ai.
 # git нужен для opencode и aider (work с git-aware агентами).
 # unzip — opencode install script распаковывает Go-binary.
+#
+# Node 22 LTS via NodeSource APT repo (v4.3.1 hotfix): bookworm ships node 18,
+# но @google/gemini-cli требует ≥20. Node 22 LTS совместим со всеми тремя CLI.
+# Подробности — см. одноимённый блок в production Dockerfile.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-         tini curl ca-certificates git unzip \
-         nodejs npm \
-    && rm -rf /var/lib/apt/lists/* \
+         tini curl ca-certificates git unzip gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y --auto-remove gnupg \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
     && groupadd --system --gid 1000 whilly \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
 
@@ -100,19 +106,23 @@ RUN apt-get update \
 #    (Anthropic, OpenAI, OpenRouter, Groq, Ollama, etc) через models.dev.
 #    Sub-agents, skills (читает .claude/skills для совместимости с claude-code),
 #    MCP, ACP. Headless: `opencode run --format json --model X "..."`.
+# 4) @openai/codex — OpenAI's official Codex CLI (gpt-5.x семейство), sub-agents,
+#    skills, MCP, plugins. Headless: `codex exec --json -o <file> -m <model> "..."`.
+#    Нужен OPENAI_API_KEY (или ChatGPT OAuth для gpt-5.5).
 #
-# Все три ставятся глобально, доступны по простым именам (claude / gemini /
-# opencode) на PATH.
+# Все четыре ставятся глобально, доступны по простым именам (claude / gemini /
+# opencode / codex) на PATH.
 RUN npm install -g --omit=dev \
         @anthropic-ai/claude-code \
         @google/gemini-cli \
         opencode-ai \
+        @openai/codex \
     && npm cache clean --force \
     && rm -rf /root/.npm
 
-# Sanity: убедимся, что все три CLI разрешаются в PATH при build'е
+# Sanity: убедимся, что все четыре CLI разрешаются в PATH при build'е
 # (если npm-пакет переименуют — fail здесь, а не на runtime в чужом проекте).
-RUN command -v claude && command -v gemini && command -v opencode && echo "all CLIs installed"
+RUN command -v claude && command -v gemini && command -v opencode && command -v codex && echo "all CLIs installed"
 
 COPY --from=builder /opt/venv /opt/venv
 
