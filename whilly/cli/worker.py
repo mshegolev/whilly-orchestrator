@@ -124,6 +124,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import logging
 import os
 import socket
@@ -131,6 +132,7 @@ import sys
 import uuid
 from collections.abc import Sequence
 from typing import Final
+from urllib.parse import urlsplit
 
 from whilly.adapters.runner import run_task
 from whilly.adapters.transport.client import RemoteWorkerClient
@@ -145,14 +147,20 @@ from whilly.worker import (
 __all__ = [
     "BOOTSTRAP_TOKEN_ENV",
     "CONTROL_URL_ENV",
+    "EXIT_CONNECT_ERROR",
     "EXIT_ENVIRONMENT_ERROR",
     "EXIT_OK",
     "PLAN_ID_ENV",
     "WORKER_ID_ENV",
     "WORKER_TOKEN_ENV",
+    "InsecureSchemeError",
+    "UrlValidationError",
+    "build_connect_parser",
     "build_register_parser",
     "build_worker_parser",
+    "classify_control_url",
     "main",
+    "run_connect_command",
     "run_register_command",
     "run_worker_command",
 ]
@@ -178,8 +186,144 @@ BOOTSTRAP_TOKEN_ENV: Final[str] = "WHILLY_WORKER_BOOTSTRAP_TOKEN"
 
 # Exit codes — kept aligned with :mod:`whilly.cli.run` so callers comparing
 # against the v4 CLI never see numbering drift between subcommands.
+#
+# * ``EXIT_OK`` (0)                    — success.
+# * ``EXIT_CONNECT_ERROR`` (1)         — ``whilly worker connect`` failed
+#   *after* argparse / env validation: bad bootstrap token, control-plane
+#   unreachable, scheme guard rejected the URL, or any other runtime
+#   precondition failed. Per the M1 feature description, ``connect``
+#   uses exit ``1`` for these cases (distinct from missing-required
+#   diagnostics, which keep the legacy ``2`` to match :mod:`whilly.cli.run`).
+# * ``EXIT_ENVIRONMENT_ERROR`` (2)     — required CLI flag / env var
+#   missing on the worker loop. Pre-existing convention.
 EXIT_OK: Final[int] = 0
+EXIT_CONNECT_ERROR: Final[int] = 1
 EXIT_ENVIRONMENT_ERROR: Final[int] = 2
+
+
+# ---------------------------------------------------------------------------
+# URL classification + scheme guard (M1, ``--insecure``)
+# ---------------------------------------------------------------------------
+
+
+class UrlValidationError(ValueError):
+    """Raised when a control-plane URL is malformed in a way the operator can fix.
+
+    Carries a human-readable reason that callers print verbatim to
+    stderr. ``code`` is reserved for future structured logging.
+    """
+
+
+class InsecureSchemeError(UrlValidationError):
+    """Raised when plain HTTP is targeted at a non-loopback host without ``--insecure``."""
+
+
+# Hostnames the loopback exemption recognises by name (case-insensitive,
+# exact match). Substring matches are *intentionally* not supported —
+# ``localhost.evil.example`` would be a public DNS name and must NOT be
+# treated as loopback (VAL-M1-INSECURE-903). Empty hostnames (URL with
+# no host, e.g. ``http:///path``) never qualify.
+_LOOPBACK_HOSTNAMES: Final[frozenset[str]] = frozenset({"localhost"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True iff ``host`` is a well-known loopback target.
+
+    Recognised:
+
+    * IPv4 addresses inside ``127.0.0.0/8``.
+    * IPv6 ``::1`` (the IPv6 loopback).
+    * The literal hostname ``localhost`` (case-insensitive, exact match).
+
+    Explicitly NOT recognised:
+
+    * ``0.0.0.0`` / ``[::]`` — wildcard binds, never a routable target.
+    * RFC1918 / link-local ranges (``192.168.0.0/16``, ``10.0.0.0/8``,
+      ``172.16.0.0/12``, ``169.254.0.0/16``) — private but not loopback.
+    * Any DNS name that merely *contains* "localhost".
+    """
+    if not host:
+        return False
+    bare = host.strip("[]").lower()
+    if bare in _LOOPBACK_HOSTNAMES:
+        return True
+    try:
+        addr = ipaddress.ip_address(bare)
+    except ValueError:
+        # Not an IP literal and not a recognised loopback name → not loopback.
+        return False
+    if isinstance(addr, ipaddress.IPv4Address):
+        return addr in ipaddress.ip_network("127.0.0.0/8")
+    # IPv6: only ::1 counts (is_loopback also covers IPv4-mapped, which
+    # is fine — those would have been caught by the v4 branch above).
+    return addr.is_loopback
+
+
+def classify_control_url(url: str) -> tuple[str, str, int]:
+    """Validate ``url`` and return ``(scheme, host, port)``.
+
+    Raises :class:`UrlValidationError` on:
+
+    * Empty / whitespace-only URL.
+    * Missing ``http://`` / ``https://`` scheme.
+    * Empty hostname.
+    * Out-of-range / non-numeric port.
+
+    A URL with a non-trivial path (anything after the host[:port] beyond
+    a single trailing slash) is rejected — the operator must point the
+    flag at the bare control-plane base URL. We picked option (b) of
+    VAL-M1-CONNECT-902 (reject) over (a) (use as base) because every
+    register / claim path on the control-plane is rooted at ``/`` today,
+    so a path-bearing URL is overwhelmingly an operator typo (e.g.
+    pasting the dashboard URL).
+
+    Caller is responsible for the ``--insecure`` decision; this function
+    only classifies the URL.
+    """
+    if not url or not url.strip():
+        raise UrlValidationError("control-plane URL is empty")
+    parts = urlsplit(url.strip())
+    if parts.scheme not in {"http", "https"}:
+        raise UrlValidationError(f"control-plane URL {url!r} is missing a scheme — prefix with http:// or https://")
+    host = parts.hostname or ""
+    if not host:
+        raise UrlValidationError(f"control-plane URL {url!r} has no host component")
+    try:
+        port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+    except ValueError as exc:
+        # urllib raises on out-of-range ports (>65535) at attribute access.
+        raise UrlValidationError(f"control-plane URL {url!r} has invalid port: {exc}") from exc
+    if not 1 <= port <= 65535:
+        raise UrlValidationError(f"control-plane URL {url!r} has out-of-range port {port}")
+    # Reject path / query / fragment. A bare trailing slash is fine — we
+    # canonicalise it away. ``parts.path`` is "" or "/" in that case.
+    path = parts.path or ""
+    if path not in ("", "/") or parts.query or parts.fragment:
+        raise UrlValidationError(
+            f"control-plane URL {url!r} must not include a path, query, or fragment "
+            "(point it at the base URL, e.g. http://host:8000)"
+        )
+    return parts.scheme, host, port
+
+
+def enforce_scheme_guard(url: str, *, insecure: bool) -> tuple[str, str, int]:
+    """Validate URL + apply the ``--insecure`` rule; return ``(scheme, host, port)``.
+
+    Plain HTTP to a non-loopback host requires ``--insecure``; otherwise
+    raises :class:`InsecureSchemeError`. HTTPS always passes (the TLS
+    layer enforces cert validation regardless of ``--insecure``).
+    """
+    scheme, host, port = classify_control_url(url)
+    if scheme == "https":
+        return scheme, host, port
+    if _is_loopback_host(host):
+        return scheme, host, port
+    if not insecure:
+        raise InsecureSchemeError(
+            f"plain HTTP to non-loopback host {host!r} requires --insecure "
+            "(use HTTPS or pass --insecure if you accept the risk)"
+        )
+    return scheme, host, port
 
 
 def build_worker_parser() -> argparse.ArgumentParser:
@@ -270,6 +414,17 @@ def build_worker_parser() -> argparse.ArgumentParser:
             "Test hook for deterministic CI runs; production leaves it unset."
         ),
     )
+    parser.add_argument(
+        "--insecure",
+        dest="insecure",
+        action="store_true",
+        help=(
+            "Allow plain HTTP to a non-loopback control-plane URL. Required "
+            "when --connect points at http://<remote-host>:... over plaintext; "
+            "loopback (127.0.0.0/8, ::1, localhost) is exempt. Always prints a "
+            "warning to stderr when set."
+        ),
+    )
     return parser
 
 
@@ -339,6 +494,23 @@ def run_worker_command(
             file=sys.stderr,
         )
         return EXIT_ENVIRONMENT_ERROR
+
+    # Apply the M1 scheme guard: plain HTTP to a non-loopback host is
+    # an operator footgun — refuse unless ``--insecure`` is explicit.
+    # HTTPS always passes; loopback always passes. When the operator
+    # opts in to ``--insecure``, surface a stderr warning so they have a
+    # chance to notice in CI logs.
+    try:
+        scheme, host, _port = enforce_scheme_guard(connect_url, insecure=args.insecure)
+    except UrlValidationError as exc:
+        print(f"whilly-worker: {exc}", file=sys.stderr)
+        return EXIT_CONNECT_ERROR
+    if args.insecure and scheme == "http" and not _is_loopback_host(host):
+        print(
+            f"whilly-worker: warning — using plain HTTP to non-loopback host {host!r} "
+            "(--insecure). Prefer HTTPS in production.",
+            file=sys.stderr,
+        )
 
     worker_id = _resolve_worker_id(args.worker_id)
     effective_runner: RemoteRunnerCallable = runner if runner is not None else run_task
@@ -609,6 +781,306 @@ async def _async_register(
         return await client.register(hostname)
 
 
+# ---------------------------------------------------------------------------
+# ``whilly worker connect <url>`` — one-shot bootstrap (M1)
+# ---------------------------------------------------------------------------
+
+
+def build_connect_parser() -> argparse.ArgumentParser:
+    """Build the ``whilly worker connect <url> ...`` argparse tree (M1).
+
+    The connect flow is the operator's one-line bootstrap:
+
+    1. Validate the URL (scheme guard, port range, no path).
+    2. Validate the bootstrap token (non-empty after ``.strip()``).
+    3. ``POST /workers/register`` with the bootstrap token.
+    4. Persist the per-worker bearer in the OS keychain (with file fallback).
+    5. ``os.execvp`` into ``whilly-worker --connect <url> --token <bearer>
+       --plan <p>`` so the operator's process *is* the worker.
+
+    Output contract on stdout (line-oriented, ``key: value``, no banners
+    between):
+
+    .. code-block:: text
+
+       worker_id: w-XXXXXXXX
+       token: <plaintext>
+
+    Operators can ``... | grep '^token:' | cut -d' ' -f2`` to extract
+    the bearer.
+    """
+    parser = argparse.ArgumentParser(
+        prog="whilly worker connect",
+        description=(
+            "One-line worker bootstrap: register against the control plane, "
+            "store the per-worker bearer in the OS keychain (or chmod-600 "
+            "fallback file), then exec into whilly-worker."
+        ),
+    )
+    parser.add_argument(
+        "control_url",
+        help=(
+            "Control-plane base URL, e.g. http://127.0.0.1:8000 or "
+            "https://control.example.com. Plain HTTP to a non-loopback host "
+            "requires --insecure."
+        ),
+    )
+    parser.add_argument(
+        "--bootstrap-token",
+        dest="bootstrap_token",
+        default=None,
+        help=(
+            f"Cluster-join secret (env: {BOOTSTRAP_TOKEN_ENV}). Required. "
+            "Authenticates POST /workers/register; rotate independently from "
+            "per-worker bearers — see whilly/adapters/transport/auth.py."
+        ),
+    )
+    parser.add_argument(
+        "--plan",
+        dest="plan_id",
+        default=None,
+        help=(
+            "Plan id this worker draws claims from. Forwarded verbatim to "
+            "whilly-worker after register. Required (no env-var fallback — "
+            "the connect flow is a one-shot, an env-var would mask config)."
+        ),
+    )
+    parser.add_argument(
+        "--hostname",
+        dest="hostname",
+        default=None,
+        help=("Hostname the new worker self-reports. Defaults to socket.gethostname() if omitted."),
+    )
+    parser.add_argument(
+        "--no-keychain",
+        dest="no_keychain",
+        action="store_true",
+        help=(
+            "Do not write the bearer to the OS keychain (or fallback file). "
+            "Stdout still prints `worker_id:` / `token:` lines so the operator "
+            "can capture the bearer manually."
+        ),
+    )
+    parser.add_argument(
+        "--keychain-service",
+        dest="keychain_service",
+        default=None,
+        help=(
+            "Override the keychain service name (default: 'whilly'). Mostly a "
+            "test seam — operators should leave this alone."
+        ),
+    )
+    parser.add_argument(
+        "--insecure",
+        dest="insecure",
+        action="store_true",
+        help=("Allow plain HTTP to a non-loopback control-plane URL. Mirrors the whilly-worker flag of the same name."),
+    )
+    return parser
+
+
+def run_connect_command(argv: Sequence[str]) -> int:
+    """Execute ``whilly worker connect <url> ...`` — return exit code (M1).
+
+    Returns ``EXIT_OK`` only if ``os.execvp`` is reached; in production
+    ``execvp`` replaces the process and never returns, but the value
+    still matters for unit tests that monkeypatch ``execvp``.
+
+    Error envelope:
+
+    * ``EXIT_CONNECT_ERROR`` (1) — bootstrap missing/empty, URL invalid,
+      scheme guard rejected, register 401, control-plane unreachable,
+      ``whilly-worker`` not on PATH after a successful register, or any
+      other runtime failure of the connect flow.
+    * ``EXIT_ENVIRONMENT_ERROR`` (2) — argparse rejected the invocation
+      (e.g. missing positional). Argparse handles this directly via
+      ``SystemExit(2)`` when ``parse_args`` fails.
+    """
+    parser = build_connect_parser()
+    args = parser.parse_args(list(argv))
+
+    # ── 1. URL validation + scheme guard ─────────────────────────────
+    try:
+        scheme, host, _port = enforce_scheme_guard(args.control_url, insecure=args.insecure)
+    except UrlValidationError as exc:
+        print(f"whilly worker connect: {exc}", file=sys.stderr)
+        return EXIT_CONNECT_ERROR
+    if args.insecure and scheme == "http" and not _is_loopback_host(host):
+        print(
+            f"whilly worker connect: warning — using plain HTTP to non-loopback host {host!r} "
+            "(--insecure). Prefer HTTPS in production.",
+            file=sys.stderr,
+        )
+
+    # ── 2. Plan id is required (no env-var fallback for this surface). ──
+    plan_id_raw = args.plan_id
+    if plan_id_raw is None or not plan_id_raw.strip():
+        print(
+            "whilly worker connect: --plan is required and must be a non-empty plan id (e.g. --plan demo).",
+            file=sys.stderr,
+        )
+        return EXIT_CONNECT_ERROR
+    plan_id = plan_id_raw.strip()
+
+    # ── 3. Bootstrap token: --flag > env. Empty / whitespace rejected. ──
+    raw_bootstrap = args.bootstrap_token
+    if raw_bootstrap is None:
+        raw_bootstrap = os.environ.get(BOOTSTRAP_TOKEN_ENV, "")
+    bootstrap_token = (raw_bootstrap or "").strip()
+    if not bootstrap_token:
+        print(
+            f"whilly worker connect: --bootstrap-token is required (or set "
+            f"{BOOTSTRAP_TOKEN_ENV}); the value must be non-empty after stripping whitespace.",
+            file=sys.stderr,
+        )
+        return EXIT_CONNECT_ERROR
+
+    # ── 4. Hostname (default to socket.gethostname()) ────────────────
+    hostname = (args.hostname or socket.gethostname()).strip()
+    if not hostname:
+        print(
+            "whilly worker connect: --hostname must be a non-empty string when supplied.",
+            file=sys.stderr,
+        )
+        return EXIT_CONNECT_ERROR
+
+    # ── 5. Canonical URL (strip trailing slash) for keychain key + worker arg ──
+    from whilly.secrets import canonical_control_url
+
+    canonical_url = canonical_control_url(args.control_url.strip())
+
+    # ── 6. Register against the control plane ───────────────────────
+    try:
+        register_response = asyncio.run(
+            _async_register(canonical_url, bootstrap_token, hostname),
+        )
+    except KeyboardInterrupt:
+        # Re-raise so the shell sees the canonical 130 exit; the
+        # contract (VAL-M1-CONNECT-906) only asks that no half-state
+        # is persisted and the keyring is not touched on the early-exit
+        # path — both are guaranteed because we have not stored anything
+        # yet.
+        raise
+    except Exception as exc:
+        # Map well-known transport failures to readable diagnostics. We
+        # import lazily to avoid pulling httpx into ``whilly --help``
+        # cold-starts that don't need it.
+        from whilly.adapters.transport.client import (
+            AuthError,
+            HTTPClientError,
+            ServerError,
+        )
+
+        if isinstance(exc, AuthError):
+            print(
+                f"whilly worker connect: control-plane rejected bootstrap token (401) for {canonical_url}. "
+                "Check the value passed via --bootstrap-token / "
+                f"{BOOTSTRAP_TOKEN_ENV} and that it has not been revoked.",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, ServerError):
+            # ``ServerError`` is a subclass of ``HTTPClientError``, so the
+            # check has to come *before* the generic-HTTP branch below.
+            print(
+                f"whilly worker connect: control-plane server error for {canonical_url} after retries: {exc}",
+                file=sys.stderr,
+            )
+        elif isinstance(exc, HTTPClientError):
+            print(
+                f"whilly worker connect: control-plane returned HTTP error for {canonical_url}: {exc}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"whilly worker connect: control-plane unreachable at {canonical_url}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+        return EXIT_CONNECT_ERROR
+
+    worker_id = register_response.worker_id
+    bearer = register_response.token
+
+    # ── 7. Persist the bearer (keychain or file fallback) ────────────
+    storage_backend: str | None = None
+    if not args.no_keychain:
+        try:
+            from whilly.secrets import WHILLY_KEYRING_SERVICE, store_worker_credential
+
+            storage_backend = store_worker_credential(
+                canonical_url,
+                bearer,
+                service=args.keychain_service or WHILLY_KEYRING_SERVICE,
+            )
+        except Exception as exc:
+            # The file-fallback is the catch-all; only a hard disk-write
+            # failure (permission, no space) gets here. Surface it on
+            # stderr but do NOT swallow the exec — the operator already
+            # has the plaintext on stdout below and can re-store later.
+            print(
+                f"whilly worker connect: warning — failed to persist bearer to keychain or fallback file: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            storage_backend = None
+
+    # ── 8. Print stdout: ``worker_id:`` / ``token:`` (line-oriented, pipeable). ──
+    # IMPORTANT: no banners between the two lines (VAL-M1-CONNECT-007).
+    sys.stdout.write(f"worker_id: {worker_id}\n")
+    sys.stdout.write(f"token: {bearer}\n")
+    sys.stdout.flush()
+
+    # Diagnostic line (post-token) on STDERR — never includes the
+    # plaintext bearer (VAL-M1-CONNECT-912 / 913).
+    if storage_backend == "keyring":
+        print(
+            f"whilly worker connect: bearer stored in OS keychain (service='whilly', user={canonical_url}).",
+            file=sys.stderr,
+        )
+    elif storage_backend == "file":
+        from whilly.secrets import credentials_file_path
+
+        print(
+            f"whilly worker connect: bearer stored in fallback file {credentials_file_path()} (mode 0600).",
+            file=sys.stderr,
+        )
+    elif args.no_keychain:
+        print(
+            "whilly worker connect: --no-keychain set; bearer printed to stdout only.",
+            file=sys.stderr,
+        )
+
+    # ── 9. Exec into ``whilly-worker``. ──────────────────────────────
+    # ``execvp`` replaces the current process — on success it never
+    # returns. We pass the bearer via argv (matching the long-running
+    # contract; the bearer is already ephemeral and execvp argv is
+    # process-private). If ``whilly-worker`` is missing from PATH,
+    # ``execvp`` raises ``FileNotFoundError`` — surface it cleanly.
+    worker_argv = [
+        "whilly-worker",
+        "--connect",
+        canonical_url,
+        "--token",
+        bearer,
+        "--plan",
+        plan_id,
+    ]
+    if args.insecure:
+        worker_argv.append("--insecure")
+    try:
+        os.execvp(worker_argv[0], worker_argv)
+    except FileNotFoundError:
+        print(
+            "whilly worker connect: registration succeeded and the bearer was persisted, "
+            "but the 'whilly-worker' executable was not found on PATH. Install the worker "
+            "package and re-run: whilly-worker --connect <url> --token <bearer> --plan <id>.",
+            file=sys.stderr,
+        )
+        return EXIT_CONNECT_ERROR
+    # ``execvp`` succeeded — unreachable in production, but keeps mypy /
+    # call-sites that monkeypatch the exec happy.
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point — registered as ``whilly-worker`` in pyproject.toml.
 
@@ -617,13 +1089,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     invoke :func:`run_worker_command` directly with a list to avoid
     poking at ``sys.argv``.
 
-    The wrapper also dispatches the ``register`` subcommand to
-    :func:`run_register_command` when the first positional token is
-    ``"register"`` — keeps the standalone ``whilly-worker`` console
-    script consistent with ``whilly worker register`` invoked through
-    the dispatcher in :mod:`whilly.cli`.
+    The wrapper also dispatches the ``register`` and ``connect``
+    subcommands to their handlers when the first positional token is
+    ``"register"`` / ``"connect"`` — keeps the standalone
+    ``whilly-worker`` console script consistent with the
+    ``whilly worker <sub>`` flow invoked through the dispatcher in
+    :mod:`whilly.cli`.
     """
     args = sys.argv[1:] if argv is None else list(argv)
     if args and args[0] == "register":
         return run_register_command(args[1:])
+    if args and args[0] == "connect":
+        return run_connect_command(args[1:])
     return run_worker_command(args)

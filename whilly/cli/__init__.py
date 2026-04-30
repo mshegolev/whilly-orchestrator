@@ -104,16 +104,21 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_forge_command(rest)
     if cmd == "worker":
-        # Sub-dispatch ``whilly worker register ...`` to the registration
-        # one-shot before falling through to the main loop entry point —
-        # mirrors the standalone ``whilly-worker`` console script's
-        # behaviour (see :func:`whilly.cli.worker.main`). Keeps a single
-        # source of truth for the register CLI shape regardless of which
+        # Sub-dispatch ``whilly worker register ...`` and
+        # ``whilly worker connect ...`` to their handlers before falling
+        # through to the main loop entry point — mirrors the standalone
+        # ``whilly-worker`` console script's behaviour (see
+        # :func:`whilly.cli.worker.main`). Keeps a single source of
+        # truth for each subcommand's CLI shape regardless of which
         # binary the operator invokes.
         if rest and rest[0] == "register":
             from whilly.cli.worker import run_register_command
 
             return run_register_command(rest[1:])
+        if rest and rest[0] == "connect":
+            from whilly.cli.worker import run_connect_command
+
+            return run_connect_command(rest[1:])
         from whilly.cli.worker import run_worker_command
 
         return run_worker_command(rest)
