@@ -110,14 +110,35 @@ services:
       # если WHILLY_WORKER_TOKEN не задан явно.
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
       WHILLY_PLAN_ID: ${WHILLY_PLAN_ID:-demo}
-      # Stub Claude с задержкой 2.5s, чтобы параллельность была видна
-      # «вживую» (мгновенный stub успевает обработать оба claim'а одним
-      # воркером, и middle frame ускользает). Можно подкрутить через
-      # FAKE_CLAUDE_DEMO_DELAY env var.
-      # Чтобы подключить настоящий Claude: уберите CLAUDE_BIN и
-      # пробросьте /usr/local/bin/claude через volume.
-      CLAUDE_BIN: /opt/whilly/tests/fixtures/fake_claude_demo.sh
+      # ─── Claude / LLM настройки ──────────────────────────────────────────
+      # Worker зовёт CLAUDE_BIN (любой бинарь, который умеет
+      # `--output-format json -p "<prompt>"` и выдаёт JSON envelope с
+      # <promise>COMPLETE</promise>). По умолчанию используется stub
+      # с задержкой 2.5s — параллельный claim видно глазом.
+      #
+      # Чтобы переключиться на реальный LLM, выставите CLAUDE_BIN на
+      # universal shim и подсуньте credentials провайдера:
+      #
+      #   CLAUDE_BIN: /opt/whilly/docker/llm_shim.py
+      #   LLM_PROVIDER: groq        # groq|openrouter|cerebras|gemini|ollama|claude
+      #   LLM_BASE_URL: https://api.groq.com/openai/v1
+      #   LLM_API_KEY:  ${GROQ_API_KEY}
+      #   # LLM_MODEL не задавайте — entrypoint авто-подберёт модель под
+      #   # cgroup-лимиты контейнера (см. docker/llm_resource_picker.py).
+      #
+      # workshop-demo.sh с флагом --llm <provider> делает это за вас.
+      CLAUDE_BIN: ${CLAUDE_BIN:-/opt/whilly/tests/fixtures/fake_claude_demo.sh}
       FAKE_CLAUDE_DEMO_DELAY: "${FAKE_CLAUDE_DEMO_DELAY:-2.5}"
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_TIER_OVERRIDE: ${LLM_TIER_OVERRIDE:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-120}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0}
+      LLM_HTTP_REFERER: ${LLM_HTTP_REFERER:-}
+      LLM_X_TITLE: ${LLM_X_TITLE:-}
+      LLM_FORCE_COMPLETE: ${LLM_FORCE_COMPLETE:-0}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
     command: ["worker"]
 
