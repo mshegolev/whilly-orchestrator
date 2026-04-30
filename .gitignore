@@ -19,6 +19,8 @@ env/
 .env
 .env.local
 .env.bak
+.env.tailscale
+.env.worker
 
 # Local whilly config — personal, use whilly.example.toml as the template
 whilly.toml
