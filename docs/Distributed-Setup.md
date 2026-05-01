@@ -33,13 +33,14 @@ deployment artifacts that make a multi-host control-plane possible.
 ## Contents
 
 1. [Prerequisites](#prerequisites)
-2. [VPS A — control-plane](#vps-a--control-plane)
-3. [Laptop B / C — workers](#laptop-b--c--workers)
-4. [Verifying the cluster](#verifying-the-cluster)
-5. [Operating the cluster](#operating-the-cluster)
-6. [Backwards compatibility](#backwards-compatibility)
-7. [Reference: env vars added in v4.4](#reference-env-vars-added-in-v44)
-8. [Audit reports](#audit-reports)
+2. [Two-host via Tailscale (recommended for private deployments)](#two-host-via-tailscale-recommended-for-private-deployments)
+3. [VPS A — control-plane](#vps-a--control-plane)
+4. [Laptop B / C — workers](#laptop-b--c--workers)
+5. [Verifying the cluster](#verifying-the-cluster)
+6. [Operating the cluster](#operating-the-cluster)
+7. [Backwards compatibility](#backwards-compatibility)
+8. [Reference: env vars added in v4.4](#reference-env-vars-added-in-v44)
+9. [Audit reports](#audit-reports)
 
 ---
 
@@ -75,6 +76,144 @@ docker pull mshegolev/whilly:4.4.0
 > NOT pull `fastapi` or `asyncpg`. The `.importlinter` `core-purity`
 > contract enforces this on every release; a worker laptop never needs the
 > server-side dependency tree.
+
+---
+
+## Two-host via Tailscale (recommended for private deployments)
+
+If you do **not** want to expose the control-plane to the public internet
+(no public IP, no ngrok, no Tailscale Funnel), the simplest two-host
+deployment is to put both hosts on a private **Tailscale tailnet** and
+let the worker reach the control-plane via its tailnet hostname. This is
+the recommended path for the M1 demo when both hosts are personal /
+private machines.
+
+The worker container ships with `tailscaled` baked in (since v4.4 —
+`m1-tailscale-worker-bootstrap`). When `TAILSCALE_AUTHKEY` is set in the
+worker's `.env`, the container joins the tailnet at startup using
+**userspace-networking** mode — no host TUN device, no `--privileged`,
+no `NET_ADMIN` cap required. The worker then resolves the control-plane
+via its tailnet hostname (e.g. `http://m-mac-pro:8000`).
+
+### (a) Install Tailscale on the control-plane host
+
+On the laptop / VPS / VM that runs the control-plane (Postgres +
+control-plane container):
+
+```bash
+# macOS:
+brew install tailscale && sudo tailscale up
+# Debian / Ubuntu:
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+Note the **magic-DNS hostname** Tailscale assigns the host — for example
+`m-mac-pro`, `mvs-laptop`, or `vps-eu-1`. You can verify with:
+
+```bash
+tailscale status
+# 100.64.0.1   m-mac-pro            you@         macOS    -
+```
+
+That hostname is what the worker container will use to reach the
+control-plane (via Tailscale's MagicDNS, no DNS records to maintain).
+
+### (b) Generate a worker auth key on admin.tailscale.com
+
+Visit [https://login.tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys)
+and create a new auth key with these settings:
+
+* **Reusable**: yes — multiple workers can share the same key
+* **Ephemeral**: yes (recommended) — worker nodes auto-deregister when
+  the container stops, so the tailnet stays clean
+* **Pre-approved**: yes (skip MFA prompt)
+* **Tags**: `tag:whilly-worker` — the worker entrypoint advertises this
+  tag via `--advertise-tags=tag:whilly-worker`, so the auth key MUST
+  permit it (configure in your tailnet ACL: `"tagOwners": {"tag:whilly-worker": ["autogroup:admin"]}`)
+
+The key has the form `tskey-auth-...`. Treat it like an SSH key — never
+commit it. Copy it into the worker host's `.env` (or `.env.worker`) in
+the next step.
+
+### (c) Configure the worker host's `.env`
+
+On the **worker** host (the host that will run `docker-compose -f
+docker-compose.worker.yml up -d`):
+
+```bash
+cd /path/to/whilly-orchestrator
+cp .env.worker.example .env.worker
+$EDITOR .env.worker
+```
+
+The minimum set of variables for the tailnet path:
+
+```env
+# .env.worker
+WHILLY_CONTROL_URL=http://m-mac-pro:8000      # tailnet magic-DNS hostname
+WHILLY_WORKER_BOOTSTRAP_TOKEN=<cluster bootstrap token>
+TAILSCALE_AUTHKEY=tskey-auth-...               # tagged + ephemeral + reusable (paste yours)
+WHILLY_USE_CONNECT_FLOW=1                     # use the connect flow
+WHILLY_INSECURE=1                             # plain HTTP over tailnet (loopback-bypass)
+WHILLY_PLAN_ID=demo
+```
+
+> **Why `WHILLY_INSECURE=1`?** Plain HTTP over a Tailscale tailnet is
+> end-to-end encrypted at the WireGuard layer. The
+> `--insecure` flag here only bypasses Whilly's own URL-scheme guard
+> (which otherwise rejects plain HTTP to a non-loopback hostname); the
+> traffic still rides the encrypted tailnet. If you prefer end-to-end
+> TLS on top, add Caddy in front of the control-plane (M2) and drop
+> the flag.
+
+### (d) Start the worker container
+
+```bash
+docker-compose -f docker-compose.worker.yml --env-file .env.worker up -d
+docker logs whilly-worker
+```
+
+You should see the entrypoint announce the tailnet bootstrap:
+
+```
+[entrypoint] role=worker
+[entrypoint] joining tailnet hostname=whilly-worker-<container-id> (userspace-networking)
+[entrypoint] tailnet up; magic-DNS hostname=whilly-worker-<container-id>
+[entrypoint] waiting for control plane at http://m-mac-pro:8000/health
+[entrypoint] control plane is up
+```
+
+### (e) Verify the tailnet path
+
+Inside the running worker container:
+
+```bash
+docker exec whilly-worker tailscale status
+# 100.64.0.1   m-mac-pro                you@           macOS    -
+# 100.64.0.5   whilly-worker-abc123     tagged-devices linux    active
+
+docker exec whilly-worker curl -sf "${WHILLY_CONTROL_URL}/health"
+# {"status":"ok"}
+```
+
+Both lines confirm the worker is on the tailnet and can reach the
+control-plane via its tailnet hostname.
+
+> **Backwards compatibility.** If `TAILSCALE_AUTHKEY` is unset (the
+> default), the worker container behaves exactly as before — no
+> tailscaled, no tailnet, direct HTTP to `WHILLY_CONTROL_URL`. The
+> opt-in is one env var.
+
+> **Slim worker image without Tailscale.** Operators who never use the
+> tailnet path can shrink the image by passing
+> `--build-arg WHILLY_INCLUDE_TAILSCALE=0` at build time:
+>
+> ```bash
+> docker buildx build --target worker \
+>     --build-arg WHILLY_INCLUDE_TAILSCALE=0 \
+>     -t whilly-worker:no-ts .
+> ```
 
 ---
 
@@ -350,6 +489,8 @@ v4.4, that is a bug — please open an issue.
 | `WHILLY_BIND_HOST` | `127.0.0.1` | Host interface the control-plane's port 8000 is mapped to. Set to `0.0.0.0` (IPv4 wildcard), `::` (IPv6 wildcard), or any explicit interface IP to expose the API beyond loopback. |
 | `WHILLY_USE_CONNECT_FLOW` | unset (legacy) | When truthy (`1`, `true`, `yes`, `on`), the worker container's entrypoint uses `whilly worker connect` instead of the legacy bash-awk register flow. Default OFF preserves byte-equivalent v4.3.1 stderr/stdout. |
 | `WHILLY_WORKER_HOSTNAME` | `whilly-worker` | Hostname the worker self-reports during register. Surfaces in the `workers` table and event payloads — set this to something humans can grep (`macbook-mvs`, `vps-eu-1`). |
+| `TAILSCALE_AUTHKEY` | unset (no-op) | When set to a Tailscale tagged auth key (`tskey-auth-…`), the worker container joins a private tailnet at startup using userspace-networking. Required tag: `tag:whilly-worker`. See §"Two-host via Tailscale" above. |
+| `TAILSCALE_HOSTNAME` | `whilly-worker-<container-hostname>` | Optional override for the tailnet hostname the worker advertises. Defaults to `whilly-worker-$(hostname)` so multiple workers on the same image stay distinct in `tailscale status`. |
 
 Both new variables are documented in [`.env.example`](../.env.example)
 and on each compose file's header comment block.
@@ -368,6 +509,8 @@ builds preserve zero functional regression.
 |---|---|---|---|
 | `WHILLY_AGENT_CLIS` | `runtime` (multi-role image, `mshegolev/whilly:<version>`) | `@anthropic-ai/claude-code @google/gemini-cli opencode-ai @openai/codex` | Space-separated list of npm packages to install with `npm install -g`. |
 | `WHILLY_AGENT_CLIS` | `worker` (worker-only image) | `opencode-ai` | Same — but the worker stage's default reflects v4.4's opencode-by-default policy (m1-opencode-groq-default). |
+| `WHILLY_INCLUDE_TAILSCALE` | both | `1` | When `1` (default) installs the tailscale + tailscaled static binaries into `/usr/local/bin/`, enabling the `TAILSCALE_AUTHKEY` runtime opt-in. Pass `0` for slim builds without tailscale. |
+| `TAILSCALE_VERSION` | both | `1.74.1` | Pinned Tailscale release used by the static-binary install. Bump when upgrading. |
 
 ### Examples
 

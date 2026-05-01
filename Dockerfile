@@ -182,6 +182,44 @@ RUN if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' @anthropic-ai/claude-code '; th
     fi \
     && echo "agentic CLIs ready (set: ${WHILLY_AGENT_CLIS:-<none>})"
 
+# ─── Tailscale userspace-networking client (opt-out via build-arg) ───────
+# Since v4.4 (m1-tailscale-worker-bootstrap): the multi-role runtime image
+# ships the tailscale + tailscaled binaries so the worker role can join a
+# private tailnet at startup (when TAILSCALE_AUTHKEY env is set) without
+# requiring host privileges (--privileged / NET_ADMIN cap). Userspace-
+# networking mode (`tailscaled --tun=userspace-networking`) keeps the
+# install fully in-container.
+#
+# Configurable via WHILLY_INCLUDE_TAILSCALE build-arg (default 1). Pass 0
+# for slim builds without tailscale (about ~30 MB saved):
+#
+#   docker buildx build --build-arg WHILLY_INCLUDE_TAILSCALE=0 -t whilly:slim-no-ts .
+#
+# When TAILSCALE_AUTHKEY is unset at runtime, this binary is dead weight
+# but harmless — entrypoint.sh skips the bootstrap silently. So default
+# operators pay nothing in correctness for the inclusion.
+ARG WHILLY_INCLUDE_TAILSCALE=1
+ARG TAILSCALE_VERSION=1.74.1
+RUN if [ "${WHILLY_INCLUDE_TAILSCALE}" = "1" ]; then \
+        set -eux; \
+        arch="$(dpkg --print-architecture)"; \
+        case "$arch" in \
+            amd64) ts_arch=amd64 ;; \
+            arm64) ts_arch=arm64 ;; \
+            armhf) ts_arch=arm ;; \
+            *) echo "unsupported architecture for tailscale: $arch" >&2; exit 1 ;; \
+        esac; \
+        curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ts_arch}.tgz" -o /tmp/tailscale.tgz; \
+        tar -xzf /tmp/tailscale.tgz -C /tmp; \
+        mv "/tmp/tailscale_${TAILSCALE_VERSION}_${ts_arch}/tailscale" /usr/local/bin/tailscale; \
+        mv "/tmp/tailscale_${TAILSCALE_VERSION}_${ts_arch}/tailscaled" /usr/local/bin/tailscaled; \
+        rm -rf /tmp/tailscale.tgz "/tmp/tailscale_${TAILSCALE_VERSION}_${ts_arch}"; \
+        tailscale --version; \
+        echo "tailscale binaries ready"; \
+    else \
+        echo "WHILLY_INCLUDE_TAILSCALE=0 — skipping tailscale install"; \
+    fi
+
 # Копируем уже установленный venv. Multi-arch это переживает: buildx делает
 # отдельный builder-слой для каждой arch, и runtime тоже per-arch — пути
 # `/opt/venv/lib/python3.12/site-packages` идентичны на amd64 / arm64.
@@ -394,6 +432,47 @@ RUN if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' opencode-ai '; then \
         && echo "opencode CLI ready for worker stage"; \
     else \
         echo "opencode-ai not in WHILLY_AGENT_CLIS=${WHILLY_AGENT_CLIS:-<empty>} — skipping opencode sanity check"; \
+    fi
+
+# ─── Tailscale userspace-networking client (opt-out via build-arg) ───────
+# Since v4.4 (m1-tailscale-worker-bootstrap): worker-only image ships the
+# tailscale + tailscaled binaries so the worker can join a private tailnet
+# at startup (when TAILSCALE_AUTHKEY env is set) without requiring host
+# privileges (--privileged / NET_ADMIN cap). Userspace-networking mode
+# (`tailscaled --tun=userspace-networking`) keeps the install fully in-
+# container, allowing M1 two-host demos against a control-plane on the
+# operator's laptop tailnet without exposing it publicly.
+#
+# Configurable via WHILLY_INCLUDE_TAILSCALE build-arg (default 1). Pass 0
+# for slim builds without tailscale:
+#
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_INCLUDE_TAILSCALE=0 \
+#       -t whilly-worker:no-ts .
+#
+# When TAILSCALE_AUTHKEY is unset at runtime, the binary is dead weight
+# but harmless — entrypoint.sh skips the bootstrap silently for full
+# backwards compatibility.
+ARG WHILLY_INCLUDE_TAILSCALE=1
+ARG TAILSCALE_VERSION=1.74.1
+RUN if [ "${WHILLY_INCLUDE_TAILSCALE}" = "1" ]; then \
+        set -eux; \
+        arch="$(dpkg --print-architecture)"; \
+        case "$arch" in \
+            amd64) ts_arch=amd64 ;; \
+            arm64) ts_arch=arm64 ;; \
+            armhf) ts_arch=arm ;; \
+            *) echo "unsupported architecture for tailscale: $arch" >&2; exit 1 ;; \
+        esac; \
+        curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${ts_arch}.tgz" -o /tmp/tailscale.tgz; \
+        tar -xzf /tmp/tailscale.tgz -C /tmp; \
+        mv "/tmp/tailscale_${TAILSCALE_VERSION}_${ts_arch}/tailscale" /usr/local/bin/tailscale; \
+        mv "/tmp/tailscale_${TAILSCALE_VERSION}_${ts_arch}/tailscaled" /usr/local/bin/tailscaled; \
+        rm -rf /tmp/tailscale.tgz "/tmp/tailscale_${TAILSCALE_VERSION}_${ts_arch}"; \
+        tailscale --version; \
+        echo "tailscale binaries ready (worker stage)"; \
+    else \
+        echo "WHILLY_INCLUDE_TAILSCALE=0 — skipping tailscale install"; \
     fi
 
 # Copy the worker-only venv built above.
