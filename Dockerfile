@@ -217,3 +217,123 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
 CMD ["control-plane"]
+
+
+# ─── Stage 3: worker-builder (worker-only dep closure) ───────────────────────
+# Worker import-path purity (VAL-M1-COMPOSE-012, AGENTS.md "Worker import-path
+# purity" invariant). The legacy `runtime` stage above installs
+# `'.[server,worker]'` because it is a multi-role image (control-plane + worker
+# dispatched at runtime via /usr/local/bin/whilly-entrypoint). That image's
+# `pip list` therefore includes fastapi / asyncpg / sqlalchemy / uvicorn /
+# alembic — fine for control-plane, but a violation of the "worker dep closure
+# stays minimal" invariant when the worker role is the only one ever invoked.
+#
+# This stage builds a SEPARATE venv that ONLY contains the worker dep closure:
+# `pip install '.[worker]'` brings in httpx + the base deps (rich / pydantic /
+# typer / psutil / platformdirs / keyring). It does NOT install the `[server]`
+# extra, so fastapi / asyncpg / sse-starlette / jinja2 /
+# prometheus-fastapi-instrumentator never land in the venv. The published
+# whilly source itself contains modules that import those packages (e.g.
+# whilly.adapters.transport.server, whilly.adapters.db.repository) but those
+# modules are simply not exercised by the `whilly-worker` entry point — and
+# `pip list` only cares about installed *distributions*, not unused Python
+# files on disk.
+#
+# The matching regression test is
+# tests/integration/test_worker_image_import_purity.py — it builds this stage
+# (`docker build --target worker -t whilly-worker:test .`) and asserts that
+# `pip list` shows ZERO matches for fastapi / asyncpg / sse-starlette /
+# prometheus-fastapi-instrumentator / jinja2.
+FROM python:${PYTHON_VERSION}-slim-bookworm AS worker-builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /build
+
+# build-essential as a defensive measure for arm64 sdist fallbacks (matches
+# the rationale in stage 1).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md LICENSE ./
+COPY whilly/__init__.py ./whilly/__init__.py
+
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip \
+    && /opt/venv/bin/pip install '.[worker]'
+
+# Full source — install whilly itself without re-resolving deps. Same shape as
+# stage 1's two-step install so the layer cache is invalidated only when the
+# whilly/ tree changes, not when an unrelated file in the repo root does.
+COPY whilly ./whilly
+RUN /opt/venv/bin/pip install --no-deps .
+
+
+# ─── Stage 4: worker (worker-only runtime image) ─────────────────────────────
+# Minimal worker-only runtime image. CMD is `["worker"]` so the same
+# whilly-entrypoint dispatcher selects the worker role. Production multi-role
+# image (`runtime` stage above) stays the canonical published artefact
+# (`mshegolev/whilly:<version>`); this stage is opt-in for operators who want
+# a slimmer worker image whose `pip list` is provably free of control-plane
+# Python distributions.
+#
+# Backwards compat: the existing single-host demo (`docker-compose.demo.yml`),
+# the published `mshegolev/whilly:4.3.1` image, and the `runtime` stage's
+# `["control-plane"]` CMD are all UNCHANGED. This stage is purely additive.
+FROM python:${PYTHON_VERSION}-slim-bookworm AS worker
+
+ARG WHILLY_VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/opt/venv/bin:$PATH \
+    WHILLY_LOG_LEVEL=INFO
+
+# tini — correct PID 1.
+# curl — health-poll the control-plane in entrypoint.sh's worker branch.
+# ca-certificates — TLS to the control-plane / Anthropic / etc.
+# git — `whilly worker connect` may inspect git config in some flows.
+# NOTE: deliberately NO nodejs / npm / agentic CLIs here — the worker dep
+# closure asserted by tests/integration/test_worker_image_import_purity.py is
+# strictly Python-package-level. Operators who want agentic CLIs in their
+# worker image continue to use the `runtime` stage above.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         tini curl ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
+    && groupadd --system --gid 1000 whilly \
+    && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
+
+# Copy the worker-only venv built above.
+COPY --from=worker-builder /opt/venv /opt/venv
+
+# Re-use the same entrypoint dispatcher so this image's worker role behaves
+# identically to the runtime image's worker role (connect-flow + legacy paths
+# both supported). No alembic.ini / control_plane.py / cli_adapter.py here —
+# they would be dead weight in a worker-only image.
+COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
+RUN chmod +x /usr/local/bin/whilly-entrypoint \
+    && chown -R whilly:whilly /home/whilly
+
+LABEL org.opencontainers.image.title="whilly-worker" \
+      org.opencontainers.image.description="Whilly v4 — worker-only runtime image (httpx + whilly.core; no fastapi/asyncpg/sse-starlette/jinja2/prometheus)" \
+      org.opencontainers.image.version="${WHILLY_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/mshegolev/whilly-orchestrator" \
+      org.opencontainers.image.documentation="https://github.com/mshegolev/whilly-orchestrator#readme" \
+      org.opencontainers.image.url="https://github.com/mshegolev/whilly-orchestrator" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.authors="Mikhail Shchegolev <mshegolev@gmail.com>" \
+      org.opencontainers.image.vendor="mshegolev"
+
+WORKDIR /home/whilly
+USER whilly
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
+CMD ["worker"]
