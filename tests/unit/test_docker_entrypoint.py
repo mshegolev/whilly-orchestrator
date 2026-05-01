@@ -311,6 +311,148 @@ def test_connect_flow_omits_insecure_when_falsy(insecure_value: str, shim_bin: P
 
 
 # ---------------------------------------------------------------------------
+# Worker-runtime arg pass-through via ``--`` sentinel
+# (fix-m1-entrypoint-switch-arg-passthrough)
+# ---------------------------------------------------------------------------
+
+
+def test_connect_flow_emits_double_dash_separator_with_no_extra_args(shim_bin: Path) -> None:
+    """No extra ``"$@"`` args → entrypoint still emits the bare ``--`` separator.
+
+    The connect parser tolerates a trailing bare ``--`` (passthrough is
+    empty), so this is a noop on the worker side. We pin it here to lock
+    the entrypoint shape in: future audits won't accidentally remove the
+    sentinel and reintroduce the original "argparse rejects --once" bug.
+    """
+    log_path = shim_bin / "argv.log"
+    result = _run_entrypoint(
+        ["worker"],
+        env={
+            "WHILLY_USE_CONNECT_FLOW": "1",
+            "WHILLY_CONTROL_URL": "http://127.0.0.1:8000",
+            "WHILLY_PLAN_ID": "demo",
+            "WHILLY_WORKER_BOOTSTRAP_TOKEN": "boot-secret",
+        },
+        shim_dir=shim_bin,
+    )
+    assert result.returncode == 0, result.stderr
+    captured = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    # The shim records the full argv on a single space-joined line. We
+    # expect ``... --hostname test-host --`` with the sentinel as the
+    # final token (whitespace-trimmed).
+    connect_lines = [line for line in captured.splitlines() if "worker connect" in line]
+    assert connect_lines, captured
+    assert connect_lines[0].rstrip().endswith("--"), connect_lines[0]
+
+
+def test_connect_flow_passes_once_through_double_dash(shim_bin: Path) -> None:
+    """``entrypoint.sh worker --once`` reaches connect's argv after ``--``.
+
+    Repro guard for the original Scrutiny round-1 finding: with the
+    flag enabled, ``--once`` must NOT be parsed by ``whilly worker
+    connect``'s argparse (which would reject it). Instead it lands
+    after the ``--`` sentinel for the exec'd ``whilly-worker``.
+    """
+    log_path = shim_bin / "argv.log"
+    result = _run_entrypoint(
+        ["worker", "--once"],
+        env={
+            "WHILLY_USE_CONNECT_FLOW": "1",
+            "WHILLY_CONTROL_URL": "http://127.0.0.1:8000",
+            "WHILLY_PLAN_ID": "demo",
+            "WHILLY_WORKER_BOOTSTRAP_TOKEN": "boot-secret",
+        },
+        shim_dir=shim_bin,
+    )
+    assert result.returncode == 0, result.stderr
+    captured = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    # `--once` must appear AFTER the `--` separator in the recorded argv.
+    connect_lines = [line for line in captured.splitlines() if "worker connect" in line]
+    assert connect_lines, captured
+    line = connect_lines[0]
+    sep = " -- "
+    assert sep in line, line
+    after = line.split(sep, 1)[1]
+    assert "--once" in after, after
+
+
+def test_connect_flow_passes_mixed_worker_runtime_args(shim_bin: Path) -> None:
+    """Multiple worker-runtime flags after ``worker`` all land after ``--``.
+
+    Covers the realistic operator workflow of overriding worker
+    identity + heartbeat cadence + a bounded run via env+CLI mix:
+    ``docker run ... worker --worker-id w-1 --heartbeat-interval 5
+    --max-iterations 3``.
+    """
+    log_path = shim_bin / "argv.log"
+    result = _run_entrypoint(
+        [
+            "worker",
+            "--worker-id",
+            "w-custom",
+            "--heartbeat-interval",
+            "5",
+            "--max-iterations",
+            "3",
+        ],
+        env={
+            "WHILLY_USE_CONNECT_FLOW": "1",
+            "WHILLY_CONTROL_URL": "http://127.0.0.1:8000",
+            "WHILLY_PLAN_ID": "demo",
+            "WHILLY_WORKER_BOOTSTRAP_TOKEN": "boot-secret",
+        },
+        shim_dir=shim_bin,
+    )
+    assert result.returncode == 0, result.stderr
+    captured = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    connect_lines = [line for line in captured.splitlines() if "worker connect" in line]
+    assert connect_lines, captured
+    line = connect_lines[0]
+    after = line.split(" -- ", 1)[1] if " -- " in line else ""
+    assert "--worker-id w-custom" in after, after
+    assert "--heartbeat-interval 5" in after, after
+    assert "--max-iterations 3" in after, after
+    # Connect-side args (--bootstrap-token, --plan, --hostname) stay
+    # BEFORE the separator — they belong to connect's argparse.
+    before = line.split(" -- ", 1)[0]
+    assert "--bootstrap-token boot-secret" in before, before
+    assert "--plan demo" in before, before
+    assert "--hostname test-host" in before, before
+
+
+def test_connect_flow_pure_connect_args_do_not_leak_to_passthrough(shim_bin: Path) -> None:
+    """Pure connect-CLI args (env-driven) live BEFORE ``--``, never after.
+
+    ``--insecure`` is a connect-side flag (it controls the URL scheme
+    guard); the entrypoint must keep emitting it as part of the
+    connect argv, not as part of the post-sentinel passthrough.
+    """
+    log_path = shim_bin / "argv.log"
+    result = _run_entrypoint(
+        ["worker"],
+        env={
+            "WHILLY_USE_CONNECT_FLOW": "1",
+            "WHILLY_INSECURE": "1",
+            "WHILLY_CONTROL_URL": "http://192.0.2.10:8000",
+            "WHILLY_PLAN_ID": "demo",
+            "WHILLY_WORKER_BOOTSTRAP_TOKEN": "boot-secret",
+        },
+        shim_dir=shim_bin,
+    )
+    assert result.returncode == 0, result.stderr
+    captured = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+    connect_lines = [line for line in captured.splitlines() if "worker connect" in line]
+    assert connect_lines, captured
+    line = connect_lines[0]
+    if " -- " in line:
+        before, after = line.split(" -- ", 1)
+    else:
+        before, after = line, ""
+    assert "--insecure" in before, before
+    assert "--insecure" not in after, after
+
+
+# ---------------------------------------------------------------------------
 # Exit-code propagation — VAL-M1-ENTRYPOINT-005 / -902
 # ---------------------------------------------------------------------------
 

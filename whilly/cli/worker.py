@@ -886,6 +886,24 @@ def run_connect_command(argv: Sequence[str]) -> int:
     ``execvp`` replaces the process and never returns, but the value
     still matters for unit tests that monkeypatch ``execvp``.
 
+    Worker-runtime arg pass-through (``--`` sentinel)
+    -------------------------------------------------
+    ``connect`` itself only understands the connect-CLI args (URL,
+    ``--bootstrap-token`` / ``--plan`` / ``--hostname`` / ``--insecure`` /
+    ``--no-keychain`` / ``--keychain-service``). Worker-runtime flags
+    (``--once``, ``--worker-id``, ``--heartbeat-interval``,
+    ``--max-iterations``) belong to the *exec'd* ``whilly-worker``
+    binary, not to argparse here. To plumb them through cleanly we treat
+    a literal ``--`` token as a sentinel: everything before goes to this
+    parser, everything after is appended verbatim to the ``whilly-worker``
+    argv right after the connect-supplied ``--connect`` / ``--token`` /
+    ``--plan`` triplet (and the optional ``--insecure``).
+
+    This matches the standard POSIX convention (``cmd ARGS -- TARGET-ARGS``)
+    and keeps the entrypoint contract honest: the docker
+    ``entrypoint.sh worker --once`` invocation lands on the worker loop,
+    not on the connect parser.
+
     Error envelope:
 
     * ``EXIT_CONNECT_ERROR`` (1) — bootstrap missing/empty, URL invalid,
@@ -896,8 +914,23 @@ def run_connect_command(argv: Sequence[str]) -> int:
       (e.g. missing positional). Argparse handles this directly via
       ``SystemExit(2)`` when ``parse_args`` fails.
     """
+    # Split argv on the first ``--`` token: everything before it is
+    # parsed by the connect argparse; everything after it is forwarded
+    # verbatim to the exec'd ``whilly-worker`` binary. A trailing bare
+    # ``--`` (no args after it) is fine — it just produces an empty
+    # passthrough list.
+    argv_list = list(argv)
+    try:
+        sep_idx = argv_list.index("--")
+    except ValueError:
+        connect_argv: list[str] = argv_list
+        worker_passthrough: list[str] = []
+    else:
+        connect_argv = argv_list[:sep_idx]
+        worker_passthrough = argv_list[sep_idx + 1 :]
+
     parser = build_connect_parser()
-    args = parser.parse_args(list(argv))
+    args = parser.parse_args(connect_argv)
 
     # ── 1. URL validation + scheme guard ─────────────────────────────
     try:
@@ -1066,6 +1099,13 @@ def run_connect_command(argv: Sequence[str]) -> int:
     ]
     if args.insecure:
         worker_argv.append("--insecure")
+    # Worker-runtime args from the ``--`` sentinel (e.g. ``--once``,
+    # ``--worker-id X``, ``--heartbeat-interval 5``) come last so that
+    # the operator can override anything we set above (argparse keeps
+    # the *last* occurrence on the worker side). This is the only path
+    # that reaches the worker loop's argparse — connect's own argparse
+    # never sees these flags.
+    worker_argv.extend(worker_passthrough)
     try:
         os.execvp(worker_argv[0], worker_argv)
     except FileNotFoundError:

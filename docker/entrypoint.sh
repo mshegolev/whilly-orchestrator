@@ -141,6 +141,19 @@ case "$ROLE" in
     # Default (unset / empty / 0 / false / no / off): keep the legacy
     # bash-awk register path so v4.3.1-shaped containers stay byte-equivalent
     # on stderr/stdout up to timestamps (VAL-M1-ENTRYPOINT-001 / -003).
+    #
+    # Connect-CLI vs worker-runtime arg split (POSIX `--` sentinel)
+    # -------------------------------------------------------------
+    # `whilly worker connect`'s argparse only accepts connect-CLI args
+    # (URL, --bootstrap-token, --plan, --hostname, --insecure,
+    # --no-keychain, --keychain-service). Worker-runtime args
+    # (--once, --worker-id, --heartbeat-interval, --max-iterations)
+    # belong to the *exec'd* `whilly-worker` binary, not to connect's
+    # argparse. We construct connect-CLI args ourselves from the
+    # WHILLY_* env vars and forward any positional `"$@"` extras after
+    # a literal `--` so they land on the worker loop, not on connect.
+    # See `whilly.cli.worker.run_connect_command` for the matching
+    # parser-side handling.
     if is_truthy "${WHILLY_USE_CONNECT_FLOW:-}"; then
       : "${WHILLY_WORKER_BOOTSTRAP_TOKEN:?WHILLY_WORKER_BOOTSTRAP_TOKEN is required when WHILLY_USE_CONNECT_FLOW is enabled}"
       log "using connect flow (WHILLY_USE_CONNECT_FLOW=${WHILLY_USE_CONNECT_FLOW})"
@@ -157,11 +170,14 @@ case "$ROLE" in
       if is_truthy "${WHILLY_INSECURE:-}"; then
         connect_argv+=(--insecure)
       fi
-      # NB: any extra "$@" args pass through. `whilly worker connect`
-      # ultimately execvp's into `whilly-worker`, so we lose the entry-
-      # point shell here intentionally — failures propagate as the
-      # kernel-level exit code of the child, never swallowed by us.
-      exec "${connect_argv[@]}" "$@"
+      # NB: positional `"$@"` extras pass through to the post-exec
+      # `whilly-worker` argv via the `--` sentinel — connect.py splits
+      # on the first `--` and appends everything after it to the worker
+      # invocation. `whilly worker connect` ultimately execvp's into
+      # `whilly-worker`, so we lose the entrypoint shell here
+      # intentionally — failures propagate as the kernel-level exit code
+      # of the child, never swallowed by us.
+      exec "${connect_argv[@]}" -- "$@"
     fi
 
     # ─── Legacy register-then-exec path (default, v4.3.1 behavior) ───────────

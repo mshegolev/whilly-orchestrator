@@ -946,6 +946,168 @@ def test_insecure_propagates_to_worker_argv(
 
 
 # ---------------------------------------------------------------------------
+# `--` sentinel: worker-runtime args pass through to the exec'd whilly-worker
+# (see fix-m1-entrypoint-switch-arg-passthrough)
+# ---------------------------------------------------------------------------
+
+
+def test_passthrough_sentinel_forwards_once_to_worker_argv(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """``... -- --once`` lands on the exec'd ``whilly-worker``, not on connect's argparse.
+
+    Repro guard for the docker-entrypoint regression: previously the
+    entrypoint passed ``--once`` directly to ``whilly worker connect``,
+    whose argparse rejected it (``unrecognized arguments: --once``).
+    With the sentinel, ``--once`` is forwarded verbatim to the exec'd
+    worker binary.
+    """
+    _patch_register(monkeypatch)
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+            "--",
+            "--once",
+        ]
+    )
+    assert code == EXIT_OK
+    assert len(exec_calls) == 1
+    _, argv = exec_calls[0]
+    assert "--once" in argv
+    # The sentinel itself does NOT leak into the worker argv (it was the
+    # split point, nothing more) — operators get a clean `whilly-worker
+    # --connect ... --token ... --plan ... --once` invocation.
+    assert "--" not in argv
+
+
+def test_passthrough_sentinel_forwards_mixed_worker_runtime_args(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """Multiple worker-runtime flags after ``--`` all reach the worker argv in order."""
+    _patch_register(monkeypatch)
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+            "--",
+            "--worker-id",
+            "w-custom",
+            "--heartbeat-interval",
+            "5",
+            "--max-iterations",
+            "3",
+            "--once",
+        ]
+    )
+    assert code == EXIT_OK
+    _, argv = exec_calls[0]
+    # All passthrough flags present, in the order the operator gave them.
+    expected_tail = [
+        "--worker-id",
+        "w-custom",
+        "--heartbeat-interval",
+        "5",
+        "--max-iterations",
+        "3",
+        "--once",
+    ]
+    assert argv[-len(expected_tail) :] == expected_tail
+    # And the connect-supplied prefix is intact.
+    assert argv[:7] == [
+        "whilly-worker",
+        "--connect",
+        "http://127.0.0.1:8000",
+        "--token",
+        "bearer-deadbeef",
+        "--plan",
+        "demo",
+    ]
+
+
+def test_passthrough_sentinel_with_no_extra_args_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """A trailing bare ``--`` with nothing after it leaves the worker argv unchanged.
+
+    The docker entrypoint always emits ``-- "$@"``; when ``$@`` is empty
+    we still see the bare sentinel. It must NOT break the argv shape or
+    leak into the exec'd worker command.
+    """
+    _patch_register(monkeypatch)
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+            "--",
+        ]
+    )
+    assert code == EXIT_OK
+    _, argv = exec_calls[0]
+    assert argv == [
+        "whilly-worker",
+        "--connect",
+        "http://127.0.0.1:8000",
+        "--token",
+        "bearer-deadbeef",
+        "--plan",
+        "demo",
+    ]
+
+
+def test_passthrough_sentinel_does_not_consume_known_connect_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """Connect-CLI flags before ``--`` are still parsed normally.
+
+    ``--insecure`` is a connect-side flag; its presence before ``--``
+    must propagate to the worker argv (existing behaviour) and any
+    post-``--`` flags must also be appended.
+    """
+    _patch_register(monkeypatch)
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://192.0.2.10:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+            "--insecure",
+            "--",
+            "--once",
+        ]
+    )
+    assert code == EXIT_OK
+    _, argv = exec_calls[0]
+    # Both connect-side --insecure and pass-through --once are present,
+    # with --insecure preceding the pass-through tail.
+    assert "--insecure" in argv
+    assert argv[-1] == "--once"
+    assert argv.index("--insecure") < argv.index("--once")
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher: `whilly worker connect` reaches run_connect_command
 # ---------------------------------------------------------------------------
 
