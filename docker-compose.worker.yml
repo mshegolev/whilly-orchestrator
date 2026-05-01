@@ -55,15 +55,28 @@ services:
     hostname: ${WHILLY_WORKER_HOSTNAME:-whilly-worker}
     restart: unless-stopped
     environment:
-      # Required: where the control-plane lives. NO default — operator
-      # must supply this in .env.worker (typically http://<vps-ip>:8000
-      # or https://<vps-host> behind Caddy / Tailscale Funnel at M2).
-      WHILLY_CONTROL_URL: ${WHILLY_CONTROL_URL:?WHILLY_CONTROL_URL is required (see .env.worker.example)}
+      # Required at RUNTIME — must be supplied by the operator in
+      # .env.worker (typically http://<vps-ip>:8000 or https://<vps-host>
+      # behind Caddy / Tailscale Funnel at M2). We deliberately use the
+      # `:-` (default-if-unset) form rather than `:?` (required) here so
+      # that a `docker-compose -f docker-compose.worker.yml config -q`
+      # against a clean checkout (no env file, no exported vars) parses
+      # cleanly — see VAL-M1-COMPOSE-003. The runtime fail-loud check
+      # lives in docker/entrypoint.sh which runs `: "${WHILLY_CONTROL_URL:?...}"`
+      # — that test fires on BOTH unset and empty values, so passing the
+      # empty string through here still produces a clear, immediate
+      # error message at `up -d` time. Do NOT change this back to `:?`
+      # without breaking VAL-M1-COMPOSE-003.
+      WHILLY_CONTROL_URL: "${WHILLY_CONTROL_URL:-}"
       # Cluster-join secret consumed by the entrypoint's `whilly worker
-      # register` flow. NO default — operator must supply this in
-      # .env.worker. Keep it out of git in real deployments; the bootstrap
-      # token is a shared cluster secret minted by the control-plane operator.
-      WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:?WHILLY_WORKER_BOOTSTRAP_TOKEN is required (see .env.worker.example)}
+      # register` flow. Same rationale as WHILLY_CONTROL_URL above:
+      # default to empty so `config -q` succeeds on a clean checkout, and
+      # let docker/entrypoint.sh's `: "${WHILLY_WORKER_BOOTSTRAP_TOKEN:?...}"`
+      # gate (legacy + connect-flow paths both have one) emit the
+      # actionable error at `up -d` time. Keep it out of git in real
+      # deployments; the bootstrap token is a shared cluster secret
+      # minted by the control-plane operator.
+      WHILLY_WORKER_BOOTSTRAP_TOKEN: "${WHILLY_WORKER_BOOTSTRAP_TOKEN:-}"
       # Plan id this worker should drain. The control-plane is
       # multi-tenant per plan; "demo" matches docker-compose.demo.yml's
       # default so the same plan files work across topologies.
