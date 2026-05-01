@@ -268,6 +268,136 @@ docker compose -f docker-compose.demo.yml down -v
 
 ---
 
+## Сценарий M1 — two-host demo (control-plane на VPS + воркер на ноутбуке)
+
+> **Что нового в v4.4 (M1).** К существующему `docker-compose.demo.yml`
+> добавлены два *additive* compose-файла: `docker-compose.control-plane.yml`
+> (postgres + control-plane на VPS) и `docker-compose.worker.yml` (только
+> worker, который смотрит на удалённый control-plane). Плюс новая команда
+> `whilly worker connect <url>` — однострочный bootstrap для ноутбука.
+> Сценарий A/B (single-host) полностью сохранён — байт-в-байт.
+>
+> Полный пошаговый walkthrough — в [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
+> Ниже — **минимальный demo-путь** для презентации.
+
+### M1.1 — Поднимаем control-plane на VPS
+
+```bash
+ssh root@vps.example.com
+cd /root/whilly
+git checkout v4.4.0
+export WHILLY_WORKER_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+
+# Loopback-only (по умолчанию — Tailscale / VPN-friendly):
+docker-compose -f docker-compose.control-plane.yml up -d
+
+# ИЛИ: открыть API наружу для laptop'ов через публичный IP / LAN:
+WHILLY_BIND_HOST=0.0.0.0 docker-compose -f docker-compose.control-plane.yml up -d
+
+curl -fsS http://127.0.0.1:8000/health        # с самого VPS
+curl -fsS http://vps.example.com:8000/health         # с ноутбука (если 0.0.0.0)
+```
+
+Импортируем демо-план прямо внутри control-plane:
+
+```bash
+docker-compose -f docker-compose.control-plane.yml exec control-plane \
+    whilly plan import examples/demo/tasks.json
+```
+
+### M1.2 — Подключаем macbook как worker (одной командой)
+
+На ноутбуке (с установленным `whilly-orchestrator[worker]`):
+
+```bash
+whilly worker connect http://vps.example.com:8000 \
+    --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
+    --plan demo \
+    --hostname "$(hostname)"
+```
+
+stdout покажет две строки `key: value` (грепабельные, без баннеров между):
+
+```
+worker_id: w-XXXXXXXX
+token: <plaintext bearer>
+```
+
+После этого процесс `execvp`'ает в `whilly-worker` — операторский PID 1
+становится воркером. Bearer хранится в OS keychain (на macOS — Keychain
+Access; на headless Linux — `~/.config/whilly/credentials.json`, mode
+0600).
+
+> Plain HTTP к не-loopback хосту требует `--insecure`. HTTPS (через
+> Caddy / Tailscale Funnel в M2) — рекомендуемый путь.
+
+### M1.3 — Подключаем второй worker на самом VPS
+
+Чтобы продемонстрировать «разные `worker_id` обрабатывают одну очередь»,
+подключим второй worker — компании на VPS, через `docker-compose.worker.yml`:
+
+```bash
+ssh root@vps.example.com
+cd /root/whilly
+
+cp .env.worker.example .env.worker
+cat >> .env.worker <<EOF
+WHILLY_CONTROL_URL=http://control-plane:8000
+WHILLY_WORKER_BOOTSTRAP_TOKEN=$(cat /root/whilly/secrets/bootstrap.token)
+WHILLY_PLAN_ID=demo
+WHILLY_USE_CONNECT_FLOW=1
+EOF
+
+docker-compose -f docker-compose.worker.yml --env-file .env.worker up -d
+docker logs whilly-worker
+```
+
+`WHILLY_USE_CONNECT_FLOW=1` переключает entrypoint с legacy bash-awk
+register-пути на `whilly worker connect`. Default (unset / `0` /
+`false` / `no` / `off`) сохраняет байт-в-байт поведение v4.3.1 — это
+важно для backwards-compat workshop demo.
+
+### M1.4 — Проверяем audit log
+
+С VPS:
+
+```bash
+docker-compose -f docker-compose.control-plane.yml exec postgres \
+    psql -U whilly -d whilly -c \
+    "SELECT DISTINCT worker_id FROM events
+     WHERE event_type='CLAIM' AND plan_id='demo';"
+```
+
+Должны увидеть **два разных** `worker_id` — один с macbook, второй с
+VPS. Это и есть «полная цепочка аудита распределённой работы»,
+которая хорошо смотрится на слайде.
+
+### M1.5 — Backwards compat smoke (обязательная проверка)
+
+После M1-демо **всегда** прогоняем legacy single-host smoke на той же
+машине, чтобы убедиться что v4.3.1 demo-путь не сломался:
+
+```bash
+bash workshop-demo.sh --cli claude       # exit 0, все demo-задачи DONE
+```
+
+Если этот шаг сфейлился — M1-фичи не приняты до фикса.
+
+### M1.6 — Тушим стек
+
+```bash
+# На ноутбуке: Ctrl-C на whilly-worker (graceful release)
+
+# На VPS:
+docker-compose -f docker-compose.worker.yml --env-file .env.worker down
+docker-compose -f docker-compose.control-plane.yml down
+```
+
+> 📚 Дальше — M2 (TLS + per-user trust через Caddy / Tailscale Funnel)
+> и M3 (web-dashboard + Prometheus). M1 — только deployment-артефакты.
+
+---
+
 ## Agentic CLI workflow (рекомендуемый production-режим)
 
 Whilly worker внутри контейнера зовёт `$CLAUDE_BIN` — это может быть
