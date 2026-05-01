@@ -356,6 +356,47 @@ and on each compose file's header comment block.
 
 ---
 
+## Reference: Dockerfile build-args (image build-time)
+
+The `Dockerfile` in this repo exposes a build-arg on **both** image
+targets that controls which agent CLIs are pre-installed in the image.
+This is a fallback / size-optimization escape hatch for constrained
+build environments (e.g. a Colima VM with limited disk) — default
+builds preserve zero functional regression.
+
+| Build-arg | Stage | Default | Purpose |
+|---|---|---|---|
+| `WHILLY_AGENT_CLIS` | `runtime` (multi-role image, `mshegolev/whilly:<version>`) | `@anthropic-ai/claude-code @google/gemini-cli opencode-ai @openai/codex` | Space-separated list of npm packages to install with `npm install -g`. |
+| `WHILLY_AGENT_CLIS` | `worker` (worker-only image) | `opencode-ai` | Same — but the worker stage's default reflects v4.4's opencode-by-default policy (m1-opencode-groq-default). |
+
+### Examples
+
+```bash
+# Slim worker image with only opencode (== current default; explicit form):
+docker buildx build --target worker \
+    --build-arg WHILLY_AGENT_CLIS='opencode-ai' \
+    -t whilly-worker:slim .
+
+# Worker image with NO npm-installed CLIs (operator BYOs the binary via
+# volume-mount or follow-on RUN layer):
+docker buildx build --target worker \
+    --build-arg WHILLY_AGENT_CLIS='' \
+    -t whilly-worker:no-clis .
+
+# Slim multi-role image: only opencode + claude-code on PATH (skip gemini
+# and codex to fit the image into a disk-constrained build VM):
+docker buildx build \
+    --build-arg WHILLY_AGENT_CLIS='opencode-ai @anthropic-ai/claude-code' \
+    -t whilly:slim .
+```
+
+> **NOTE.** When `WHILLY_AGENT_CLIS=''` is passed, the build-time sanity
+> check that normally validates `opencode --version` is also skipped —
+> there is no binary to probe. Default builds retain the existing
+> sanity check unchanged.
+
+---
+
 ## Audit reports
 
 The mission's distributed-systems audit reports live at the canonical
