@@ -487,6 +487,34 @@ compose_psql -c "
    WHERE plan_id='$PLAN_ID'
    ORDER BY id;"
 
+# ─── 7.5. Terminal-state guard (additive — fixes silent-success bug) ─────────
+# Previously the demo script unconditionally exited 0 when the wait-for-DONE
+# loop finished, even if the loop itself bailed on the timeout warning with
+# tasks still in PENDING / CLAIMED / IN_PROGRESS. That hid worker-disabled
+# regressions during cross-host runs (M1 user-testing finding
+# VAL-CROSS-BACKCOMPAT-002 / VAL-M1-ENTRYPOINT-003 / VAL-M1-DEMO-008).
+#
+# Now: query the tasks table for anything outside the terminal set and pipe
+# the result through scripts/check_demo_tasks_terminal.sh. Empty result =>
+# exit 0 (backwards-compatible green CI). Non-empty => the helper prints
+# each offending `<id> (status=...)` to stderr and we exit 4.
+step "проверяем терминальные статусы всех seeded задач"
+non_terminal_rows="$(
+  compose_psql -c "
+    SELECT id || '|' || status
+      FROM tasks
+     WHERE plan_id='$PLAN_ID'
+       AND status NOT IN ('DONE','FAILED','SKIPPED')
+     ORDER BY id;
+  " 2>/dev/null || true
+)"
+if ! printf '%s\n' "$non_terminal_rows" \
+     | bash "$REPO_ROOT/scripts/check_demo_tasks_terminal.sh"; then
+  err "demo aborted: see stuck task list above"
+  exit 4
+fi
+ok "все seeded задачи в терминальном статусе"
+
 # ─── 8. Done ─────────────────────────────────────────────────────────────────
 echo
 ok "демо завершено"
