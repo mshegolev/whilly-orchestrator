@@ -109,6 +109,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "live_llm: live-LLM smoke test gated by WHILLY_RUN_LIVE_LLM=1 (TASK-104b)",
+    "compose: docker-compose-driven integration test (heavy; gate with `pytest -m compose` and a built `WHILLY_IMAGE`)",
 ]
 
 [tool.mypy]
