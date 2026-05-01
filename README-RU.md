@@ -8,7 +8,7 @@ Python-реализация **Whilly Wiggum loop** — умного брата R
 
 > "I'm helping — и я читал ТРИЗ." — Whilly Wiggum
 
-📘 [Full English README](README.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md)
+📘 [Full English README](README.md) · 🎓 [Workshop kit (HackSprint1)](docs/workshop/INDEX.md) · 🌐 [Распределённая установка (VPS + ноутбуки)](docs/Distributed-Setup.md)
 
 ## Что делает
 
@@ -106,6 +106,10 @@ WHILLY_MAX_PARALLEL=2 WHILLY_BUDGET_USD=5 whilly tasks.json
 ```
 
 3. Смотри dashboard. `q` — выйти, `d` — детали task, `l` — лог агента, `t` — список задач, `h` — помощь.
+
+## Распределённый запуск (multi-host)
+
+С v4.4 Whilly умеет работать в multi-host режиме: один VPS под control-plane, ноутбуки B/C — workers через `whilly worker connect`. Полный walkthrough (compose-сплит, bind-host, keychain, multi-host demo) — в [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md). Дизайн будущего per-worker workspace (M4) — в [`docs/Workspace-Topology.md`](docs/Workspace-Topology.md).
 
 ## Workshop kit (HackSprint1)
 
