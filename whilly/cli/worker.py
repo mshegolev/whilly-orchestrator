@@ -1102,3 +1102,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args and args[0] == "connect":
         return run_connect_command(args[1:])
     return run_worker_command(args)
+
+
+# ``python -m whilly.cli.worker`` entry point. Mirrors :mod:`whilly.__main__`
+# / :mod:`whilly.cli.__main__` so a test that needs to spawn the worker as
+# a subprocess can do so via ``sys.executable -m whilly.cli.worker``
+# without depending on a ``whilly-worker`` console script being on
+# ``$PATH``. Specifically robust to PATH pollution from stale pipx
+# installs that frequently shadow the active venv's ``whilly-worker``
+# (see ``tests/integration/test_phase5_remote.py`` for the exact
+# observed failure mode).
+if __name__ == "__main__":  # pragma: no cover — exercised via subprocess in tests
+    sys.exit(main())
