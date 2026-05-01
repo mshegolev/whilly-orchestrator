@@ -91,6 +91,79 @@ case "$ROLE" in
     : "${WHILLY_CONTROL_URL:?WHILLY_CONTROL_URL is required}"
     : "${WHILLY_PLAN_ID:?WHILLY_PLAN_ID is required}"
 
+    # ─── M1: opt-in Tailscale tailnet bootstrap (m1-tailscale-worker-bootstrap) ──
+    # When TAILSCALE_AUTHKEY is set, join a private Tailscale tailnet BEFORE
+    # invoking the whilly worker connect / register flow. This lets the worker
+    # reach a control-plane that lives on the laptop's tailnet (e.g.
+    # `http://m-mac-pro:8000`) WITHOUT exposing the control-plane to the public
+    # internet (no ngrok, no Funnel, no public IP needed).
+    #
+    # Critical design points:
+    #   * userspace-networking mode (--tun=userspace-networking): no host TUN
+    #     device, no NET_ADMIN cap, no --privileged required. Container is
+    #     fully self-contained.
+    #   * tailscaled writes its socket to /var/run/tailscale/tailscaled.sock —
+    #     we pass --socket explicitly to `tailscale up` to avoid races on
+    #     systems where the default location differs.
+    #   * Default behaviour (TAILSCALE_AUTHKEY unset / empty) is a NO-OP —
+    #     workers without the env continue to work exactly as before
+    #     (direct HTTP to WHILLY_CONTROL_URL). Backwards compatible.
+    #   * If tailscaled fails to reach `Backend state: Running` within 30s,
+    #     we exit non-zero with a clear single-line error citing
+    #     TAILSCALE_AUTHKEY — never silent.
+    #   * The auth key is passed to `tailscale up` via env-var substitution
+    #     (NOT echoed to logs). Container `set -x` would still leak it; we
+    #     intentionally do not enable bash xtrace in this branch.
+    if [[ -n "${TAILSCALE_AUTHKEY:-}" ]]; then
+      if ! command -v tailscaled >/dev/null 2>&1 || ! command -v tailscale >/dev/null 2>&1; then
+        printf 'whilly worker: TAILSCALE_AUTHKEY is set but tailscale / tailscaled binaries are missing from this image. Rebuild with WHILLY_INCLUDE_TAILSCALE=1 (default) or unset TAILSCALE_AUTHKEY to skip the bootstrap.\n' >&2
+        exit 2
+      fi
+      _ts_hostname="${TAILSCALE_HOSTNAME:-whilly-worker-$(hostname)}"
+      log "joining tailnet hostname=${_ts_hostname} (userspace-networking)"
+      mkdir -p /var/run/tailscale /var/lib/tailscale /tmp/tailscale
+      # Start tailscaled in userspace-networking mode in the background.
+      # State dir under /var/lib/tailscale; SOCKS5 + outbound HTTP proxy on
+      # 1055 are conventional defaults from the tailscale-in-docker recipe
+      # (https://tailscale.com/kb/1282/docker) and are harmless when unused.
+      tailscaled \
+        --tun=userspace-networking \
+        --socks5-server=localhost:1055 \
+        --outbound-http-proxy-listen=localhost:1055 \
+        --state=/var/lib/tailscale/tailscaled.state \
+        --socket=/var/run/tailscale/tailscaled.sock \
+        >/tmp/tailscaled.log 2>&1 &
+      _tailscaled_pid=$!
+      # Bring the tailnet up. `tailscale up` blocks until login completes
+      # (or the auth key is rejected). We do NOT log the auth key.
+      if ! tailscale --socket=/var/run/tailscale/tailscaled.sock up \
+          --auth-key="${TAILSCALE_AUTHKEY}" \
+          --hostname="${_ts_hostname}" \
+          --accept-routes \
+          --accept-dns=true \
+          --ssh=false \
+          --advertise-tags=tag:whilly-worker; then
+        printf 'whilly worker: tailscale up failed — check that TAILSCALE_AUTHKEY is valid (tagged auth keys must allow tag:whilly-worker). See https://login.tailscale.com/admin/settings/keys\n' >&2
+        kill "${_tailscaled_pid}" 2>/dev/null || true
+        exit 2
+      fi
+      # Verify Backend state: Running within 30s. tailscale up returns
+      # promptly once the key is accepted, but the daemon still needs a few
+      # seconds to settle on a derp/relay endpoint.
+      _ts_deadline=$(( $(date +%s) + 30 ))
+      until tailscale --socket=/var/run/tailscale/tailscaled.sock status 2>/dev/null | grep -q -E '(^|[[:space:]])100\.[0-9]+\.[0-9]+\.[0-9]+'; do
+        if (( $(date +%s) >= _ts_deadline )); then
+          printf 'whilly worker: tailscale Backend state did not reach Running within 30s; check TAILSCALE_AUTHKEY validity and network access to *.tailscale.com.\n' >&2
+          tail -n 20 /tmp/tailscaled.log >&2 || true
+          kill "${_tailscaled_pid}" 2>/dev/null || true
+          exit 2
+        fi
+        sleep 1
+      done
+      log "tailnet up; magic-DNS hostname=${_ts_hostname}"
+      unset _ts_hostname _ts_deadline _tailscaled_pid
+    fi
+
     # ─── Fail fast: opencode + groq path requires GROQ_API_KEY (v4.4) ────
     # Default since feature m1-opencode-groq-default: WHILLY_CLI=opencode +
     # WHILLY_MODEL=groq/openai/gpt-oss-120b (free-tier on Groq). Without
