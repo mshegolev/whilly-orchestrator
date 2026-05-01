@@ -43,7 +43,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import socket
 import sys
 from collections.abc import AsyncIterator
@@ -287,23 +286,20 @@ async def test_phase5_remote_worker_completes_task_via_http(
         # interleaved in real time — invaluable for diagnosing hangs.
         "PYTHONUNBUFFERED": "1",
     }
-    # Resolve the production console-script entry. shutil.which checks
-    # the env's PATH first (so a venv-local whilly-worker is preferred
-    # over a system one); falling back to running the entry-point
-    # function via `python -c` keeps the test runnable in a tox/CI
-    # context where the script may not be on PATH (e.g. ``pip install
-    # --target=...`` builds, or a partial ``pip install -e .`` that
-    # didn't refresh entry points).
-    worker_bin = shutil.which("whilly-worker", path=env["PATH"])
-    if worker_bin is not None:
-        cmd: tuple[str, ...] = (worker_bin, "--once")
-    else:
-        cmd = (
-            sys.executable,
-            "-c",
-            "import sys; from whilly.cli.worker import main; sys.exit(main())",
-            "--once",
-        )
+    # Invoke the worker via the *current* interpreter's module entry —
+    # NOT via ``shutil.which("whilly-worker")``. PATH on a developer
+    # workstation often points at a stale ``pipx`` install of
+    # whilly-orchestrator (e.g. ``~/.local/bin/whilly-worker`` resolved
+    # through ``~/.local/pipx/venvs/whilly-orchestrator/...``), whose
+    # frozen-in-time site-packages may be missing transitive deps the
+    # current source tree requires (we have observed
+    # ``ModuleNotFoundError: No module named 'fastapi'`` from a stale
+    # pipx env in this exact path). ``sys.executable -m whilly.cli.worker``
+    # binds the subprocess to the venv that's running the test, which
+    # is the venv where ``pip install -e '.[dev]'`` was run, so it is
+    # robust to PATH pollution and matches the in-venv install the
+    # mission's init.sh prepares.
+    cmd: tuple[str, ...] = (sys.executable, "-m", "whilly.cli.worker", "--once")
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         env=env,
