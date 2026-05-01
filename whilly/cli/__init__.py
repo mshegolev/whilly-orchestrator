@@ -15,16 +15,44 @@ Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
 Rich Live runtime, or the Claude/agent stack just to print usage text.
 
-Unknown subcommands print the v4 help block to stderr and exit ``2``
-(argparse convention). The v3 top-level flags ``--all``, ``--resume``,
-``--prd-wizard``, ``--workspace``, and ``--worktree`` are no longer
-recognised; their functionality either moved to a v4 subcommand or was
-removed (``WHILLY_WORKTREE`` / ``WHILLY_USE_WORKSPACE`` env vars are now
-no-ops — the v4 CLI does not act on them).
+Legacy v3 top-level flag shim
+-----------------------------
+The v3 console accepted top-level long flags such as
+``whilly --tasks tasks.json``, ``whilly --headless``, ``whilly --init …``,
+``whilly --prd-wizard``, ``whilly --resume``, ``whilly --reset PLAN``,
+``whilly --all`` and the workspace/worktree opt-in toggles
+``--workspace`` / ``--worktree`` / ``--no-workspace`` / ``--no-worktree``.
+``CLAUDE.md`` documents these as the canonical user-facing entry points
+and explicitly lists ``--no-workspace`` / ``--no-worktree`` as no-ops
+"retained for backward compatibility". STRICT backwards compatibility is
+mission-critical (see ``AGENTS.md``), so :func:`_apply_legacy_shim`
+detects each legacy form *before* the v4 unknown-command rejection path
+and rewrites ``argv`` into the equivalent v4 subcommand invocation:
+
+==================================  ==========================================
+Legacy invocation                    v4 dispatch
+==================================  ==========================================
+``whilly --tasks PATH``              ``whilly run --plan PATH``
+``whilly --headless``                Sets ``WHILLY_HEADLESS=1``; stripped from argv
+``whilly --init "desc"``             ``whilly init "desc"``
+``whilly --prd-wizard [SLUG]``       ``whilly init --interactive [--slug SLUG] [SLUG]``
+``whilly --resume``                  No-op (Postgres state survives restarts)
+``whilly --reset PLAN``              ``whilly plan reset PLAN --keep-tasks --yes``
+``whilly --all``                     No-op (use ``whilly run --plan <id>`` per plan)
+``--workspace`` / ``--worktree``     Silently consumed (opt-in workspace toggle)
+``--no-workspace`` / ``--no-worktree``  Silently consumed (legacy no-ops)
+==================================  ==========================================
+
+The legacy ``--init`` flow additionally tolerates the v3-only
+``--plan`` / ``--go`` modifier flags by dropping them — the v4 ``init``
+subcommand always imports + can be followed by a separate
+``whilly run`` step, so the modifiers carry no behavioural meaning in
+v4.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Sequence
 
@@ -46,7 +74,48 @@ Commands:
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
 
 Run `whilly <command> --help` for command-specific options.
+
+Legacy v3 flag forms (`whilly --tasks PATH`, `whilly --init …`,
+`whilly --prd-wizard`, `whilly --resume`, `whilly --reset PLAN`,
+`whilly --all`, `--workspace`/`--worktree` opt-ins, and the
+`--no-workspace`/`--no-worktree` no-ops) are accepted for backwards
+compatibility and routed to the v4 subcommand surface above.
 """
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Legacy v3 flag shim
+# ────────────────────────────────────────────────────────────────────────
+#
+# These constants are the source of truth for which legacy forms still
+# need to be accepted post-M1. Adding or removing a token here must be
+# accompanied by a matching change in
+# :file:`tests/unit/test_cli_legacy_flag_shim.py` so the routing
+# contract stays tested.
+_LEGACY_NOOP_FLAGS: frozenset[str] = frozenset(
+    {
+        # Workspace/worktree toggles — opt-in path is preserved by
+        # ``WHILLY_USE_WORKSPACE`` env var; the long flags are accepted
+        # and silently consumed so legacy scripts that pass them do not
+        # die with "unrecognized arguments".
+        "--workspace",
+        "--worktree",
+        "--no-workspace",
+        "--no-worktree",
+    }
+)
+
+_LEGACY_VERB_FLAGS: frozenset[str] = frozenset(
+    {
+        "--tasks",
+        "--headless",
+        "--init",
+        "--prd-wizard",
+        "--resume",
+        "--reset",
+        "--all",
+    }
+)
 
 
 def _print_help(stream: object = None) -> None:
@@ -56,16 +125,182 @@ def _print_help(stream: object = None) -> None:
     out.flush()
 
 
+def _apply_legacy_shim(args: list[str]) -> tuple[list[str] | None, int | None]:
+    """Translate v3-era top-level flags into a v4 subcommand invocation.
+
+    Returns a 2-tuple ``(new_args, exit_code)``:
+
+    * ``(None, None)`` — argv does not match any legacy form; caller
+      proceeds with the original ``args`` unchanged.
+    * ``(list, None)`` — caller should dispatch using the rewritten args.
+    * ``(None, int)`` — caller exits immediately with this code (used
+      for legacy forms that have no v4 equivalent and only emit a
+      diagnostic, e.g. ``whilly --resume`` and ``whilly --all``).
+
+    Side effects:
+      * Sets ``WHILLY_HEADLESS=1`` in :data:`os.environ` when the
+        legacy ``--headless`` flag appears anywhere in ``args``. The v4
+        subcommand then reads it from the environment (matches the v3
+        non-TTY contract documented in
+        ``VAL-CROSS-BACKCOMPAT-009``).
+    """
+    if not args:
+        return None, None
+
+    # Fast reject: nothing here looks legacy. Tokens that start with
+    # ``--`` but aren't in the legacy set fall through to the normal v4
+    # dispatcher (which rejects them with a clear "unknown command"
+    # error). This keeps the shim narrow.
+    has_noop = any(a in _LEGACY_NOOP_FLAGS for a in args)
+    has_headless = "--headless" in args
+    has_verb = any(a in _LEGACY_VERB_FLAGS for a in args)
+    if not (has_noop or has_headless or has_verb):
+        return None, None
+
+    # Strip pure no-op tokens (workspace/worktree variants) from anywhere
+    # in argv. They never affect downstream parsing in v4.
+    rest = [a for a in args if a not in _LEGACY_NOOP_FLAGS]
+
+    # ``--headless`` is a state-setting modifier. v3 uses it to pick the
+    # JSON-on-stdout exit-code contract; in v4 the same env var is read
+    # by ``whilly init`` (TTY detection) and by ``whilly run`` consumers
+    # via :data:`whilly.config`, so we just export it and drop the
+    # token. This matches ``CLAUDE.md``'s description of the flag as a
+    # mode toggle rather than a verb.
+    if "--headless" in rest:
+        os.environ["WHILLY_HEADLESS"] = "1"
+        rest = [a for a in rest if a != "--headless"]
+
+    # If the only legacy tokens were modifiers (workspace + headless),
+    # there is nothing left to dispatch. Fall back to the v4 default
+    # behaviour by returning an empty argv — :func:`main` then prints
+    # help and exits 0, matching v3's "no plan, just show help" flow.
+    if not rest:
+        return [], None
+
+    head = rest[0]
+
+    # If the only legacy tokens were no-op modifiers (no legacy verb in
+    # head position), return the cleaned args so v4 dispatch sees an
+    # invocation like ``whilly run ...`` or ``whilly --help`` without
+    # the workspace/worktree noise.
+    if head not in _LEGACY_VERB_FLAGS:
+        return rest, None
+
+    if head == "--tasks":
+        # v3: ``whilly --tasks PATH`` runs the in-process Wiggum loop on
+        # the JSON plan at PATH. v4 keeps the same operator mental model
+        # by routing to ``whilly run --plan PATH`` — the v4 worker
+        # claims tasks from whichever plan id matches PATH (operators
+        # who have already imported the plan use the same identifier
+        # they imported under).
+        if len(rest) < 2 or rest[1].startswith("-"):
+            sys.stderr.write("whilly: --tasks requires a path or plan id (e.g. `whilly --tasks tasks.json`).\n")
+            return None, 2
+        return ["run", "--plan", rest[1], *rest[2:]], None
+
+    if head == "--init":
+        # v3 supported ``--plan`` and ``--go`` modifiers on the init
+        # pipeline — they're meaningless in v4 (init always imports;
+        # follow up with ``whilly run`` to execute) so we strip them.
+        cleaned = [a for a in rest[1:] if a not in ("--plan", "--go")]
+        if not cleaned:
+            sys.stderr.write('whilly: --init requires a description (e.g. `whilly --init "build a thing"`).\n')
+            return None, 2
+        return ["init", *cleaned], None
+
+    if head == "--prd-wizard":
+        # v3: ``whilly --prd-wizard [SLUG]`` launches Claude
+        # interactively with the PRD master prompt. v4 fuses this into
+        # ``whilly init --interactive`` (FR-2 of PRD-v41-prd-wizard-port).
+        # We pass through ``--help`` so the wizard's argparse help
+        # prints rather than spawning Claude.
+        tail = rest[1:]
+        if "--help" in tail or "-h" in tail:
+            return ["init", "--help"], None
+
+        slug: str | None = None
+        passthrough: list[str] = []
+        for token in tail:
+            if token.startswith("-"):
+                passthrough.append(token)
+            elif slug is None:
+                slug = token
+            else:
+                passthrough.append(token)
+
+        new_args: list[str] = ["init", "--interactive"]
+        if slug is not None:
+            new_args += ["--slug", slug, slug]
+        else:
+            # v4 ``init`` requires a non-empty idea positional; supply a
+            # neutral placeholder so the dispatcher still routes
+            # cleanly. The interactive wizard ignores the idea text and
+            # the user types directly into Claude (see
+            # :func:`whilly.cli.init._default_interactive_runner`).
+            new_args += ["wizard"]
+        new_args += passthrough
+        return new_args, None
+
+    if head == "--resume":
+        # v3 reloaded ``.whilly_state.json`` and continued the
+        # in-process loop. v4's state is in Postgres, so re-running
+        # ``whilly run`` resumes naturally — there's nothing to do here.
+        # Keeping this as a no-op (with a one-line stderr breadcrumb)
+        # means legacy operator shell wrappers don't break.
+        sys.stderr.write(
+            "whilly: --resume is a no-op in v4 — Postgres state survives "
+            "restarts; rerun `whilly run --plan <plan_id>` to continue.\n"
+        )
+        return None, 0
+
+    if head == "--reset":
+        # v3: ``whilly --reset PLAN`` reset every task in PLAN to
+        # PENDING. v4 has the equivalent under
+        # ``whilly plan reset --keep-tasks``; we bake in ``--yes`` so
+        # legacy non-interactive scripts don't hang on the y/N prompt.
+        if len(rest) < 2 or rest[1].startswith("-"):
+            sys.stderr.write("whilly: --reset requires a plan id (e.g. `whilly --reset tasks.json`).\n")
+            return None, 2
+        return ["plan", "reset", rest[1], "--keep-tasks", "--yes"], None
+
+    if head == "--all":
+        # v3 ran every discovered ``tasks*.json`` plan sequentially. v4
+        # plans live in Postgres and are run individually with
+        # ``whilly run --plan <id>``. No automatic "run all plans"
+        # exists; emit a diagnostic and exit 0 so legacy scripts don't
+        # break.
+        sys.stderr.write(
+            "whilly: --all is a no-op in v4 — run each plan explicitly with `whilly run --plan <plan_id>`.\n"
+        )
+        return None, 0
+
+    # Token started with ``--`` but didn't match the legacy table — let
+    # the caller fall through to the regular unknown-command path.
+    return None, None
+
+
 def main(argv: list[str] | None = None) -> int:
     """v4 CLI entry point — dispatch the first positional token to its sub-CLI.
 
     ``argv`` defaults to ``sys.argv[1:]`` (matching the standard Python CLI
-    contract). When the first token is unknown — including the legacy v3
-    flags ``--all``, ``--resume``, ``--prd-wizard``, ``--workspace``, and
-    ``--worktree`` — the command prints the v4 help block to stderr and
-    returns ``2``.
+    contract). Legacy v3 top-level flags (``--tasks``, ``--headless``,
+    ``--init``, ``--prd-wizard``, ``--resume``, ``--reset``, ``--all``,
+    ``--workspace``/``--worktree``/``--no-workspace``/``--no-worktree``)
+    are intercepted by :func:`_apply_legacy_shim` and rewritten into the
+    matching v4 subcommand before the unknown-command rejection runs.
     """
     args = sys.argv[1:] if argv is None else list(argv)
+
+    # ── legacy v3 flag shim ────────────────────────────────────────
+    # Run the shim before -h/--help and -V/--version so legacy
+    # invocations like ``whilly --headless --help`` route into
+    # ``whilly --help`` after the headless modifier is consumed.
+    shim_args, shim_exit = _apply_legacy_shim(args)
+    if shim_exit is not None:
+        return shim_exit
+    if shim_args is not None:
+        args = shim_args
 
     if not args or args[0] in ("-h", "--help"):
         _print_help()
