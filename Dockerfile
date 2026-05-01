@@ -298,16 +298,43 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # curl — health-poll the control-plane in entrypoint.sh's worker branch.
 # ca-certificates — TLS to the control-plane / Anthropic / etc.
 # git — `whilly worker connect` may inspect git config in some flows.
-# NOTE: deliberately NO nodejs / npm / agentic CLIs here — the worker dep
-# closure asserted by tests/integration/test_worker_image_import_purity.py is
-# strictly Python-package-level. Operators who want agentic CLIs in their
-# worker image continue to use the `runtime` stage above.
+# nodejs — Node 22 LTS via NodeSource APT repo, required by `opencode-ai`
+#   (the v4.4 default agent CLI per feature m1-opencode-groq-default).
+#   See the runtime stage above for the full rationale (gemini-cli ≥20,
+#   Debian bookworm ships node 18 → too old for the modern CLI tooling).
+# unzip — opencode-ai's npm postinstall extracts a bundled bun binary.
+#
+# The `lint-imports` core-purity contract is concerned with *Python*
+# distributions in pip's site-packages — adding system-level node + the
+# opencode CLI binary on PATH does not violate it (the contract still
+# verifies fastapi / asyncpg / etc. are absent from `pip list`). See the
+# matching regression test
+# tests/integration/test_worker_image_import_purity.py.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-         tini curl ca-certificates git \
+         tini curl ca-certificates git unzip gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y --auto-remove gnupg \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
     && groupadd --system --gid 1000 whilly \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
+
+# Install opencode CLI globally — the v4.4 default agent CLI in worker
+# containers (m1-opencode-groq-default). `opencode-ai` is the canonical
+# npm package name (verified against https://opencode.ai/docs/install/).
+# `--omit=dev` keeps the install closure minimal; `npm cache clean` +
+# `rm -rf /root/.npm` reclaims the layer's tmp.
+RUN npm install -g --omit=dev opencode-ai \
+    && npm cache clean --force \
+    && rm -rf /root/.npm
+
+# Build-time sanity check: the binary must be on PATH and `opencode --version`
+# must execute (catches NodeSource / npm regressions at image-build time
+# rather than at first agent invocation in production).
+RUN command -v opencode \
+    && opencode --version >/dev/null \
+    && echo "opencode CLI ready for worker stage"
 
 # Copy the worker-only venv built above.
 COPY --from=worker-builder /opt/venv /opt/venv

@@ -16,9 +16,18 @@ Configuration via env:
     WHILLY_OPENCODE_SAFE    truthy → omit ``--dangerously-skip-permissions``
                             so the CLI's per-tool permission policy applies
                             (requires ``.opencode/opencode.json`` setup)
-    WHILLY_MODEL            model id; if missing a provider prefix (e.g.
-                            ``claude-opus-4-6``) it's auto-prefixed with
-                            ``anthropic/``
+    WHILLY_MODEL            model id; bare ids like ``gpt-oss-120b`` are
+                            auto-prefixed (see ``_PROVIDER_BY_PREFIX``).
+                            ``provider/model`` and ``provider/sub/model``
+                            forms (e.g. ``groq/openai/gpt-oss-120b``) pass
+                            through untouched.
+
+Default since v4.4 (feature m1-opencode-groq-default): ``opencode`` is
+the default agent CLI in worker containers, and the default model is
+``groq/openai/gpt-oss-120b`` (free-tier on Groq, ~14k req/day). Worker
+startup fails fast with a clear, single-line error message if the
+operator selected the default groq path without setting ``GROQ_API_KEY``
+— see ``whilly.cli.worker.check_opencode_groq_credentials``.
 """
 
 from __future__ import annotations
@@ -36,10 +45,17 @@ from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER, spawn
 log = logging.getLogger("whilly")
 
 
-DEFAULT_MODEL = "anthropic/claude-opus-4-6"
+# v4.4 (feature m1-opencode-groq-default): the default model is the free-tier
+# Groq-hosted OpenAI gpt-oss-120b. Operators who want the legacy Anthropic
+# default set ``WHILLY_MODEL=anthropic/claude-opus-4-6`` in their env or
+# ``.env`` — the override is fully respected by ``default_model()`` below.
+DEFAULT_MODEL = "groq/openai/gpt-oss-120b"
 DEFAULT_BIN = "opencode"
 
-# Heuristic provider prefixes — auto-applied to bare model ids.
+# Heuristic provider prefixes — auto-applied to bare model ids. Already-
+# prefixed forms (``groq/openai/gpt-oss-120b``, ``anthropic/claude-opus-4-6``,
+# etc.) pass through untouched in :meth:`OpenCodeBackend.normalize_model`,
+# so this table only covers the bare-id convenience path.
 _PROVIDER_BY_PREFIX: list[tuple[str, str]] = [
     ("claude", "anthropic"),
     ("gpt", "openai"),

@@ -50,6 +50,17 @@ deployment artifacts that make a multi-host control-plane possible.
 | VPS A | Docker 24+, Docker Compose v2 (the dash-separated `docker-compose` binary is fine), 1 GB RAM, 2 GB free disk, ports 80/443/8000 free, public IPv4 | Runs Postgres (256 MB) + control-plane (256 MB) under the M1 mission's 600 MB budget |
 | Laptop B/C | Python 3.12+ with `whilly-orchestrator` installed (see below), or Docker for the worker container path, network reachability to VPS A on port 8000 (or 443 behind Caddy at M2) | Runs `whilly worker connect <url>` or `docker-compose -f docker-compose.worker.yml up` |
 
+> **Default agent: opencode + Groq gpt-oss-120b (free tier).** Since
+> v4.4 (`m1-opencode-groq-default`), worker containers ship with
+> `WHILLY_CLI=opencode` and `WHILLY_MODEL=groq/openai/gpt-oss-120b`
+> (~14k requests/day on the free tier). Get a free key at
+> [https://console.groq.com](https://console.groq.com) and put it in
+> `.env` (gitignored) as `GROQ_API_KEY=...` — **never commit a real
+> key** anywhere. The worker fails fast at startup with a single-line
+> diagnostic if `WHILLY_CLI=opencode` and `GROQ_API_KEY` is empty;
+> override `WHILLY_MODEL=anthropic/claude-opus-4-6` (or any other
+> non-groq provider) to opt out of the Groq path entirely.
+
 Two install closures cover the worker side. Pick whichever fits the host:
 
 ```bash

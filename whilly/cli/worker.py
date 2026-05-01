@@ -158,6 +158,7 @@ __all__ = [
     "build_connect_parser",
     "build_register_parser",
     "build_worker_parser",
+    "check_opencode_groq_credentials",
     "classify_control_url",
     "main",
     "run_connect_command",
@@ -879,6 +880,62 @@ def build_connect_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def check_opencode_groq_credentials() -> str | None:
+    """Return a single-line error message if opencode+groq is selected but ``GROQ_API_KEY`` is missing.
+
+    Returns ``None`` on success (env is fine, or the operator opted out
+    of the groq path via ``WHILLY_MODEL=<other-provider>/<model>``).
+
+    Default since v4.4 (feature m1-opencode-groq-default): the worker
+    container ships with ``WHILLY_CLI=opencode`` and
+    ``WHILLY_MODEL=groq/openai/gpt-oss-120b`` (free-tier on Groq,
+    ~14k req/day). Without ``GROQ_API_KEY`` set, ``opencode run`` would
+    fail at the first agent invocation with a confusing 401 from the
+    provider — far worse for new operators than a single-line, up-front
+    diagnostic that names the env var, points at the free console, and
+    documents the WHILLY_MODEL escape hatch.
+
+    The check is intentionally narrow:
+
+    * ``WHILLY_CLI`` must be exactly ``opencode`` (case-insensitive,
+      whitespace-stripped). Any other CLI selector (or empty/unset)
+      returns ``None`` because GROQ_API_KEY is not their concern.
+    * ``WHILLY_MODEL`` must be empty (defaults to groq) or start with
+      the literal ``groq/`` prefix. Operators who explicitly set a
+      non-groq provider (``anthropic/claude-...``, ``openai/gpt-4o``,
+      etc.) bypass the check.
+    * ``GROQ_API_KEY`` is empty / whitespace-only / unset.
+
+    The returned message is a single line so docker-compose / CI
+    grep-style assertions can match it without regex acrobatics
+    (VAL-M1-AGENT-DEFAULT-003).
+    """
+    cli = (os.environ.get("WHILLY_CLI") or "").strip().lower()
+    if cli != "opencode":
+        return None
+    model = (os.environ.get("WHILLY_MODEL") or "").strip()
+    # Empty WHILLY_MODEL → opencode backend resolves to DEFAULT_MODEL,
+    # which is groq/openai/gpt-oss-120b since v4.4. So an unset value
+    # also routes through Groq and needs the API key.
+    if model == "":
+        is_groq = True
+    else:
+        # provider/... (or provider/sub/...) form. Bare ids without a
+        # slash never auto-prefix to ``groq/`` (see _PROVIDER_BY_PREFIX
+        # in whilly.agents.opencode), so they cannot reach Groq.
+        is_groq = "/" in model and model.split("/", 1)[0].lower() == "groq"
+    if not is_groq:
+        return None
+    api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
+    if api_key:
+        return None
+    return (
+        "whilly worker: GROQ_API_KEY is required when WHILLY_CLI=opencode "
+        "(or set WHILLY_MODEL to a non-groq provider). "
+        "See https://console.groq.com to obtain a free key."
+    )
+
+
 def run_connect_command(argv: Sequence[str]) -> int:
     """Execute ``whilly worker connect <url> ...`` — return exit code (M1).
 
@@ -931,6 +988,18 @@ def run_connect_command(argv: Sequence[str]) -> int:
 
     parser = build_connect_parser()
     args = parser.parse_args(connect_argv)
+
+    # ── 0. Fail fast on missing GROQ_API_KEY when opencode+groq is selected ──
+    # Default since v4.4 (m1-opencode-groq-default): the worker uses
+    # opencode + groq/openai/gpt-oss-120b. Catch the missing-key case
+    # BEFORE any HTTP call so docker compose smoke tests get a clean
+    # single-line diagnostic on stderr (VAL-M1-AGENT-DEFAULT-003), and
+    # never appear to "register but never claim" because the agent run
+    # itself died at the first task with a provider 401.
+    groq_err = check_opencode_groq_credentials()
+    if groq_err is not None:
+        print(groq_err, file=sys.stderr)
+        return EXIT_CONNECT_ERROR
 
     # ── 1. URL validation + scheme guard ─────────────────────────────
     try:

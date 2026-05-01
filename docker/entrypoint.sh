@@ -91,6 +91,28 @@ case "$ROLE" in
     : "${WHILLY_CONTROL_URL:?WHILLY_CONTROL_URL is required}"
     : "${WHILLY_PLAN_ID:?WHILLY_PLAN_ID is required}"
 
+    # ─── Fail fast: opencode + groq path requires GROQ_API_KEY (v4.4) ────
+    # Default since feature m1-opencode-groq-default: WHILLY_CLI=opencode +
+    # WHILLY_MODEL=groq/openai/gpt-oss-120b (free-tier on Groq). Without
+    # GROQ_API_KEY set, the agent's first task hits a provider 401 — far
+    # worse for the operator than a single-line diagnostic up-front.
+    # Mirrors whilly.cli.worker.check_opencode_groq_credentials.
+    if [[ "$(printf '%s' "${WHILLY_CLI:-}" | tr '[:upper:]' '[:lower:]')" == "opencode" ]]; then
+      _whilly_model_norm="${WHILLY_MODEL:-}"
+      _is_groq=0
+      if [[ -z "${_whilly_model_norm}" ]]; then
+        # Empty model → opencode default = groq/openai/gpt-oss-120b
+        _is_groq=1
+      elif [[ "${_whilly_model_norm}" == groq/* || "${_whilly_model_norm}" == GROQ/* ]]; then
+        _is_groq=1
+      fi
+      if [[ "${_is_groq}" == "1" && -z "${GROQ_API_KEY:-}" ]]; then
+        printf 'whilly worker: GROQ_API_KEY is required when WHILLY_CLI=opencode (or set WHILLY_MODEL to a non-groq provider). See https://console.groq.com to obtain a free key.\n' >&2
+        exit 2
+      fi
+      unset _whilly_model_norm _is_groq
+    fi
+
     # ─── Auto-pick LLM model based on container resources ────────────────
     # Если оператор задал LLM_PROVIDER (groq/openrouter/cerebras/gemini/
     # ollama/claude) но НЕ зафиксировал LLM_MODEL — подбираем модель под

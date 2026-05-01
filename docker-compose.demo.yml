@@ -139,7 +139,15 @@ services:
       # ─── Agentic CLI mode (--cli claude-code|opencode|gemini) ────────────
       # cli_adapter.py транслирует whilly's argv в native argv каждого CLI
       # и парсит native output. WHILLY_CLI выбирает adapter route.
-      WHILLY_CLI: ${WHILLY_CLI:-}
+      #
+      # Since v4.4 (m1-opencode-groq-default): the worker default is
+      # `opencode` + `groq/openai/gpt-oss-120b` (free tier, ~14k req/day).
+      # Operators provide GROQ_API_KEY via the host env or the repo `.env`
+      # file (gitignored — never commit a real key). To opt out of the
+      # groq path, override WHILLY_MODEL=<other-provider>/<model>; the
+      # entrypoint's groq-credentials check then becomes a no-op.
+      WHILLY_CLI: ${WHILLY_CLI:-opencode}
+      WHILLY_MODEL: ${WHILLY_MODEL:-groq/openai/gpt-oss-120b}
       WHILLY_FORCE_COMPLETE: ${WHILLY_FORCE_COMPLETE:-1}
       # Credentials для каждого agentic CLI (читаются нативно):
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
