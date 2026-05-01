@@ -111,9 +111,10 @@ whilly init "build a CLI tool for monitoring API endpoints" --slug api-monitor
 
 # 3b. Already have tasks.json? Import directly. Add --strict to skip
 #     decision-gate REJECTs as they're imported.
+export PLAN_ID=demo                   # placeholder convention — your plan id
 whilly plan import path/to/tasks.json
 whilly plan apply path/to/tasks.json --strict
-whilly plan show <plan_id>            # ASCII DAG of the imported plan
+whilly plan show "$PLAN_ID"           # ASCII DAG of the imported plan
 
 # 3c. Cap spend up-front (per-plan budget guard).
 whilly plan create --id my-plan --name "My plan" --budget 5.00
@@ -122,7 +123,7 @@ whilly plan create --id my-plan --name "My plan" --budget 5.00
 whilly forge intake mshegolev/whilly-orchestrator/123
 
 # 4a. All-in-one local mode — control plane embedded in the worker process.
-whilly run --plan <plan_id>
+whilly run --plan "$PLAN_ID"
 
 # 4b. Distributed mode — control plane + remote worker on different hosts.
 #     a) on the control-plane box:
@@ -134,14 +135,14 @@ pip install whilly-orchestrator[worker]
 WORKER_TOKEN=$(whilly worker register \
     --connect https://control.example.com:8000 \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
-    --plan <plan_id>)
+    --plan "$PLAN_ID")
 whilly-worker \
     --connect https://control.example.com:8000 \
     --token "$WORKER_TOKEN" \
-    --plan <plan_id>
+    --plan "$PLAN_ID"
 
 # 5. Watch progress live
-whilly dashboard --plan <plan_id>     # Rich Live TUI over the tasks table
+whilly dashboard --plan "$PLAN_ID"    # Rich Live TUI over the tasks table
 ```
 
 A complete reproducible single-host demo (Postgres + control plane + remote
