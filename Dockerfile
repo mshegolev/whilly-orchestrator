@@ -134,25 +134,53 @@ RUN apt-get update \
 # Whilly-worker зовёт один из них через CLAUDE_BIN+WHILLY_CLI (см.
 # docker/cli_adapter.py). Если установка увеличит размер образа сверх
 # приемлемого — можно будет вынести в отдельный target `whilly:agents`.
-RUN npm install -g --omit=dev \
-        @anthropic-ai/claude-code \
-        @google/gemini-cli \
-        opencode-ai \
-        @openai/codex \
-    && npm cache clean --force \
-    && rm -rf /root/.npm
+#
+# Configurable via WHILLY_AGENT_CLIS build-arg (added in v4.4.x). Default
+# preserves the historical 4-CLI install (zero functional regression for
+# default builds). Pass a different (smaller) space-separated package list
+# to slim the image for constrained build environments — e.g. Colima VM
+# with limited disk:
+#
+#   docker buildx build \
+#       --build-arg WHILLY_AGENT_CLIS='opencode-ai' \
+#       -t whilly:slim .
+#
+# Or pass an empty string to skip the npm-install layer entirely (operator
+# BYOs the CLI binary via volume-mount or follow-on RUN layer):
+#
+#   docker buildx build --build-arg WHILLY_AGENT_CLIS='' -t whilly:no-clis .
+ARG WHILLY_AGENT_CLIS="@anthropic-ai/claude-code @google/gemini-cli opencode-ai @openai/codex"
+RUN if [ -n "${WHILLY_AGENT_CLIS}" ]; then \
+        npm install -g --omit=dev ${WHILLY_AGENT_CLIS} \
+        && npm cache clean --force \
+        && rm -rf /root/.npm; \
+    else \
+        echo "WHILLY_AGENT_CLIS empty — skipping agent CLI npm install"; \
+    fi
 
-# Sanity build-time: все четыре CLI должны быть в PATH. Падаем здесь, а не
-# на runtime в чужом проекте, если npm-пакет переименовали. Дополнительно
-# валидируем что `--version` отрабатывает у каждого: gemini-cli на node18
-# падал с "Invalid regular expression flags" — именно этот failure mode
-# мы поймали бы здесь и заглушили fix, если кто-то откатит Node-bump.
-RUN command -v claude && command -v gemini && command -v opencode && command -v codex \
-    && claude --version >/dev/null \
-    && gemini --version >/dev/null \
-    && opencode --version >/dev/null \
-    && codex --version >/dev/null \
-    && echo "agentic CLIs ready: claude / gemini / opencode / codex"
+# Sanity build-time: все CLI из WHILLY_AGENT_CLIS должны быть в PATH (или
+# их npm-имена должны соответствовать установленным бинарям). Падаем здесь,
+# а не на runtime в чужом проекте, если npm-пакет переименовали.
+# Дополнительно валидируем что `--version` отрабатывает у каждого присутствующего:
+# gemini-cli на node18 падал с "Invalid regular expression flags" — именно
+# этот failure mode мы поймали бы здесь и заглушили fix, если кто-то откатит
+# Node-bump.
+#
+# The check is conditional on each CLI's npm package being in the install set
+# so slim / empty WHILLY_AGENT_CLIS builds don't fail spuriously.
+RUN if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' @anthropic-ai/claude-code '; then \
+        command -v claude && claude --version >/dev/null && echo "claude CLI ready"; \
+    fi \
+    && if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' @google/gemini-cli '; then \
+        command -v gemini && gemini --version >/dev/null && echo "gemini CLI ready"; \
+    fi \
+    && if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' opencode-ai '; then \
+        command -v opencode && opencode --version >/dev/null && echo "opencode CLI ready"; \
+    fi \
+    && if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' @openai/codex '; then \
+        command -v codex && codex --version >/dev/null && echo "codex CLI ready"; \
+    fi \
+    && echo "agentic CLIs ready (set: ${WHILLY_AGENT_CLIS:-<none>})"
 
 # Копируем уже установленный venv. Multi-arch это переживает: buildx делает
 # отдельный builder-слой для каждой arch, и runtime тоже per-arch — пути
@@ -320,21 +348,53 @@ RUN apt-get update \
     && groupadd --system --gid 1000 whilly \
     && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
 
-# Install opencode CLI globally — the v4.4 default agent CLI in worker
-# containers (m1-opencode-groq-default). `opencode-ai` is the canonical
-# npm package name (verified against https://opencode.ai/docs/install/).
-# `--omit=dev` keeps the install closure minimal; `npm cache clean` +
-# `rm -rf /root/.npm` reclaims the layer's tmp.
-RUN npm install -g --omit=dev opencode-ai \
-    && npm cache clean --force \
-    && rm -rf /root/.npm
+# Install opencode CLI (and any other configured agent CLIs) globally —
+# `opencode-ai` is the v4.4 default agent CLI in worker containers
+# (m1-opencode-groq-default; canonical npm name verified against
+# https://opencode.ai/docs/install/). `--omit=dev` keeps the install
+# closure minimal; `npm cache clean` + `rm -rf /root/.npm` reclaims the
+# layer's tmp.
+#
+# Configurable via WHILLY_AGENT_CLIS build-arg (added in v4.4.x). Default
+# preserves the worker-stage's existing 1-CLI install (zero functional
+# regression). Constrained build environments can override the install set
+# — same flag as the runtime stage:
+#
+#   # slim build with only opencode (== current default; explicit form):
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_AGENT_CLIS='opencode-ai' \
+#       -t whilly-worker:slim .
+#
+#   # skip npm install entirely (BYO binary via volume-mount):
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_AGENT_CLIS='' \
+#       -t whilly-worker:no-clis .
+#
+#   # add additional CLIs alongside opencode:
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_AGENT_CLIS='opencode-ai @anthropic-ai/claude-code' \
+#       -t whilly-worker:multi .
+ARG WHILLY_AGENT_CLIS="opencode-ai"
+RUN if [ -n "${WHILLY_AGENT_CLIS}" ]; then \
+        npm install -g --omit=dev ${WHILLY_AGENT_CLIS} \
+        && npm cache clean --force \
+        && rm -rf /root/.npm; \
+    else \
+        echo "WHILLY_AGENT_CLIS empty — skipping agent CLI npm install"; \
+    fi
 
-# Build-time sanity check: the binary must be on PATH and `opencode --version`
-# must execute (catches NodeSource / npm regressions at image-build time
-# rather than at first agent invocation in production).
-RUN command -v opencode \
-    && opencode --version >/dev/null \
-    && echo "opencode CLI ready for worker stage"
+# Build-time sanity check: when opencode-ai is in the install set the binary
+# must be on PATH and `opencode --version` must execute (catches NodeSource /
+# npm regressions at image-build time rather than at first agent invocation
+# in production). Slim / empty WHILLY_AGENT_CLIS builds skip the check
+# cleanly so an operator who deliberately omits opencode is not blocked.
+RUN if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' opencode-ai '; then \
+        command -v opencode \
+        && opencode --version >/dev/null \
+        && echo "opencode CLI ready for worker stage"; \
+    else \
+        echo "opencode-ai not in WHILLY_AGENT_CLIS=${WHILLY_AGENT_CLIS:-<empty>} — skipping opencode sanity check"; \
+    fi
 
 # Copy the worker-only venv built above.
 COPY --from=worker-builder /opt/venv /opt/venv
