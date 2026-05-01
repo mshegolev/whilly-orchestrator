@@ -161,8 +161,15 @@ docker-compose -f docker-compose.control-plane.yml up -d
 # Laptop (one-line bootstrap; stores per-worker bearer in OS keychain)
 whilly worker connect http://<vps-ip>:8000 \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
-    --plan demo
+    --plan demo \
+    --insecure   # dev-only: opts out of the loopback-only HTTP guard
 ```
+
+> ⚠️ `--insecure` here is a **dev-only loopback-bypass**: the
+> `whilly-worker` URL-scheme guard otherwise rejects plain HTTP to a
+> non-loopback host. For production, switch to HTTPS once **M2** lands
+> the Caddy + ACME / Tailscale Funnel paths — see
+> [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
 
 Full walkthrough — including `WHILLY_BIND_HOST` / `WHILLY_USE_CONNECT_FLOW`
 options, the laptop-side Docker variant via
