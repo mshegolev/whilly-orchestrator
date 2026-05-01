@@ -1,4 +1,16 @@
-"""M1 cross-host integration smoke (mirror of test_phase5_remote.py for two workers).
+"""M1 cross-host **non-compose** smoke (cheap CI gate; mirror of test_phase5_remote.py for two workers).
+
+Status: this is the lightweight, in-process variant of the M1 cross-host
+gate. The heavyweight compose-driven counterpart lives at
+``tests/integration/test_phase6_cross_host_compose.py`` (gated behind
+``pytest -m compose`` and an operator-supplied ``WHILLY_IMAGE``); it is
+the test that *literally* exercises ``docker-compose.control-plane.yml``
+and ``docker-compose.worker.yml`` plus a worker-container restart, per
+the M1 demo / sign-off contract. THIS file is intentionally NOT a
+compose-based test — it stays here as the cheap pre-merge smoke that
+catches state-machine regressions in seconds rather than minutes, while
+the compose-based sibling is what proves the deployment artefacts
+themselves are correct.
 
 Exercises the docker-compose.control-plane.yml + docker-compose.worker.yml
 deployment shape introduced in M1 by composing the same primitives in a
@@ -11,6 +23,25 @@ processes — distinct PIDs, distinct asyncio loops, distinct httpx
 clients — and each carries a stable, distinct ``WORKER_ID`` and
 ``HOSTNAME`` so the events table can be queried for cross-host
 attribution.
+
+What this gate does NOT prove (covered by the compose sibling)
+--------------------------------------------------------------
+* That ``docker-compose.control-plane.yml`` and
+  ``docker-compose.worker.yml`` boot to a healthy state under
+  ``docker-compose up -d``. (``test_phase6_cross_host_compose.py``
+  drives the real compose CLIs.)
+* That a stopped+restarted worker container correctly re-engages the
+  plan and the audit log shows a clean RELEASE/CLAIM transition.
+  (Same compose sibling handles container lifecycle.)
+* That the per-worker mem_limit / hostname / network-isolation
+  settings declared in compose actually take effect at runtime.
+  (Same.)
+
+If you are touching the state-machine semantics, run BOTH this test
+(fast, hermetic) and the compose sibling (slow, real Docker) before
+merging. If you are touching only the compose YAML, the compose
+sibling is the gate that catches regressions in the deployment shape;
+this file's behaviour is unaffected by compose-yaml edits.
 
 What this gate proves (mission §2 — M1 demo / sign-off)
 -------------------------------------------------------
@@ -42,14 +73,23 @@ Why a single uvicorn + 2 worker subprocesses, not literally
 ----------------------------------------------------------
 ``docker compose -f docker-compose.control-plane.yml up`` and ``-f
 docker-compose.worker.yml up`` are the canonical operator-facing demo
-path (and are exercised by the M1 user-testing-validator passes). For
-pytest's purposes that approach is far heavier than what we need to
-prove the state-machine drains correctly across processes: a
+path. The compose-based gate that drives those exact CLIs (and also
+restarts the worker container mid-flight to assert a clean
+RELEASE/CLAIM audit-log transition) lives at
+``tests/integration/test_phase6_cross_host_compose.py`` — gated behind
+``pytest -m compose`` plus an operator-supplied ``WHILLY_IMAGE``
+because each run shells out to docker-compose and costs minutes.
+
+THIS file stays as the cheap, hermetic pre-merge smoke. A
 testcontainers Postgres + uvicorn + 2 subprocesses already crosses
 every cross-process boundary the compose stack does, while staying
 hermetic (no Docker images to pull, no compose-network plumbing) and
-under 30s per run on warm hardware. ``test_phase5_remote.py`` pioneered
-the pattern; this test extends it to two workers.
+under 30s per run on warm hardware. ``test_phase5_remote.py``
+pioneered the pattern; this test extends it to two workers. Both
+gates are kept on purpose: this one runs on every CI invocation; the
+compose sibling runs only at the explicit ``pytest -m compose``
+opt-in so a developer touching just the state machine does not pay
+the Docker tax on every commit.
 
 Hermetic by construction
 ------------------------
