@@ -5,10 +5,21 @@ Re-running this script on an already-initialised checkout is a no-op:
 
 * Existing fixture / baseline / state files whose contents already match the
   canonical bytes embedded below are left alone.
-* Distributed-audit reports under ``.planning/distributed-audit/`` are mirrored
-  byte-for-byte into ``docs/distributed-audit/`` AND ``library/distributed-audit/``
-  only if the destination is missing or has drifted. The ``library/`` location
-  is the canonical mirror required by VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902;
+* Distributed-audit reports are mirrored byte-for-byte into
+  ``docs/distributed-audit/`` AND ``library/distributed-audit/`` only if the
+  destination is missing or has drifted. The audit *source* is resolved with
+  a deterministic fallback chain so the script also works on a clean clone or
+  CI runner where the planning-local working copy is absent:
+
+  1. ``.planning/distributed-audit/`` (mission-local working copy; may be
+     untracked but is the freshest source on the dev box).
+  2. ``library/distributed-audit/`` (tracked canonical M1 mirror per
+     VAL-M1-DOCS-004 — populated by m1-docs).
+
+  If neither source exists with files, the audit-mirror step is a clean
+  no-op (clear stderr message, exit 0) — the artefacts may already be in
+  place via a different code path. The ``library/`` location is the
+  canonical mirror required by VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902;
   the ``docs/`` mirror is retained for backwards-compatibility with the
   m1-readiness-baseline feature that introduced it.
 
@@ -41,11 +52,18 @@ The script prints one line per file describing whether it was ``created``,
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+# REPO_ROOT defaults to the repository this script lives in (two parents up).
+# For test isolation we honour ``WHILLY_M1_BASELINE_ROOT`` as an override —
+# the regression test in ``tests/unit/test_m1_readiness_baseline.py`` uses
+# this to assert the script behaves correctly on a synthetic temp tree
+# where ``.planning/distributed-audit/`` is intentionally absent.
+_ENV_OVERRIDE = os.environ.get("WHILLY_M1_BASELINE_ROOT")
+REPO_ROOT = Path(_ENV_OVERRIDE).resolve() if _ENV_OVERRIDE else Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # Canonical fixture content (embedded so the script is self-sufficient).
@@ -419,6 +437,34 @@ def _write_json_idempotent(path: Path, data: object) -> str:
     return "created"
 
 
+def _resolve_audit_source() -> Path | None:
+    """Resolve which directory to use as the canonical audit-report source.
+
+    Preference order (first directory that exists *and* contains at least
+    one regular file wins):
+
+    1. ``REPO_ROOT/.planning/distributed-audit/`` — mission-local working
+       copy. This is the freshest source on the dev box but is **untracked**
+       (``git ls-files`` returns no entries for it), so it may be missing on
+       a clean clone or CI runner.
+    2. ``REPO_ROOT/library/distributed-audit/`` — the **tracked** canonical
+       M1 mirror per VAL-M1-DOCS-004, populated by the m1-docs feature.
+
+    Returns ``None`` when neither path contains any files — callers treat
+    that as "audit step is a no-op for this environment", per the AGENTS.md
+    "Test hygiene" rule that committed scripts must not hard-fail on the
+    untracked planning-local path.
+    """
+    candidates: tuple[Path, ...] = (
+        REPO_ROOT / ".planning" / "distributed-audit",
+        REPO_ROOT / "library" / "distributed-audit",
+    )
+    for candidate in candidates:
+        if candidate.is_dir() and any(p.is_file() for p in candidate.iterdir()):
+            return candidate
+    return None
+
+
 def _mirror_file_idempotent(src: Path, dst: Path) -> str:
     """Copy ``src`` → ``dst`` only if missing or drifted (byte-equality).
 
@@ -480,34 +526,56 @@ def main() -> int:
         )
     )
 
-    # 5. Mirror .planning/distributed-audit/ -> docs/distributed-audit/
-    #    AND -> library/distributed-audit/ (the canonical M1 location per
-    #    VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902). Both mirrors are byte-equal
-    #    to the source, so future tooling can ``diff -r`` either against
-    #    ``.planning/distributed-audit/`` and expect zero divergence.
-    src_dir = REPO_ROOT / ".planning" / "distributed-audit"
-    if not src_dir.is_dir():
-        print(f"ERROR: source directory missing: {src_dir}", file=sys.stderr)
-        return 2
-
-    mirror_destinations: tuple[Path, ...] = (
-        REPO_ROOT / "docs" / "distributed-audit",
-        REPO_ROOT / "library" / "distributed-audit",
-    )
-    for dst_dir in mirror_destinations:
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        for src_file in sorted(src_dir.iterdir()):
-            if not src_file.is_file():
+    # 5. Mirror the distributed-audit reports into ``docs/distributed-audit/``
+    #    AND ``library/distributed-audit/`` (the canonical M1 location per
+    #    VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902).
+    #
+    #    Source-resolution chain (first match wins):
+    #      a) ``.planning/distributed-audit/`` — mission-local working copy
+    #         (may be untracked but is the freshest source on the dev box).
+    #      b) ``library/distributed-audit/`` — tracked canonical M1 mirror,
+    #         populated by m1-docs. This is what's available on a clean
+    #         clone or CI runner where ``.planning/`` is not committed.
+    #
+    #    If neither path is populated the script is a clean no-op with a
+    #    clear stderr message (exit 0) — per the new AGENTS.md "Test hygiene"
+    #    rule, committed scripts must use a tracked canonical fallback and
+    #    must not hard-fail when the untracked planning-local path is
+    #    missing.
+    src_dir = _resolve_audit_source()
+    if src_dir is None:
+        print(
+            "NOTE: neither .planning/distributed-audit/ nor "
+            "library/distributed-audit/ is populated — skipping "
+            "audit-report mirror step (no-op).",
+            file=sys.stderr,
+        )
+    else:
+        mirror_destinations: tuple[Path, ...] = (
+            REPO_ROOT / "docs" / "distributed-audit",
+            REPO_ROOT / "library" / "distributed-audit",
+        )
+        src_resolved = src_dir.resolve()
+        for dst_dir in mirror_destinations:
+            # If the destination IS the resolved source (e.g. ``library/`` is
+            # the fallback source), skip — copying onto self is a guaranteed
+            # no-op and the action-line "library/distributed-audit/<f>
+            # unchanged" is implicit.
+            if dst_dir.resolve() == src_resolved:
                 continue
-            dst_file = dst_dir / src_file.name
-            mirror_label = dst_dir.relative_to(REPO_ROOT).as_posix()
-            actions.append(
-                (
-                    f"{mirror_label}/{src_file.name}",
-                    dst_file,
-                    _mirror_file_idempotent(src_file, dst_file),
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for src_file in sorted(src_dir.iterdir()):
+                if not src_file.is_file():
+                    continue
+                dst_file = dst_dir / src_file.name
+                mirror_label = dst_dir.relative_to(REPO_ROOT).as_posix()
+                actions.append(
+                    (
+                        f"{mirror_label}/{src_file.name}",
+                        dst_file,
+                        _mirror_file_idempotent(src_file, dst_file),
+                    )
                 )
-            )
 
     # Print summary
     longest = max(len(name) for name, _, _ in actions)
