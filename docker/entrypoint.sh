@@ -15,6 +15,18 @@ shift || true
 
 log() { printf '\033[1;34m[entrypoint]\033[0m %s\n' "$*" >&2; }
 
+# ─── Truthiness helper for env-var feature flags ─────────────────────────────
+# Recognises 1 / true / yes / on (case-insensitive) as truthy. Empty / unset
+# and everything else (including 0 / false / no / off) are falsy. Centralised
+# so future flags (WHILLY_INSECURE, WHILLY_USE_CONNECT_FLOW, ...) share the
+# exact same rules — VAL-M1-ENTRYPOINT-901 asserts the rule set explicitly.
+is_truthy() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 wait_for_db() {
   # asyncpg сам ретраится, но alembic — нет. Подождём, пока БД станет доступной,
   # прежде чем гонять миграции.
@@ -49,8 +61,15 @@ case "$ROLE" in
   control-plane)
     log "role=control-plane"
     : "${WHILLY_DATABASE_URL:?WHILLY_DATABASE_URL is required}"
-    : "${WHILLY_WORKER_TOKEN:?WHILLY_WORKER_TOKEN is required}"
     : "${WHILLY_WORKER_BOOTSTRAP_TOKEN:?WHILLY_WORKER_BOOTSTRAP_TOKEN is required}"
+    # NOTE: WHILLY_WORKER_TOKEN is intentionally NOT required for the
+    # control-plane role anymore. It is the legacy *worker* bearer (FR-1.2,
+    # see whilly/adapters/transport/auth.py) and the control-plane only
+    # falls back to it when no per-worker bearer authenticates a request —
+    # i.e. it's optional from the server's point of view. Requiring it here
+    # forced m1-compose-control-plane to default the variable to a meaning-
+    # less placeholder just to satisfy the gate (see docker-compose.control-
+    # plane.yml). Worker-role keeps its own explicit gate below.
 
     log "waiting for postgres at $WHILLY_DATABASE_URL"
     wait_for_db
@@ -110,15 +129,54 @@ case "$ROLE" in
     done
     log "control plane is up"
 
-    # ─── Авто-регистрация воркера ─────────────────────────────────────────────
-    # Если WHILLY_WORKER_TOKEN не задан — регистрируемся через bootstrap-token,
-    # получаем уникальную пару (worker_id, per-worker bearer). Это критично
-    # для `docker compose up --scale worker=N`: каждая реплика регистрируется
-    # сама и получает свой worker_id, никаких PK-коллизий в таблице workers.
+    # ─── M1: opt-in `whilly worker connect` register-then-exec flow ──────────
+    # When WHILLY_USE_CONNECT_FLOW is truthy (1/true/yes/on, case-insensitive),
+    # delegate the entire register-and-launch dance to `whilly worker connect`.
+    # That subcommand validates the URL (scheme guard incl. --insecure rule),
+    # registers via bootstrap, persists the bearer in the OS keychain (or
+    # chmod-600 fallback), and execvp's into `whilly-worker` — so we just
+    # `exec` it and let the kernel propagate the exit code on any failure
+    # (VAL-M1-ENTRYPOINT-002 / -005 / -006 / -901 / -902).
     #
-    # Если WHILLY_WORKER_TOKEN задан явно (например, оператор уже сделал
-    # `whilly worker register` снаружи и пробросил токен) — пропускаем
-    # регистрацию и используем то, что дали.
+    # Default (unset / empty / 0 / false / no / off): keep the legacy
+    # bash-awk register path so v4.3.1-shaped containers stay byte-equivalent
+    # on stderr/stdout up to timestamps (VAL-M1-ENTRYPOINT-001 / -003).
+    if is_truthy "${WHILLY_USE_CONNECT_FLOW:-}"; then
+      : "${WHILLY_WORKER_BOOTSTRAP_TOKEN:?WHILLY_WORKER_BOOTSTRAP_TOKEN is required when WHILLY_USE_CONNECT_FLOW is enabled}"
+      log "using connect flow (WHILLY_USE_CONNECT_FLOW=${WHILLY_USE_CONNECT_FLOW})"
+      connect_argv=(
+        whilly worker connect "$WHILLY_CONTROL_URL"
+        --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN"
+        --plan "$WHILLY_PLAN_ID"
+        --hostname "$(hostname)"
+      )
+      # WHILLY_INSECURE follows the same truthiness rules and forwards
+      # --insecure to the connect command. Without it, plain HTTP to a
+      # non-loopback control-plane URL is rejected before any HTTP call —
+      # that's the explicit assertion in VAL-M1-ENTRYPOINT-006.
+      if is_truthy "${WHILLY_INSECURE:-}"; then
+        connect_argv+=(--insecure)
+      fi
+      # NB: any extra "$@" args pass through. `whilly worker connect`
+      # ultimately execvp's into `whilly-worker`, so we lose the entry-
+      # point shell here intentionally — failures propagate as the
+      # kernel-level exit code of the child, never swallowed by us.
+      exec "${connect_argv[@]}" "$@"
+    fi
+
+    # ─── Legacy register-then-exec path (default, v4.3.1 behavior) ───────────
+    # Worker role still requires WHILLY_WORKER_TOKEN unless the connect-flow
+    # branch above handled identity acquisition. The legacy path also accepts
+    # WHILLY_WORKER_BOOTSTRAP_TOKEN as a fallback (auto-register at startup):
+    #
+    #   * WHILLY_WORKER_TOKEN set     → use it, skip register.
+    #   * WHILLY_WORKER_TOKEN unset   → register via bootstrap, parse bearer
+    #     out of the `key: value` stdout shape (the same shape the new connect
+    #     flow uses — see whilly/cli/worker.py::run_register_command).
+    #
+    # `docker compose up --scale worker=N` relies on the bootstrap branch so
+    # each replica gets its own worker_id without PK collisions in the workers
+    # table.
     if [[ -z "${WHILLY_WORKER_TOKEN:-}" ]]; then
       : "${WHILLY_WORKER_BOOTSTRAP_TOKEN:?need WHILLY_WORKER_TOKEN or WHILLY_WORKER_BOOTSTRAP_TOKEN to bootstrap}"
       log "registering via bootstrap token (hostname=$(hostname))"
