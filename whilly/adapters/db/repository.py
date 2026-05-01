@@ -74,6 +74,7 @@ from whilly.core.state_machine import Transition
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import to avoid import cycles.
     from whilly.api.event_flusher import EventRecord
+    from whilly.audit import JsonlEventSink
 
 __all__ = [
     "BUDGET_EXCEEDED_EVENT_TYPE",
@@ -725,21 +726,34 @@ released AS (
       -- ``_RELEASE_STALE_SQL`` and the offline-worker sweep below.
       AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
     RETURNING tasks.id, tasks.version, stale.claimed_by AS prev_claimed_by, stale.plan_id
+),
+inserted AS (
+    INSERT INTO events (task_id, plan_id, event_type, payload)
+    SELECT
+        id,
+        plan_id,
+        $2,
+        jsonb_build_object(
+            'reason', $3::text,
+            'version', version,
+            'worker_id', prev_claimed_by,
+            'task_id', id,
+            'plan_id', plan_id
+        )
+    FROM released
+    RETURNING task_id
 )
-INSERT INTO events (task_id, plan_id, event_type, payload)
+-- Surface the per-row payload columns from ``released`` so the JSONL
+-- audit sink (VAL-CROSS-BACKCOMPAT-907) can mirror each released row
+-- to ``whilly_logs/whilly_events.jsonl`` after the sweep commits.
+-- The previous single-column ``task_id`` callers continue to read
+-- ``row["task_id"]`` unchanged.
 SELECT
-    id,
-    plan_id,
-    $2,
-    jsonb_build_object(
-        'reason', $3::text,
-        'version', version,
-        'worker_id', prev_claimed_by,
-        'task_id', id,
-        'plan_id', plan_id
-    )
+    released.id AS task_id,
+    released.plan_id,
+    released.version,
+    released.prev_claimed_by AS worker_id
 FROM released
-RETURNING task_id
 """
 
 
@@ -805,26 +819,38 @@ released AS (
     WHERE tasks.claimed_by = offline_workers.worker_id
       AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
     RETURNING tasks.id, tasks.version, tasks.plan_id, offline_workers.worker_id
+),
+inserted AS (
+    INSERT INTO events (task_id, plan_id, event_type, payload)
+    SELECT
+        id,
+        plan_id,
+        $2,
+        jsonb_build_object(
+            'reason', $3::text,
+            'version', version,
+            'worker_id', worker_id,
+            -- ``task_id`` and ``plan_id`` are emitted into the JSON payload
+            -- (M1 fix VAL-CROSS-BACKCOMPAT-912) so the audit row carries the
+            -- contract-required v4.4.0 enriched shape directly in
+            -- ``events.payload`` — independent of the column-level
+            -- ``events.plan_id`` populated alongside.
+            'task_id', id,
+            'plan_id', plan_id
+        )
+    FROM released
+    RETURNING task_id
 )
-INSERT INTO events (task_id, plan_id, event_type, payload)
+-- Surface per-row payload columns from ``released`` so the JSONL
+-- audit sink (VAL-CROSS-BACKCOMPAT-907) can mirror each row after
+-- the sweep commits. Existing callers continue to read
+-- ``row["task_id"]`` unchanged.
 SELECT
-    id,
-    plan_id,
-    $2,
-    jsonb_build_object(
-        'reason', $3::text,
-        'version', version,
-        'worker_id', worker_id,
-        -- ``task_id`` and ``plan_id`` are emitted into the JSON payload
-        -- (M1 fix VAL-CROSS-BACKCOMPAT-912) so the audit row carries the
-        -- contract-required v4.4.0 enriched shape directly in
-        -- ``events.payload`` — independent of the column-level
-        -- ``events.plan_id`` populated alongside.
-        'task_id', id,
-        'plan_id', plan_id
-    )
+    released.id AS task_id,
+    released.plan_id,
+    released.version,
+    released.worker_id
 FROM released
-RETURNING task_id
 """
 
 
@@ -989,6 +1015,7 @@ class TaskRepository:
         pool: asyncpg.Pool,
         *,
         event_flusher: EventFlusherProtocol | None = None,
+        jsonl_sink: JsonlEventSink | None = None,
     ) -> None:
         """Bind the asyncpg pool and (optionally) the lifespan event flusher.
 
@@ -1013,6 +1040,55 @@ class TaskRepository:
         """
         self._pool = pool
         self._event_flusher: EventFlusherProtocol | None = event_flusher
+        self._jsonl_sink: JsonlEventSink | None = jsonl_sink
+
+    def attach_jsonl_sink(self, jsonl_sink: JsonlEventSink | None) -> None:
+        """Late-bind the JSONL audit sink onto an already-constructed repo.
+
+        Mirrors :meth:`attach_event_flusher`. The CLI composition root
+        (``whilly run`` / local-worker entry point) attaches the sink
+        after constructing the repository so the per-method emit
+        helper :meth:`_emit_jsonl` writes one JSONL line to
+        ``whilly_logs/whilly_events.jsonl`` per successful
+        ``INSERT INTO events`` (VAL-CROSS-BACKCOMPAT-907).
+
+        Idempotent: passing ``None`` clears the sink and disables
+        further file emits without affecting in-flight writes.
+        """
+        self._jsonl_sink = jsonl_sink
+
+    def _emit_jsonl(
+        self,
+        event_type: str,
+        *,
+        task_id: TaskId | None = None,
+        plan_id: PlanId | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Best-effort JSONL mirror of one ``events`` row.
+
+        Called inside repository methods AFTER the parent transaction
+        block exits cleanly so a rollback never produces an orphaned
+        JSONL line. Swallows every exception (including disk-full,
+        permission denied, sink internal bug) so a sink failure can
+        never roll back a database commit (VAL-CROSS-BACKCOMPAT-907
+        contract: JSONL is opportunistic, Postgres is durable).
+        """
+        if self._jsonl_sink is None:
+            return
+        try:
+            self._jsonl_sink.record(
+                event_type,
+                task_id=task_id,
+                plan_id=plan_id,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 — fail-open contract
+            logger.warning(
+                "jsonl sink: record(%s) raised unexpectedly — swallowing",
+                event_type,
+                exc_info=True,
+            )
 
     def attach_event_flusher(self, event_flusher: EventFlusherProtocol | None) -> None:
         """Late-bind the lifespan event flusher onto an already-constructed repo.
@@ -1084,15 +1160,14 @@ class TaskRepository:
                 # the new keys (they validated ``additionalProperties:
                 # true``) so this addition is forward-compatible.
                 claimed_at = row["claimed_at"]
-                payload = json.dumps(
-                    {
-                        "worker_id": worker_id,
-                        "task_id": row["id"],
-                        "plan_id": plan_id,
-                        "claimed_at": claimed_at.isoformat() if claimed_at is not None else None,
-                        "version": row["version"],
-                    }
-                )
+                payload_dict: dict[str, Any] = {
+                    "worker_id": worker_id,
+                    "task_id": row["id"],
+                    "plan_id": plan_id,
+                    "claimed_at": claimed_at.isoformat() if claimed_at is not None else None,
+                    "version": row["version"],
+                }
+                payload = json.dumps(payload_dict)
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],
@@ -1106,7 +1181,18 @@ class TaskRepository:
                     plan_id,
                     row["version"],
                 )
-                return _row_to_task(row)
+                claimed_task = _row_to_task(row)
+                claim_task_id = row["id"]
+        # Transaction committed — mirror the CLAIM row to the JSONL
+        # sink (VAL-CROSS-BACKCOMPAT-907). Emitting after commit
+        # guarantees a JSONL line never references a rolled-back DB row.
+        self._emit_jsonl(
+            Transition.CLAIM.value,
+            task_id=claim_task_id,
+            plan_id=plan_id,
+            payload=payload_dict,
+        )
+        return claimed_task
 
     async def start_task(self, task_id: TaskId, version: int) -> Task:
         """Atomically transition ``task_id`` from ``CLAIMED`` → ``IN_PROGRESS``.
@@ -1138,7 +1224,8 @@ class TaskRepository:
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
 
-                payload = json.dumps({"version": row["version"]})
+                payload_dict: dict[str, Any] = {"version": row["version"]}
+                payload = json.dumps(payload_dict)
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],
@@ -1150,7 +1237,19 @@ class TaskRepository:
                     row["id"],
                     row["version"],
                 )
-                return _row_to_task(row)
+                started_task = _row_to_task(row)
+                start_task_id = row["id"]
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        # ``plan_id`` is not in _START_SQL's RETURNING clause (the column
+        # is not part of the Task value object); leave it None on the
+        # JSONL line — START is always a per-task event.
+        self._emit_jsonl(
+            Transition.START.value,
+            task_id=start_task_id,
+            plan_id=None,
+            payload=payload_dict,
+        )
+        return started_task
 
     async def complete_task(
         self,
@@ -1225,6 +1324,7 @@ class TaskRepository:
             :class:`VersionConflictError`.
         """
         cost = _coerce_cost_usd(cost_usd)
+        pending_budget_sentinel: dict[str, Any] | None = None
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(_COMPLETE_SQL, task_id, version)
@@ -1241,15 +1341,14 @@ class TaskRepository:
                 # the spend bookkeeping. ``cost_usd`` is stringified so
                 # the JSON round-trips with the same precision as the
                 # NUMERIC(10, 4) ``plans.spent_usd`` column.
-                payload = json.dumps(
-                    {
-                        "worker_id": row["claimed_by"],
-                        "task_id": row["id"],
-                        "plan_id": row["plan_id"],
-                        "version": row["version"],
-                        "usage": {"cost_usd": str(cost)},
-                    }
-                )
+                complete_payload_dict: dict[str, Any] = {
+                    "worker_id": row["claimed_by"],
+                    "task_id": row["id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "usage": {"cost_usd": str(cost)},
+                }
+                payload = json.dumps(complete_payload_dict)
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],
@@ -1284,22 +1383,22 @@ class TaskRepository:
                             row["id"],
                         )
                     elif spend_row["crossed"]:
-                        sentinel_payload = json.dumps(
-                            {
-                                "plan_id": plan_id,
-                                "budget_usd": str(spend_row["budget_usd"]),
-                                "spent_usd": str(spend_row["new_spent"]),
-                                "crossing_task_id": row["id"],
-                                "reason": BUDGET_EXCEEDED_REASON,
-                                "threshold_pct": BUDGET_EXCEEDED_THRESHOLD_PCT,
-                            }
-                        )
+                        sentinel_payload_dict: dict[str, Any] = {
+                            "plan_id": plan_id,
+                            "budget_usd": str(spend_row["budget_usd"]),
+                            "spent_usd": str(spend_row["new_spent"]),
+                            "crossing_task_id": row["id"],
+                            "reason": BUDGET_EXCEEDED_REASON,
+                            "threshold_pct": BUDGET_EXCEEDED_THRESHOLD_PCT,
+                        }
+                        sentinel_payload = json.dumps(sentinel_payload_dict)
                         await conn.execute(
                             _INSERT_PLAN_EVENT_SQL,
                             plan_id,
                             BUDGET_EXCEEDED_EVENT_TYPE,
                             sentinel_payload,
                         )
+                        pending_budget_sentinel = sentinel_payload_dict
                         logger.info(
                             "complete_task: plan=%s spent_usd=%s crossed budget_usd=%s — emitted %s sentinel",
                             plan_id,
@@ -1314,7 +1413,26 @@ class TaskRepository:
                     row["version"],
                     cost,
                 )
-                return _row_to_task(row)
+                completed_task = _row_to_task(row)
+                complete_task_id = row["id"]
+                complete_plan_id = row["plan_id"]
+        # Transaction committed — emit JSONL mirrors after commit so a
+        # rolled-back COMPLETE / sentinel pair never leaks an orphaned
+        # JSONL line (VAL-CROSS-BACKCOMPAT-907).
+        self._emit_jsonl(
+            Transition.COMPLETE.value,
+            task_id=complete_task_id,
+            plan_id=complete_plan_id,
+            payload=complete_payload_dict,
+        )
+        if pending_budget_sentinel is not None:
+            self._emit_jsonl(
+                BUDGET_EXCEEDED_EVENT_TYPE,
+                task_id=None,
+                plan_id=complete_plan_id,
+                payload=pending_budget_sentinel,
+            )
+        return completed_task
 
     async def fail_task(
         self,
@@ -1379,16 +1497,15 @@ class TaskRepository:
                 # name surface the failure cause. Free-form caller
                 # diagnostics still ride on the separate ``detail``
                 # JSONB column (TASK-104b) — payload stays canonical.
-                payload = json.dumps(
-                    {
-                        "worker_id": row["claimed_by"],
-                        "task_id": row["id"],
-                        "plan_id": row["plan_id"],
-                        "version": row["version"],
-                        "reason": reason,
-                        "error": reason,
-                    }
-                )
+                fail_payload_dict: dict[str, Any] = {
+                    "worker_id": row["claimed_by"],
+                    "task_id": row["id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "reason": reason,
+                    "error": reason,
+                }
+                payload = json.dumps(fail_payload_dict)
                 detail_jsonb = json.dumps(detail) if detail is not None else None
                 await conn.execute(
                     _INSERT_EVENT_WITH_DETAIL_SQL,
@@ -1404,6 +1521,15 @@ class TaskRepository:
                     reason,
                 )
                 updated = _row_to_task(row)
+                fail_task_id = row["id"]
+                fail_plan_id = row["plan_id"]
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        self._emit_jsonl(
+            Transition.FAIL.value,
+            task_id=fail_task_id,
+            plan_id=fail_plan_id,
+            payload=fail_payload_dict,
+        )
 
         # TRIZ hook runs *after* the FAIL commit (VAL-TRIZ-010 ordering
         # contract: FAIL row's ``created_at`` ≤ ``triz.contradiction``
@@ -1597,15 +1723,14 @@ class TaskRepository:
                 # by a sweep racing this call, in which case the
                 # optimistic-lock filter would have rejected the
                 # UPDATE and we wouldn't be here.
-                payload = json.dumps(
-                    {
-                        "worker_id": row["claimed_by"],
-                        "task_id": row["id"],
-                        "plan_id": row["plan_id"],
-                        "version": row["version"],
-                        "reason": reason,
-                    }
-                )
+                release_payload_dict: dict[str, Any] = {
+                    "worker_id": row["claimed_by"],
+                    "task_id": row["id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "reason": reason,
+                }
+                payload = json.dumps(release_payload_dict)
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],
@@ -1618,7 +1743,17 @@ class TaskRepository:
                     row["version"],
                     reason,
                 )
-                return _row_to_task(row)
+                released_task = _row_to_task(row)
+                release_task_id = row["id"]
+                release_plan_id = row["plan_id"]
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        self._emit_jsonl(
+            Transition.RELEASE.value,
+            task_id=release_task_id,
+            plan_id=release_plan_id,
+            payload=release_payload_dict,
+        )
+        return released_task
 
     async def skip_task(
         self,
@@ -1755,12 +1890,12 @@ class TaskRepository:
                 # Build the SKIP event payload. Reserved fields go
                 # last so they cannot be overwritten by a malicious /
                 # buggy ``detail`` dict.
-                payload_dict: dict[str, Any] = {}
+                skip_payload_dict: dict[str, Any] = {}
                 if detail:
-                    payload_dict.update(detail)
-                payload_dict["version"] = row["version"]
-                payload_dict["reason"] = reason
-                payload = json.dumps(payload_dict)
+                    skip_payload_dict.update(detail)
+                skip_payload_dict["version"] = row["version"]
+                skip_payload_dict["reason"] = reason
+                payload = json.dumps(skip_payload_dict)
                 # Write the audit row with BOTH task_id and plan_id
                 # populated. The contract literal (M3 fix-feature) is
                 # the lowercase dotted ``task.skipped`` (sourced from
@@ -1787,7 +1922,17 @@ class TaskRepository:
                     row["version"],
                     reason,
                 )
-                return _row_to_task(row)
+                skipped_task = _row_to_task(row)
+                skip_task_id = row["id"]
+                skip_plan_id = row["plan_id"]
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        self._emit_jsonl(
+            TASK_SKIPPED_EVENT_TYPE,
+            task_id=skip_task_id,
+            plan_id=skip_plan_id,
+            payload=skip_payload_dict,
+        )
+        return skipped_task
 
     async def release_stale_tasks(self, visibility_timeout_seconds: int) -> int:
         """Return ``CLAIMED`` / ``IN_PROGRESS`` tasks whose claim has aged out.
@@ -1857,7 +2002,21 @@ class TaskRepository:
                         "release_stale_tasks: visibility_timeout=%ds — no stale claims",
                         visibility_timeout_seconds,
                     )
-                return released
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        for row in rows:
+            self._emit_jsonl(
+                Transition.RELEASE.value,
+                task_id=row["task_id"],
+                plan_id=row["plan_id"],
+                payload={
+                    "worker_id": row["worker_id"],
+                    "task_id": row["task_id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "reason": "visibility_timeout",
+                },
+            )
+        return released
 
     async def release_offline_workers(self, heartbeat_timeout_seconds: int) -> int:
         """Mark stale-heartbeat workers ``offline`` and release their in-flight tasks.
@@ -1957,7 +2116,21 @@ class TaskRepository:
                         "release_offline_workers: heartbeat_timeout=%ds — no offline workers with in-flight tasks",
                         heartbeat_timeout_seconds,
                     )
-                return released
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        for row in rows:
+            self._emit_jsonl(
+                Transition.RELEASE.value,
+                task_id=row["task_id"],
+                plan_id=row["plan_id"],
+                payload={
+                    "worker_id": row["worker_id"],
+                    "task_id": row["task_id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "reason": "worker_offline",
+                },
+            )
+        return released
 
     async def register_worker(
         self,
@@ -2148,6 +2321,7 @@ class TaskRepository:
             "plan exists, was empty" from "plan doesn't exist" by
             checking the plan row separately if they care.
         """
+        reset_jsonl_payloads: list[dict[str, Any]] = []
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 if keep_tasks:
@@ -2156,38 +2330,49 @@ class TaskRepository:
                     await conn.execute(_RESET_DELETE_EVENTS_SQL, plan_id)
                     rows = await conn.fetch(_RESET_UPDATE_TASKS_SQL, plan_id)
                     for row in rows:
-                        payload = json.dumps(
-                            {
-                                "reason": "manual_reset",
-                                "mode": "keep_tasks",
-                                "version": row["version"],
-                            }
-                        )
+                        reset_payload_dict: dict[str, Any] = {
+                            "reason": "manual_reset",
+                            "mode": "keep_tasks",
+                            "version": row["version"],
+                        }
+                        payload = json.dumps(reset_payload_dict)
                         await conn.execute(
                             _INSERT_EVENT_SQL,
                             row["id"],
                             "RESET",
                             payload,
                         )
+                        reset_jsonl_payloads.append({"task_id": row["id"], "payload": reset_payload_dict})
                     logger.info(
                         "reset_plan(keep_tasks=True): plan=%s reset %d task(s)",
                         plan_id,
                         len(rows),
                     )
-                    return len(rows)
-
-                # Hard mode: count first (so we can report what we
-                # nuked), then DELETE the plan row. CASCADE handles
-                # tasks + events in the same statement.
-                count_row = await conn.fetchrow(_RESET_COUNT_TASKS_SQL, plan_id)
-                count = int(count_row["c"]) if count_row else 0
-                await conn.execute(_RESET_DELETE_PLAN_SQL, plan_id)
-                logger.info(
-                    "reset_plan(keep_tasks=False): plan=%s deleted (%d task(s) cascaded)",
-                    plan_id,
-                    count,
-                )
-                return count
+                    reset_count = len(rows)
+                else:
+                    # Hard mode: count first (so we can report what we
+                    # nuked), then DELETE the plan row. CASCADE handles
+                    # tasks + events in the same statement.
+                    count_row = await conn.fetchrow(_RESET_COUNT_TASKS_SQL, plan_id)
+                    count = int(count_row["c"]) if count_row else 0
+                    await conn.execute(_RESET_DELETE_PLAN_SQL, plan_id)
+                    logger.info(
+                        "reset_plan(keep_tasks=False): plan=%s deleted (%d task(s) cascaded)",
+                        plan_id,
+                        count,
+                    )
+                    reset_count = count
+        # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        # Hard mode emits no RESET rows (the cascade wipes ``events``);
+        # only soft mode produces audit rows worth mirroring.
+        for entry in reset_jsonl_payloads:
+            self._emit_jsonl(
+                "RESET",
+                task_id=entry["task_id"],
+                plan_id=plan_id,
+                payload=entry["payload"],
+            )
+        return reset_count
 
     async def _raise_version_conflict(
         self,

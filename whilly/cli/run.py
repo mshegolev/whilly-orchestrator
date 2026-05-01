@@ -78,6 +78,7 @@ from typing import Final
 
 from whilly.adapters.db import TaskRepository, close_pool, create_pool
 from whilly.adapters.runner import run_task
+from whilly.audit import JsonlEventSink
 from whilly.cli.plan import _select_plan_with_tasks
 from whilly.core.models import WorkerId
 from whilly.worker import (
@@ -331,7 +332,15 @@ async def _async_run(
             len(_tasks),
         )
 
-        repo = TaskRepository(pool)
+        # Attach a JSONL audit sink so every CLAIM / START / COMPLETE /
+        # FAIL / RELEASE / RESET / task.skipped row written by the
+        # repository is also mirrored as one line into
+        # ``whilly_logs/whilly_events.jsonl`` (VAL-CROSS-BACKCOMPAT-907).
+        # The sink resolves its directory from ``WHILLY_LOG_DIR`` (env)
+        # or the project default ``whilly_logs/``. Failures to write
+        # are logged but never raised, so the orchestrator stays
+        # functional on read-only filesystems / disk-full hosts.
+        repo = TaskRepository(pool, jsonl_sink=JsonlEventSink())
         return await run_worker(
             repo,
             runner,
