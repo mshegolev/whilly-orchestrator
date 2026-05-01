@@ -1,0 +1,280 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mshegolev/whilly/schemas/events_payload_v4.4.0.json",
+  "title": "Whilly v4.4.0 events.payload baseline (M1 enriched shape)",
+  "description": "Per-event_type baseline JSON-Schema for the events.payload jsonb column as emitted by Whilly v4.4.0 onwards. Strict superset of the v4.3.1 baseline (events_payload_v4.3.1.json) — every required key in v4.3.1 remains required here; new keys (worker_id / task_id / plan_id on CLAIM / COMPLETE / FAIL / RELEASE, claimed_at on CLAIM, usage on COMPLETE, error on FAIL) are additive. Pinned by M1 user-testing round 1 blockers VAL-CROSS-BACKCOMPAT-909 / -910 / -911 / -912.",
+  "version": "4.4.0",
+  "captured_from": [
+    "whilly/adapters/db/repository.py (_CLAIM_SQL/_COMPLETE_SQL/_FAIL_SQL/_RELEASE_SQL + _RELEASE_STALE_SQL + _RELEASE_OFFLINE_WORKERS_SQL)",
+    "whilly/api/event_flusher.py",
+    "whilly/api/main.py",
+    "whilly/worker/local.py"
+  ],
+  "supersedes": "events_payload_v4.3.1.json",
+  "compatibility": "Forward-readable: any v4.3.1 reader (which validated `additionalProperties: true`) accepts v4.4.0 payloads. Legacy v4.3.1 payloads (already-emitted rows in long-running databases) remain valid against the v4.3.1 baseline — this v4.4.0 schema applies to FRESH payloads emitted by v4.4.0+ code paths.",
+  "event_types": {
+    "CLAIM": {
+      "type": "object",
+      "required": [
+        "worker_id",
+        "task_id",
+        "plan_id",
+        "claimed_at",
+        "version"
+      ],
+      "properties": {
+        "worker_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "claimed_at": {
+          "type": "string",
+          "description": "ISO-8601 timestamp captured from tasks.claimed_at via the _CLAIM_SQL RETURNING clause."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "COMPLETE": {
+      "type": "object",
+      "required": [
+        "worker_id",
+        "task_id",
+        "plan_id",
+        "version",
+        "usage"
+      ],
+      "properties": {
+        "worker_id": {
+          "type": "string",
+          "description": "tasks.claimed_by at COMPLETE time (the column is preserved across the COMPLETE transition)."
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "usage": {
+          "type": "object",
+          "required": [
+            "cost_usd"
+          ],
+          "properties": {
+            "cost_usd": {
+              "type": "string",
+              "description": "Decimal-quantised cost (NUMERIC(10, 4)) stringified to preserve precision through JSON."
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "FAIL": {
+      "type": "object",
+      "required": [
+        "worker_id",
+        "task_id",
+        "plan_id",
+        "version",
+        "reason",
+        "error"
+      ],
+      "properties": {
+        "worker_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "error": {
+          "type": "string",
+          "description": "Aliased copy of `reason` for dashboards keyed off `error`. Same value as `reason`."
+        }
+      },
+      "additionalProperties": true
+    },
+    "RELEASE": {
+      "type": "object",
+      "required": [
+        "worker_id",
+        "task_id",
+        "plan_id",
+        "version",
+        "reason"
+      ],
+      "properties": {
+        "worker_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Pre-UPDATE tasks.claimed_by, captured by the RELEASE SQL's `prev` CTE before the column is NULL'd. May be null only if the row was unowned at release time (defensive)."
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "visibility_timeout",
+            "worker_offline",
+            "manual_reset",
+            "timeout",
+            "shutdown",
+            "admin_revoked"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "RESET": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "manual_reset"
+          ]
+        },
+        "mode": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "task.created": {
+      "type": "object",
+      "required": [
+        "plan_id"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "task.skipped": {
+      "type": "object",
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "enum": [
+            "decision_gate_failed",
+            "deadlock"
+          ]
+        },
+        "missing_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "plan.applied": {
+      "type": "object",
+      "required": [
+        "plan_id"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "task_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "plan.budget_exceeded": {
+      "type": "object",
+      "required": [
+        "plan_id"
+      ],
+      "properties": {
+        "plan_id": {
+          "type": "string"
+        },
+        "threshold_pct": {
+          "type": "number"
+        },
+        "cost_usd": {
+          "type": "number"
+        },
+        "budget_usd": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": true
+    },
+    "triz.contradiction": {
+      "type": "object",
+      "required": [
+        "contradiction_type"
+      ],
+      "properties": {
+        "contradiction_type": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "triz.error": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

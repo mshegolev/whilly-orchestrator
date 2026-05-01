@@ -284,7 +284,13 @@ RETURNING
     tasks.acceptance_criteria,
     tasks.test_steps,
     tasks.prd_requirement,
-    tasks.version
+    tasks.version,
+    -- ``claimed_at`` is added to RETURNING (M1 fix
+    -- VAL-CROSS-BACKCOMPAT-909) so the CLAIM event payload can
+    -- carry the post-update timestamp without an extra SELECT
+    -- round-trip — required by the v4.4.0 enriched payload shape
+    -- documented in tests/fixtures/baselines/events_payload_v4.4.0.json.
+    tasks.claimed_at
 """
 
 
@@ -383,7 +389,14 @@ RETURNING
     tasks.test_steps,
     tasks.prd_requirement,
     tasks.version,
-    tasks.plan_id
+    tasks.plan_id,
+    -- ``claimed_by`` is added to RETURNING (M1 fix
+    -- VAL-CROSS-BACKCOMPAT-910) so the COMPLETE event payload can
+    -- carry the owning worker's id without an extra SELECT
+    -- round-trip — required by the v4.4.0 enriched payload shape
+    -- and previously forced m1-cross-host-smoke to fall back to a
+    -- ``tasks.claimed_by`` JOIN for attribution.
+    tasks.claimed_by
 """
 
 
@@ -482,7 +495,16 @@ RETURNING
     tasks.acceptance_criteria,
     tasks.test_steps,
     tasks.prd_requirement,
-    tasks.version
+    tasks.version,
+    -- ``plan_id`` and ``claimed_by`` are added to RETURNING (M1 fix
+    -- VAL-CROSS-BACKCOMPAT-911) so the FAIL event payload can carry
+    -- the parent plan and the owning worker's id without extra
+    -- SELECT round-trips — required by the v4.4.0 enriched payload
+    -- shape. ``claimed_by`` is preserved across the FAIL transition
+    -- (the SET clause does not NULL it) so RETURNING reflects the
+    -- worker that owned the row at fail time.
+    tasks.plan_id,
+    tasks.claimed_by
 """
 
 
@@ -501,15 +523,30 @@ RETURNING
 # the row surfaces as :class:`VersionConflictError` — the worker should
 # treat that as "already released, nothing to do" and exit cleanly.
 _RELEASE_SQL: str = """
+WITH prev AS (
+    -- Capture the pre-UPDATE ``claimed_by`` / ``plan_id`` BEFORE the
+    -- UPDATE clears ``claimed_by`` to NULL (M1 fix
+    -- VAL-CROSS-BACKCOMPAT-912). RETURNING in an UPDATE statement
+    -- returns the *new* row values, so without this CTE we would
+    -- lose the owning ``worker_id`` and could not include it in the
+    -- RELEASE event payload — required by the v4.4.0 enriched shape.
+    -- The CTE shares the same MVCC snapshot as the outer UPDATE, so
+    -- the captured values are the ones the UPDATE was about to
+    -- overwrite.
+    SELECT id, claimed_by, plan_id
+    FROM tasks
+    WHERE id = $1
+)
 UPDATE tasks
 SET status = 'PENDING',
     claimed_by = NULL,
     claimed_at = NULL,
     version = tasks.version + 1,
     updated_at = NOW()
-WHERE id = $1
-  AND version = $2
-  AND status IN ('CLAIMED', 'IN_PROGRESS')
+FROM prev
+WHERE tasks.id = prev.id
+  AND tasks.version = $2
+  AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
 RETURNING
     tasks.id,
     tasks.status,
@@ -520,7 +557,9 @@ RETURNING
     tasks.acceptance_criteria,
     tasks.test_steps,
     tasks.prd_requirement,
-    tasks.version
+    tasks.version,
+    prev.plan_id AS plan_id,
+    prev.claimed_by AS claimed_by
 """
 
 
@@ -655,20 +694,50 @@ WHERE id = $1
 # ``make_interval(secs => ...)`` is preferred over string concatenation here
 # (no SQL-injection surface, no locale-dependent parsing).
 _RELEASE_STALE_SQL: str = """
-WITH released AS (
+WITH stale AS (
+    -- Snapshot the stale-claim cohort BEFORE the UPDATE clears
+    -- ``claimed_by`` so the audit-event payload can carry the owning
+    -- ``worker_id`` and parent ``plan_id`` (M1 fix
+    -- VAL-CROSS-BACKCOMPAT-912). Same MVCC snapshot as the outer
+    -- UPDATE — every row matched by the inner ``UPDATE ... FROM stale``
+    -- WHERE clause is also visible here.
+    SELECT id, claimed_by, plan_id
+    FROM tasks
+    WHERE status IN ('CLAIMED', 'IN_PROGRESS')
+      AND claimed_at IS NOT NULL
+      AND claimed_at < NOW() - make_interval(secs => $1::int)
+),
+released AS (
     UPDATE tasks
     SET status = 'PENDING',
         claimed_by = NULL,
         claimed_at = NULL,
         version = tasks.version + 1,
         updated_at = NOW()
-    WHERE status IN ('CLAIMED', 'IN_PROGRESS')
-      AND claimed_at IS NOT NULL
-      AND claimed_at < NOW() - make_interval(secs => $1::int)
-    RETURNING id, version
+    FROM stale
+    WHERE tasks.id = stale.id
+      -- Preserve the lock-free contract with concurrent workers: a
+      -- worker that just COMPLETE/FAIL'd one of the stale rows
+      -- between the ``stale`` CTE's snapshot and this UPDATE's row
+      -- lock has flipped ``status`` out of the active set; the
+      -- filter excludes it so we don't bounce a finished row back
+      -- to PENDING. Same invariant as the original
+      -- ``_RELEASE_STALE_SQL`` and the offline-worker sweep below.
+      AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
+    RETURNING tasks.id, tasks.version, stale.claimed_by AS prev_claimed_by, stale.plan_id
 )
-INSERT INTO events (task_id, event_type, payload)
-SELECT id, $2, jsonb_build_object('reason', $3::text, 'version', version)
+INSERT INTO events (task_id, plan_id, event_type, payload)
+SELECT
+    id,
+    plan_id,
+    $2,
+    jsonb_build_object(
+        'reason', $3::text,
+        'version', version,
+        'worker_id', prev_claimed_by,
+        'task_id', id,
+        'plan_id', plan_id
+    )
 FROM released
 RETURNING task_id
 """
@@ -735,10 +804,25 @@ released AS (
     FROM offline_workers
     WHERE tasks.claimed_by = offline_workers.worker_id
       AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
-    RETURNING tasks.id, tasks.version, offline_workers.worker_id
+    RETURNING tasks.id, tasks.version, tasks.plan_id, offline_workers.worker_id
 )
-INSERT INTO events (task_id, event_type, payload)
-SELECT id, $2, jsonb_build_object('reason', $3::text, 'version', version, 'worker_id', worker_id)
+INSERT INTO events (task_id, plan_id, event_type, payload)
+SELECT
+    id,
+    plan_id,
+    $2,
+    jsonb_build_object(
+        'reason', $3::text,
+        'version', version,
+        'worker_id', worker_id,
+        -- ``task_id`` and ``plan_id`` are emitted into the JSON payload
+        -- (M1 fix VAL-CROSS-BACKCOMPAT-912) so the audit row carries the
+        -- contract-required v4.4.0 enriched shape directly in
+        -- ``events.payload`` — independent of the column-level
+        -- ``events.plan_id`` populated alongside.
+        'task_id', id,
+        'plan_id', plan_id
+    )
 FROM released
 RETURNING task_id
 """
@@ -990,7 +1074,25 @@ class TaskRepository:
                     )
                     return None
 
-                payload = json.dumps({"worker_id": worker_id, "version": row["version"]})
+                # CLAIM event payload (v4.4.0 enriched shape;
+                # VAL-CROSS-BACKCOMPAT-909). The v4.3.1 baseline only
+                # required ``worker_id`` + ``version``; M1 backcompat
+                # additionally pins ``task_id``, ``plan_id`` and the
+                # post-update ``claimed_at`` timestamp so downstream
+                # audit / dashboard queries don't need to JOIN
+                # against ``tasks``. Legacy v4.3.1 readers ignore
+                # the new keys (they validated ``additionalProperties:
+                # true``) so this addition is forward-compatible.
+                claimed_at = row["claimed_at"]
+                payload = json.dumps(
+                    {
+                        "worker_id": worker_id,
+                        "task_id": row["id"],
+                        "plan_id": plan_id,
+                        "claimed_at": claimed_at.isoformat() if claimed_at is not None else None,
+                        "version": row["version"],
+                    }
+                )
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],
@@ -1129,7 +1231,25 @@ class TaskRepository:
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
 
-                payload = json.dumps({"version": row["version"]})
+                # COMPLETE event payload (v4.4.0 enriched shape;
+                # VAL-CROSS-BACKCOMPAT-910). The v4.3.1 baseline only
+                # carried ``version``; M1 backcompat additionally pins
+                # ``worker_id`` (sourced from ``tasks.claimed_by`` —
+                # COMPLETE preserves the column, so RETURNING reflects
+                # the worker that completed the task), ``task_id``,
+                # ``plan_id``, and a structured ``usage`` envelope for
+                # the spend bookkeeping. ``cost_usd`` is stringified so
+                # the JSON round-trips with the same precision as the
+                # NUMERIC(10, 4) ``plans.spent_usd`` column.
+                payload = json.dumps(
+                    {
+                        "worker_id": row["claimed_by"],
+                        "task_id": row["id"],
+                        "plan_id": row["plan_id"],
+                        "version": row["version"],
+                        "usage": {"cost_usd": str(cost)},
+                    }
+                )
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],
@@ -1249,7 +1369,26 @@ class TaskRepository:
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
 
-                payload = json.dumps({"version": row["version"], "reason": reason})
+                # FAIL event payload (v4.4.0 enriched shape;
+                # VAL-CROSS-BACKCOMPAT-911). The v4.3.1 baseline already
+                # required ``version`` + ``reason``; M1 backcompat
+                # additionally pins ``worker_id`` (sourced from
+                # ``tasks.claimed_by`` — FAIL preserves the column),
+                # ``task_id``, ``plan_id`` and a duplicated ``error``
+                # alias for ``reason`` so dashboards keying off either
+                # name surface the failure cause. Free-form caller
+                # diagnostics still ride on the separate ``detail``
+                # JSONB column (TASK-104b) — payload stays canonical.
+                payload = json.dumps(
+                    {
+                        "worker_id": row["claimed_by"],
+                        "task_id": row["id"],
+                        "plan_id": row["plan_id"],
+                        "version": row["version"],
+                        "reason": reason,
+                        "error": reason,
+                    }
+                )
                 detail_jsonb = json.dumps(detail) if detail is not None else None
                 await conn.execute(
                     _INSERT_EVENT_WITH_DETAIL_SQL,
@@ -1447,7 +1586,26 @@ class TaskRepository:
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
 
-                payload = json.dumps({"version": row["version"], "reason": reason})
+                # RELEASE event payload (v4.4.0 enriched shape;
+                # VAL-CROSS-BACKCOMPAT-912). The v4.3.1 baseline only
+                # required ``version`` + ``reason``; M1 backcompat
+                # additionally pins ``worker_id`` (the *previous*
+                # claimed_by — captured by ``_RELEASE_SQL``'s ``prev``
+                # CTE before the UPDATE NULL'd the column),
+                # ``task_id`` and ``plan_id``. ``worker_id`` may be
+                # ``None`` only if the row had already been released
+                # by a sweep racing this call, in which case the
+                # optimistic-lock filter would have rejected the
+                # UPDATE and we wouldn't be here.
+                payload = json.dumps(
+                    {
+                        "worker_id": row["claimed_by"],
+                        "task_id": row["id"],
+                        "plan_id": row["plan_id"],
+                        "version": row["version"],
+                        "reason": reason,
+                    }
+                )
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     row["id"],

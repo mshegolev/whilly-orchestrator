@@ -164,6 +164,94 @@ def test_events_payload_baseline_release_reasons_pinned() -> None:
     assert {"visibility_timeout", "worker_offline"}.issubset(enum)
 
 
+# ─── events.payload v4.4.0 baseline (enriched shape) ─────────────────────
+#
+# The v4.4.0 baseline documents the enriched shape introduced by the
+# M1 fix for VAL-CROSS-BACKCOMPAT-909..-912: CLAIM / COMPLETE / FAIL /
+# RELEASE event payloads now carry ``worker_id`` + ``task_id`` +
+# ``plan_id`` at minimum, plus event-specific extras
+# (CLAIM: ``claimed_at``; COMPLETE: ``usage``; FAIL: ``error``;
+# RELEASE: enum extended with ``admin_revoked``). The v4.3.1 baseline
+# above is preserved as a forward-readability regression anchor —
+# any v4.3.1 reader that validated ``additionalProperties: true``
+# accepts v4.4.0 payloads, so legacy data still parses.
+
+
+def test_events_payload_v4_4_0_baseline_exists_and_pins_version() -> None:
+    """The v4.4.0 baseline must exist alongside v4.3.1 and report the new version."""
+    data = load_fixture("baselines/events_payload_v4.4.0.json")
+    assert data.get("version") == "4.4.0"
+    assert data.get("supersedes") == "events_payload_v4.3.1.json"
+
+
+def test_events_payload_v4_4_0_baseline_pins_enriched_required_keys() -> None:
+    """CLAIM / COMPLETE / FAIL / RELEASE must require the v4.4.0 enriched key set."""
+    data = load_fixture("baselines/events_payload_v4.4.0.json")
+    expected_required = {
+        "CLAIM": {"worker_id", "task_id", "plan_id", "claimed_at", "version"},
+        "COMPLETE": {"worker_id", "task_id", "plan_id", "version", "usage"},
+        "FAIL": {"worker_id", "task_id", "plan_id", "version", "reason", "error"},
+        "RELEASE": {"worker_id", "task_id", "plan_id", "version", "reason"},
+    }
+    for event_type, required_keys in expected_required.items():
+        schema = data["event_types"][event_type]
+        actual_required = set(schema["required"])
+        assert required_keys.issubset(actual_required), (
+            f"{event_type}: required={actual_required}; missing {required_keys - actual_required}"
+        )
+
+
+def test_events_payload_v4_4_0_baseline_is_strict_superset_of_v4_3_1() -> None:
+    """Every v4.3.1 required key must remain required in v4.4.0 (forward-readability)."""
+    legacy = load_fixture("baselines/events_payload_v4.3.1.json")
+    enriched = load_fixture("baselines/events_payload_v4.4.0.json")
+    for event_type, legacy_schema in legacy["event_types"].items():
+        if event_type not in enriched["event_types"]:
+            continue
+        legacy_required = set(legacy_schema.get("required", []))
+        enriched_required = set(enriched["event_types"][event_type].get("required", []))
+        assert legacy_required.issubset(enriched_required), (
+            f"{event_type}: v4.4.0 dropped a v4.3.1 required key — missing {legacy_required - enriched_required}"
+        )
+
+
+def test_events_payload_v4_4_0_release_reason_enum_extends_v4_3_1() -> None:
+    """v4.4.0 RELEASE.reason enum must extend (not replace) the v4.3.1 enum."""
+    legacy = load_fixture("baselines/events_payload_v4.3.1.json")
+    enriched = load_fixture("baselines/events_payload_v4.4.0.json")
+    legacy_enum = set(legacy["event_types"]["RELEASE"]["properties"]["reason"]["enum"])
+    enriched_enum = set(enriched["event_types"]["RELEASE"]["properties"]["reason"]["enum"])
+    assert legacy_enum.issubset(enriched_enum), (
+        f"v4.4.0 RELEASE.reason enum dropped values: {legacy_enum - enriched_enum}"
+    )
+    # ``admin_revoked`` is the new additive value pinned by VAL-CROSS-BACKCOMPAT-912.
+    assert "admin_revoked" in enriched_enum
+
+
+def test_events_payload_v4_3_1_baseline_unchanged_as_legacy_anchor() -> None:
+    """The v4.3.1 baseline is the legacy regression anchor and must stay frozen.
+
+    The required-key sets pinned here are the *legacy* shape — fresh
+    rows emitted by v4.4.0+ code paths use the v4.4.0 baseline above,
+    but already-emitted rows in long-running databases must still
+    parse against this baseline. Tests that validate freshly-emitted
+    rows MUST use the v4.4.0 baseline; tests that validate legacy
+    fixture data MUST use this v4.3.1 baseline.
+    """
+    data = load_fixture("baselines/events_payload_v4.3.1.json")
+    legacy_required = {
+        "CLAIM": {"worker_id", "version"},
+        "COMPLETE": {"version"},
+        "FAIL": {"version", "reason"},
+        "RELEASE": {"version", "reason"},
+    }
+    for event_type, required_keys in legacy_required.items():
+        schema = data["event_types"][event_type]
+        assert set(schema["required"]) == required_keys, (
+            f"v4.3.1 {event_type} required-set drift: got {schema['required']}, expected {sorted(required_keys)}"
+        )
+
+
 # ─── whilly_state-v4.3.json snapshot ─────────────────────────────────────
 
 
