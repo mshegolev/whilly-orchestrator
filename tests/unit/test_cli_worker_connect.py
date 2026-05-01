@@ -1062,6 +1062,9 @@ def test_passthrough_sentinel_with_no_extra_args_is_noop(
     )
     assert code == EXIT_OK
     _, argv = exec_calls[0]
+    # ``--worker-id <minted_id>`` is appended by connect itself so the
+    # exec'd whilly-worker uses the registered identity bound to the
+    # bearer token (fix-m1-connect-handoff-403 / VAL-M1-CONNECT-008).
     assert argv == [
         "whilly-worker",
         "--connect",
@@ -1070,6 +1073,8 @@ def test_passthrough_sentinel_with_no_extra_args_is_noop(
         "bearer-deadbeef",
         "--plan",
         "demo",
+        "--worker-id",
+        "w-12345678",
     ]
 
 
@@ -1105,6 +1110,118 @@ def test_passthrough_sentinel_does_not_consume_known_connect_flags(
     assert "--insecure" in argv
     assert argv[-1] == "--once"
     assert argv.index("--insecure") < argv.index("--once")
+
+
+# ---------------------------------------------------------------------------
+# Identity hand-off: --worker-id forwarded to whilly-worker so the bearer
+# token (which is bound to the *registered* worker_id) is used with the
+# matching id on /tasks/claim and /workers/<id>/heartbeat. Without this,
+# whilly-worker auto-generates a fresh id at startup, every claim/heartbeat
+# carries a worker_id that does NOT match the bearer's bound owner, and
+# _require_token_owner returns 403. (M1 user-testing round 1 blocking
+# finding: VAL-M1-ENTRYPOINT-002 / VAL-M1-CONNECT-008 / VAL-M1-CONNECT-021.)
+# ---------------------------------------------------------------------------
+
+
+def test_exec_argv_includes_worker_id_from_register_response(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """``connect`` forwards the registered ``worker_id`` to whilly-worker via ``--worker-id``.
+
+    The bearer token returned by ``POST /workers/register`` is bound
+    server-side to the registered worker_id. If we let whilly-worker
+    mint a fresh id at startup, every subsequent claim/heartbeat would
+    carry the new id while the bearer authenticated as the registered
+    id — _require_token_owner would reject the mismatch with 403.
+    """
+    _patch_register(monkeypatch, worker_id="w-registered-42", token="bearer-bound")
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+        ]
+    )
+    assert code == EXIT_OK
+    _, argv = exec_calls[0]
+    assert "--worker-id" in argv
+    # The id forwarded is exactly the one the server returned at register
+    # time; whilly-worker will not auto-generate.
+    idx = argv.index("--worker-id")
+    assert argv[idx + 1] == "w-registered-42"
+    # And it appears AFTER --plan so the worker's argparse parses the
+    # whole connect-supplied identity block before any passthrough.
+    plan_idx = argv.index("--plan")
+    assert plan_idx < idx
+
+
+def test_exec_argv_worker_id_pinned_even_when_passthrough_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """Operator-supplied ``-- --worker-id X`` overrides the connect-pinned id (last-wins).
+
+    The connect-supplied ``--worker-id`` is the safe default but
+    operators with bespoke deployments may want a different id (e.g.
+    PID-suffixed for k8s replicas). Argparse's last-wins rule means
+    a passthrough override is honoured while the safe default remains
+    the head-of-argv when nothing is forwarded.
+    """
+    _patch_register(monkeypatch, worker_id="w-default-id", token="bearer-x")
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+            "--",
+            "--worker-id",
+            "w-operator-override",
+        ]
+    )
+    assert code == EXIT_OK
+    _, argv = exec_calls[0]
+    # Both occurrences are present; the override is last (argparse wins).
+    occurrences = [i for i, tok in enumerate(argv) if tok == "--worker-id"]
+    assert len(occurrences) == 2
+    assert argv[occurrences[0] + 1] == "w-default-id"
+    assert argv[occurrences[1] + 1] == "w-operator-override"
+    # Tail of argv ends with the operator's override so the worker
+    # parser (which reads left-to-right and keeps the last) lands on it.
+    assert argv[-2:] == ["--worker-id", "w-operator-override"]
+
+
+def test_exec_argv_worker_id_present_with_no_keychain(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_keyring: _FakeKeyring,
+    patched_xdg: str,
+) -> None:
+    """``--no-keychain`` does not affect the identity-handoff fix."""
+    _patch_register(monkeypatch, worker_id="w-no-kc", token="bearer-nk")
+    exec_calls = _patch_execvp(monkeypatch)
+    code = run_connect_command(
+        [
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "BT",
+            "--plan",
+            "demo",
+            "--no-keychain",
+        ]
+    )
+    assert code == EXIT_OK
+    _, argv = exec_calls[0]
+    assert "--worker-id" in argv
+    idx = argv.index("--worker-id")
+    assert argv[idx + 1] == "w-no-kc"
 
 
 # ---------------------------------------------------------------------------
