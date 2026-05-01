@@ -160,6 +160,46 @@ opens a PR / merges the branch.
   subcommand) or just `rm -rf ./workspace/<plan_id>` on idle workers.
   M4 tracks last-used timestamp per clone.
 
+### Worked example — operator-side trace (Option A)
+
+The block below is a copy-paste-runnable trace of the Option A flow
+from the operator's POV. It uses the canonical branch-naming sketch
+(`worker-<id>/<plan_id>/<task_id>`) and the `--force-with-lease` push
+policy locked in above. The example assumes one worker host (call it
+`worker-A`) draining one plan (`demo`) against the operator's git
+remote `origin`.
+
+```bash
+# 1. First-claim setup on worker-A (one-time per plan):
+#    `git clone --branch worker-A` carves out a per-worker namespace
+#    on the operator's remote so two workers cloning the same repo
+#    don't accidentally collide on a shared default branch. This is
+#    the canonical worked example for Option A.
+git clone --branch worker-A git@github.com:org/repo.git ./workspace/demo
+cd ./workspace/demo
+
+# 2. Per-task lifecycle on a CLAIM (illustrative — the worker
+#    automates this; an operator only runs it manually for forensics):
+git fetch origin
+git reset --hard <task.git_ref>
+git checkout -B worker-A/demo/T-42 <task.git_ref>
+
+# 3. Agentic CLI runs in the working tree...
+#    (claude / opencode / codex — produces commits on the local branch)
+
+# 4. On agent success, the worker pushes the per-task branch back
+#    under the worker-A namespace:
+git push origin worker-A/demo/T-42 --force-with-lease
+
+# 5. Cleanup or re-claim (optional — `git push origin worker-A/...`
+#    is the canonical handoff back to the operator's remote):
+git push origin worker-A/demo/T-42 --force-with-lease
+```
+
+The `git clone --branch worker-A` and `git push origin worker-A/...`
+commands are the two operator-visible touchpoints; everything between
+is the agentic CLI's job.
+
 ### Design constraints baked in by M1
 
 * The `./workspace` placeholder mount on `docker-compose.worker.yml` is

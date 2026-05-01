@@ -124,10 +124,22 @@ falling back to the wildcard.
 ### 4. Bring the control-plane up
 
 ```bash
+# Modern Docker Compose v2 (recommended — `docker compose` with a space):
+docker compose -f docker-compose.control-plane.yml up -d
+docker compose -f docker-compose.control-plane.yml ps
+docker compose -f docker-compose.control-plane.yml logs -f control-plane
+
+# Legacy v1 ``docker-compose`` (dash) binary still works identically:
 docker-compose -f docker-compose.control-plane.yml up -d
 docker-compose -f docker-compose.control-plane.yml ps
 docker-compose -f docker-compose.control-plane.yml logs -f control-plane
 ```
+
+> **Note on the binary name.** Compose v2 ships as a `docker` subcommand
+> (`docker compose ...`, with a space). The standalone `docker-compose`
+> (dash form, v1) is end-of-life upstream but still works on hosts that
+> retained it. The compose files themselves are byte-equivalent for
+> both invocations — pick whichever your VPS image already has.
 
 Within ~60 s both `postgres` and `control-plane` should be `running`,
 with `postgres` reaching `healthy`. From the VPS itself:
