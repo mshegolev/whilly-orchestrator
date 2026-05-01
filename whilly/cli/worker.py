@@ -1088,6 +1088,20 @@ def run_connect_command(argv: Sequence[str]) -> int:
     # contract; the bearer is already ephemeral and execvp argv is
     # process-private). If ``whilly-worker`` is missing from PATH,
     # ``execvp`` raises ``FileNotFoundError`` — surface it cleanly.
+    #
+    # ``--worker-id <minted_id>`` is REQUIRED here even though
+    # ``whilly-worker`` would otherwise auto-generate one. The bearer
+    # token returned by ``POST /workers/register`` is bound (via
+    # ``token_hash``) to the *registered* ``worker_id``; if we let
+    # ``whilly-worker`` mint a fresh id at startup, every subsequent
+    # ``/tasks/claim`` / ``/workers/<id>/heartbeat`` would carry the
+    # new id while the bearer authenticated as the registered id — the
+    # ``_require_token_owner`` route helper would reject the mismatch
+    # with 403. Pinning the registered id makes the exec'd worker speak
+    # the same identity the server already issued credentials for, so
+    # claim/heartbeat round-trips return 200 instead of 403. (M1
+    # blocking finding: VAL-M1-CONNECT-008 / VAL-M1-CONNECT-021 /
+    # VAL-M1-ENTRYPOINT-002.)
     worker_argv = [
         "whilly-worker",
         "--connect",
@@ -1096,6 +1110,8 @@ def run_connect_command(argv: Sequence[str]) -> int:
         bearer,
         "--plan",
         plan_id,
+        "--worker-id",
+        worker_id,
     ]
     if args.insecure:
         worker_argv.append("--insecure")
