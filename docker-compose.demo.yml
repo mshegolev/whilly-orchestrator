@@ -106,6 +106,13 @@ services:
         condition: service_healthy
     environment:
       WHILLY_CONTROL_URL: http://control-plane:8000
+      # plain HTTP к control-plane:8000 → connect-flow требует opt-in.
+      # Connect-flow (WHILLY_USE_CONNECT_FLOW=1) — единственная ветка
+      # entrypoint.sh, которая пробрасывает --insecure в `whilly worker connect`,
+      # а та, в свою очередь, в exec'ed `whilly-worker`. Без обоих переменных
+      # стартует строгий scheme-guard и worker'ы зацикливаются на ре-старте.
+      WHILLY_USE_CONNECT_FLOW: "1"
+      WHILLY_INSECURE: "1"
       # Bootstrap-токен — entrypoint.sh использует его для `whilly worker register`,
       # если WHILLY_WORKER_TOKEN не задан явно.
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
