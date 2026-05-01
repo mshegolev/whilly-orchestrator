@@ -173,8 +173,14 @@ pip install 'whilly-orchestrator[worker]'
 whilly worker connect http://vps.example.com:8000 \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
     --plan demo \
-    --hostname "$(hostname)"
+    --hostname "$(hostname)" \
+    --insecure   # dev-only: opts out of the loopback-only HTTP guard
 ```
+
+> ⚠️ `--insecure` here is a **dev-only loopback-bypass**: the
+> `whilly-worker` URL-scheme guard otherwise rejects plain HTTP to a
+> non-loopback host (see the warning blockquote below for the full
+> details and the recommended HTTPS path that lands in **M2**).
 
 Stdout shows two `key: value` lines (line-oriented and pipeable):
 
@@ -192,9 +198,12 @@ host (no D-Bus), the bearer is written to `~/.config/whilly/credentials.json`
 at mode `0600` instead.
 
 > **Plain HTTP to a non-loopback host** is rejected up front with
-> `--insecure` advice in stderr. Pass `--insecure` to acknowledge the
-> risk if you really must use plaintext over the LAN; HTTPS is the
-> recommended path (see M2 Caddy / Tailscale Funnel docs).
+> `--insecure` advice in stderr. Pass `--insecure` (as shown in the
+> snippet above) to acknowledge the risk if you really must use
+> plaintext over the LAN — this is a **dev-only loopback-bypass**.
+> HTTPS is the recommended production path; once **M2** lands the
+> Caddy + ACME / Tailscale Funnel story, drop `--insecure` and point
+> the worker at the `https://` URL instead.
 
 If the OS keychain is unavailable and the fallback file write also
 fails, the bearer is still printed to stdout — capture it manually and

@@ -313,8 +313,15 @@ docker-compose -f docker-compose.control-plane.yml exec control-plane \
 whilly worker connect http://vps.example.com:8000 \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
     --plan demo \
-    --hostname "$(hostname)"
+    --hostname "$(hostname)" \
+    --insecure   # dev-only: отключает loopback-only HTTP guard
 ```
+
+> ⚠️ `--insecure` здесь — это **dev-only loopback-bypass**: иначе
+> `whilly-worker` отвергает plain HTTP к не-loopback хосту. В проде
+> переключитесь на HTTPS, когда подъедет **M2** (Caddy + ACME /
+> Tailscale Funnel) — подробности в
+> [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
 
 stdout покажет две строки `key: value` (грепабельные, без баннеров между):
 
@@ -328,8 +335,10 @@ token: <plaintext bearer>
 Access; на headless Linux — `~/.config/whilly/credentials.json`, mode
 0600).
 
-> Plain HTTP к не-loopback хосту требует `--insecure`. HTTPS (через
-> Caddy / Tailscale Funnel в M2) — рекомендуемый путь.
+> Plain HTTP к не-loopback хосту требует `--insecure` (как в сниппете
+> выше — это **dev-only loopback-bypass**). HTTPS (через Caddy /
+> Tailscale Funnel в M2) — рекомендуемый production-путь; полные
+> детали — в [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
 
 ### M1.3 — Подключаем второй worker на самом VPS
 
