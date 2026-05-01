@@ -205,3 +205,52 @@ def test_distributed_audit_docs_mirror_planning_directory() -> None:
     assert src_names == dst_names, f"only-in-src: {src_names - dst_names}, only-in-dst: {dst_names - src_names}"
     for name in src_names:
         assert (src / name).read_bytes() == (dst / name).read_bytes(), f"drift: {name}"
+
+
+def test_distributed_audit_library_mirror_planning_directory() -> None:
+    """``library/distributed-audit/`` must mirror ``.planning/distributed-audit/``.
+
+    This is the canonical M1 location required by VAL-M1-DOCS-004 /
+    VAL-M1-COMPOSE-902, populated by the m1-docs feature via the same
+    idempotent ``scripts/m1_baseline_fixtures.py`` writer that maintains
+    the legacy ``docs/distributed-audit/`` mirror.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    src = repo_root / ".planning" / "distributed-audit"
+    dst = repo_root / "library" / "distributed-audit"
+    assert dst.is_dir(), f"missing library mirror: {dst}"
+    src_names = {p.name for p in src.iterdir() if p.is_file()}
+    dst_names = {p.name for p in dst.iterdir() if p.is_file()}
+    assert src_names == dst_names, f"only-in-src: {src_names - dst_names}, only-in-dst: {dst_names - src_names}"
+    for name in src_names:
+        assert (src / name).read_bytes() == (dst / name).read_bytes(), f"drift: {name}"
+
+
+def test_m1_baseline_fixtures_script_is_idempotent_on_rerun(tmp_path) -> None:
+    """Re-running ``scripts/m1_baseline_fixtures.py`` on a clean checkout is a no-op.
+
+    Captures the script's stdout summary table over two consecutive
+    invocations and asserts the second pass reports nothing as
+    ``created`` or ``updated`` — every action line ends with
+    ``unchanged`` instead.
+    """
+    import subprocess
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script = repo_root / "scripts" / "m1_baseline_fixtures.py"
+    # First run primes any drift; the assertion runs on the second pass
+    # so this test never trips on a fresh clone where the fixtures
+    # legitimately need creating.
+    subprocess.run(["python3", str(script)], cwd=repo_root, check=True, capture_output=True)
+    second = subprocess.run(["python3", str(script)], cwd=repo_root, check=True, capture_output=True, text=True)
+    for line in second.stdout.splitlines():
+        if not line.strip():
+            continue
+        # Each action line is "  <name>  <status>  <relpath>"; status is
+        # the second whitespace-separated field after collapsing.
+        assert "created" not in line.split() and "updated" not in line.split(), (
+            f"non-idempotent re-run produced action line: {line!r}"
+        )

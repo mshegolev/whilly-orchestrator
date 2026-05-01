@@ -6,8 +6,11 @@ Re-running this script on an already-initialised checkout is a no-op:
 * Existing fixture / baseline / state files whose contents already match the
   canonical bytes embedded below are left alone.
 * Distributed-audit reports under ``.planning/distributed-audit/`` are mirrored
-  byte-for-byte into ``docs/distributed-audit/`` only if the destination is
-  missing or has drifted.
+  byte-for-byte into ``docs/distributed-audit/`` AND ``library/distributed-audit/``
+  only if the destination is missing or has drifted. The ``library/`` location
+  is the canonical mirror required by VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902;
+  the ``docs/`` mirror is retained for backwards-compatibility with the
+  m1-readiness-baseline feature that introduced it.
 
 The four canonical artifacts produced are:
 
@@ -478,23 +481,33 @@ def main() -> int:
     )
 
     # 5. Mirror .planning/distributed-audit/ -> docs/distributed-audit/
+    #    AND -> library/distributed-audit/ (the canonical M1 location per
+    #    VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902). Both mirrors are byte-equal
+    #    to the source, so future tooling can ``diff -r`` either against
+    #    ``.planning/distributed-audit/`` and expect zero divergence.
     src_dir = REPO_ROOT / ".planning" / "distributed-audit"
-    dst_dir = REPO_ROOT / "docs" / "distributed-audit"
     if not src_dir.is_dir():
         print(f"ERROR: source directory missing: {src_dir}", file=sys.stderr)
         return 2
-    dst_dir.mkdir(parents=True, exist_ok=True)
-    for src_file in sorted(src_dir.iterdir()):
-        if not src_file.is_file():
-            continue
-        dst_file = dst_dir / src_file.name
-        actions.append(
-            (
-                f"audit/{src_file.name}",
-                dst_file,
-                _mirror_file_idempotent(src_file, dst_file),
+
+    mirror_destinations: tuple[Path, ...] = (
+        REPO_ROOT / "docs" / "distributed-audit",
+        REPO_ROOT / "library" / "distributed-audit",
+    )
+    for dst_dir in mirror_destinations:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for src_file in sorted(src_dir.iterdir()):
+            if not src_file.is_file():
+                continue
+            dst_file = dst_dir / src_file.name
+            mirror_label = dst_dir.relative_to(REPO_ROOT).as_posix()
+            actions.append(
+                (
+                    f"{mirror_label}/{src_file.name}",
+                    dst_file,
+                    _mirror_file_idempotent(src_file, dst_file),
+                )
             )
-        )
 
     # Print summary
     longest = max(len(name) for name, _, _ in actions)

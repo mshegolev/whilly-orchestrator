@@ -147,6 +147,29 @@ whilly dashboard --plan <plan_id>     # Rich Live TUI over the tasks table
 A complete reproducible single-host demo (Postgres + control plane + remote
 worker, all on loopback) lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
 
+### Distributed (multi-host) deployment — v4.4 / M1
+
+For split-host deployments — control-plane on a VPS, workers on laptops —
+two new compose files (additive; the single-host
+[`docker-compose.demo.yml`](docker-compose.demo.yml) is unchanged):
+
+```bash
+# VPS (control-plane only)
+docker-compose -f docker-compose.control-plane.yml up -d
+
+# Laptop (one-line bootstrap; stores per-worker bearer in OS keychain)
+whilly worker connect http://<vps-ip>:8000 \
+    --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
+    --plan demo
+```
+
+Full walkthrough — including `WHILLY_BIND_HOST` / `WHILLY_USE_CONNECT_FLOW`
+options, the laptop-side Docker variant via
+[`docker-compose.worker.yml`](docker-compose.worker.yml), audit-log
+verification, and the M4 workspace topology design — lives in
+[`docs/Distributed-Setup.md`](docs/Distributed-Setup.md) and
+[`docs/Workspace-Topology.md`](docs/Workspace-Topology.md).
+
 ## CLI surface
 
 `whilly <command>` dispatches to a sub-CLI; `whilly --help` prints the routing
@@ -242,6 +265,8 @@ deprecation via `log.warning(...)` + env-flag suppression (not Python's
 - [`CLAUDE.md`](CLAUDE.md) — coding conventions and architecture pointers.
 - [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) — hexagonal layout, scheduling, locks.
 - [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) — HTTP wire protocol, auth, long-polling.
+- [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md) — v4.4 multi-host deployment (VPS control-plane + laptop workers).
+- [`docs/Workspace-Topology.md`](docs/Workspace-Topology.md) — design-only spec for the M4 per-worker editing workspace.
 - [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) — env-var mapping and breaking changes.
 - [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) — `whilly init` PRD-wizard flow.
 - [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md) — Claude CLI through HTTPS proxy / SSH tunnel.

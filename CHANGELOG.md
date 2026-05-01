@@ -5,6 +5,86 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.0] - 2026-05-01
+
+> **M1 of Whilly Distributed v5.0 — split-host deployments.** Adds two new
+> additive compose files (`docker-compose.control-plane.yml`,
+> `docker-compose.worker.yml`), the one-line `whilly worker connect <url>`
+> bootstrap, and the supporting docs/env knobs needed for a VPS+laptops
+> deployment shape. **Strictly additive** — existing single-host
+> `docker-compose.demo.yml`, `workshop-demo.sh`, and `mshegolev/whilly:4.3.1`
+> continue to work identically and pass `bash workshop-demo.sh --cli claude`
+> byte-for-byte.
+
+### Added
+
+- **`docker-compose.control-plane.yml`** — postgres + control-plane only,
+  sized for the 964 MB-RAM VPS profile (256 MB cap each, PG tuned with
+  `shared_buffers=64MB` / `work_mem=4MB`). Bind interface controlled by the
+  new `WHILLY_BIND_HOST` env var (default `127.0.0.1`; set `0.0.0.0` /
+  `::` / explicit IP to expose). IPv6 wildcard supported via long-form
+  port mapping (the short form swallows colons).
+- **`docker-compose.worker.yml`** + **`.env.worker.example`** — single
+  worker service that targets a remote control-plane via
+  `WHILLY_CONTROL_URL`. Workspace volume placeholder (`./workspace:/work`)
+  declared but unused at M1 — reserved for the M4 per-worker plan
+  workspace (see `docs/Workspace-Topology.md`).
+- **`whilly worker connect <url>`** — one-line operator bootstrap. Validates
+  URL (scheme guard, port range, no path), registers via the bootstrap
+  token, persists the per-worker bearer in the OS keychain (with a
+  chmod-600 `~/.config/whilly/credentials.json` fallback for headless
+  Linux), then `execvp`s into `whilly-worker`. Stdout shape is
+  line-oriented (`worker_id: ...` / `token: ...`) so it pipes cleanly into
+  shell scripts. Extensive failure-mode handling: 401 / unreachable / 5xx
+  retries / SIGINT mid-register / missing-on-PATH are all surfaced with
+  actionable stderr.
+- **`whilly-worker --insecure`** — explicit opt-in for plain HTTP to a
+  non-loopback control-plane URL. Loopback hosts (`127.0.0.0/8`, `::1`,
+  `localhost`) are exempt; RFC1918 / link-local / `0.0.0.0` are NOT
+  exempt. Mirrors on `whilly worker connect`.
+- **`docker/entrypoint.sh` `WHILLY_USE_CONNECT_FLOW` switch** — when truthy
+  (`1` / `true` / `yes` / `on`, case-insensitive), the worker container
+  delegates registration + keychain persistence + exec to `whilly worker
+  connect` instead of the legacy bash-awk register path. **Default OFF**
+  preserves byte-equivalent v4.3.1 stderr/stdout behaviour for the
+  workshop demo.
+- **`docs/Distributed-Setup.md`** — VPS-A control-plane → laptop-B/C
+  workers walkthrough. Copy-paste-ready commands, env-var reference, and
+  cross-link to the workspace-topology design doc. References the
+  canonical audit-report mirror at `library/distributed-audit/`.
+- **`docs/Workspace-Topology.md`** — design-only spec for the M4
+  per-worker editing workspace. Locks in **Option A** (per-worker git
+  clone + push-branch); options B (shared workspace) and C (patch-based)
+  are documented and ruled out. Carries an explicit "design only — NOT
+  implemented in this mission" callout to prevent confusion with shipping
+  features.
+- **DEMO.md** — new "Сценарий M1 — two-host demo" section walking through
+  the VPS + macbook + VPS-local-worker path.
+- **`.env.example`** — documented `WHILLY_BIND_HOST` and
+  `WHILLY_USE_CONNECT_FLOW` with default values, semantics, and example
+  overrides.
+- **README.md** — quickstart now references
+  `docker-compose.control-plane.yml`, `docker-compose.worker.yml`, and
+  `whilly worker connect`. Documentation index links the two new docs.
+- **`scripts/m1_baseline_fixtures.py` extension** — the existing
+  idempotent fixture mirror now also writes
+  `library/distributed-audit/` (canonical M1 location per
+  VAL-M1-DOCS-004 / VAL-M1-COMPOSE-902) in addition to the
+  `docs/distributed-audit/` mirror introduced by m1-readiness-baseline.
+  Re-runs are byte-equality no-ops.
+
+### Compatibility
+
+- `docker-compose.demo.yml`, `workshop-demo.sh`, `Dockerfile.demo`, and
+  `mshegolev/whilly:4.3.1` are unchanged from v4.3.1. The single-host
+  workshop demo is verified byte-equivalent on every M1 validator pass.
+- `WHILLY_USE_CONNECT_FLOW` defaults to OFF; existing containers that
+  rely on the legacy bash-awk register flow continue to use it.
+- All v3-era CLI flags (`whilly --tasks`, `--headless`, `--resume`,
+  `--reset`, `--init`, `--prd-wizard`) continue to dispatch correctly;
+  the `whilly worker` / `whilly admin` subcommand additions do not
+  shadow them.
+
 ## [4.3.1] - 2026-04-30
 
 > **Hotfix: Node 22 LTS + четвёртый agentic CLI (Codex).** Production-образ
