@@ -40,6 +40,63 @@
         "head -1 PAR-B.md | grep -q '^B done$'"
       ],
       "prd_requirement": "parallel-B"
+    },
+    {
+      "id": "PAR-003",
+      "phase": "Parallel",
+      "category": "doc",
+      "priority": "high",
+      "status": "pending",
+      "description": "Создать файл PAR-C.md с одной строкой 'C done'.",
+      "dependencies": [],
+      "key_files": ["PAR-C.md"],
+      "acceptance_criteria": [
+        "PAR-C.md существует",
+        "Содержимое — строка 'C done'"
+      ],
+      "test_steps": [
+        "test -s PAR-C.md",
+        "head -1 PAR-C.md | grep -q '^C done$'"
+      ],
+      "prd_requirement": "parallel-C"
+    },
+    {
+      "id": "PAR-004",
+      "phase": "Parallel",
+      "category": "doc",
+      "priority": "high",
+      "status": "pending",
+      "description": "Создать файл PAR-D.md с одной строкой 'D done'.",
+      "dependencies": [],
+      "key_files": ["PAR-D.md"],
+      "acceptance_criteria": [
+        "PAR-D.md существует",
+        "Содержимое — строка 'D done'"
+      ],
+      "test_steps": [
+        "test -s PAR-D.md",
+        "head -1 PAR-D.md | grep -q '^D done$'"
+      ],
+      "prd_requirement": "parallel-D"
+    },
+    {
+      "id": "PAR-005",
+      "phase": "Parallel",
+      "category": "doc",
+      "priority": "high",
+      "status": "pending",
+      "description": "Создать файл PAR-E.md с одной строкой 'E done'.",
+      "dependencies": [],
+      "key_files": ["PAR-E.md"],
+      "acceptance_criteria": [
+        "PAR-E.md существует",
+        "Содержимое — строка 'E done'"
+      ],
+      "test_steps": [
+        "test -s PAR-E.md",
+        "head -1 PAR-E.md | grep -q '^E done$'"
+      ],
+      "prd_requirement": "parallel-E"
     }
   ]
 }
