@@ -5,6 +5,32 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — NEXT
+
+### Documentation
+
+- **Backcompat strategy clarified: the v3-flag shim is the canonical
+  v4 backcompat surface.** The v3 in-process Wiggum loop was removed in
+  TASK-107 (commit `91bcfbd`); the legacy-flag shim added in commit
+  `0bfd8b1` (`whilly/cli/__init__.py::_apply_legacy_shim`) is the only
+  authoritative compatibility layer for v3-era top-level flags
+  (`--tasks`, `--headless`, `--init`, `--prd-wizard`, `--workspace`,
+  `--no-workspace`, `--no-worktree`, `--resume`, `--reset`, `--all`).
+  The shim rewrites argv into the equivalent v4 subcommand
+  (`run --plan`, `init`, `plan reset`) and lets the v4 dispatcher take
+  over — it does **not** restore the v3 in-process executor, the
+  `.whilly_state.json` resume file, or the `.whilly_workspaces/{slug}/`
+  git-worktree feature. The mission validation contract was reframed
+  (mission feature `m1-backcompat-reframer`) to match this reality:
+  13 backcompat assertions now test the shim's argv-rewrite + dispatch
+  contract instead of v3-loop semantics, one assertion
+  (`VAL-CROSS-BACKCOMPAT-904`, the `.whilly_state.json` forward-readability
+  chain) is removed because the file format is dead. See
+  `library/architecture.md` § "Backcompat strategy (v3 → v4)" for the
+  full rewrite table and rationale. **No source code changes** ship in
+  this NEXT entry — the shim implementation has been in place since
+  v4.4.0 and the reframe is contract-document only.
+
 ## [4.4.0] - 2026-05-01
 
 > **M1 of Whilly Distributed v5.0 — split-host deployments.** Adds two new
