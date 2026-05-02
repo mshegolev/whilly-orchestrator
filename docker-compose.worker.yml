@@ -56,8 +56,9 @@ services:
     restart: unless-stopped
     environment:
       # Required at RUNTIME — must be supplied by the operator in
-      # .env.worker (typically http://<vps-ip>:8000 or https://<vps-host>
-      # behind Caddy / Tailscale Funnel at M2). We deliberately use the
+      # .env.worker (typically http://<vps-ip>:8000 or the rotating
+      # https://<random>.lhr.life URL published by the M2 localhost.run
+      # `funnel` sidecar). We deliberately use the
       # `:-` (default-if-unset) form rather than `:?` (required) here so
       # that a `docker-compose -f docker-compose.worker.yml config -q`
       # against a clean checkout (no env file, no exported vars) parses
@@ -81,18 +82,6 @@ services:
       # multi-tenant per plan; "demo" matches docker-compose.demo.yml's
       # default so the same plan files work across topologies.
       WHILLY_PLAN_ID: ${WHILLY_PLAN_ID:-demo}
-      # ─── Tailscale tailnet bootstrap (opt-in, m1-tailscale-worker-bootstrap) ──
-      # Both vars are OPTIONAL — when TAILSCALE_AUTHKEY is unset the worker
-      # behaves exactly like main (direct HTTP to WHILLY_CONTROL_URL, no
-      # tailnet involvement). When set, docker/entrypoint.sh joins a private
-      # Tailscale tailnet at startup using userspace-networking so the worker
-      # can reach a control-plane that lives on the operator's tailnet
-      # (e.g. WHILLY_CONTROL_URL=http://m-mac-pro:8000) WITHOUT exposing
-      # the control-plane publicly. Mint a tagged auth key at
-      # https://login.tailscale.com/admin/settings/keys (recommended:
-      # ephemeral + reusable + tag:whilly-worker). Never commit a real key.
-      TAILSCALE_AUTHKEY: ${TAILSCALE_AUTHKEY:-}
-      TAILSCALE_HOSTNAME: ${TAILSCALE_HOSTNAME:-}
       # ─── Claude / LLM настройки (mirrored from docker-compose.demo.yml) ──
       # Worker calls CLAUDE_BIN to execute tasks. Default keeps the
       # zero-cost fake stub so a plain `up -d` against the control-plane
