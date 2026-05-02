@@ -117,14 +117,6 @@ services:
       # если WHILLY_WORKER_TOKEN не задан явно.
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
       WHILLY_PLAN_ID: ${WHILLY_PLAN_ID:-demo}
-      # ─── Tailscale tailnet bootstrap (opt-in, m1-tailscale-worker-bootstrap) ──
-      # Both vars are OPTIONAL — single-host workshop demo does NOT need a
-      # tailnet. Forwarded here so an operator can opt-in via `.env` (e.g.
-      # to test the bootstrap path locally) without editing this file.
-      # See docs/Distributed-Setup.md "Two-host via Tailscale" for the
-      # recommended cross-host topology. Never commit a real auth key.
-      TAILSCALE_AUTHKEY: ${TAILSCALE_AUTHKEY:-}
-      TAILSCALE_HOSTNAME: ${TAILSCALE_HOSTNAME:-}
       # ─── Claude / LLM настройки ──────────────────────────────────────────
       # Worker зовёт CLAUDE_BIN (любой бинарь, который умеет
       # `--output-format json -p "<prompt>"` и выдаёт JSON envelope с
