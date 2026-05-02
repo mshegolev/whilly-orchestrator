@@ -131,6 +131,11 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          # Pin the build target explicitly so the published image is always the
+          # multi-role `runtime` (control-plane) stage with CMD ["control-plane"].
+          # Defence-in-depth against accidental stage-order regressions in the
+          # Dockerfile (see tests/integration/test_dockerfile_default_target_cmd.py).
+          target: runtime
           platforms: linux/amd64,linux/arm64
           # Push выполняется только если есть хотя бы один target. На
           # forked PR'ах login fail'ится → tags пуст → push false.

@@ -65,7 +65,192 @@ RUN python -m venv /opt/venv \
 COPY whilly ./whilly
 RUN /opt/venv/bin/pip install --no-deps .
 
-# ─── Stage 2: runtime ────────────────────────────────────────────────────────
+# ─── Stage 2: worker-builder (worker-only dep closure) ───────────────────────
+# Worker import-path purity (VAL-M1-COMPOSE-012, AGENTS.md "Worker import-path
+# purity" invariant). The legacy `runtime` stage (last stage in this file) installs
+# `'.[server,worker]'` because it is a multi-role image (control-plane + worker
+# dispatched at runtime via /usr/local/bin/whilly-entrypoint). That image's
+# `pip list` therefore includes fastapi / asyncpg / sqlalchemy / uvicorn /
+# alembic — fine for control-plane, but a violation of the "worker dep closure
+# stays minimal" invariant when the worker role is the only one ever invoked.
+#
+# This stage builds a SEPARATE venv that ONLY contains the worker dep closure:
+# `pip install '.[worker]'` brings in httpx + the base deps (rich / pydantic /
+# typer / psutil / platformdirs / keyring). It does NOT install the `[server]`
+# extra, so fastapi / asyncpg / sse-starlette / jinja2 /
+# prometheus-fastapi-instrumentator never land in the venv. The published
+# whilly source itself contains modules that import those packages (e.g.
+# whilly.adapters.transport.server, whilly.adapters.db.repository) but those
+# modules are simply not exercised by the `whilly-worker` entry point — and
+# `pip list` only cares about installed *distributions*, not unused Python
+# files on disk.
+#
+# The matching regression test is
+# tests/integration/test_worker_image_import_purity.py — it builds this stage
+# (`docker build --target worker -t whilly-worker:test .`) and asserts that
+# `pip list` shows ZERO matches for fastapi / asyncpg / sse-starlette /
+# prometheus-fastapi-instrumentator / jinja2.
+FROM python:${PYTHON_VERSION}-slim-bookworm AS worker-builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /build
+
+# build-essential as a defensive measure for arm64 sdist fallbacks (matches
+# the rationale in stage 1).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md LICENSE ./
+COPY whilly/__init__.py ./whilly/__init__.py
+
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --upgrade pip \
+    && /opt/venv/bin/pip install '.[worker]'
+
+# Full source — install whilly itself without re-resolving deps. Same shape as
+# stage 1's two-step install so the layer cache is invalidated only when the
+# whilly/ tree changes, not when an unrelated file in the repo root does.
+COPY whilly ./whilly
+RUN /opt/venv/bin/pip install --no-deps .
+
+
+# ─── Stage 3: worker (worker-only runtime image) ─────────────────────────────
+# Minimal worker-only runtime image. CMD is `["worker"]` so the same
+# whilly-entrypoint dispatcher selects the worker role. Production multi-role
+# image (`runtime` stage — the LAST stage in this file, kept last so it is
+# the default `docker buildx build .` target) stays the canonical published artefact
+# (`mshegolev/whilly:<version>`); this stage is opt-in for operators who want
+# a slimmer worker image whose `pip list` is provably free of control-plane
+# Python distributions.
+#
+# Backwards compat: the existing single-host demo (`docker-compose.demo.yml`),
+# the published `mshegolev/whilly:4.3.1` image, and the `runtime` stage's
+# `["control-plane"]` CMD are all UNCHANGED. This stage is purely additive.
+# This stage produces the slim worker image. Build it explicitly via
+# `docker buildx build --target worker -t whilly-worker:<tag> .`. The
+# default-target image (last stage in this file) is the `runtime`
+# (control-plane) image — keep `runtime` last so `docker buildx build .`
+# (no --target) produces the canonical control-plane image.
+FROM python:${PYTHON_VERSION}-slim-bookworm AS worker
+
+ARG WHILLY_VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH=/opt/venv/bin:$PATH \
+    WHILLY_LOG_LEVEL=INFO
+
+# tini — correct PID 1.
+# curl — health-poll the control-plane in entrypoint.sh's worker branch.
+# ca-certificates — TLS to the control-plane / Anthropic / etc.
+# git — `whilly worker connect` may inspect git config in some flows.
+# nodejs — Node 22 LTS via NodeSource APT repo, required by `opencode-ai`
+#   (the v4.4 default agent CLI per feature m1-opencode-groq-default).
+#   See the runtime stage (last stage in this file) for the full rationale (gemini-cli ≥20,
+#   Debian bookworm ships node 18 → too old for the modern CLI tooling).
+# unzip — opencode-ai's npm postinstall extracts a bundled bun binary.
+#
+# The `lint-imports` core-purity contract is concerned with *Python*
+# distributions in pip's site-packages — adding system-level node + the
+# opencode CLI binary on PATH does not violate it (the contract still
+# verifies fastapi / asyncpg / etc. are absent from `pip list`). See the
+# matching regression test
+# tests/integration/test_worker_image_import_purity.py.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         tini curl ca-certificates git unzip gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y --auto-remove gnupg \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
+    && groupadd --system --gid 1000 whilly \
+    && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
+
+# Install opencode CLI (and any other configured agent CLIs) globally —
+# `opencode-ai` is the v4.4 default agent CLI in worker containers
+# (m1-opencode-groq-default; canonical npm name verified against
+# https://opencode.ai/docs/install/). `--omit=dev` keeps the install
+# closure minimal; `npm cache clean` + `rm -rf /root/.npm` reclaims the
+# layer's tmp.
+#
+# Configurable via WHILLY_AGENT_CLIS build-arg (added in v4.4.x). Default
+# preserves the worker-stage's existing 1-CLI install (zero functional
+# regression). Constrained build environments can override the install set
+# — same flag as the runtime stage:
+#
+#   # slim build with only opencode (== current default; explicit form):
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_AGENT_CLIS='opencode-ai' \
+#       -t whilly-worker:slim .
+#
+#   # skip npm install entirely (BYO binary via volume-mount):
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_AGENT_CLIS='' \
+#       -t whilly-worker:no-clis .
+#
+#   # add additional CLIs alongside opencode:
+#   docker buildx build --target worker \
+#       --build-arg WHILLY_AGENT_CLIS='opencode-ai @anthropic-ai/claude-code' \
+#       -t whilly-worker:multi .
+ARG WHILLY_AGENT_CLIS="opencode-ai"
+RUN if [ -n "${WHILLY_AGENT_CLIS}" ]; then \
+        npm install -g --omit=dev ${WHILLY_AGENT_CLIS} \
+        && npm cache clean --force \
+        && rm -rf /root/.npm; \
+    else \
+        echo "WHILLY_AGENT_CLIS empty — skipping agent CLI npm install"; \
+    fi
+
+# Build-time sanity check: when opencode-ai is in the install set the binary
+# must be on PATH and `opencode --version` must execute (catches NodeSource /
+# npm regressions at image-build time rather than at first agent invocation
+# in production). Slim / empty WHILLY_AGENT_CLIS builds skip the check
+# cleanly so an operator who deliberately omits opencode is not blocked.
+RUN if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' opencode-ai '; then \
+        command -v opencode \
+        && opencode --version >/dev/null \
+        && echo "opencode CLI ready for worker stage"; \
+    else \
+        echo "opencode-ai not in WHILLY_AGENT_CLIS=${WHILLY_AGENT_CLIS:-<empty>} — skipping opencode sanity check"; \
+    fi
+
+# Copy the worker-only venv built above.
+COPY --from=worker-builder /opt/venv /opt/venv
+
+# Re-use the same entrypoint dispatcher so this image's worker role behaves
+# identically to the runtime image's worker role (connect-flow + legacy paths
+# both supported). No alembic.ini / control_plane.py / cli_adapter.py here —
+# they would be dead weight in a worker-only image.
+COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
+RUN chmod +x /usr/local/bin/whilly-entrypoint \
+    && chown -R whilly:whilly /home/whilly
+
+LABEL org.opencontainers.image.title="whilly-worker" \
+      org.opencontainers.image.description="Whilly v4 — worker-only runtime image (httpx + whilly.core; no fastapi/asyncpg/sse-starlette/jinja2/prometheus)" \
+      org.opencontainers.image.version="${WHILLY_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/mshegolev/whilly-orchestrator" \
+      org.opencontainers.image.documentation="https://github.com/mshegolev/whilly-orchestrator#readme" \
+      org.opencontainers.image.url="https://github.com/mshegolev/whilly-orchestrator" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.authors="Mikhail Shchegolev <mshegolev@gmail.com>" \
+      org.opencontainers.image.vendor="mshegolev"
+
+WORKDIR /home/whilly
+USER whilly
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
+CMD ["worker"]
+
+
+# ─── Stage 4: runtime ────────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
 
 # Build args для OCI labels — заполняются из workflow'а через --build-arg.
@@ -245,182 +430,3 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
 CMD ["control-plane"]
-
-
-# ─── Stage 3: worker-builder (worker-only dep closure) ───────────────────────
-# Worker import-path purity (VAL-M1-COMPOSE-012, AGENTS.md "Worker import-path
-# purity" invariant). The legacy `runtime` stage above installs
-# `'.[server,worker]'` because it is a multi-role image (control-plane + worker
-# dispatched at runtime via /usr/local/bin/whilly-entrypoint). That image's
-# `pip list` therefore includes fastapi / asyncpg / sqlalchemy / uvicorn /
-# alembic — fine for control-plane, but a violation of the "worker dep closure
-# stays minimal" invariant when the worker role is the only one ever invoked.
-#
-# This stage builds a SEPARATE venv that ONLY contains the worker dep closure:
-# `pip install '.[worker]'` brings in httpx + the base deps (rich / pydantic /
-# typer / psutil / platformdirs / keyring). It does NOT install the `[server]`
-# extra, so fastapi / asyncpg / sse-starlette / jinja2 /
-# prometheus-fastapi-instrumentator never land in the venv. The published
-# whilly source itself contains modules that import those packages (e.g.
-# whilly.adapters.transport.server, whilly.adapters.db.repository) but those
-# modules are simply not exercised by the `whilly-worker` entry point — and
-# `pip list` only cares about installed *distributions*, not unused Python
-# files on disk.
-#
-# The matching regression test is
-# tests/integration/test_worker_image_import_purity.py — it builds this stage
-# (`docker build --target worker -t whilly-worker:test .`) and asserts that
-# `pip list` shows ZERO matches for fastapi / asyncpg / sse-starlette /
-# prometheus-fastapi-instrumentator / jinja2.
-FROM python:${PYTHON_VERSION}-slim-bookworm AS worker-builder
-
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONDONTWRITEBYTECODE=1
-
-WORKDIR /build
-
-# build-essential as a defensive measure for arm64 sdist fallbacks (matches
-# the rationale in stage 1).
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY pyproject.toml README.md LICENSE ./
-COPY whilly/__init__.py ./whilly/__init__.py
-
-RUN python -m venv /opt/venv \
-    && /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install '.[worker]'
-
-# Full source — install whilly itself without re-resolving deps. Same shape as
-# stage 1's two-step install so the layer cache is invalidated only when the
-# whilly/ tree changes, not when an unrelated file in the repo root does.
-COPY whilly ./whilly
-RUN /opt/venv/bin/pip install --no-deps .
-
-
-# ─── Stage 4: worker (worker-only runtime image) ─────────────────────────────
-# Minimal worker-only runtime image. CMD is `["worker"]` so the same
-# whilly-entrypoint dispatcher selects the worker role. Production multi-role
-# image (`runtime` stage above) stays the canonical published artefact
-# (`mshegolev/whilly:<version>`); this stage is opt-in for operators who want
-# a slimmer worker image whose `pip list` is provably free of control-plane
-# Python distributions.
-#
-# Backwards compat: the existing single-host demo (`docker-compose.demo.yml`),
-# the published `mshegolev/whilly:4.3.1` image, and the `runtime` stage's
-# `["control-plane"]` CMD are all UNCHANGED. This stage is purely additive.
-FROM python:${PYTHON_VERSION}-slim-bookworm AS worker
-
-ARG WHILLY_VERSION=dev
-ARG VCS_REF=unknown
-ARG BUILD_DATE=unknown
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH=/opt/venv/bin:$PATH \
-    WHILLY_LOG_LEVEL=INFO
-
-# tini — correct PID 1.
-# curl — health-poll the control-plane in entrypoint.sh's worker branch.
-# ca-certificates — TLS to the control-plane / Anthropic / etc.
-# git — `whilly worker connect` may inspect git config in some flows.
-# nodejs — Node 22 LTS via NodeSource APT repo, required by `opencode-ai`
-#   (the v4.4 default agent CLI per feature m1-opencode-groq-default).
-#   See the runtime stage above for the full rationale (gemini-cli ≥20,
-#   Debian bookworm ships node 18 → too old for the modern CLI tooling).
-# unzip — opencode-ai's npm postinstall extracts a bundled bun binary.
-#
-# The `lint-imports` core-purity contract is concerned with *Python*
-# distributions in pip's site-packages — adding system-level node + the
-# opencode CLI binary on PATH does not violate it (the contract still
-# verifies fastapi / asyncpg / etc. are absent from `pip list`). See the
-# matching regression test
-# tests/integration/test_worker_image_import_purity.py.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-         tini curl ca-certificates git unzip gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && apt-get purge -y --auto-remove gnupg \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* \
-    && groupadd --system --gid 1000 whilly \
-    && useradd  --system --uid 1000 --gid whilly --create-home --home /home/whilly whilly
-
-# Install opencode CLI (and any other configured agent CLIs) globally —
-# `opencode-ai` is the v4.4 default agent CLI in worker containers
-# (m1-opencode-groq-default; canonical npm name verified against
-# https://opencode.ai/docs/install/). `--omit=dev` keeps the install
-# closure minimal; `npm cache clean` + `rm -rf /root/.npm` reclaims the
-# layer's tmp.
-#
-# Configurable via WHILLY_AGENT_CLIS build-arg (added in v4.4.x). Default
-# preserves the worker-stage's existing 1-CLI install (zero functional
-# regression). Constrained build environments can override the install set
-# — same flag as the runtime stage:
-#
-#   # slim build with only opencode (== current default; explicit form):
-#   docker buildx build --target worker \
-#       --build-arg WHILLY_AGENT_CLIS='opencode-ai' \
-#       -t whilly-worker:slim .
-#
-#   # skip npm install entirely (BYO binary via volume-mount):
-#   docker buildx build --target worker \
-#       --build-arg WHILLY_AGENT_CLIS='' \
-#       -t whilly-worker:no-clis .
-#
-#   # add additional CLIs alongside opencode:
-#   docker buildx build --target worker \
-#       --build-arg WHILLY_AGENT_CLIS='opencode-ai @anthropic-ai/claude-code' \
-#       -t whilly-worker:multi .
-ARG WHILLY_AGENT_CLIS="opencode-ai"
-RUN if [ -n "${WHILLY_AGENT_CLIS}" ]; then \
-        npm install -g --omit=dev ${WHILLY_AGENT_CLIS} \
-        && npm cache clean --force \
-        && rm -rf /root/.npm; \
-    else \
-        echo "WHILLY_AGENT_CLIS empty — skipping agent CLI npm install"; \
-    fi
-
-# Build-time sanity check: when opencode-ai is in the install set the binary
-# must be on PATH and `opencode --version` must execute (catches NodeSource /
-# npm regressions at image-build time rather than at first agent invocation
-# in production). Slim / empty WHILLY_AGENT_CLIS builds skip the check
-# cleanly so an operator who deliberately omits opencode is not blocked.
-RUN if echo " ${WHILLY_AGENT_CLIS} " | grep -q ' opencode-ai '; then \
-        command -v opencode \
-        && opencode --version >/dev/null \
-        && echo "opencode CLI ready for worker stage"; \
-    else \
-        echo "opencode-ai not in WHILLY_AGENT_CLIS=${WHILLY_AGENT_CLIS:-<empty>} — skipping opencode sanity check"; \
-    fi
-
-# Copy the worker-only venv built above.
-COPY --from=worker-builder /opt/venv /opt/venv
-
-# Re-use the same entrypoint dispatcher so this image's worker role behaves
-# identically to the runtime image's worker role (connect-flow + legacy paths
-# both supported). No alembic.ini / control_plane.py / cli_adapter.py here —
-# they would be dead weight in a worker-only image.
-COPY docker/entrypoint.sh /usr/local/bin/whilly-entrypoint
-RUN chmod +x /usr/local/bin/whilly-entrypoint \
-    && chown -R whilly:whilly /home/whilly
-
-LABEL org.opencontainers.image.title="whilly-worker" \
-      org.opencontainers.image.description="Whilly v4 — worker-only runtime image (httpx + whilly.core; no fastapi/asyncpg/sse-starlette/jinja2/prometheus)" \
-      org.opencontainers.image.version="${WHILLY_VERSION}" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.source="https://github.com/mshegolev/whilly-orchestrator" \
-      org.opencontainers.image.documentation="https://github.com/mshegolev/whilly-orchestrator#readme" \
-      org.opencontainers.image.url="https://github.com/mshegolev/whilly-orchestrator" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.authors="Mikhail Shchegolev <mshegolev@gmail.com>" \
-      org.opencontainers.image.vendor="mshegolev"
-
-WORKDIR /home/whilly
-USER whilly
-
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
-CMD ["worker"]
