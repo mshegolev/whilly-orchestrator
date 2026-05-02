@@ -36,3 +36,25 @@ ignore_imports =
     # whilly.core stays pure — this exception is intentionally narrow.
     whilly.core.triz -> subprocess
     whilly.core.triz -> shutil
+
+[importlinter:contract:worker-entry-purity]
+# Static-graph guard for the v4.4.x worker-entry import closure
+# (fix-m1-whilly-worker-fastapi-leak). The remote worker entry must not
+# transitively import any control-plane-only top-level package: a worker
+# box installs ``whilly-orchestrator[worker]`` (httpx + pydantic + base
+# closure) and any leak surfaces at runtime as ModuleNotFoundError. The
+# runtime gate (tests/integration/test_worker_image_import_purity.py)
+# proves the *image* is clean; this contract proves the *graph* is clean
+# so future regressions are caught at PR-review time.
+name = whilly worker entry closure must not import server-only packages
+type = forbidden
+source_modules =
+    whilly.cli.worker
+    whilly.worker.remote
+    whilly.adapters.transport.client
+forbidden_modules =
+    fastapi
+    asyncpg
+    sqlalchemy
+    alembic
+    uvicorn

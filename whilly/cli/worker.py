@@ -134,10 +134,10 @@ from collections.abc import Sequence
 from typing import Final
 from urllib.parse import urlsplit
 
-from whilly.adapters.runner import run_task
+from whilly.adapters.runner.claude_cli import run_task
 from whilly.adapters.transport.client import RemoteWorkerClient
 from whilly.core.models import Plan, WorkerId
-from whilly.worker import (
+from whilly.worker.remote import (
     DEFAULT_HEARTBEAT_INTERVAL,
     RemoteRunnerCallable,
     RemoteWorkerStats,
