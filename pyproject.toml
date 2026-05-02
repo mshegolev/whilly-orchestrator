@@ -64,6 +64,7 @@ dev = [
     "whilly-orchestrator[worker,server]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.6",
     "testcontainers>=4.0",
     "ruff==0.11.5",
     # mypy 1.11.0 (Aug 2024) is the first release with PEP 695 ``type``-statement
