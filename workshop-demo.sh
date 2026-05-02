@@ -515,6 +515,32 @@ if ! printf '%s\n' "$non_terminal_rows" \
 fi
 ok "все seeded задачи в терминальном статусе"
 
+# ─── 7.6. DONE-count guard for VAL-CROSS-BACKCOMPAT-005 ─────────────────────
+# Round-4 finding: even with the terminal-state guard the demo could exit 0
+# with only 2/5 DONE (when the seeded plan was undersized OR tasks were
+# marked FAILED/SKIPPED). VAL-CROSS-BACKCOMPAT-005 explicitly requires the
+# `--cli stub` demo to drain 5 tasks DONE within 5 minutes. We re-query the
+# tasks table for ALL rows and pipe into the same helper with --min-done 5;
+# the helper prints a `DONE=N PENDING=N ...` summary on stdout (asserted by
+# tests/integration/test_workshop_demo_drains_5_tasks.py) and exits non-zero
+# if DONE < 5 even when every row is terminal.
+step "проверяем что >= 5 задач DONE (VAL-CROSS-BACKCOMPAT-005)"
+all_status_rows="$(
+  compose_psql -c "
+    SELECT id || '|' || status
+      FROM tasks
+     WHERE plan_id='$PLAN_ID'
+     ORDER BY id;
+  " 2>/dev/null || true
+)"
+if ! printf '%s\n' "$all_status_rows" \
+     | bash "$REPO_ROOT/scripts/check_demo_tasks_terminal.sh" \
+            --min-done 5 --plan "$PLAN_ID"; then
+  err "demo aborted: DONE-count below 5 (see breakdown above)"
+  exit 5
+fi
+ok "плановое количество DONE достигнуто (>= 5)"
+
 # ─── 8. Done ─────────────────────────────────────────────────────────────────
 echo
 ok "демо завершено"
