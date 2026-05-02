@@ -148,14 +148,17 @@ services:
       # cli_adapter.py транслирует whilly's argv в native argv каждого CLI
       # и парсит native output. WHILLY_CLI выбирает adapter route.
       #
-      # Since v4.4 (m1-opencode-groq-default): the worker default is
-      # `opencode` + `groq/openai/gpt-oss-120b` (free tier, ~14k req/day).
-      # Operators provide GROQ_API_KEY via the host env or the repo `.env`
-      # file (gitignored — never commit a real key). To opt out of the
-      # groq path, override WHILLY_MODEL=<other-provider>/<model>; the
-      # entrypoint's groq-credentials check then becomes a no-op.
+      # Since v4.4.2 (m1-opencode-big-pickle-default): the worker default
+      # is `opencode` + `opencode/big-pickle` — the free, anonymous
+      # stealth model on OpenCode Zen (no API key required as of
+      # 2026-05-02). Zero-key onboarding: workshop-demo.sh works on a
+      # fresh checkout without any provider credential. To opt into Groq
+      # set WHILLY_MODEL=groq/openai/gpt-oss-120b AND provide GROQ_API_KEY
+      # via the host env / `.env` (gitignored — never commit a real key);
+      # the worker's groq-credentials guard then re-engages. Anthropic /
+      # OpenAI escape hatches work the same way.
       WHILLY_CLI: ${WHILLY_CLI:-opencode}
-      WHILLY_MODEL: ${WHILLY_MODEL:-groq/openai/gpt-oss-120b}
+      WHILLY_MODEL: ${WHILLY_MODEL:-opencode/big-pickle}
       WHILLY_FORCE_COMPLETE: ${WHILLY_FORCE_COMPLETE:-1}
       # Credentials для каждого agentic CLI (читаются нативно):
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
