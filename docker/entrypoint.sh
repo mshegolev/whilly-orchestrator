@@ -164,23 +164,23 @@ case "$ROLE" in
       unset _ts_hostname _ts_deadline _tailscaled_pid
     fi
 
-    # ─── Fail fast: opencode + groq path requires GROQ_API_KEY (v4.4) ────
-    # Default since feature m1-opencode-groq-default: WHILLY_CLI=opencode +
-    # WHILLY_MODEL=groq/openai/gpt-oss-120b (free-tier on Groq). Without
-    # GROQ_API_KEY set, the agent's first task hits a provider 401 — far
-    # worse for the operator than a single-line diagnostic up-front.
+    # ─── Fail fast: explicit groq path requires GROQ_API_KEY (v4.4.2) ────
+    # Default since feature m1-opencode-big-pickle-default: WHILLY_CLI=opencode
+    # + WHILLY_MODEL=opencode/big-pickle (zero-key, anonymous, free on
+    # OpenCode Zen). Empty / unset WHILLY_MODEL is the zero-key path and
+    # MUST NOT trigger this guard. Only when the operator explicitly opts
+    # into Groq via WHILLY_MODEL=groq/... does a missing GROQ_API_KEY
+    # become a fail-fast condition.
     # Mirrors whilly.cli.worker.check_opencode_groq_credentials.
     if [[ "$(printf '%s' "${WHILLY_CLI:-}" | tr '[:upper:]' '[:lower:]')" == "opencode" ]]; then
       _whilly_model_norm="${WHILLY_MODEL:-}"
       _is_groq=0
-      if [[ -z "${_whilly_model_norm}" ]]; then
-        # Empty model → opencode default = groq/openai/gpt-oss-120b
-        _is_groq=1
-      elif [[ "${_whilly_model_norm}" == groq/* || "${_whilly_model_norm}" == GROQ/* ]]; then
+      if [[ -n "${_whilly_model_norm}" ]] \
+         && [[ "${_whilly_model_norm}" == groq/* || "${_whilly_model_norm}" == GROQ/* ]]; then
         _is_groq=1
       fi
       if [[ "${_is_groq}" == "1" && -z "${GROQ_API_KEY:-}" ]]; then
-        printf 'whilly worker: GROQ_API_KEY is required when WHILLY_CLI=opencode (or set WHILLY_MODEL to a non-groq provider). See https://console.groq.com to obtain a free key.\n' >&2
+        printf 'whilly worker: GROQ_API_KEY is required when WHILLY_MODEL=groq/... (or unset WHILLY_MODEL to use the zero-key opencode/big-pickle default). See https://console.groq.com to obtain a free key.\n' >&2
         exit 2
       fi
       unset _whilly_model_norm _is_groq
