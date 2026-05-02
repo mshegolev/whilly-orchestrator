@@ -31,6 +31,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this NEXT entry — the shim implementation has been in place since
   v4.4.0 and the reframe is contract-document only.
 
+## [4.4.1] - 2026-05-02
+
+> **Patch release — fixes two regressions in v4.4.0's published
+> artefacts.** No new features. Strictly additive: every v4.4.0 user
+> should upgrade. v4.4.0 is officially deprecated; see the GitHub
+> Release banner.
+
+### ⚠️ v4.4.0 deprecation notice
+
+`mshegolev/whilly:4.4.0` (Docker Hub) and `whilly-worker==4.4.0`
+(PyPI) shipped with two confirmed regressions:
+
+1. **`mshegolev/whilly:4.4.0` had `Config.Cmd=["worker"]` instead of
+   `["control-plane"]`.** Commit `7ae66b7` appended the `worker-builder`
+   + `worker` stages AFTER the `runtime` stage in `Dockerfile`; since
+   `.github/workflows/docker-publish.yml` invokes
+   `docker/build-push-action@v6` without a `target:` key, the default
+   build target silently switched to `worker`. Operators running
+   `docker run mshegolev/whilly:4.4.0` (no explicit command) got a
+   worker process instead of the control-plane.
+2. **`whilly-worker==4.4.0` crashed on `--help`.** Top-level imports in
+   `whilly/cli/worker.py` eagerly pulled in `fastapi` / `asyncpg` /
+   `sse-starlette` / `prometheus_fastapi_instrumentator`. Operators who
+   followed the documented `pip install whilly-worker` install path
+   (which only installs the `[worker]` dep closure: `httpx` + base)
+   could not even run `whilly-worker --help` — argparse never got a
+   chance because the import chain raised `ModuleNotFoundError:
+   fastapi` at startup.
+
+`mshegolev/whilly:4.4.0` and `whilly-worker==4.4.0` remain reachable on
+their respective registries (Docker Hub digest discipline + PyPI's
+no-overwrite policy) for users who pin by digest, but **users on tag
+`:4.4.0` or `==4.4.0` should upgrade to v4.4.1 immediately.**
+
+### Fixed
+
+- **Dockerfile stage order.** Reordered so `runtime` is the LAST
+  `FROM ... AS ...` stanza (`builder → worker-builder → worker →
+  runtime`). `docker buildx build .` (no `--target`) now correctly
+  produces the multi-role image with `CMD=["control-plane"]`. Defence
+  in depth: `.github/workflows/docker-publish.yml` was also updated to
+  pin `target: runtime` so the published image is correct even if a
+  future commit accidentally appends another stage. New regression
+  test `tests/integration/test_dockerfile_default_target_cmd.py`
+  parses the Dockerfile and asserts the last stage is `runtime`. Fix
+  committed in `4d143a2` (`fix(m1): reorder Dockerfile so runtime is
+  the last stage`).
+- **`whilly-worker --help` no longer ImportErrors on a `[worker]`-only
+  install.** Deferred all `fastapi` / `asyncpg` /
+  `prometheus_fastapi_instrumentator` / `sse-starlette` imports to
+  inside the lifespan-bound code paths in
+  `whilly/cli/worker.py::main`. The worker entry's import closure now
+  matches the `lint-imports --config .importlinter` contract: only
+  `httpx` / `pydantic` / `whilly.core` /
+  `whilly.adapters.transport.client` are touched. New regression test
+  `tests/unit/test_whilly_worker_help_runs_with_worker_extra_only.py`
+  reproduces the v4.4.0 failure mode and asserts `--help` exits 0 in
+  a venv that only has `whilly-orchestrator[worker]` installed. Fix
+  committed in `e4bc4eb` (`fix(m1): defer fastapi/asyncpg imports in
+  worker entry closure`).
+
+### Verification
+
+- `docker buildx imagetools inspect mshegolev/whilly:4.4.1` → both
+  `linux/amd64` and `linux/arm64` manifests; `Config.Cmd` =
+  `["control-plane"]` on both arches.
+- `mshegolev/whilly:latest` moved to point at v4.4.1 (Docker Hub tag
+  rewrite; v4.4.1 digest stable for users pinning by digest).
+- `python3.12 -m pip download whilly-orchestrator==4.4.1 --no-deps` and
+  `python3.12 -m pip download whilly-worker==4.4.1 --no-deps` both
+  succeed against `files.pythonhosted.org`.
+- In a fresh `python3.12 -m venv` with only
+  `pip install whilly-worker==4.4.1`, `whilly-worker --help` exits 0
+  (no `ModuleNotFoundError: fastapi`).
+
 ## [4.4.0] - 2026-05-01
 
 > **M1 of Whilly Distributed v5.0 — split-host deployments.** Adds two new

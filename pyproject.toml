@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whilly-orchestrator"
-version = "4.4.0"
+version = "4.4.1"
 description = "Whilly v4.0 — distributed orchestrator with Postgres-backed task queue, FastAPI control plane, and remote workers"
 readme = "README.md"
 requires-python = ">=3.12"
