@@ -71,6 +71,8 @@ Commands:
   init        Interactive PRD wizard → plan import.
   worker      Run a remote worker against a control-plane URL.
               `whilly worker register` mints a per-worker bearer token.
+  admin       Operator CLI (`admin bootstrap mint|revoke|list`,
+              `admin worker revoke`).
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
 
 Run `whilly <command> --help` for command-specific options.
@@ -332,6 +334,13 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.init import run_init_command
 
         return run_init_command(rest)
+    if cmd == "admin":
+        # Lazy import: the admin subcommand pulls asyncpg via
+        # :mod:`whilly.adapters.db`, which we want to avoid for the
+        # ``whilly --help`` fast path.
+        from whilly.cli.admin import run_admin_command
+
+        return run_admin_command(rest)
     if cmd == "forge":
         # Lazy import keeps ``whilly --help`` fast — the forge package
         # transitively imports asyncpg + the PRD generator stack.
