@@ -985,6 +985,83 @@ ORDER BY created_at DESC, token_hash
 _OWNER_EMAIL_RE: re.Pattern[str] = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+# Admin worker revocation (M2 mission, VAL-M2-ADMIN-CLI-011/012). One-shot
+# CTE that:
+#   1. Flips ``workers.token_hash`` to NULL (so subsequent bearer auth
+#      lookups against that hash miss → 401), AND marks the row offline
+#      so the dashboard / online-count query reflects reality. Filtered
+#      by ``worker_id`` so the UPDATE matches at most one row.
+#   2. Releases every CLAIMED / IN_PROGRESS task previously owned by
+#      that worker back to PENDING — clearing ``claimed_by`` /
+#      ``claimed_at``, incrementing ``version``.
+#   3. Writes one RELEASE audit event per released task carrying
+#      ``payload = {"reason": "admin_revoked", "version": <new>,
+#      "worker_id": <wid>, "task_id": <id>, "plan_id": <pid>}`` —
+#      same enriched shape pinned by VAL-CROSS-BACKCOMPAT-912 for
+#      every other RELEASE producer.
+#
+# Returned rows are the per-task release records so the JSONL audit
+# sink can mirror them after the transaction commits (matches the
+# pattern used by ``release_stale_tasks`` /
+# ``release_offline_workers``). The presence/absence of any returned
+# row also tells the caller whether the worker existed AND was
+# revoked: a missing ``worker_id`` matches zero rows in the
+# ``revoked_worker`` CTE, which short-circuits the rest of the
+# pipeline so no spurious RELEASE rows can land.
+_REVOKE_WORKER_BEARER_SQL: str = """
+WITH revoked_worker AS (
+    UPDATE workers
+    SET token_hash = NULL,
+        status = 'offline'
+    WHERE worker_id = $1
+    RETURNING worker_id
+),
+released AS (
+    UPDATE tasks
+    SET status = 'PENDING',
+        claimed_by = NULL,
+        claimed_at = NULL,
+        version = tasks.version + 1,
+        updated_at = NOW()
+    FROM revoked_worker
+    WHERE tasks.claimed_by = revoked_worker.worker_id
+      AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
+    RETURNING tasks.id, tasks.version, tasks.plan_id, revoked_worker.worker_id
+),
+inserted AS (
+    INSERT INTO events (task_id, plan_id, event_type, payload)
+    SELECT
+        id,
+        plan_id,
+        $2,
+        jsonb_build_object(
+            'reason', $3::text,
+            'version', version,
+            'worker_id', worker_id,
+            'task_id', id,
+            'plan_id', plan_id
+        )
+    FROM released
+    RETURNING task_id
+)
+SELECT
+    released.id AS task_id,
+    released.plan_id,
+    released.version,
+    released.worker_id
+FROM released
+"""
+
+
+# Probe used to differentiate "worker did not exist" from "worker existed
+# but had no in-flight tasks" after :data:`_REVOKE_WORKER_BEARER_SQL`
+# runs. Returns one row when the worker_id is in the ``workers`` table,
+# zero otherwise.
+_PROBE_WORKER_EXISTS_SQL: str = """
+SELECT 1 FROM workers WHERE worker_id = $1 LIMIT 1
+"""
+
+
 def hash_bootstrap_token(plaintext: str) -> str:
     """Return the canonical SHA-256 hex digest of a bootstrap-token plaintext.
 
@@ -2573,6 +2650,83 @@ class TaskRepository:
             )
             for row in rows
         ]
+
+    async def revoke_worker_bearer(self, worker_id: WorkerId) -> tuple[bool, int]:
+        """Revoke a worker's bearer token and release any in-flight tasks.
+
+        Implements the data-side half of ``whilly admin worker revoke``
+        (M2 mission, VAL-M2-ADMIN-CLI-011/012). Atomically:
+
+        1. Sets ``workers.token_hash = NULL`` for the matching row so
+           subsequent steady-state RPCs that present the revoked
+           plaintext bearer fail at the per-worker bearer auth dep
+           (``token_hash IS NULL`` cannot match any presented hash —
+           NULL ≠ anything under SQL three-valued logic). Also flips
+           the worker's ``status`` to ``offline`` so dashboards and
+           the online-count metric reflect the revocation immediately.
+        2. Releases every CLAIMED / IN_PROGRESS task previously owned
+           by that worker back to ``PENDING`` — clearing
+           ``claimed_by`` / ``claimed_at`` and incrementing
+           ``version`` so a peer worker can re-claim cleanly.
+        3. Writes one ``RELEASE`` event per released task carrying
+           ``payload = {"reason": "admin_revoked", "version": <new>,
+           "worker_id": <wid>, "task_id": <id>, "plan_id": <pid>}``
+           — matches the v4.4.0 enriched payload shape pinned by
+           VAL-CROSS-BACKCOMPAT-912.
+
+        All three writes happen inside a single transaction so a
+        crash between steps cannot leave the worker un-revoked but
+        tasks released, or vice versa.
+
+        Returns
+        -------
+        tuple[bool, int]
+            ``(found, released_count)``: ``found`` is ``True`` when
+            ``worker_id`` matched a row in ``workers``; ``False``
+            when the worker is unknown to the control plane.
+            ``released_count`` is the number of in-flight tasks
+            released (0 when the worker had no claims, or when
+            ``found`` is ``False``). Letting the caller distinguish
+            the two cases lets the admin CLI exit non-zero with a
+            clear "worker not found" message (VAL-M2-ADMIN-CLI-013)
+            without an extra round-trip.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    _REVOKE_WORKER_BEARER_SQL,
+                    worker_id,
+                    Transition.RELEASE.value,
+                    "admin_revoked",
+                )
+                if rows:
+                    found = True
+                else:
+                    probe = await conn.fetchval(_PROBE_WORKER_EXISTS_SQL, worker_id)
+                    found = probe is not None
+        released = len(rows)
+        if found:
+            logger.info(
+                "revoke_worker_bearer: worker=%s revoked, released %d task(s)",
+                worker_id,
+                released,
+            )
+        else:
+            logger.info("revoke_worker_bearer: worker=%s not found", worker_id)
+        for row in rows:
+            self._emit_jsonl(
+                Transition.RELEASE.value,
+                task_id=row["task_id"],
+                plan_id=row["plan_id"],
+                payload={
+                    "worker_id": row["worker_id"],
+                    "task_id": row["task_id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "reason": "admin_revoked",
+                },
+            )
+        return (found, released)
 
     async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
         """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).
