@@ -402,3 +402,45 @@ async def test_lookup_record_dataclass_is_immutable() -> None:
     )
     with pytest.raises(Exception):
         record.owner_email = "bob@example.com"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# VAL-M2-ADMIN-AUTH-013 — token-collision-by-truncation impossible
+# ---------------------------------------------------------------------------
+
+
+def _mint_pair_with_shared_hash_prefix(prefix_len: int = 8, max_attempts: int = 200_000) -> tuple[str, str]:
+    """Rejection-sample two distinct plaintexts whose SHA-256 hex digests
+    share the first ``prefix_len`` hex characters. Returns ``(t1, t2)``.
+
+    With prefix_len=8 (32 bits) the expected number of samples is ~2**16
+    = 65 536 — well within the 200 k budget for a deterministic local
+    fixture.
+    """
+    import secrets as _secrets
+
+    seen: dict[str, str] = {}
+    for _ in range(max_attempts):
+        plaintext = _secrets.token_hex(16)
+        digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+        prefix = digest[:prefix_len]
+        existing = seen.get(prefix)
+        if existing is not None and existing != plaintext:
+            return existing, plaintext
+        seen[prefix] = plaintext
+    raise RuntimeError(
+        f"could not find two plaintexts whose SHA-256 share the first {prefix_len} hex chars "
+        f"in {max_attempts} attempts (extremely unlikely; check the RNG)"
+    )
+
+
+def test_token_collision_by_truncation_impossible() -> None:
+    """VAL-M2-ADMIN-AUTH-013 — two distinct plaintexts whose digests share
+    a leading 8-hex prefix still produce DISTINCT full SHA-256 digests.
+    """
+    t1, t2 = _mint_pair_with_shared_hash_prefix(prefix_len=8)
+    assert t1 != t2
+    h1 = hash_bootstrap_token(t1)
+    h2 = hash_bootstrap_token(t2)
+    assert h1[:8] == h2[:8], "rejection sampler did not produce a shared 8-hex prefix"
+    assert h1 != h2, "full SHA-256 digests must differ even when the leading 8 hex chars match"

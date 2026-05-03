@@ -91,6 +91,7 @@ __all__ = [
     "TASK_SKIPPED_EVENT_TYPE",
     "TaskRepository",
     "VersionConflictError",
+    "WORKER_REGISTERED_EVENT_TYPE",
     "hash_bootstrap_token",
 ]
 
@@ -174,6 +175,16 @@ TASK_CREATED_EVENT_TYPE: str = "task.created"
 # exactly once per ``whilly plan apply`` invocation after the strict
 # gate iteration completes.
 PLAN_APPLIED_EVENT_TYPE: str = "plan.applied"
+
+# Canonical event_type literal for "worker registered" audit events
+# (M2 fix-feature VAL-M2-ADMIN-AUTH-903). Emitted exactly once per
+# successful ``POST /workers/register`` carrying the originating
+# bootstrap-token hash so an operator can answer "which bootstrap
+# minted this worker?" via SQL on ``events.payload->>'bootstrap_token_hash'``
+# without bisecting logs. Plaintext NEVER reaches the payload —
+# only the SHA-256 hex digest produced by
+# :func:`whilly.adapters.transport.auth.hash_bearer_token`.
+WORKER_REGISTERED_EVENT_TYPE: str = "worker.registered"
 
 
 # Quantum used to coerce a Python float-ish ``cost_usd`` into a stable
@@ -2346,6 +2357,8 @@ class TaskRepository:
         hostname: str,
         token_hash: str,
         owner_email: str | None = None,
+        *,
+        bootstrap_token_hash: str | None = None,
     ) -> None:
         """Insert a new row in ``workers`` for a freshly-registered worker (PRD FR-1.1).
 
@@ -2379,12 +2392,33 @@ class TaskRepository:
             layer that doesn't need it.
         """
         async with self._pool.acquire() as conn:
-            await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash, owner_email)
+            async with conn.transaction():
+                await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash, owner_email)
+                event_payload: dict[str, Any] = {
+                    "worker_id": worker_id,
+                    "hostname": hostname,
+                }
+                if owner_email is not None:
+                    event_payload["owner_email"] = owner_email
+                if bootstrap_token_hash is not None:
+                    event_payload["bootstrap_token_hash"] = bootstrap_token_hash
+                await conn.execute(
+                    _INSERT_EVENT_SQL,
+                    None,
+                    WORKER_REGISTERED_EVENT_TYPE,
+                    json.dumps(event_payload),
+                )
         logger.info(
             "register_worker: registered worker %s on %s (owner_email=%s)",
             worker_id,
             hostname,
             owner_email if owner_email is not None else "<none>",
+        )
+        self._emit_jsonl(
+            WORKER_REGISTERED_EVENT_TYPE,
+            task_id=None,
+            plan_id=None,
+            payload=event_payload,
         )
 
     async def get_worker_id_by_token_hash(self, token_hash: str) -> WorkerId | None:
