@@ -421,6 +421,10 @@ at mode `0600` instead.
 > HTTPS is the recommended production path; once **M2** lands the
 > localhost.run `funnel` sidecar, drop `--insecure` and point the
 > worker at the rotating `https://<random>.lhr.life` URL instead.
+> See
+> [`--insecure` semantics: trust-store vs hostname verification](#--insecure-semantics-trust-store-vs-hostname-verification)
+> below for the precise scope of what `--insecure` does and does
+> **not** disable on HTTPS targets.
 
 If the OS keychain is unavailable and the fallback file write also
 fails, the bearer is still printed to stdout — capture it manually and
@@ -458,6 +462,19 @@ WHILLY_PLAN_ID=demo
 > `on` (case-insensitive) as truthy. Empty / unset / `0` / `false` /
 > `no` / `off` are falsy and keep the legacy path. Mirrors what the
 > rest of the entrypoint already does for `WHILLY_INSECURE`.
+
+### `--insecure` semantics: trust-store vs hostname verification
+
+`--insecure` disables **only** trust-store / CA-chain validation on
+the worker's HTTPS client: an issuer the OS does not trust (e.g. a
+self-signed cert minted by the operator on a known host) stops being
+a fatal error. It does **not** weaken hostname verification — `httpx`
+continues to enforce SNI and SAN matching against the configured
+host, so a cert issued for `evil.com` served at `<our-host>` is
+rejected with a TLS hostname-mismatch error even when `--insecure`
+is set. The flag exists so operators can run with self-signed certs
+on a known host (cert SAN matches the URL host); it does **not**
+permit accepting any random cert at any host.
 
 ---
 
