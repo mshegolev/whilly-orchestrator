@@ -97,6 +97,11 @@ Every migration is round-trippable via `alembic upgrade head → downgrade base
 ## Quick start
 
 ```bash
+# 0. Set placeholders so the block below is copy-paste-runnable as-is.
+export PLAN_FILE=examples/demo/tasks.json
+export WHILLY_CONTROL_URL=https://control.example.com:8000
+export PLAN_ID=demo                   # placeholder convention — your plan id
+
 # 1. Postgres on the control-plane box (or any reachable host)
 docker compose up -d                  # boots postgres:15-alpine via docker-compose.yml
 export WHILLY_DATABASE_URL=postgresql://whilly:whilly@localhost:5432/whilly
@@ -111,9 +116,8 @@ whilly init "build a CLI tool for monitoring API endpoints" --slug api-monitor
 
 # 3b. Already have tasks.json? Import directly. Add --strict to skip
 #     decision-gate REJECTs as they're imported.
-export PLAN_ID=demo                   # placeholder convention — your plan id
-whilly plan import path/to/tasks.json
-whilly plan apply path/to/tasks.json --strict
+whilly plan import "$PLAN_FILE"
+whilly plan apply "$PLAN_FILE" --strict
 whilly plan show "$PLAN_ID"           # ASCII DAG of the imported plan
 
 # 3c. Cap spend up-front (per-plan budget guard).
@@ -126,23 +130,27 @@ whilly forge intake mshegolev/whilly-orchestrator/123
 whilly run --plan "$PLAN_ID"
 
 # 4b. Distributed mode — control plane + remote worker on different hosts.
-#     a) on the control-plane box:
+#     a) on the control-plane box, mint the cluster bootstrap secret:
 export WHILLY_WORKER_BOOTSTRAP_TOKEN=$(openssl rand -hex 32)
-uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
 
 #     b) on the worker box (only needs httpx — pull the slim install):
 pip install whilly-orchestrator[worker]
 WORKER_TOKEN=$(whilly worker register \
-    --connect https://control.example.com:8000 \
+    --connect "$WHILLY_CONTROL_URL" \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
     --plan "$PLAN_ID")
 whilly-worker \
-    --connect https://control.example.com:8000 \
+    --connect "$WHILLY_CONTROL_URL" \
     --token "$WORKER_TOKEN" \
     --plan "$PLAN_ID"
 
 # 5. Watch progress live
 whilly dashboard --plan "$PLAN_ID"    # Rich Live TUI over the tasks table
+```
+
+```bash
+# Run in a second terminal — long-running:
+uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
 ```
 
 A complete reproducible single-host demo (Postgres + control plane + remote
@@ -155,11 +163,15 @@ two new compose files (additive; the single-host
 [`docker-compose.demo.yml`](docker-compose.demo.yml) is unchanged):
 
 ```bash
+# Set the public IP of the control-plane VPS so the example below is
+# copy-paste-runnable as-is.
+export VPS_IP=203.0.113.99
+
 # VPS (control-plane only)
 docker-compose -f docker-compose.control-plane.yml up -d
 
 # Laptop (one-line bootstrap; stores per-worker bearer in OS keychain)
-whilly worker connect http://<vps-ip>:8000 \
+whilly worker connect http://$VPS_IP:8000 \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
     --plan demo \
     --insecure   # dev-only: opts out of the loopback-only HTTP guard
