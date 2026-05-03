@@ -124,24 +124,35 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import os
 import socket
 import sys
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Final
 from urllib.parse import urlsplit
 
 from whilly.adapters.runner.claude_cli import run_task
 from whilly.adapters.transport.client import RemoteWorkerClient
 from whilly.core.models import Plan, WorkerId
+from whilly.worker.funnel import (
+    FUNNEL_URL_FILE_ENV,
+    FUNNEL_URL_POLL_SECONDS_ENV,
+    FUNNEL_URL_SOURCE_ENV,
+    FunnelUrlSourceError,
+    StaticUrlSource,
+    make_funnel_url_source,
+)
 from whilly.worker.remote import (
     DEFAULT_HEARTBEAT_INTERVAL,
     RemoteRunnerCallable,
     RemoteWorkerStats,
+    RotationStats,
     run_remote_worker_with_heartbeat,
+    run_remote_worker_with_url_rotation,
 )
 
 __all__ = [
@@ -426,6 +437,43 @@ def build_worker_parser() -> argparse.ArgumentParser:
             "warning to stderr when set."
         ),
     )
+    parser.add_argument(
+        "--funnel-source",
+        dest="funnel_source",
+        default=None,
+        choices=("static", "postgres", "file"),
+        help=(
+            "M2 funnel-URL discovery mode (env: "
+            f"{FUNNEL_URL_SOURCE_ENV}). 'static' (default — back-compat) "
+            "uses --connect verbatim with no polling. 'postgres' polls the "
+            "funnel_url table via WHILLY_DATABASE_URL. 'file' polls the "
+            "shared-volume file at WHILLY_FUNNEL_URL_FILE (default "
+            "/funnel/url.txt). On URL rotation the worker releases any "
+            "in-flight task and reconnects against the new URL while "
+            "preserving its existing worker_id and bearer."
+        ),
+    )
+    parser.add_argument(
+        "--funnel-file",
+        dest="funnel_file",
+        default=None,
+        help=(
+            f"Shared-volume file the funnel sidecar publishes to (env: "
+            f"{FUNNEL_URL_FILE_ENV}). Used when --funnel-source=file. "
+            "Defaults to /funnel/url.txt."
+        ),
+    )
+    parser.add_argument(
+        "--funnel-poll-seconds",
+        dest="funnel_poll_seconds",
+        type=float,
+        default=None,
+        help=(
+            f"Poll cadence (seconds) for the chosen funnel source (env: "
+            f"{FUNNEL_URL_POLL_SECONDS_ENV}). Defaults: 30 for postgres, "
+            "5 for file."
+        ),
+    )
     return parser
 
 
@@ -542,19 +590,32 @@ def run_worker_command(
     # can be set, the first to fire wins (the loop honours either).
     max_processed = 1 if args.once else None
 
-    stats = asyncio.run(
-        _async_worker(
-            connect_url=connect_url,
-            token=token,
-            plan_id=plan_id,
-            worker_id=worker_id,
-            runner=effective_runner,
-            heartbeat_interval=heartbeat_interval,
-            max_iterations=args.max_iterations,
-            max_processed=max_processed,
-            install_signal_handlers=install_signal_handlers,
+    funnel_env_overrides: dict[str, str] = {}
+    if args.funnel_source is not None:
+        funnel_env_overrides[FUNNEL_URL_SOURCE_ENV] = args.funnel_source
+    if args.funnel_file is not None:
+        funnel_env_overrides[FUNNEL_URL_FILE_ENV] = args.funnel_file
+    if args.funnel_poll_seconds is not None:
+        funnel_env_overrides[FUNNEL_URL_POLL_SECONDS_ENV] = str(args.funnel_poll_seconds)
+
+    try:
+        stats = asyncio.run(
+            _async_worker(
+                connect_url=connect_url,
+                token=token,
+                plan_id=plan_id,
+                worker_id=worker_id,
+                runner=effective_runner,
+                heartbeat_interval=heartbeat_interval,
+                max_iterations=args.max_iterations,
+                max_processed=max_processed,
+                install_signal_handlers=install_signal_handlers,
+                funnel_env=funnel_env_overrides,
+            )
         )
-    )
+    except FunnelUrlSourceError as exc:
+        print(f"whilly-worker: {exc}", file=sys.stderr)
+        return EXIT_ENVIRONMENT_ERROR
 
     print(
         (
@@ -604,43 +665,97 @@ async def _async_worker(
     max_iterations: int | None,
     max_processed: int | None,
     install_signal_handlers: bool,
+    funnel_env: dict[str, str] | None = None,
 ) -> RemoteWorkerStats:
     """Open the HTTP client, build a synthetic Plan, run the loop.
 
-    The ``async with`` over :class:`RemoteWorkerClient` is the only
-    side-effect surface — the loop owns connection lifecycle, signal
-    handler installation, and TaskGroup unwinding. We don't catch
-    anything: an :class:`AuthError` (bad token), a :class:`ServerError`
-    (control plane down), or any other transport failure surfaces as a
-    traceback so the supervisor (Kubernetes, systemd, tmux) knows the
-    pod failed and restart policies kick in. Mapping these onto exit
-    codes here would conflate "the env was wrong" (already returned 2
-    from the sync wrapper) with "the cluster is broken", and operator
-    triage would lose the typed exception information.
+    When ``WHILLY_FUNNEL_URL_SOURCE`` (or its ``--funnel-source``
+    override) selects a non-static discovery mode, the loop runs
+    inside :func:`run_remote_worker_with_url_rotation` so a rotating
+    ``lhr.life`` URL is absorbed transparently — the worker releases
+    any in-flight task, closes the previous client, opens a new one
+    against the new URL, and resumes. The same ``worker_id`` and
+    bearer are reused across rotations, so the control plane sees a
+    single identity reconnecting (no duplicate-worker error).
+
+    Static mode behaves byte-equivalently to the v4.4 baseline: one
+    :class:`RemoteWorkerClient` for the lifetime of the loop, no
+    polling, no rotation supervisor.
 
     The synthetic ``Plan(id=plan_id, name=plan_id)`` is documented in the
     module docstring — the worker doesn't need the full task list and the
     server has no ``GET /plans/{id}`` today.
     """
     plan = Plan(id=plan_id, name=plan_id)
-    async with RemoteWorkerClient(connect_url, token) as client:
-        logger.info(
-            "whilly-worker: connecting to %s as worker_id=%s plan_id=%s once=%s",
-            connect_url,
-            worker_id,
-            plan_id,
-            max_processed == 1,
-        )
-        return await run_remote_worker_with_heartbeat(
-            client,
+
+    merged_env: dict[str, str] = dict(os.environ)
+    if funnel_env:
+        merged_env.update(funnel_env)
+    source = make_funnel_url_source(control_url=connect_url, env=merged_env)
+
+    if isinstance(source, StaticUrlSource):
+        # Back-compat path: byte-equivalent to v4.4.
+        try:
+            async with RemoteWorkerClient(connect_url, token) as client:
+                logger.info(
+                    "whilly-worker: connecting to %s as worker_id=%s plan_id=%s once=%s",
+                    connect_url,
+                    worker_id,
+                    plan_id,
+                    max_processed == 1,
+                )
+                return await run_remote_worker_with_heartbeat(
+                    client,
+                    runner,
+                    plan,
+                    worker_id,
+                    heartbeat_interval=heartbeat_interval,
+                    max_iterations=max_iterations,
+                    max_processed=max_processed,
+                    install_signal_handlers=install_signal_handlers,
+                )
+        finally:
+            await source.aclose()
+
+    logger.info(
+        "whilly-worker: URL-rotation mode (source=%s, poll=%ss); seed url=%s worker_id=%s plan_id=%s",
+        merged_env.get(FUNNEL_URL_SOURCE_ENV, "static"),
+        source.poll_interval,
+        connect_url,
+        worker_id,
+        plan_id,
+    )
+
+    initial = await source.fetch()
+    initial_url = initial or connect_url
+
+    @contextlib.asynccontextmanager
+    async def _client_factory(url: str) -> AsyncIterator[RemoteWorkerClient]:
+        async with RemoteWorkerClient(url, token) as client:
+            yield client
+
+    try:
+        rotation_stats: RotationStats = await run_remote_worker_with_url_rotation(
+            _client_factory,
             runner,
             plan,
             worker_id,
+            initial_url,
+            source,
             heartbeat_interval=heartbeat_interval,
             max_iterations=max_iterations,
             max_processed=max_processed,
             install_signal_handlers=install_signal_handlers,
         )
+    finally:
+        await source.aclose()
+
+    logger.info(
+        "whilly-worker: rotation supervisor finished — sessions=%d rotations=%d",
+        rotation_stats.inner_runs,
+        rotation_stats.url_rotations,
+    )
+    return rotation_stats.stats
 
 
 def build_register_parser() -> argparse.ArgumentParser:
