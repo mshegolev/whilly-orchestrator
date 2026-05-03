@@ -31,6 +31,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this NEXT entry — the shim implementation has been in place since
   v4.4.0 and the reframe is contract-document only.
 
+## [4.4.2] - 2026-05-03
+
+> **Patch release — fixes two M1-round-6 regressions in v4.4.1's
+> published artefacts.** No new features. Strictly additive: every
+> v4.4.1 user should upgrade. v4.4.1 is officially deprecated; see the
+> GitHub Release banner.
+
+### ⚠️ v4.4.1 deprecation notice
+
+`mshegolev/whilly:4.4.1` (Docker Hub) shipped with two confirmed
+regressions surfaced by M1 user-testing-validator round 6:
+
+1. **`mshegolev/whilly:4.4.1` runtime image excluded `examples/demo/`,
+   so `WHILLY_IMAGE_TAG=4.4.1 bash workshop-demo.sh --cli stub` failed
+   at the plan-import step.** The runtime stage of the multi-stage
+   `Dockerfile` deliberately did not `COPY examples/`; `workshop-demo.sh`
+   shells out `whilly plan import "$PLAN_FILE"` where `PLAN_FILE` is
+   `/opt/whilly/examples/demo/parallel.json`, so the demo could not
+   drain its 5 tasks against `mshegolev/whilly:4.4.1`. Blocked
+   `VAL-M1-COMPOSE-011` end-to-end.
+2. **`docker/entrypoint.sh` legacy register-and-exec path ignored
+   `WHILLY_INSECURE=1`.** The non-`WHILLY_USE_CONNECT_FLOW` branch
+   `exec`'d `whilly-worker` without `--insecure`, so plain-HTTP control
+   planes (the M1 cross-host smoke flow before the M2 funnel sidecar
+   ships) were rejected by the worker scheme guard regardless of the
+   env var. Blocked `VAL-M1-ENTRYPOINT-001`.
+
+`mshegolev/whilly:4.4.1` and `whilly-worker==4.4.1` remain reachable on
+their respective registries (Docker Hub digest discipline + PyPI's
+no-overwrite policy) for users who pin by digest, but **users on tag
+`:4.4.1` or `==4.4.1` should upgrade to v4.4.2 immediately.**
+
+### Fixed
+
+- **Runtime image now ships `examples/demo/`.** Added
+  `COPY examples /opt/whilly/examples/` to the runtime stage of
+  `Dockerfile` (~10 KB total — negligible). Updated the leading
+  comment to reflect the new contract. New regression test
+  `tests/integration/test_runtime_image_ships_examples_demo.py` is the
+  install-time gate (static parse + docker-gated `ls` check; skips
+  cleanly when the docker daemon is unavailable). Fix committed in
+  `02fc9f2` (`fix(m1): runtime image ships examples/demo for
+  workshop-demo.sh (VAL-M1-COMPOSE-011)`).
+- **Entrypoint legacy path honours `WHILLY_INSECURE`.** Wrapped the
+  legacy `exec` in a `worker_argv` array and conditionally appended
+  `--insecure` via the existing `is_truthy` helper, mirroring the
+  connect-flow branch. The truthiness matrix (`1` / `true` / `yes` /
+  `on`, case-insensitive) is identical to the connect-flow handling.
+  Restores the v4.3.1 plain-HTTP behaviour the M1 round-5 contract
+  reframer described. New regression test
+  `tests/unit/test_entrypoint_legacy_path.py` covers the truthiness
+  matrix, the pre-supplied `WHILLY_WORKER_TOKEN` sub-branch, and
+  positional `"$@"` pass-through (23 cases). Fix committed in
+  `c5aa5fb` (`fix(m1): honor WHILLY_INSECURE in entrypoint legacy
+  register-and-exec path`).
+
+### Verification
+
+- `docker buildx imagetools inspect mshegolev/whilly:4.4.2` → both
+  `linux/amd64` and `linux/arm64` manifests; `Config.Cmd` =
+  `["control-plane"]` on both arches.
+- `mshegolev/whilly:latest` moved to point at v4.4.2 (Docker Hub tag
+  rewrite; v4.4.2 digest stable for users pinning by digest).
+- `docker run --rm mshegolev/whilly:4.4.2 ls /opt/whilly/examples/demo`
+  lists `parallel.json`, `tasks.json`, `PRD-demo.md`.
+- `WHILLY_IMAGE_TAG=4.4.2 bash workshop-demo.sh --cli stub --no-color`
+  exits 0 with `5 DONE 0 PENDING` (canonical proof of
+  `VAL-M1-COMPOSE-011`).
+- Smoke-run of the published image with
+  `-e WHILLY_INSECURE=1` (no `WHILLY_USE_CONNECT_FLOW`) against a
+  plain-HTTP control plane confirms the scheme guard is bypassed.
+- `python3.12 -m pip download whilly-orchestrator==4.4.2 --no-deps` and
+  `python3.12 -m pip download whilly-worker==4.4.2 --no-deps` both
+  succeed against `files.pythonhosted.org`.
+
 ## [4.4.1] - 2026-05-02
 
 > **Patch release — fixes two regressions in v4.4.0's published
