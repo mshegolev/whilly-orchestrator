@@ -251,7 +251,7 @@ discovery modes is enabled:
 | `file` | no | Same, but reads `WHILLY_FUNNEL_URL_FILE` (default `/funnel/url.txt`). 5 s default cadence. |
 
 Re-registration is idempotent server-side: the same `worker_id` row
-gets its `last_heartbeat` and `host_url` columns updated in place.
+gets its `last_heartbeat` column updated in place.
 The bearer in the OS keychain is reused if still valid; otherwise the
 worker re-runs the bootstrap flow with its stored bootstrap token.
 
