@@ -100,12 +100,28 @@ MAX_HOSTNAME_LEN: Final[int] = 256
 MAX_TOKEN_LEN: Final[int] = 1024
 MAX_REASON_LEN: Final[int] = 2048
 MAX_DESCRIPTION_LEN: Final[int] = 8192
+MAX_EMAIL_LEN: Final[int] = 320  # RFC 5321 §4.5.3.1.3 (64 local + 1 @ + 255 domain)
 
 NonEmptyShortStr = Annotated[str, Field(min_length=1, max_length=MAX_ID_LEN)]
 NonEmptyHostname = Annotated[str, Field(min_length=1, max_length=MAX_HOSTNAME_LEN)]
 NonEmptyToken = Annotated[str, Field(min_length=1, max_length=MAX_TOKEN_LEN)]
 NonEmptyReason = Annotated[str, Field(min_length=1, max_length=MAX_REASON_LEN)]
 NonNegativeVersion = Annotated[int, Field(ge=0)]
+# Lightweight email shape check — pydantic's ``EmailStr`` would pull in the
+# optional ``email-validator`` dependency, which is not in [server]/[dev]
+# extras. The regex enforces a single ``@`` separating a non-empty local
+# part from a domain that contains at least one dot — enough to reject
+# obviously malformed input (``"x"``, ``"x@"``, ``"@y"``, ``"x@y"``)
+# without re-implementing RFC 5321. The Postgres column has no CHECK
+# constraint, so this validator is the canonical gate.
+OwnerEmail = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=MAX_EMAIL_LEN,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    ),
+]
 
 
 class _FrozenModel(BaseModel):
@@ -233,9 +249,18 @@ class RegisterRequest(_FrozenModel):
     ``token``. ``hostname`` is the only field the worker can self-report
     that's worth recording — it shows up in the dashboard (TASK-027) so
     operators can correlate workers with the boxes they run on.
+
+    ``owner_email`` is optional (M2 mission, migration 008): when set, it
+    binds the worker row to the operator who registered it so the M2
+    admin dashboard can list ``workers WHERE owner_email = $1``. Legacy
+    bootstrap registrations omit the field and the column stays NULL.
+    Validation is a lightweight regex shape check (single ``@`` between
+    non-empty local part and a dotted domain) — enough to reject typos
+    without pulling in the optional ``email-validator`` dependency.
     """
 
     hostname: NonEmptyHostname
+    owner_email: OwnerEmail | None = None
 
 
 class RegisterResponse(_FrozenModel):
@@ -490,10 +515,12 @@ class ErrorResponse(_FrozenModel):
 
 __all__ = [
     "MAX_DESCRIPTION_LEN",
+    "MAX_EMAIL_LEN",
     "MAX_HOSTNAME_LEN",
     "MAX_ID_LEN",
     "MAX_REASON_LEN",
     "MAX_TOKEN_LEN",
+    "OwnerEmail",
     "ClaimRequest",
     "ClaimResponse",
     "CompleteRequest",

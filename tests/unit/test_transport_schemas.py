@@ -112,8 +112,33 @@ def test_register_request_response_happy_path() -> None:
     req = RegisterRequest(hostname="worker-01.local")
     resp = RegisterResponse(worker_id="w-abc", token="opaque-bearer")
     assert req.hostname == "worker-01.local"
+    assert req.owner_email is None
     assert resp.worker_id == "w-abc"
     assert resp.token == "opaque-bearer"
+
+
+def test_register_request_accepts_owner_email() -> None:
+    """``owner_email`` is optional and round-trips when set (M2 migration 008)."""
+    req = RegisterRequest(hostname="worker-01.local", owner_email="alice@example.com")
+    assert req.owner_email == "alice@example.com"
+
+
+@pytest.mark.parametrize(
+    "bad_email",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("plain", id="no-at-sign"),
+        pytest.param("a@", id="no-domain"),
+        pytest.param("@b.com", id="no-local-part"),
+        pytest.param("a@b", id="no-dot-in-domain"),
+        pytest.param("a b@c.com", id="space-in-local"),
+        pytest.param("a@b@c.com", id="double-at"),
+    ],
+)
+def test_register_request_rejects_malformed_owner_email(bad_email: str) -> None:
+    """Malformed ``owner_email`` values surface as 422 at the wire boundary."""
+    with pytest.raises(ValidationError):
+        RegisterRequest(hostname="worker-01.local", owner_email=bad_email)
 
 
 def test_claim_response_empty_queue_is_none() -> None:

@@ -973,7 +973,7 @@ def create_app(
         plaintext_token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
         token_hash = _hash_token(plaintext_token)
         try:
-            await repo.register_worker(worker_id, payload.hostname, token_hash)
+            await repo.register_worker(worker_id, payload.hostname, token_hash, payload.owner_email)
         except asyncpg.UniqueViolationError:
             # Defensive: 64 bits of entropy makes this nearly impossible.
             # If it does fire we surface a 500 rather than retrying with
