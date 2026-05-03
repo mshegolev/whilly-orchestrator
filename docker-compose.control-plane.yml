@@ -113,6 +113,52 @@ services:
     mem_reservation: 128m
     command: ["control-plane"]
 
+  # ─── (Optional) funnel sidecar — localhost.run reverse SSH tunnel ─────────
+  #
+  # Profile-gated behind `--profile funnel` — the default
+  # `docker compose -f docker-compose.control-plane.yml up` is byte-equivalent
+  # to v4.4 (no sidecar). Operators opt in with
+  # `docker compose -f docker-compose.control-plane.yml --profile funnel up -d`.
+  #
+  # Holds an outbound SSH reverse-tunnel against `nokey@localhost.run`
+  # (free anonymous tier) and publishes the assigned
+  # `https://<random>.lhr.life` URL into:
+  #   1. Postgres `funnel_url` singleton table (primary; migration 010).
+  #   2. Shared-volume file `/funnel/url.txt` (fallback).
+  # Auto-reconnects with exponential backoff on disconnect. See
+  # `Dockerfile.funnel`, `scripts/funnel/run.sh`,
+  # `docs/Deploy-M2.md` § Topology B, and `docs/Distributed-Setup.md`
+  # § "Two-host via localhost.run".
+  funnel:
+    build:
+      context: .
+      dockerfile: Dockerfile.funnel
+    image: whilly-funnel:latest
+    pull_policy: never
+    container_name: whilly-cp-funnel
+    profiles: ["funnel"]
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      FUNNEL_LOCAL_HOST: control-plane
+      FUNNEL_LOCAL_PORT: "8000"
+      FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
+      FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
+      FUNNEL_URL_FILE: /funnel/url.txt
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+    volumes:
+      - funnel_url_volume:/funnel
+    # Mission §4 cap: ~32 MB image; allow 64 MB headroom for psql + ssh.
+    mem_limit: 64m
+    mem_reservation: 16m
+
 volumes:
   whilly_cp_pgdata:
     name: whilly_cp_pgdata
+  # Shared volume between the funnel sidecar (writer) and any consumer
+  # that prefers reading `/funnel/url.txt` over a postgres lookup. Only
+  # populated when `--profile funnel` is active.
+  funnel_url_volume:
+    name: whilly_cp_funnel_url

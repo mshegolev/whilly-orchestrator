@@ -255,12 +255,13 @@ gets its `last_heartbeat` and `host_url` columns updated in place.
 The bearer in the OS keychain is reused if still valid; otherwise the
 worker re-runs the bootstrap flow with its stored bootstrap token.
 
-> Note: at the time this doc ships, `m2-worker-url-refresh-on-rotation`
-> may still be `pending`. The env vars and behaviour above are the
-> contract; until the implementation lands, `WHILLY_FUNNEL_URL_SOURCE`
-> defaults to `static` and is the only supported value. Operators on a
-> rotating URL must restart the worker manually until the feature
-> ships.
+> The publishing side (sidecar → `funnel_url` table +
+> `/funnel/url.txt`) ships with `m2-localhostrun-funnel-sidecar`.
+> The worker-side polling loop that consumes the URL is
+> implemented in feature `m2-worker-url-refresh-on-rotation`; see
+> [`docs/Distributed-Setup.md` § "Two-host via
+> localhost.run"](Distributed-Setup.md#two-host-via-localhostrun)
+> for the static-URL fallback recipe operators can use today.
 
 ---
 

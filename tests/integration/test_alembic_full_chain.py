@@ -51,6 +51,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "007_plan_prd_file",
     "008_workers_owner_email",
     "009_bootstrap_tokens",
+    "010_funnel_url",
 )
 
 
@@ -136,7 +137,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "009_bootstrap_tokens"
+    assert head_version == "010_funnel_url"
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -220,6 +221,30 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(bootstrap_tokens_index_count) == 1
 
+    # 010: ``funnel_url`` singleton table exists with the singleton check.
+    funnel_url_table_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'funnel_url'
+            """,
+        )
+    )
+    assert int(funnel_url_table_count) == 1
+    funnel_url_singleton_check = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.table_constraints
+            WHERE table_name = 'funnel_url'
+              AND constraint_name = 'funnel_url_singleton'
+              AND constraint_type = 'CHECK'
+            """,
+        )
+    )
+    assert int(funnel_url_singleton_check) == 1
+
     # Confirm the whilly tables are present (sanity).
     tables = {
         row["table_name"]
@@ -229,12 +254,12 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens')
+                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens', 'funnel_url')
                 """,
             )
         )
     }
-    assert tables == {"workers", "plans", "tasks", "events", "bootstrap_tokens"}
+    assert tables == {"workers", "plans", "tasks", "events", "bootstrap_tokens", "funnel_url"}
 
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
@@ -253,7 +278,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens')
+                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens', 'funnel_url')
                 """,
             )
         )
@@ -272,8 +297,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "009_bootstrap_tokens"
+    assert first_version == "010_funnel_url"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "009_bootstrap_tokens"
+    assert second_version == "010_funnel_url"

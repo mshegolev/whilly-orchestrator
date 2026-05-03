@@ -90,17 +90,166 @@ docker pull mshegolev/whilly:4.4.0
 
 ---
 
-## Two-host via localhost.run (M2 in progress, not yet shipped)
+## Two-host via localhost.run
 
-> **Status: Coming in v4.5.** Tailscale was removed from the
-> architecture in the 2026-05-02 pivot (`m1-tailscale-rip-out`). The
-> replacement is a small **`funnel` sidecar** that holds an SSH reverse
-> tunnel to **localhost.run** and publishes a rotating
-> `https://<random>.lhr.life` URL the worker can reach from anywhere.
-> The sidecar lives in M2 features `m2-localhostrun-funnel-sidecar`
-> and `m2-worker-url-refresh-on-rotation`. Until it ships, two-host
-> demos use direct HTTP to a public VPS IP (see `WHILLY_BIND_HOST=0.0.0.0`
-> below).
+> **Status: Available since v4.5.** Tailscale was removed from the
+> architecture in the 2026-05-02 pivot. The replacement is a small
+> **`funnel` sidecar** (`m2-localhostrun-funnel-sidecar`) that holds an
+> outbound SSH reverse tunnel to **localhost.run** (free anonymous
+> tier — no account, no SSH key) and publishes the assigned
+> `https://<random>.lhr.life` URL into:
+>
+> 1. The Postgres `funnel_url` singleton table (primary; created by
+>    migration 010).
+> 2. The shared-volume file `/funnel/url.txt` (fallback for workers
+>    without postgres reachability).
+>
+> The sidecar reconnects with exponential backoff on disconnect and
+> re-publishes the freshly-assigned URL — operators do not need to
+> intervene on URL rotation.
+
+This section walks through the **two host topologies** the sidecar
+enables. Both are documented end-to-end so operators can pick the
+shape that matches their hardware. For the per-environment-variable
+reference, the tier-decision matrix (anonymous vs SSH-key), and the
+admin-CLI walkthrough, see [`docs/Deploy-M2.md`](Deploy-M2.md).
+
+### Quick context
+
+The `funnel` service is added to **both** new compose files as a
+profile-gated entry — default `docker compose ... up` is byte-equivalent
+to v4.4 (the sidecar does NOT start without `--profile funnel`). It
+ships as a separate ~32 MB Alpine image (`Dockerfile.funnel`) carrying
+only `openssh-client + bash + curl + postgresql-client`.
+
+| Service | Compose file | Activated by |
+|---|---|---|
+| `funnel` | `docker-compose.demo.yml` | `docker compose -f docker-compose.demo.yml --profile funnel up -d` |
+| `funnel` | `docker-compose.control-plane.yml` | `docker compose -f docker-compose.control-plane.yml --profile funnel up -d` |
+
+**Free-tier rotation caveat.** The anonymous tier rotates the public
+URL "after a few hours" of session lifetime (per the localhost.run
+FAQ). The sidecar absorbs every reconnect transparently — but workers
+that hard-code the URL (no `WHILLY_FUNNEL_URL_SOURCE=postgres|file`
+re-discovery) need to be restarted manually after a rotation. For a
+**stable URL** (free localhost.run account + dedicated SSH key,
+deferred to M3 in this mission), see [`docs/Deploy-M2.md`
+§ "localhost.run tier — staging vs prod"](Deploy-M2.md#localhostrun-tier--staging-vs-prod).
+
+### Scenario A — Laptop-host control-plane (most common)
+
+The control-plane and the sidecar both run on **your laptop**; workers
+connect from a VPS, a teammate's laptop, or a phone-tethered
+colleague. Useful for hands-on demos and short working sessions.
+
+```bash
+# 1. Bring up the control-plane + funnel sidecar on the laptop.
+cd /opt/develop/whilly-orchestrator
+export WHILLY_WORKER_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+
+docker compose -f docker-compose.control-plane.yml \
+    --profile funnel \
+    up -d
+
+# 2. Wait for the sidecar to parse its lhr.life URL (~10s).
+docker compose -f docker-compose.control-plane.yml logs funnel \
+    | grep -oE 'https://[a-z0-9-]+\.lhr\.life' \
+    | head -n1
+```
+
+Workers anywhere on the public internet (no VPN, no custom CA) join
+via the published URL. Two equally-valid worker-side strategies:
+
+**Strategy A.1 — Postgres re-discovery (preferred for long-lived workers).**
+Worker reads the URL from the `funnel_url` table and re-registers
+idempotently when the URL rotates.
+
+```bash
+# On the worker host (e.g. VPS).
+export WHILLY_DATABASE_URL="$WHILLY_DATABASE_URL"  # set in your .env (see config/settings.py)
+export WHILLY_FUNNEL_URL_SOURCE=postgres
+
+whilly worker connect "$(psql -t -A "$WHILLY_DATABASE_URL" \
+    -c 'SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1')" \
+    --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
+    --plan demo \
+    --hostname "$(hostname)"
+```
+
+> The worker-side polling loop that watches `funnel_url` for
+> rotation lives in feature `m2-worker-url-refresh-on-rotation` —
+> see the contract in [`docs/Deploy-M2.md`
+> § "Worker-side URL re-discovery"](Deploy-M2.md#worker-side-url-re-discovery).
+
+**Strategy A.2 — One-shot static URL (simplest).**
+Worker takes a snapshot of the URL once and uses it as a plain
+`WHILLY_CONTROL_URL`. If localhost.run rotates the URL, restart the
+worker by hand.
+
+```bash
+URL=$(psql -t -A "$WHILLY_DATABASE_URL" \
+    -c 'SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1')
+
+whilly worker connect "$URL" \
+    --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
+    --plan demo \
+    --hostname "$(hostname)"
+```
+
+In either strategy the worker does **not** need `--insecure` —
+localhost.run terminates a real Let's Encrypt cert at the edge so
+the URL-scheme guard accepts the HTTPS URL without complaint.
+
+### Scenario B — VPS-host control-plane
+
+The control-plane and the sidecar run on a **public VPS**; workers
+connect from laptops. Less common because a VPS usually has its own
+public IP and can serve `WHILLY_BIND_HOST=0.0.0.0` directly — but
+this scenario is **fully supported** for two cases:
+
+* The VPS sits behind NAT (no inbound public port, only outbound TCP/22).
+* The operator wants the worker side to use the same URL-discovery
+  contract regardless of where the control-plane lives (single
+  worker codepath for cross-environment automation).
+
+```bash
+# On the VPS.
+export VPS_HOST=vps.example.com
+ssh root@$VPS_HOST
+cd /root/whilly
+export WHILLY_WORKER_BOOTSTRAP_TOKEN="$(openssl rand -hex 32)"
+
+docker compose -f docker-compose.control-plane.yml \
+    --profile funnel \
+    up -d
+
+docker compose -f docker-compose.control-plane.yml logs funnel \
+    | grep -oE 'https://[a-z0-9-]+\.lhr\.life' \
+    | head -n1
+```
+
+Workers on laptops connect via the same flows as Scenario A.1 / A.2
+above (the strategies are URL-discovery-mode choices, independent of
+whether the control-plane is on a laptop or a VPS).
+
+### Verifying the published URL
+
+Either source-of-truth works for spot checks:
+
+```bash
+# Postgres (primary publisher target).
+psql "$WHILLY_DATABASE_URL" \
+    -c 'SELECT id, url, updated_at FROM funnel_url ORDER BY updated_at DESC LIMIT 1;'
+
+# Shared-volume file (fallback publisher target).
+docker compose -f docker-compose.control-plane.yml exec funnel \
+    cat /funnel/url.txt
+```
+
+Both are bumped on every reconnect. The sidecar logs the regex match
+once per session (`[funnel ...] discovered URL: https://...lhr.life`)
+so `docker compose logs funnel` is the simplest way to spot the
+latest URL without writing SQL.
 
 ---
 

@@ -1,0 +1,49 @@
+# Whilly funnel sidecar — localhost.run reverse-SSH tunnel publisher (M2).
+#
+# Holds an outbound SSH reverse-tunnel against `nokey@localhost.run`
+# (free anonymous tier, no account / no key required), parses the
+# assigned `https://<random>.lhr.life` URL from SSH stdout, and
+# publishes it to:
+#   1. Postgres `funnel_url` singleton table (primary)
+#   2. Shared-volume file `/funnel/url.txt` (fallback)
+#
+# Auto-reconnect with backoff on disconnect. See
+# `scripts/funnel/run.sh` for the loop and
+# `docs/Deploy-M2.md` § "Topology A/B" for the operator walkthrough.
+#
+# Build (multi-arch via buildx is recommended for cross-host demos):
+#   docker buildx build -f Dockerfile.funnel -t whilly-funnel:latest .
+#
+# Run (standalone smoke — fake-URL bypass; see scripts/funnel/run.sh):
+#   docker run --rm \
+#     -e FUNNEL_FAKE_URL=https://abc123.lhr.life \
+#     -v /tmp/funnel:/funnel \
+#     whilly-funnel:latest
+#
+# Image-size invariant (mission §4): ≤ 32 MB. The Alpine 3.20 base
+# is ~7.4 MB; openssh-client + bash + curl + postgresql-client add
+# the rest.
+
+FROM alpine:3.20
+
+# Sidecar dependencies:
+#   - openssh-client : the reverse-tunnel transport
+#   - bash           : run.sh shebang + arrays
+#   - curl           : ad-hoc health probes for operators
+#   - postgresql-client : `psql` for the funnel_url upsert
+RUN apk add --no-cache \
+        openssh-client \
+        bash \
+        curl \
+        postgresql-client \
+    && rm -rf /var/cache/apk/*
+
+COPY scripts/funnel/run.sh /usr/local/bin/run.sh
+RUN chmod +x /usr/local/bin/run.sh
+
+# `/funnel` is the shared-volume mountpoint where the sidecar writes
+# `url.txt` (atomic rename). Workers without postgres reachability
+# read from this file instead.
+RUN mkdir -p /funnel
+
+CMD ["/usr/local/bin/run.sh"]
