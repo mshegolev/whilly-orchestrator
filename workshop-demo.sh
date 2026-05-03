@@ -55,6 +55,16 @@
 #   --no-color           отключить ANSI-цвета (для логов CI / pipe в файл)
 #   --debug              `set -x`
 #   -h | --help          справка
+#
+# Переменные окружения:
+#   WHILLY_IMAGE_TAG=<x.y.z>
+#                        Опт-ин: использовать published `mshegolev/whilly:<x.y.z>`
+#                        вместо локальной сборки `whilly-demo:latest`. Скрипт
+#                        проверит manifest в registry, сделает `docker pull`
+#                        и пробросит образ в docker-compose.demo.yml через
+#                        WHILLY_IMAGE_TAG_REF. Unset → прежнее поведение
+#                        (`docker build` + локальный `whilly-demo:latest`).
+#                        Пример: `WHILLY_IMAGE_TAG=4.4.1 bash workshop-demo.sh --cli stub`.
 
 set -euo pipefail
 
@@ -243,7 +253,18 @@ configure_llm_backend() {
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly COMPOSE_FILE="$REPO_ROOT/docker-compose.demo.yml"
 readonly DOCKERFILE="$REPO_ROOT/Dockerfile.demo"
-readonly IMAGE_TAG="whilly-demo:latest"
+# WHILLY_IMAGE_TAG=<x.y.z> опт-ин на published `mshegolev/whilly:<x.y.z>`
+# вместо локально-собранного `whilly-demo:latest`. WHILLY_IMAGE_TAG_REF
+# экспортируется в env для docker-compose.demo.yml — там каждый
+# сервис объявлен как `image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}`.
+# Unset → байт-в-байт прежнее поведение (`docker build` + local image).
+if [[ -n "${WHILLY_IMAGE_TAG:-}" ]]; then
+  IMAGE_TAG="mshegolev/whilly:${WHILLY_IMAGE_TAG}"
+  export WHILLY_IMAGE_TAG_REF="$IMAGE_TAG"
+else
+  IMAGE_TAG="whilly-demo:latest"
+fi
+readonly IMAGE_TAG
 # Все обращения к Postgres идут через `docker compose exec postgres psql -U ...`,
 # поэтому жёсткой DSN-константы тут не держим — нет риска утечки кред в логи /
 # в скриншот презентации. Если нужна host-side DSN — соберите её из env vars,
@@ -353,23 +374,37 @@ step "сносим предыдущий demo-стек (если был)"
 compose down -v >/dev/null 2>&1 || true
 ok "чистая сцена"
 
-# ─── 1. Build ────────────────────────────────────────────────────────────────
-if (( SKIP_BUILD )); then
-  if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-    warn "--skip-build, но $IMAGE_TAG не найден локально — собираю всё равно"
-    SKIP_BUILD=0
-  else
-    step "пропускаем сборку (--skip-build)"
-    ok "используем существующий $IMAGE_TAG"
+# ─── 1. Build (или pull, если задан WHILLY_IMAGE_TAG) ────────────────────────
+if [[ -n "${WHILLY_IMAGE_TAG:-}" ]]; then
+  step "WHILLY_IMAGE_TAG=$WHILLY_IMAGE_TAG → используем $IMAGE_TAG (skip local build)"
+  # Fail-fast: если тег опечатан, упасть ДО `compose up`, а не после.
+  if ! docker manifest inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+    err "образ $IMAGE_TAG недоступен в registry (docker manifest inspect failed)"
+    err "проверьте https://hub.docker.com/r/mshegolev/whilly/tags"
+    exit 1
   fi
-fi
+  ok "manifest найден в registry"
+  step "пуллим $IMAGE_TAG"
+  docker pull "$IMAGE_TAG"
+  ok "образ загружен: $(docker image inspect -f '{{.Id}}' "$IMAGE_TAG" | head -c 19)…"
+else
+  if (( SKIP_BUILD )); then
+    if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+      warn "--skip-build, но $IMAGE_TAG не найден локально — собираю всё равно"
+      SKIP_BUILD=0
+    else
+      step "пропускаем сборку (--skip-build)"
+      ok "используем существующий $IMAGE_TAG"
+    fi
+  fi
 
-if (( ! SKIP_BUILD )); then
-  step "собираем $IMAGE_TAG (через docker build, не compose build)"
-  # Используем именно `docker build`, чтобы не упереться в требование
-  # buildx >= 0.17, которое появляется в свежих compose v2.
-  docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" "$REPO_ROOT"
-  ok "образ собран: $(docker image inspect -f '{{.Id}}' "$IMAGE_TAG" | head -c 19)…"
+  if (( ! SKIP_BUILD )); then
+    step "собираем $IMAGE_TAG (через docker build, не compose build)"
+    # Используем именно `docker build`, чтобы не упереться в требование
+    # buildx >= 0.17, которое появляется в свежих compose v2.
+    docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" "$REPO_ROOT"
+    ok "образ собран: $(docker image inspect -f '{{.Id}}' "$IMAGE_TAG" | head -c 19)…"
+  fi
 fi
 
 # ─── 2. Postgres + control-plane ─────────────────────────────────────────────
