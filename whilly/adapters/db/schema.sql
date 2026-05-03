@@ -170,3 +170,33 @@ CREATE TABLE events (
 );
 
 CREATE INDEX ix_events_task_id_created_at ON events (task_id, created_at);
+
+-- ─── bootstrap_tokens ────────────────────────────────────────────────────
+-- Per-user worker-bootstrap auth (M2 mission, migration 009). Replaces
+-- the single shared ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var sentinel
+-- with a per-operator table: ``POST /workers/register`` carrying
+-- ``Bearer <plaintext>`` looks up the SHA-256 hex digest of the
+-- plaintext in this table; an active row (``revoked_at IS NULL`` AND
+-- (``expires_at IS NULL OR expires_at > NOW()``)) authorises the
+-- registration and pins the new ``workers.owner_email`` to the row's
+-- ``owner_email``. The ``is_admin`` bit (false by default) is the M2
+-- admin-CLI gate (``make_admin_auth`` consults this column to authorise
+-- ``whilly admin …`` calls). Plaintext NEVER reaches Postgres
+-- (PRD NFR-3 — mirrors the ``workers.token_hash`` discipline).
+CREATE TABLE bootstrap_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    owner_email TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ,
+    revoked_at  TIMESTAMPTZ,
+    is_admin    BOOLEAN NOT NULL DEFAULT false
+);
+
+-- Partial index over active rows only. The per-owner listing
+-- (``list_bootstrap_tokens``) and the per-owner active-token lookup
+-- paths only ever touch rows with ``revoked_at IS NULL``; revoked
+-- rows are forensic-only. Keeping the index footprint bounded to
+-- currently-issued tokens mirrors the pattern of
+-- ``ix_workers_owner_email`` (migration 008).
+CREATE INDEX ix_bootstrap_tokens_owner_email_active ON bootstrap_tokens (owner_email)
+    WHERE revoked_at IS NULL;

@@ -136,11 +136,13 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_008_is_head_revision() -> None:
-    """The alembic script directory reports ``008_workers_owner_email`` as the head."""
+def test_008_is_in_chain_after_007() -> None:
+    """``008_workers_owner_email`` immediately follows ``007_plan_prd_file`` in the alembic chain."""
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "008_workers_owner_email"
+    revision = script.get_revision("008_workers_owner_email")
+    assert revision is not None
+    assert revision.down_revision == "007_plan_prd_file"
 
 
 # ---------------------------------------------------------------------------
@@ -285,9 +287,17 @@ def test_partial_index_excludes_null_rows(base_007_dsn: str) -> None:
 
 
 def test_downgrade_removes_owner_email_and_index(base_007_dsn: str) -> None:
-    """After ``upgrade head`` then ``downgrade -1``, the column and index are gone."""
+    """After ``upgrade 008`` then ``downgrade -1``, the column and index are gone.
+
+    Pinned at the explicit ``008_workers_owner_email`` revision so the test
+    keeps exercising 008's downgrade in isolation even when later migrations
+    extend the chain head past 008.
+    """
     cfg = _build_cfg(base_007_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "008_workers_owner_email"),
+        op="upgrade 008_workers_owner_email",
+    )
     _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
 
     async def _inspect() -> tuple[int, int, str | None]:
