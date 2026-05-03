@@ -115,7 +115,8 @@ private deployments. The two most common public-facing options
 ### 1. Clone the repo
 
 ```bash
-ssh root@vps.example.com
+export VPS_HOST=vps.example.com
+ssh root@$VPS_HOST
 cd /root
 git clone https://github.com/mshegolev/whilly-orchestrator.git whilly
 cd whilly
@@ -190,7 +191,8 @@ If you set `WHILLY_BIND_HOST=0.0.0.0`, a `curl` from your laptop should
 also succeed:
 
 ```bash
-curl -fsS http://vps.example.com:8000/health
+export VPS_HOST=vps.example.com
+curl -fsS http://$VPS_HOST:8000/health
 ```
 
 ### 5. Import a plan
@@ -217,9 +219,10 @@ becomes a long-running worker process.
 ### Option 1 — Native install (`whilly worker connect`)
 
 ```bash
+export VPS_HOST=vps.example.com
 pip install 'whilly-orchestrator[worker]'
 
-whilly worker connect http://vps.example.com:8000 \
+whilly worker connect http://$VPS_HOST:8000 \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
     --plan demo \
     --hostname "$(hostname)" \
