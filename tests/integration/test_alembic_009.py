@@ -147,11 +147,20 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_009_is_head_revision() -> None:
-    """The alembic script directory reports ``009_bootstrap_tokens`` as the head."""
+def test_009_in_chain_with_known_predecessor() -> None:
+    """``009_bootstrap_tokens`` is a known revision in the alembic chain.
+
+    The head revision moves forward as new migrations land (010 funnel_url,
+    011 events notify trigger, …); pinning ``head == "009_bootstrap_tokens"``
+    here would force every downstream worker to update this test. Instead we
+    verify ``009_bootstrap_tokens`` is reachable via :class:`ScriptDirectory`
+    and that its ``down_revision`` chain links to ``008``.
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "009_bootstrap_tokens"
+    revision = script.get_revision("009_bootstrap_tokens")
+    assert revision is not None
+    assert revision.down_revision == "008_workers_owner_email"
 
 
 def test_009_depends_on_008() -> None:
@@ -233,7 +242,7 @@ def test_upgrade_creates_table_with_required_columns(base_008_dsn: str) -> None:
 def test_upgrade_creates_primary_key_on_token_hash(base_008_dsn: str) -> None:
     """``token_hash`` is the PRIMARY KEY (VAL-M2-MIGRATE-009-002 — PK named on token_hash)."""
     cfg = _build_cfg(base_008_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, "009_bootstrap_tokens"), op="upgrade 009_bootstrap_tokens")
 
     pk_columns = asyncio.run(
         _fetch(
@@ -260,7 +269,7 @@ def test_upgrade_creates_primary_key_on_token_hash(base_008_dsn: str) -> None:
 def test_upgrade_creates_partial_index_with_predicate(base_008_dsn: str) -> None:
     """``ix_bootstrap_tokens_owner_email_active`` has predicate ``WHERE revoked_at IS NULL``."""
     cfg = _build_cfg(base_008_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, "009_bootstrap_tokens"), op="upgrade 009_bootstrap_tokens")
 
     indexdef = asyncio.run(
         _fetchval(
@@ -279,7 +288,7 @@ def test_upgrade_creates_partial_index_with_predicate(base_008_dsn: str) -> None
 def test_partial_index_excludes_revoked_rows(base_008_dsn: str) -> None:
     """A revoked row coexists with an active row for the same owner_email."""
     cfg = _build_cfg(base_008_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, "009_bootstrap_tokens"), op="upgrade 009_bootstrap_tokens")
 
     async def _scenario() -> None:
         await _execute(
@@ -324,7 +333,7 @@ def test_partial_index_excludes_revoked_rows(base_008_dsn: str) -> None:
 
 def test_downgrade_removes_table_and_index(base_008_dsn: str) -> None:
     cfg = _build_cfg(base_008_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, "009_bootstrap_tokens"), op="upgrade 009_bootstrap_tokens")
     _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
 
     async def _inspect() -> tuple[int, int, str | None]:
@@ -351,11 +360,17 @@ def test_downgrade_removes_table_and_index(base_008_dsn: str) -> None:
 
 
 def test_round_trip_upgrade_downgrade_base_upgrade(base_008_dsn: str) -> None:
-    """``upgrade head`` → ``downgrade base`` → ``upgrade head`` succeeds at every step."""
+    """``upgrade 009`` → ``downgrade base`` → ``upgrade 009`` succeeds at every step."""
     cfg = _build_cfg(base_008_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (rt-1)")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "009_bootstrap_tokens"),
+        op="upgrade 009_bootstrap_tokens (rt-1)",
+    )
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (rt)")
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (rt-2)")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "009_bootstrap_tokens"),
+        op="upgrade 009_bootstrap_tokens (rt-2)",
+    )
 
     async def _inspect() -> tuple[int, int]:
         table_count = await _fetchval(
@@ -386,7 +401,10 @@ def test_round_trip_upgrade_downgrade_base_upgrade(base_008_dsn: str) -> None:
 def test_upgrade_head_is_idempotent(base_008_dsn: str) -> None:
     """Two consecutive ``upgrade head`` calls succeed; existing rows preserved."""
     cfg = _build_cfg(base_008_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "009_bootstrap_tokens"),
+        op="upgrade 009_bootstrap_tokens (1)",
+    )
 
     async def _seed() -> None:
         await _execute(
@@ -402,7 +420,10 @@ def test_upgrade_head_is_idempotent(base_008_dsn: str) -> None:
 
     asyncio.run(_seed())
 
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "009_bootstrap_tokens"),
+        op="upgrade 009_bootstrap_tokens (2)",
+    )
 
     persisted_owner = asyncio.run(
         _fetchval(

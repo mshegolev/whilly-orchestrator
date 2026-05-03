@@ -9,12 +9,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **v4.5 entry preview.** The block immediately below previews the
 > changes that will ship in **v4.5.0** (M2 of the Whilly Distributed
-> v5.0 mission). Code-side M2 features (`m2-localhostrun-funnel-
-> sidecar`, `m2-worker-url-refresh-on-rotation`, `m2-cross-host-demo`,
-> `m2-release-v4.5`) are still landing — this entry is the
-> docs / runbook portion. The release-driver feature
-> (`m2-release-v4.5`) will move this preview into a dated
-> `## [4.5.0] - YYYY-MM-DD` section at sign-off.
+> v5.0 mission). Code-side M2 features (`m2-worker-url-refresh-on-
+> rotation`, `m2-cross-host-demo`, `m2-release-v4.5`) are still
+> landing — this entry is the docs / runbook + sidecar portion. The
+> release-driver feature (`m2-release-v4.5`) will move this preview
+> into a dated `## [4.5.0] - YYYY-MM-DD` section at sign-off.
+
+### Added (v4.5 — M2 funnel sidecar — date TBD until release)
+
+- **`funnel` sidecar service** (`m2-localhostrun-funnel-sidecar`).
+  Adds a profile-gated `funnel` service to **both**
+  `docker-compose.demo.yml` and `docker-compose.control-plane.yml`.
+  The sidecar holds an outbound SSH reverse tunnel against
+  `nokey@localhost.run` (free anonymous tier — no account, no key),
+  parses the assigned `https://<random>.lhr.life` URL from SSH
+  stdout, and publishes it to:
+  - The new `funnel_url` Postgres singleton table (primary;
+    created by migration **010**).
+  - The shared-volume file `/funnel/url.txt` (fallback for workers
+    without postgres reachability).
+  Auto-reconnects with exponential backoff on disconnect and
+  re-publishes the freshly-assigned URL. Default `docker compose
+  ... up` is byte-equivalent to v4.4 — the sidecar only starts with
+  `--profile funnel`. Replaces the previously-planned (and
+  cancelled) Caddy + ACME + Tailscale Funnel stack.
+- **`Dockerfile.funnel`** — ≤ 32 MB Alpine image
+  (`alpine:3.20 + openssh-client + bash + curl + postgresql-client`).
+- **`scripts/funnel/run.sh`** — bash loop that runs the SSH tunnel,
+  parses the `lhr.life` URL via `https://[a-z0-9-]+\.lhr\.life`
+  regex, writes the file via tmp-file + atomic rename, and upserts
+  the Postgres row via `INSERT ... ON CONFLICT (id) DO UPDATE`.
+  Honours env vars `FUNNEL_LOCAL_HOST` / `FUNNEL_LOCAL_PORT`
+  (defaults `control-plane:8000`), `FUNNEL_SERVER_ALIVE_INTERVAL`
+  (default 60 s), `FUNNEL_RETRY_BACKOFF_SECONDS` (default 5 s),
+  `FUNNEL_URL_FILE` (default `/funnel/url.txt`), and
+  `WHILLY_DATABASE_URL` (parsed once into discrete `PG*` env vars
+  so the password never appears on `psql` argv).
+- **Migration 010 — `funnel_url` table.** `CREATE TABLE
+  funnel_url (id INTEGER PRIMARY KEY DEFAULT 1, url TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), CONSTRAINT
+  funnel_url_singleton CHECK (id = 1));`. Singleton invariant is
+  enforced at the schema level; `schema.sql` is hand-updated in the
+  same commit (mission migration discipline).
+- **`docs/Distributed-Setup.md` § "Two-host via localhost.run"** —
+  end-to-end walkthrough for both Scenario A (laptop-host
+  control-plane, workers anywhere) and Scenario B (VPS-host
+  control-plane, workers on laptops). Documents the URL-discovery
+  strategies (postgres re-discovery vs one-shot static URL), the
+  free-tier rotation caveat, and links to the M3 stable-URL path.
+
+### Documentation (v4.5 — date TBD until release)
 
 ### Documentation (v4.5 — date TBD until release)
 

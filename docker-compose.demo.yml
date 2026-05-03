@@ -177,7 +177,45 @@ services:
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
     command: ["worker"]
 
-  # ─── 4. (Опционально) одноразовый seed-runner ──────────────────────────────
+  # ─── 4. (Опционально) funnel sidecar — localhost.run reverse SSH tunnel ────
+  #
+  # Profile-gated за `--profile funnel` — дефолтный
+  # `docker compose -f docker-compose.demo.yml up` обязан остаться
+  # байт-в-байт как в v4.4 (mission §4 backcompat invariant).
+  # Активируется явным `docker compose ... --profile funnel up -d`.
+  #
+  # Держит SSH reverse-tunnel к `nokey@localhost.run` (free anonymous
+  # tier) и публикует ротирующийся `https://<random>.lhr.life` URL в
+  # postgres-таблицу `funnel_url` + shared-volume `/funnel/url.txt`.
+  # На disconnect — exponential backoff и переподключение. См.
+  # `Dockerfile.funnel`, `scripts/funnel/run.sh`,
+  # `docs/Deploy-M2.md` § Topology A.
+  funnel:
+    build:
+      context: .
+      dockerfile: Dockerfile.funnel
+    image: whilly-funnel:latest
+    pull_policy: never
+    container_name: whilly-demo-funnel
+    profiles: ["funnel"]
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      FUNNEL_LOCAL_HOST: control-plane
+      FUNNEL_LOCAL_PORT: "8000"
+      FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
+      FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
+      FUNNEL_URL_FILE: /funnel/url.txt
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+    volumes:
+      - funnel_url_volume:/funnel
+    # Mission §4 cap: ~32 MB alpine + openssh-client image.
+    mem_limit: 64m
+    mem_reservation: 16m
+
+  # ─── 5. (Опционально) одноразовый seed-runner ──────────────────────────────
   # Импортирует demo-план в БД сразу после старта control-plane. Поднимается
   # отдельным сервисом с `restart: 'no'` — в `docker compose up` он сделает
   # своё дело и завершится; повторный `up` не запустит его снова без
@@ -200,3 +238,8 @@ services:
 volumes:
   whilly_demo_pgdata:
     name: whilly_demo_pgdata
+  # Shared volume between the funnel sidecar (writer) and any consumer
+  # that prefers reading `/funnel/url.txt` over a postgres lookup. Only
+  # populated when `--profile funnel` is active.
+  funnel_url_volume:
+    name: whilly_demo_funnel_url
