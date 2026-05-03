@@ -47,7 +47,15 @@ services:
     # image used by docker-compose.control-plane.yml. Override with
     # WHILLY_IMAGE=<tag> for dev / local-build workflows.
     image: ${WHILLY_IMAGE:-mshegolev/whilly:4.3.1}
-    container_name: whilly-worker
+    # No `container_name:` here — Compose auto-generates names like
+    # `whilly-orchestrator-worker-1`, `-worker-2`, ... so operators can run
+    # `docker-compose -f docker-compose.worker.yml up -d --scale worker=N`
+    # for multi-worker scenarios (VAL-M2-DEMO-902 / VAL-M2-LHR-003). A fixed
+    # name would force Docker to refuse `--scale worker=N>1` (container
+    # names must be unique). The worker entrypoint registers itself using
+    # `$(hostname)` (see `hostname:` below), so the events table audit
+    # identity stays meaningful regardless of the auto-generated container
+    # name.
     # Container hostname propagated to `whilly worker register --hostname`
     # via the entrypoint's `$(hostname)` capture. Operators set this in
     # .env.worker so the events table shows a meaningful identity in the

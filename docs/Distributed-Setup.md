@@ -440,8 +440,42 @@ cp .env.worker.example .env.worker
 $EDITOR .env.worker        # set WHILLY_CONTROL_URL, WHILLY_WORKER_BOOTSTRAP_TOKEN
 
 docker-compose -f docker-compose.worker.yml --env-file .env.worker up -d
-docker logs whilly-worker
+docker-compose -f docker-compose.worker.yml --env-file .env.worker logs worker
 ```
+
+> **Container name:** `docker-compose.worker.yml` does NOT pin
+> `container_name:`, so Compose auto-generates names like
+> `whilly-orchestrator-worker-1`. Use `docker-compose ... logs worker`
+> (service name) or `docker logs $(docker-compose -f
+> docker-compose.worker.yml ps -q worker | head -1)` instead of the
+> legacy `docker logs whilly-worker`. The worker registers itself with
+> the container's `$(hostname)` (see `WHILLY_WORKER_HOSTNAME` in
+> `.env.worker`), so the audit-log identity stays meaningful regardless
+> of the generated container name.
+
+#### Multi-worker scenario (`--scale worker=N`)
+
+For load-test or memory-pressure scenarios (VAL-M2-DEMO-902,
+VAL-M2-LHR-003) you can spin up multiple workers from the same compose
+file by passing `--scale worker=N`:
+
+```bash
+# Bring up 3 workers against an already-running control-plane.
+docker-compose -f docker-compose.worker.yml --env-file .env.worker up -d \
+    --scale worker=3 --no-build
+
+# Confirm 3 distinct container names (whilly-orchestrator-worker-1..3)
+# and 3 worker_ids in the control-plane audit log.
+docker ps --filter name=worker --format '{{.Names}}'
+```
+
+All workers share the same `WHILLY_CONTROL_URL` and bootstrap token
+from `.env.worker`. They register independently — each picks up a
+unique `worker_id` from the control-plane and reports its own
+`$(hostname)` (Compose assigns each replica a distinct hostname by
+default). To simulate distinct hosts more realistically, leave
+`WHILLY_WORKER_HOSTNAME` unset in `.env.worker` so each replica falls
+back to the auto-generated container hostname.
 
 The container's entrypoint runs the legacy bash-awk register flow by
 default (`WHILLY_USE_CONNECT_FLOW` unset / `0`). To exercise the new
