@@ -232,13 +232,84 @@ def test_missing_token_exits_2_with_hint(
 
     "Отсутствие токена → exit 2 с подсказкой" is the literal AC for
     TASK-022c — this test is the canonical regression guard for it.
+
+    Since M2 (VAL-M1-DEMO-009) the worker also consults the OS keychain
+    via :func:`whilly.secrets.fetch_worker_credential` before giving up;
+    the diagnostic now mentions ``whilly worker connect`` as a third
+    option. We force the keyring lookup to ``None`` so this regression
+    guard is independent of any bearer the developer's keychain may
+    legitimately hold for ``http://127.0.0.1:8000``.
     """
     _clear_worker_env(monkeypatch)
+    monkeypatch.setattr("whilly.secrets.fetch_worker_credential", lambda *a, **kw: None)
     code = run_worker_command(["--connect", "http://127.0.0.1:8000", "--plan", "P-1"])
     assert code == EXIT_ENVIRONMENT_ERROR
     captured = capsys.readouterr()
     assert WORKER_TOKEN_ENV in captured.err
     assert "--token" in captured.err
+    assert "whilly worker connect" in captured.err
+    assert "keychain" in captured.err.lower()
+
+
+def test_keychain_token_satisfies_required_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-M1-DEMO-009: with no ``--token`` / env, a keychain bearer is used.
+
+    Mirrors the M1 keyring-resume contract that was deferred to M2:
+    after ``whilly worker connect`` stores a bearer via
+    :func:`whilly.secrets.store_worker_credential`, a follow-up
+    ``whilly-worker --connect <url> --plan <p>`` invocation (without
+    ``--token`` / ``WHILLY_WORKER_TOKEN``) must fetch the bearer from
+    the OS keychain and proceed to the loop.
+    """
+    _clear_worker_env(monkeypatch)
+    monkeypatch.setattr(
+        "whilly.secrets.fetch_worker_credential",
+        lambda *a, **kw: "keychain-bearer",
+    )
+    captured, fake = _make_async_worker_recorder()
+    monkeypatch.setattr(cli_worker, "_async_worker", fake)
+    code = run_worker_command(
+        ["--connect", "http://127.0.0.1:8000", "--plan", "P-resume"],
+    )
+    assert code == EXIT_OK
+    assert len(captured) == 1
+    assert captured[0]["token"] == "keychain-bearer"
+
+
+def test_cli_token_takes_precedence_over_keychain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--token`` wins even when the keychain has a bearer for ``--connect``.
+
+    Pins the precedence: explicit CLI > env > keychain. A regression
+    that reordered these would silently substitute a stale stored
+    bearer for the operator's one-off override.
+    """
+    _clear_worker_env(monkeypatch)
+    fetched: list[tuple[object, ...]] = []
+
+    def _fetch(*args: object, **kwargs: object) -> str:
+        fetched.append(args)
+        return "stale-keychain-bearer"
+
+    monkeypatch.setattr("whilly.secrets.fetch_worker_credential", _fetch)
+    captured, fake = _make_async_worker_recorder()
+    monkeypatch.setattr(cli_worker, "_async_worker", fake)
+    code = run_worker_command(
+        [
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--plan",
+            "P-1",
+            "--token",
+            "explicit-cli-bearer",
+        ],
+    )
+    assert code == EXIT_OK
+    assert captured[0]["token"] == "explicit-cli-bearer"
+    assert fetched == []  # keychain never consulted when --token is set
 
 
 def test_missing_plan_exits_2_with_hint(

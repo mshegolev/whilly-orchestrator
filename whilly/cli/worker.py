@@ -477,21 +477,42 @@ def run_worker_command(
         )
         return EXIT_ENVIRONMENT_ERROR
 
-    token = args.token or os.environ.get(WORKER_TOKEN_ENV)
-    if not token:
-        print(
-            f"whilly-worker: --token is required (or set {WORKER_TOKEN_ENV}). "
-            "This is the per-worker bearer issued at registration; "
-            "the bootstrap secret is for `whilly-worker register` only.",
-            file=sys.stderr,
-        )
-        return EXIT_ENVIRONMENT_ERROR
-
     plan_id = args.plan_id or os.environ.get(PLAN_ID_ENV)
     if not plan_id:
         print(
             f"whilly-worker: --plan is required (or set {PLAN_ID_ENV}). "
             "This is the plan id imported via `whilly plan import`.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    token = args.token or os.environ.get(WORKER_TOKEN_ENV)
+    if not token:
+        # Keyring-resume read path (M2, VAL-M1-DEMO-009): when neither
+        # ``--token`` nor ``WHILLY_WORKER_TOKEN`` is provided, fall back
+        # to a bearer previously stored by ``whilly worker connect``
+        # (or any other caller of ``store_worker_credential``). Lookup
+        # is keyed by the canonical control URL; ``plan_id`` is passed
+        # through for forward-compatibility with future per-plan scoping.
+        # Any storage-backend error is treated as "no token" so the
+        # canonical diagnostic below covers all "operator forgot to
+        # provide a bearer" cases, not just the env/flag branches.
+        try:
+            from whilly.secrets import fetch_worker_credential
+
+            token = fetch_worker_credential(connect_url, plan_id)
+        except Exception as exc:
+            logger.warning(
+                "whilly-worker: keychain lookup failed for %s: %s",
+                connect_url,
+                exc,
+            )
+            token = None
+    if not token:
+        print(
+            "whilly-worker: no token: pass --token, set "
+            f"{WORKER_TOKEN_ENV}, or run `whilly worker connect` to "
+            "store one in the keychain.",
             file=sys.stderr,
         )
         return EXIT_ENVIRONMENT_ERROR
