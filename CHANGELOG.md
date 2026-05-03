@@ -31,6 +31,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this NEXT entry — the shim implementation has been in place since
   v4.4.0 and the reframe is contract-document only.
 
+## [4.4.3] - 2026-05-03
+
+> **Patch release — fixes a third M1-round-6 regression in v4.4.2's
+> published runtime image.** No new features. Strictly additive: every
+> v4.4.2 user should upgrade. v4.4.2 is officially deprecated; see the
+> GitHub Release banner.
+
+### ⚠️ v4.4.2 deprecation notice
+
+`mshegolev/whilly:4.4.2` (Docker Hub) shipped with one confirmed
+regression surfaced after the round-6 v4.4.2 publish smoke:
+
+1. **`mshegolev/whilly:4.4.2` runtime image excluded
+   `tests/fixtures/fake_claude.sh` and
+   `tests/fixtures/fake_claude_demo.sh`, so workers running
+   `WHILLY_IMAGE_TAG=4.4.2 bash workshop-demo.sh --cli stub` claimed
+   tasks but immediately failed with
+   `claude binary not found at /opt/whilly/tests/fixtures/fake_claude_demo.sh`.**
+   `Dockerfile.demo` already shipped these fixtures, but the production
+   `Dockerfile` runtime stage did not. Blocked the canonical end-to-end
+   proof of `VAL-M1-COMPOSE-011` against the published image.
+
+`mshegolev/whilly:4.4.2` and `whilly-worker==4.4.2` remain reachable on
+their respective registries (Docker Hub digest discipline + PyPI's
+no-overwrite policy) for users who pin by digest, but **users on tag
+`:4.4.2` or `==4.4.2` should upgrade to v4.4.3 immediately.**
+
+### Fixed
+
+- **Runtime image now ships `tests/fixtures/fake_claude.sh` and
+  `tests/fixtures/fake_claude_demo.sh`.** Added a targeted
+  `COPY tests/fixtures/fake_claude.sh tests/fixtures/fake_claude_demo.sh
+  /opt/whilly/tests/fixtures/` to the runtime stage of `Dockerfile`,
+  matching the contract that already held in `Dockerfile.demo`. Both
+  scripts are chmod-ed `+x` and end up at
+  `/opt/whilly/tests/fixtures/fake_claude*.sh` so
+  `workshop-demo.sh --cli stub` (which points worker `CLAUDE_BIN` at
+  the demo stub) now drains all 5 tasks against the published image.
+  New regression test
+  `tests/integration/test_runtime_image_ships_fake_claude_stubs.py`
+  is the install-time gate (static parse + docker-gated `ls -la`
+  check; skips cleanly when the docker daemon is unavailable). Fix
+  committed in `4167c5e`
+  (`fix(m1): runtime image ships fake_claude stubs for workshop-demo
+  --cli stub (VAL-M1-COMPOSE-011)`).
+
+### Verification
+
+- `docker buildx imagetools inspect mshegolev/whilly:4.4.3` → both
+  `linux/amd64` and `linux/arm64` manifests; `Config.Cmd` =
+  `["control-plane"]` on both arches.
+- `mshegolev/whilly:latest` moved to point at v4.4.3 (Docker Hub tag
+  rewrite; v4.4.3 digest stable for users pinning by digest).
+- `docker run --rm mshegolev/whilly:4.4.3 ls /opt/whilly/tests/fixtures/`
+  lists `fake_claude.sh` and `fake_claude_demo.sh`, both executable.
+- `WHILLY_IMAGE_TAG=4.4.3 bash workshop-demo.sh --cli stub --no-color`
+  exits 0 with `5 DONE 0 PENDING` (canonical proof of
+  `VAL-M1-COMPOSE-011`).
+- `python3.12 -m pip download whilly-orchestrator==4.4.3 --no-deps` and
+  `python3.12 -m pip download whilly-worker==4.4.3 --no-deps` both
+  succeed against `files.pythonhosted.org`.
+
 ## [4.4.2] - 2026-05-03
 
 > **Patch release — fixes two M1-round-6 regressions in v4.4.1's
