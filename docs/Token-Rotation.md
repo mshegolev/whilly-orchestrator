@@ -336,6 +336,13 @@ checklist:
        ORDER BY created_at DESC;"
   ```
 
+  > **Source-IP gap.** `events.payload->>'source_ip'` is intentionally
+  > absent under the M2 localhost.run funnel deploy and cannot be used
+  > as an impostor-detection signal here — see
+  > [`docs/Distributed-Setup.md` § "Source-IP forensics: out of scope
+  > under localhost.run"](Distributed-Setup.md#source-ip-forensics-out-of-scope-under-localhostrun)
+  > for the full rationale and the future paid-tier path.
+
 * [ ] **Claim attribution scan.** For each impostor `worker_id`
   found above, check what tasks it claimed.
 
