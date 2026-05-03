@@ -338,6 +338,28 @@ def enforce_scheme_guard(url: str, *, insecure: bool) -> tuple[str, str, int]:
     return scheme, host, port
 
 
+_INSECURE_WARNING_EMITTED: bool = False
+
+
+def _warn_insecure_once(prefix: str, host: str) -> None:
+    """Emit the plain-HTTP-to-non-loopback warning at most once per process.
+
+    Both worker entry points (legacy ``whilly-worker --connect`` and the
+    ``whilly worker connect`` subcommand) share a single module-level
+    latch so two consecutive invocations in the same Python process
+    produce exactly one warning line on stderr (VAL-M2-WORKER-INSECURE-007
+    / VAL-M2-WORKER-INSECURE-901).
+    """
+    global _INSECURE_WARNING_EMITTED
+    if _INSECURE_WARNING_EMITTED:
+        return
+    print(
+        f"{prefix}: warning — using plain HTTP to non-loopback host {host!r} (--insecure). Prefer HTTPS in production.",
+        file=sys.stderr,
+    )
+    _INSECURE_WARNING_EMITTED = True
+
+
 def build_worker_parser() -> argparse.ArgumentParser:
     """Build the ``whilly-worker ...`` argparse tree.
 
@@ -576,11 +598,7 @@ def run_worker_command(
         print(f"whilly-worker: {exc}", file=sys.stderr)
         return EXIT_CONNECT_ERROR
     if args.insecure and scheme == "http" and not _is_loopback_host(host):
-        print(
-            f"whilly-worker: warning — using plain HTTP to non-loopback host {host!r} "
-            "(--insecure). Prefer HTTPS in production.",
-            file=sys.stderr,
-        )
+        _warn_insecure_once("whilly-worker", host)
 
     worker_id = _resolve_worker_id(args.worker_id)
     effective_runner: RemoteRunnerCallable = runner if runner is not None else run_task
@@ -1144,11 +1162,7 @@ def run_connect_command(argv: Sequence[str]) -> int:
         print(f"whilly worker connect: {exc}", file=sys.stderr)
         return EXIT_CONNECT_ERROR
     if args.insecure and scheme == "http" and not _is_loopback_host(host):
-        print(
-            f"whilly worker connect: warning — using plain HTTP to non-loopback host {host!r} "
-            "(--insecure). Prefer HTTPS in production.",
-            file=sys.stderr,
-        )
+        _warn_insecure_once("whilly worker connect", host)
 
     # ── 2. Plan id is required (no env-var fallback for this surface). ──
     plan_id_raw = args.plan_id
