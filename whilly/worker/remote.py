@@ -106,6 +106,7 @@ already taken responsibility for it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import signal
 from collections.abc import Awaitable, Callable
@@ -910,12 +911,245 @@ async def run_remote_worker_with_heartbeat(
     return worker_task.result()
 
 
+# --------------------------------------------------------------------------- #
+# URL-rotation supervisor (M2: m2-worker-url-refresh-on-rotation)
+# --------------------------------------------------------------------------- #
+
+# Honoured env-var name for the M2 funnel-URL discovery mode. Re-exported
+# from :mod:`whilly.worker.funnel` so callers do not have to know which
+# submodule owns the constant.
+WORKER_RECONNECT_URL_REASON: Final[str] = "url_rotation"
+
+
+@dataclass(frozen=True)
+class RotationStats:
+    """Aggregate counters returned by :func:`run_remote_worker_with_url_rotation`.
+
+    ``inner_runs`` is the number of distinct ``RemoteWorkerClient``
+    sessions opened (one per observed control URL). ``url_rotations``
+    is the number of times the discovery source returned a *new* URL
+    while the worker was already connected — strictly less than or
+    equal to ``inner_runs``. ``stats`` aggregates the per-session
+    :class:`RemoteWorkerStats` so dashboards can sum them without
+    having to know the rotation count.
+    """
+
+    inner_runs: int = 0
+    url_rotations: int = 0
+    stats: RemoteWorkerStats = RemoteWorkerStats()
+
+
+# Type alias for the factory the rotation supervisor uses to mint a
+# fresh transport client per session. Production callers pass a small
+# closure around :class:`RemoteWorkerClient`; tests inject a stub that
+# yields an in-memory fake. Returning an async-context-manager keeps
+# the supervisor blind to the underlying implementation.
+RemoteClientFactory = Callable[[str], contextlib.AbstractAsyncContextManager[RemoteWorkerClient]]
+
+
+async def _watch_url_changes(
+    source: "FunnelUrlSource",
+    current_url: str,
+    *,
+    on_change: Callable[[str], None],
+    stop: asyncio.Event,
+) -> None:
+    """Poll ``source`` until it reports a different URL or ``stop`` fires.
+
+    Any non-``None`` value that does not equal the seed ``current_url``
+    is treated as a rotation: the watcher invokes ``on_change`` with
+    the new value and returns. Transient ``None`` returns are
+    swallowed — the rotation loop owns the "URL temporarily missing"
+    semantics, not the watcher.
+
+    The wait is racing the ``source.poll_interval`` against ``stop``
+    via :func:`asyncio.wait_for` so a SIGTERM-driven shutdown wakes
+    the watcher immediately rather than waiting out a 30 s tick.
+    """
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=source.poll_interval)
+            return
+        except TimeoutError:
+            pass
+        try:
+            latest = await source.fetch()
+        except Exception as exc:
+            log.warning("funnel URL source raised during fetch (%s); will retry", exc)
+            continue
+        if latest is None or latest == current_url:
+            continue
+        log.info(
+            "funnel URL rotation detected: %s -> %s",
+            current_url,
+            latest,
+        )
+        on_change(latest)
+        return
+
+
+async def run_remote_worker_with_url_rotation(
+    client_factory: RemoteClientFactory,
+    runner: RemoteRunnerCallable,
+    plan: Plan,
+    worker_id: WorkerId,
+    initial_url: str,
+    source: "FunnelUrlSource",
+    *,
+    heartbeat_interval: float = DEFAULT_HEARTBEAT_INTERVAL,
+    max_iterations: int | None = None,
+    max_processed: int | None = None,
+    install_signal_handlers: bool = True,
+    stop: asyncio.Event | None = None,
+) -> RotationStats:
+    """Run :func:`run_remote_worker_with_heartbeat` across funnel-URL rotations.
+
+    Wraps the steady-state composition root with an outer reconnect
+    loop. While the inner worker is running, a sibling task polls
+    ``source`` for URL changes; when one is observed it sets the
+    inner loop's stop event so the worker releases any in-flight task
+    via :meth:`RemoteWorkerClient.release` and unwinds cleanly. The
+    outer loop then closes the previous client, opens a new one
+    against the rotated URL, and resumes — preserving the same
+    ``worker_id`` and bearer the caller provided so the control
+    plane sees the same identity reconnecting (no duplicate-worker
+    error, no orphaned task).
+
+    The outer ``stop`` event (typically wired to SIGTERM via the
+    inner :func:`run_remote_worker_with_heartbeat`) terminates the
+    rotation loop; passing it to the inner call keeps shutdown
+    semantics unified.
+
+    Returns
+    -------
+    RotationStats
+        Summary of how many sessions ran, how many rotations occurred,
+        and the aggregated per-session worker stats.
+    """
+    if stop is None:
+        stop = asyncio.Event()
+
+    current_url = initial_url
+    inner_runs = 0
+    rotations = 0
+    aggregate = RemoteWorkerStats()
+
+    while not stop.is_set():
+        rotated_url: list[str] = []
+
+        def _on_change(new_url: str, _bucket: list[str] = rotated_url) -> None:
+            _bucket.append(new_url)
+
+        # The inner stop event is shared with the heartbeat composition
+        # so the in-flight task is released via the existing shutdown
+        # path. Either (a) URL rotation, (b) outer stop, or (c) the
+        # worker reaching ``max_iterations`` / ``max_processed`` flips
+        # it, after which the watcher and outer-stop bridge both wake
+        # up and exit cleanly.
+        inner_stop = asyncio.Event()
+
+        async def _run_inner() -> RemoteWorkerStats:
+            try:
+                async with client_factory(current_url) as client:
+                    return await run_remote_worker_with_heartbeat(
+                        client,
+                        runner,
+                        plan,
+                        worker_id,
+                        heartbeat_interval=heartbeat_interval,
+                        max_iterations=max_iterations,
+                        max_processed=max_processed,
+                        install_signal_handlers=install_signal_handlers,
+                        stop=inner_stop,
+                    )
+            finally:
+                inner_stop.set()
+
+        async def _run_watcher() -> None:
+            await _watch_url_changes(
+                source,
+                current_url,
+                on_change=_on_change,
+                stop=inner_stop,
+            )
+            if rotated_url:
+                inner_stop.set()
+
+        # Forward outer SIGTERM to the inner stop event AND wake on
+        # ``inner_stop`` so we don't hang past worker exit.
+        async def _bridge_outer_stop() -> None:
+            assert stop is not None
+            outer_done = asyncio.create_task(stop.wait())
+            inner_done = asyncio.create_task(inner_stop.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {outer_done, inner_done},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                outer_done.cancel()
+                inner_done.cancel()
+            if outer_done in done:
+                inner_stop.set()
+
+        inner_runs += 1
+        log.info("remote worker session %d starting against %s", inner_runs, current_url)
+        async with asyncio.TaskGroup() as tg:
+            worker_task = tg.create_task(_run_inner(), name="whilly-remote-worker")
+            tg.create_task(_run_watcher(), name="whilly-funnel-url-watcher")
+            tg.create_task(_bridge_outer_stop(), name="whilly-outer-stop-bridge")
+
+        session_stats = worker_task.result()
+        aggregate = RemoteWorkerStats(
+            iterations=aggregate.iterations + session_stats.iterations,
+            completed=aggregate.completed + session_stats.completed,
+            failed=aggregate.failed + session_stats.failed,
+            idle_polls=aggregate.idle_polls + session_stats.idle_polls,
+            released_on_shutdown=(aggregate.released_on_shutdown + session_stats.released_on_shutdown),
+        )
+
+        if stop.is_set():
+            log.info("remote worker outer stop fired; exiting rotation loop")
+            break
+        if not rotated_url:
+            # Inner exited for non-rotation reasons (max_iterations,
+            # max_processed, or unexpected). Don't reconnect — caller
+            # asked for a bounded run.
+            log.info("remote worker inner loop exited without URL rotation")
+            break
+
+        rotations += 1
+        current_url = rotated_url[-1]
+        log.info(
+            "remote worker reconnecting against rotated URL %s (rotation #%d)",
+            current_url,
+            rotations,
+        )
+
+    return RotationStats(
+        inner_runs=inner_runs,
+        url_rotations=rotations,
+        stats=aggregate,
+    )
+
+
+# Late import keeps the static graph clean: ``whilly.worker.funnel``
+# only depends on stdlib + ``importlib``, but stating the dependency
+# at the top of the file would couple the typing imports to the
+# module-load order test harnesses care about.
+from whilly.worker.funnel import FunnelUrlSource  # noqa: E402  pylint: disable=wrong-import-position
+
+
 __all__ = [
     "DEFAULT_HEARTBEAT_INTERVAL",
     "SHUTDOWN_RELEASE_REASON",
+    "WORKER_RECONNECT_URL_REASON",
+    "RemoteClientFactory",
     "RemoteRunnerCallable",
     "RemoteWorkerStats",
+    "RotationStats",
     "run_remote_heartbeat_loop",
     "run_remote_worker",
     "run_remote_worker_with_heartbeat",
+    "run_remote_worker_with_url_rotation",
 ]

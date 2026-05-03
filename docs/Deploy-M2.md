@@ -257,11 +257,12 @@ worker re-runs the bootstrap flow with its stored bootstrap token.
 
 > The publishing side (sidecar → `funnel_url` table +
 > `/funnel/url.txt`) ships with `m2-localhostrun-funnel-sidecar`.
-> The worker-side polling loop that consumes the URL is
-> implemented in feature `m2-worker-url-refresh-on-rotation`; see
-> [`docs/Distributed-Setup.md` § "Two-host via
+> The worker-side polling loop that consumes the URL ships in
+> `m2-worker-url-refresh-on-rotation`: opt in by setting
+> `WHILLY_FUNNEL_URL_SOURCE=postgres` or `=file` on the worker.
+> See [`docs/Distributed-Setup.md` § "Two-host via
 > localhost.run"](Distributed-Setup.md#two-host-via-localhostrun)
-> for the static-URL fallback recipe operators can use today.
+> for the static-URL fallback recipe operators can also use.
 
 ---
 
