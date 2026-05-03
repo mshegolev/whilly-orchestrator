@@ -2,7 +2,7 @@
 # Whilly Orchestrator — production image (опубликован в Docker Hub / GHCR).
 #
 # Этот Dockerfile отличается от Dockerfile.demo:
-#   * Не тащит в runtime тесты, fixtures, README'ы. examples/ нужны для workshop-demo.sh.
+#   * Не тащит в runtime тесты, README'ы. examples/ + tests/fixtures/fake_claude*.sh нужны для workshop-demo.sh.
 #   * Ставит whilly из локального source'а через `pip install '.[server,worker]'`
 #     (не [all], не [dev]) — минимальная зависимость для двух ролей: control-plane
 #     (FastAPI + asyncpg + alembic) и worker (httpx).
@@ -388,6 +388,17 @@ COPY docker/control_plane.py /opt/whilly/docker/control_plane.py
 # (VAL-M1-COMPOSE-011). The directory is ~10 KB total — negligible.
 COPY examples /opt/whilly/examples/
 
+# Fake Claude stubs consumed by workshop-demo.sh's `--cli stub` path
+# (Round-6 v4.4.2 publish smoke against VAL-M1-COMPOSE-011 caught the
+# regression: workers claim tasks but fail with `claude binary not found
+# at /opt/whilly/tests/fixtures/fake_claude_demo.sh`). Dockerfile.demo
+# already ships these via the same paths; the production runtime image
+# now mirrors that contract so `WHILLY_IMAGE_TAG=<ver> bash
+# workshop-demo.sh --cli stub` drains its 5 demo tasks end-to-end.
+# Combined size is ~3 KB — negligible.
+COPY tests/fixtures/fake_claude.sh /opt/whilly/tests/fixtures/fake_claude.sh
+COPY tests/fixtures/fake_claude_demo.sh /opt/whilly/tests/fixtures/fake_claude_demo.sh
+
 # Adapter + raw shim + cgroup-aware model picker для agentic CLI workflow:
 #   - cli_adapter.py: транслирует whilly's argv в native argv каждого CLI
 #     (claude-code/opencode/gemini), парсит native output → whilly envelope.
@@ -406,6 +417,8 @@ RUN chmod +x /usr/local/bin/whilly-entrypoint \
     /opt/whilly/docker/cli_adapter.py \
     /opt/whilly/docker/llm_shim.py \
     /opt/whilly/docker/llm_resource_picker.py \
+    /opt/whilly/tests/fixtures/fake_claude.sh \
+    /opt/whilly/tests/fixtures/fake_claude_demo.sh \
     && chown -R whilly:whilly /opt/whilly /home/whilly
 
 # OCI labels — Docker Hub и GHCR показывают их на странице тэгов;
