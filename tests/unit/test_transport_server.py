@@ -393,16 +393,21 @@ def test_create_app_accepts_missing_worker_token(
     assert isinstance(app, FastAPI)
 
 
-def test_create_app_raises_when_bootstrap_token_missing_everywhere(
+def test_create_app_accepts_missing_bootstrap_token_env(
     monkeypatch: pytest.MonkeyPatch,
     healthy_pool: _FakePool,
 ) -> None:
-    """Same as above but for the bootstrap secret (TASK-021b dependency)."""
+    """M2: ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` is optional now that the
+    bootstrap dep consults the per-operator ``bootstrap_tokens`` table
+    (migration 009). The env var only acts as a one-minor-version
+    legacy fallback that emits a deprecation warning when its path is
+    taken — without the env, ``create_app`` still succeeds and the
+    DB-backed lookup is the sole authority.
+    """
     monkeypatch.setenv(WORKER_TOKEN_ENV, "w")
     monkeypatch.delenv(BOOTSTRAP_TOKEN_ENV, raising=False)
-    with pytest.raises(RuntimeError) as excinfo:
-        create_app(_as_pool(healthy_pool))
-    assert BOOTSTRAP_TOKEN_ENV in str(excinfo.value)
+    app = create_app(_as_pool(healthy_pool))
+    assert isinstance(app, FastAPI)
 
 
 def test_create_app_rejects_explicit_blank_worker_token(healthy_pool: _FakePool) -> None:
@@ -531,6 +536,7 @@ def test_lifespan_attaches_pool_and_auth_deps_to_app_state(
         captured["pool_is_same"] = str(app.state.pool is _as_pool(pool))
         captured["has_bearer_dep"] = str(app.state.bearer_dep is not None)
         captured["has_bootstrap_dep"] = str(app.state.bootstrap_dep is not None)
+        captured["has_admin_dep"] = str(app.state.admin_dep is not None)
         return {"ok": "true"}
 
     with TestClient(app) as client:
@@ -539,6 +545,7 @@ def test_lifespan_attaches_pool_and_auth_deps_to_app_state(
     assert captured["pool_is_same"] == "True"
     assert captured["has_bearer_dep"] == "True"
     assert captured["has_bootstrap_dep"] == "True"
+    assert captured["has_admin_dep"] == "True"
 
 
 def test_lifespan_clears_pool_reference_on_shutdown(healthy_pool: _FakePool) -> None:

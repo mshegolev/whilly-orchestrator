@@ -669,6 +669,21 @@ LIMIT 1
 """
 
 
+# M2 mission: identity-binding lookup that ALSO returns ``owner_email``
+# so the bearer auth dep can stash both the ``worker_id`` (for
+# cross-worker bearer enforcement, VAL-AUTH-024) and the operator's
+# email (for events.payload attribution, VAL-M2-ADMIN-AUTH-011) in a
+# single round-trip. Same single-row guarantees as
+# :data:`_LOOKUP_WORKER_BY_TOKEN_HASH_SQL` (partial UNIQUE index on
+# ``token_hash`` + ``LIMIT 1`` defence-in-depth).
+_LOOKUP_WORKER_IDENTITY_BY_TOKEN_HASH_SQL: str = """
+SELECT worker_id, owner_email
+FROM workers
+WHERE token_hash = $1
+LIMIT 1
+"""
+
+
 # Probe used after an optimistic-lock UPDATE returns 0 rows: differentiates
 # "row vanished" (FK cascade or test bug) from "version moved" / "wrong
 # status". Cheaper than a second UPDATE attempt and gives us enough context
@@ -1211,7 +1226,13 @@ class TaskRepository:
         """
         self._event_flusher = event_flusher
 
-    async def claim_task(self, worker_id: WorkerId, plan_id: PlanId) -> Task | None:
+    async def claim_task(
+        self,
+        worker_id: WorkerId,
+        plan_id: PlanId,
+        *,
+        owner_email: str | None = None,
+    ) -> Task | None:
         """Atomically claim one ``PENDING`` task from ``plan_id`` for ``worker_id``.
 
         Returns the post-update :class:`Task` (status ``CLAIMED``,
@@ -1266,6 +1287,17 @@ class TaskRepository:
                     "claimed_at": claimed_at.isoformat() if claimed_at is not None else None,
                     "version": row["version"],
                 }
+                # M2 mission (VAL-M2-ADMIN-AUTH-011): when the
+                # request was authenticated by a registered worker
+                # whose row carries ``owner_email``, attribute the
+                # CLAIM event to the operator. The handler resolves
+                # the value from ``request.state.authenticated_owner_email``
+                # (see :func:`make_db_bearer_auth`); legacy /
+                # unattributed callers pass ``None`` and the key is
+                # omitted to preserve the v4.4.0 baseline payload
+                # shape on registrations that predate migration 008.
+                if owner_email is not None:
+                    payload_dict["owner_email"] = owner_email
                 payload = json.dumps(payload_dict)
                 await conn.execute(
                     _INSERT_EVENT_SQL,
@@ -2315,6 +2347,24 @@ class TaskRepository:
         # the asyncpg-returned ``str`` is already the right shape — no
         # constructor wrapping needed.
         return row
+
+    async def get_worker_identity_by_token_hash(self, token_hash: str) -> tuple[WorkerId, str | None] | None:
+        """Resolve a presented bearer's hash to ``(worker_id, owner_email)`` (M2).
+
+        Same single-round-trip lookup as
+        :meth:`get_worker_id_by_token_hash` but also returns
+        ``workers.owner_email`` (NULL → ``None``) so the per-worker
+        bearer auth dep can stash both identifiers on
+        ``request.state`` in one SQL hit. Returning ``None`` keeps
+        the same "not found" semantics — the auth layer surfaces
+        every miss as 401 regardless of the underlying cause
+        (revoked, deleted, or never minted).
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_LOOKUP_WORKER_IDENTITY_BY_TOKEN_HASH_SQL, token_hash)
+        if row is None:
+            return None
+        return (row["worker_id"], row["owner_email"])
 
     async def update_heartbeat(self, worker_id: WorkerId) -> bool:
         """Stamp ``workers.last_heartbeat = NOW()`` for ``worker_id``.
