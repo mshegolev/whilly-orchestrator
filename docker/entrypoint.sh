@@ -239,11 +239,22 @@ case "$ROLE" in
       log "using pre-supplied WHILLY_WORKER_TOKEN (skipping register)"
     fi
 
-    exec whilly-worker \
-      --connect "$WHILLY_CONTROL_URL" \
-      --token "$WHILLY_WORKER_TOKEN" \
-      --plan "$WHILLY_PLAN_ID" \
-      "$@"
+    # WHILLY_INSECURE follows the same truthiness rules as the connect-flow
+    # branch above (line ~145) and forwards `--insecure` to the worker.
+    # Without it, plain HTTP to a non-loopback control-plane URL is rejected
+    # by the worker's scheme guard before any HTTP call. VAL-M1-ENTRYPOINT-001
+    # was reframed (m1-round5-contract-rereframer) to expect WHILLY_INSECURE=1
+    # to opt in and restore v4.3.1 plain-HTTP-non-loopback behavior.
+    worker_argv=(
+      whilly-worker
+      --connect "$WHILLY_CONTROL_URL"
+      --token "$WHILLY_WORKER_TOKEN"
+      --plan "$WHILLY_PLAN_ID"
+    )
+    if is_truthy "${WHILLY_INSECURE:-}"; then
+      worker_argv+=(--insecure)
+    fi
+    exec "${worker_argv[@]}" "$@"
     ;;
 
   migrate)
