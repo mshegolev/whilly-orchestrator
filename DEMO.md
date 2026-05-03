@@ -429,6 +429,12 @@ Agentic CLI'и — это полноценные кодинг-агенты со 
 Node 22 LTS (раньше bookworm-ный node18 ронял gemini-cli и был
 несовместим с codex). Выбор через `--cli` флаг:
 
+> **Закрепить published-образ из Docker Hub:** установите
+> `WHILLY_IMAGE_TAG=<tag>` (например `WHILLY_IMAGE_TAG=4.4.1
+> bash workshop-demo.sh --cli stub`) — скрипт сделает `docker pull
+> mshegolev/whilly:<tag>` вместо локального `docker build`. Unset →
+> прежний путь (локальная сборка `whilly-demo:latest`).
+
 ```bash
 # Claude Code (Anthropic) — best agentic capabilities, платно:
 export ANTHROPIC_API_KEY=YOUR_ANTHROPIC_KEY_HERE

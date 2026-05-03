@@ -51,7 +51,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.demo
-    image: whilly-demo:latest
+    # WHILLY_IMAGE_TAG_REF выставляется обёрткой workshop-demo.sh из
+    # WHILLY_IMAGE_TAG: set → `mshegolev/whilly:${WHILLY_IMAGE_TAG}`,
+    # unset → `whilly-demo:latest` (local-build path сохраняется
+    # байт-в-байт). См. VAL-M1-COMPOSE-011.
+    image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}
     # Никогда не пытаться пулить из registry — образ собран локально
     # (см. шаг сборки в DEMO-CHECKLIST.md). Без этого compose на чистой
     # машине пытается `docker pull whilly-demo` и падает с
@@ -95,7 +99,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.demo
-    image: whilly-demo:latest
+    image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}
     pull_policy: never
     # `container_name` намеренно НЕ указан — иначе compose откажется делать
     # вторую реплику при `--scale worker=2` (имя контейнера должно быть
@@ -179,7 +183,7 @@ services:
   # своё дело и завершится; повторный `up` не запустит его снова без
   # `--force-recreate`. Можно отключить с `--scale seed=0`.
   seed:
-    image: whilly-demo:latest
+    image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}
     pull_policy: never
     container_name: whilly-demo-seed
     profiles: ["seed"]
