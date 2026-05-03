@@ -7,15 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — NEXT
 
-> **v4.5 entry preview.** The block immediately below previews the
-> changes that will ship in **v4.5.0** (M2 of the Whilly Distributed
-> v5.0 mission). Code-side M2 features (`m2-worker-url-refresh-on-
-> rotation`, `m2-cross-host-demo`, `m2-release-v4.5`) are still
-> landing — this entry is the docs / runbook + sidecar portion. The
-> release-driver feature (`m2-release-v4.5`) will move this preview
-> into a dated `## [4.5.0] - YYYY-MM-DD` section at sign-off.
+_(no unreleased changes — v4.5.0 cut on 2026-05-03)_
 
-### Added (v4.5 — M2 funnel sidecar — date TBD until release)
+## [4.5.0] - 2026-05-03
+
+> **M2 of Whilly Distributed v5.0 — public-tunnel multi-host
+> deployments.** Adds the profile-gated localhost.run `funnel` sidecar
+> (free-tier rotating `https://<random>.lhr.life` URL), DB-backed
+> per-user bootstrap tokens with admin CLI for mint/revoke/list, the
+> `whilly admin worker revoke` live-eviction surface, worker-side
+> URL re-discovery via `WHILLY_FUNNEL_URL_SOURCE=postgres|file`, and
+> migrations 008/009/010 (workers.owner_email + bootstrap_tokens +
+> funnel_url tables). **Strictly additive** — default `docker compose
+> up` is byte-equivalent to v4.4 (sidecar only starts with `--profile
+> funnel`); workshop-demo.sh, all v3-era CLI flags, and existing
+> alembic migrations 001-007 continue to work identically.
+
+### Breaking changes
+
+(none)
+
+### Upgrade notes
+
+- `pip install --upgrade whilly-orchestrator==4.5.0` /
+  `pip install --upgrade whilly-worker==4.5.0` (the worker
+  meta-package keeps its `==X.Y.Z` pin to the orchestrator —
+  upgrade both in lockstep).
+- `docker pull mshegolev/whilly:4.5.0` for the multi-arch image.
+- Schema migration: `alembic upgrade head` applies 008/009/010
+  (workers.owner_email column, bootstrap_tokens table, funnel_url
+  singleton table). All three are additive — v4.4 consumers reading
+  `events.payload` / `events.detail` are unaffected.
+- The legacy `WHILLY_WORKER_BOOTSTRAP_TOKEN` env-var fallback is
+  kept for back-compat; new deployments should mint per-user tokens
+  via `whilly admin bootstrap mint --owner <email> --json`.
+- Public exposure: opt in to the rotating-URL sidecar with
+  `docker compose -f docker-compose.control-plane.yml --profile funnel
+  up -d` and discover the URL via `SELECT url FROM funnel_url WHERE
+  id = 1` or `/funnel/url.txt`. See `docs/Deploy-M2.md`.
+
+### Added
 
 - **`funnel` sidecar service** (`m2-localhostrun-funnel-sidecar`).
   Adds a profile-gated `funnel` service to **both**
@@ -86,9 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     validator's surface for VAL-M2-DEMO-001/002/007/008/009/010 and
     VAL-M2-DEMO-902/904/905.
 
-### Documentation (v4.5 — date TBD until release)
-
-### Documentation (v4.5 — date TBD until release)
+### Documentation
 
 - **v4.5 (M2) deploy + ops doc set landed.** Three new operator
   docs ship under `docs/`:
