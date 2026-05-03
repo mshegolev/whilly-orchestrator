@@ -7,7 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — NEXT
 
-### Documentation
+> **v4.5 entry preview.** The block immediately below previews the
+> changes that will ship in **v4.5.0** (M2 of the Whilly Distributed
+> v5.0 mission). Code-side M2 features (`m2-localhostrun-funnel-
+> sidecar`, `m2-worker-url-refresh-on-rotation`, `m2-cross-host-demo`,
+> `m2-release-v4.5`) are still landing — this entry is the
+> docs / runbook portion. The release-driver feature
+> (`m2-release-v4.5`) will move this preview into a dated
+> `## [4.5.0] - YYYY-MM-DD` section at sign-off.
+
+### Documentation (v4.5 — date TBD until release)
+
+- **v4.5 (M2) deploy + ops doc set landed.** Three new operator
+  docs ship under `docs/`:
+  - [`docs/Deploy-M2.md`](docs/Deploy-M2.md) — M2 deploy walkthrough
+    covering both topologies (laptop-host vs VPS-host control-plane),
+    the localhost.run **staging vs prod** decision matrix
+    (free anonymous tier with rotating `https://<random>.lhr.life`
+    URL vs the deferred SSH-key stable-URL path), profile-gated
+    `funnel` sidecar bring-up, worker-side URL re-discovery via
+    `WHILLY_FUNNEL_URL_SOURCE=postgres|file`, and the full env-var
+    reference for v4.5.
+  - [`docs/Cert-Renewal.md`](docs/Cert-Renewal.md) — TLS / cert
+    renewal runbook. Documents the file paths the `funnel` sidecar
+    uses (`/funnel/url.txt` shared volume, `funnel_url` Postgres
+    table, `~root/.ssh/known_hosts` inside the alpine container),
+    explains why there is no `certbot renew` step on Whilly's side
+    (TLS terminated upstream by localhost.run with a Let's Encrypt
+    prod wildcard cert for `*.lhr.life`), and gives the
+    force-renew procedure (`docker compose restart funnel`) plus
+    the migration path to a self-managed cert (Caddy / Cloudflared
+    / etc.) when you outgrow localhost.run.
+  - [`docs/Token-Rotation.md`](docs/Token-Rotation.md) — admin-token
+    rotation runbook with **two separate playbooks**: Playbook A for
+    a per-user bootstrap-token leak (`whilly admin bootstrap
+    revoke <prefix>` + re-mint, limited blast radius, 5-min SLA)
+    and Playbook B for an admin / shared legacy-token leak (full
+    cluster rotation, mass-revoke, forensic checklist, 30-min
+    SLA). Includes a per-worker bearer-leak side path
+    (`whilly admin worker revoke <id>`) and a mandatory
+    post-rotation forensic checklist.
+- **DEMO.md** gets a new **«Сценарий M2 — public exposure через
+  localhost.run (v4.5)»** section walking through `--profile
+  funnel` bring-up, per-operator bootstrap minting via `whilly
+  admin bootstrap mint`, worker connect against the live
+  `lhr.life` URL, and `whilly admin worker revoke` live eviction.
+  The trailing «Дальше — M2 (Caddy / Tailscale Funnel)» pointer
+  is updated to reflect the 2026-05-02 pivot (localhost.run
+  sidecar replaces both cancelled paths).
+- **README.md** quickstart gets a cross-link from the M1
+  distributed-deployment block over to `docs/Deploy-M2.md` and the
+  two adjacent runbooks so operators can find them by name without
+  spelunking the full `docs/` tree.
+- **Pivot reflected throughout.** All references to "Caddy + ACME"
+  / "Tailscale Funnel" / "custom CA bundle on the worker" in M2
+  context are removed or rewritten to point at the localhost.run
+  sidecar (per AGENTS.md mission boundaries — see also the cancelled
+  `m2-tailscale-funnel`, `m2-caddy-compose`, `m2-worker-cert-trust`
+  features in `features.json`).
 
 - **Backcompat strategy clarified: the v3-flag shim is the canonical
   v4 backcompat surface.** The v3 in-process Wiggum loop was removed in

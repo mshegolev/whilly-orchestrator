@@ -319,8 +319,10 @@ whilly worker connect http://vps.example.com:8000 \
 
 > ⚠️ `--insecure` здесь — это **dev-only loopback-bypass**: иначе
 > `whilly-worker` отвергает plain HTTP к не-loopback хосту. В проде
-> переключитесь на HTTPS, когда подъедет **M2** (Caddy + ACME /
-> Tailscale Funnel) — подробности в
+> используйте **M2 (v4.5)** localhost.run sidecar — он публикует
+> `https://<random>.lhr.life` URL с настоящим Let's Encrypt-cert'ом
+> на edge, и `--insecure` становится не нужен. Полный walkthrough —
+> [`docs/Deploy-M2.md`](docs/Deploy-M2.md); базовый M1-сетап —
 > [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
 
 stdout покажет две строки `key: value` (грепабельные, без баннеров между):
@@ -336,9 +338,9 @@ Access; на headless Linux — `~/.config/whilly/credentials.json`, mode
 0600).
 
 > Plain HTTP к не-loopback хосту требует `--insecure` (как в сниппете
-> выше — это **dev-only loopback-bypass**). HTTPS (через Caddy /
-> Tailscale Funnel в M2) — рекомендуемый production-путь; полные
-> детали — в [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
+> выше — это **dev-only loopback-bypass**). HTTPS через **M2 (v4.5)**
+> localhost.run sidecar — рекомендуемый production-путь; полные
+> детали — в [`docs/Deploy-M2.md`](docs/Deploy-M2.md).
 
 ### M1.3 — Подключаем второй worker на самом VPS
 
@@ -402,8 +404,132 @@ docker-compose -f docker-compose.worker.yml --env-file .env.worker down
 docker-compose -f docker-compose.control-plane.yml down
 ```
 
-> 📚 Дальше — M2 (TLS + per-user trust через Caddy / Tailscale Funnel)
-> и M3 (web-dashboard + Prometheus). M1 — только deployment-артефакты.
+> 📚 Дальше — M2 (public-exposure через localhost.run sidecar +
+> per-user bootstrap CLI) ниже, и M3 (web-dashboard + Prometheus) в
+> следующей миссии. M1 — только deployment-артефакты.
+
+---
+
+## Сценарий M2 — public exposure через localhost.run (v4.5)
+
+> **Что нового в v4.5 (M2).** К `docker-compose.demo.yml` и
+> `docker-compose.control-plane.yml` добавлен **profile-gated
+> `funnel` сервис** — небольшой alpine-контейнер, который держит
+> SSH reverse-tunnel к **localhost.run** (бесплатный анонимный
+> tier) и публикует ротирующийся `https://<random>.lhr.life` URL
+> в (а) postgres-таблицу `funnel_url` и (б) shared-volume
+> `/funnel/url.txt`. Ноутбуки коллег подключаются по этому URL
+> из любой точки публичного интернета — без своего домена, без
+> Let's Encrypt, без Tailscale.
+>
+> Также добавлен **per-operator bootstrap-flow**: миграции 008
+> (`workers.owner_email`) + 009 (`bootstrap_tokens`), CLI-namespace
+> `whilly admin bootstrap mint|revoke|list` и
+> `whilly admin worker revoke <id>` (живой eviction воркера с
+> RELEASE in-flight задач). Старый shared
+> `WHILLY_WORKER_BOOTSTRAP_TOKEN` остаётся как back-compat
+> fallback на одну минорную версию.
+>
+> **Pivot 2026-05-02:** изначальные планы M2 (Caddy + ACME +
+> Tailscale Funnel + custom CA bundle на воркере) **отменены**.
+> localhost.run sidecar — единственный канонический путь
+> public-exposure в этой миссии. Полный walkthrough —
+> [`docs/Deploy-M2.md`](docs/Deploy-M2.md). Runbook'и для
+> tls-cert и token-rotation —
+> [`docs/Cert-Renewal.md`](docs/Cert-Renewal.md) +
+> [`docs/Token-Rotation.md`](docs/Token-Rotation.md).
+
+### M2.1 — Поднимаем control-plane + funnel sidecar
+
+```bash
+# Topology A (laptop-host) — control-plane + sidecar на ноутбуке.
+# Дефолтный `up` остаётся байт-в-байт как в v4.4 — sidecar только
+# через `--profile funnel`.
+docker compose -f docker-compose.demo.yml \
+    --profile funnel \
+    up -d
+
+# Verify sidecar parsed an lhr.life URL within ~10s:
+docker compose -f docker-compose.demo.yml logs funnel \
+    | grep -E 'https://[a-z0-9-]+\.lhr\.life'
+```
+
+(VPS-host вариант — `docker-compose.control-plane.yml` с тем же
+`--profile funnel`. Подробности — `docs/Deploy-M2.md` § Topology B.)
+
+### M2.2 — Минтим per-operator bootstrap token
+
+```bash
+# WHILLY_DATABASE_URL должен указывать на control-plane Postgres (тот же DSN, что и в Сценарии A).
+
+whilly admin bootstrap mint --owner alice@example.com --expires-in 30d
+# token: <plaintext>     ← captured ОДИН раз; список потом не покажет
+# owner: alice@example.com
+# token_hash: 9f3c0a4e1b2d…
+# is_admin: false
+# expires_at: 2026-06-02T...
+```
+
+Plaintext показывается **только один раз** — захватите и передайте
+alice через secure-канал (`whilly admin bootstrap list` показывает
+только truncated `token_hash`).
+
+### M2.3 — Читаем live `lhr.life` URL и подключаем worker
+
+```bash
+URL=$(psql "$WHILLY_DATABASE_URL" -t -A -c \
+    "SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1")
+echo "$URL"     # → https://abc123def456.lhr.life
+
+# На worker-ноутбуке (любой публичный internet — VPN не нужен):
+pip install 'whilly-orchestrator[worker]'
+whilly worker connect "$URL" \
+    --bootstrap-token "<alice's plaintext>" \
+    --plan demo \
+    --hostname "$(hostname)"
+
+# `--insecure` тут НЕ нужен — localhost.run терминирует publi
+# Let's Encrypt-cert на edge, и URL-scheme guard воркера принимает
+# HTTPS без оговорок.
+```
+
+### M2.4 — Проверяем eviction воркера через admin CLI
+
+```bash
+# Find a worker_id from `psql -c "SELECT worker_id FROM workers;"`:
+whilly admin worker revoke w-XXXXXXXX
+# revoked: true
+# worker_id: w-XXXXXXXX
+# released_tasks: 1
+```
+
+После этого старый bearer возвращает 401 на любом state-mutating
+RPC, а in-flight задача воркера освобождена обратно в `PENDING` с
+`RELEASE`-event'ом (`payload.reason='admin_revoked'`).
+
+### M2.5 — Backwards compat smoke (обязательная проверка)
+
+После M2-демо **всегда** прогоняем legacy single-host smoke
+(profile `funnel` оставляем выключенным — default behaviour):
+
+```bash
+docker compose -f docker-compose.demo.yml down
+bash workshop-demo.sh --cli stub        # exit 0, все demo-задачи DONE
+```
+
+Если этот шаг сфейлился — M2 принимать нельзя. Default-behaviour
+(`docker compose -f docker-compose.demo.yml up` без
+`--profile funnel`) обязан остаться байт-в-байт как v4.4.
+
+### M2.6 — Тушим стек
+
+```bash
+docker compose -f docker-compose.demo.yml --profile funnel down
+```
+
+> 📚 Дальше — M3 (web-dashboard на HTMX + SSE + Prometheus
+> `/metrics`) в следующей миссии. M2 — public-exposure +
+> per-user trust.
 
 ---
 

@@ -179,16 +179,27 @@ whilly worker connect http://$VPS_IP:8000 \
 
 > ⚠️ `--insecure` here is a **dev-only loopback-bypass**: the
 > `whilly-worker` URL-scheme guard otherwise rejects plain HTTP to a
-> non-loopback host. For production, switch to HTTPS once **M2** lands
-> the Caddy + ACME / Tailscale Funnel paths — see
-> [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md).
+> non-loopback host. For production, use **M2 (v4.5)**'s
+> localhost.run sidecar — it publishes a real
+> `https://<random>.lhr.life` URL with an upstream Let's Encrypt
+> cert at the edge, no `--insecure` needed. Full walkthrough +
+> staging-vs-prod decision matrix:
+> [`docs/Deploy-M2.md`](docs/Deploy-M2.md). Adjacent runbooks:
+> [`docs/Cert-Renewal.md`](docs/Cert-Renewal.md) (TLS / cert
+> lifecycle) and [`docs/Token-Rotation.md`](docs/Token-Rotation.md)
+> (per-user vs admin token-leak playbooks).
 
 Full walkthrough — including `WHILLY_BIND_HOST` / `WHILLY_USE_CONNECT_FLOW`
 options, the laptop-side Docker variant via
 [`docker-compose.worker.yml`](docker-compose.worker.yml), audit-log
 verification, and the M4 workspace topology design — lives in
 [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md) and
-[`docs/Workspace-Topology.md`](docs/Workspace-Topology.md).
+[`docs/Workspace-Topology.md`](docs/Workspace-Topology.md). For the
+v4.5 / M2 public-internet-exposure path (localhost.run sidecar +
+per-operator bootstrap CLI + admin token rotation runbooks), see
+[`docs/Deploy-M2.md`](docs/Deploy-M2.md),
+[`docs/Cert-Renewal.md`](docs/Cert-Renewal.md), and
+[`docs/Token-Rotation.md`](docs/Token-Rotation.md).
 
 ## CLI surface
 
@@ -286,6 +297,9 @@ deprecation via `log.warning(...)` + env-flag suppression (not Python's
 - [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) — hexagonal layout, scheduling, locks.
 - [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) — HTTP wire protocol, auth, long-polling.
 - [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md) — v4.4 multi-host deployment (VPS control-plane + laptop workers).
+- [`docs/Deploy-M2.md`](docs/Deploy-M2.md) — v4.5 (M2) public-internet exposure via the localhost.run sidecar (staging vs prod decision matrix, both topologies, env-var reference).
+- [`docs/Cert-Renewal.md`](docs/Cert-Renewal.md) — v4.5 (M2) TLS / cert renewal runbook (file paths, force-renew, migration off localhost.run).
+- [`docs/Token-Rotation.md`](docs/Token-Rotation.md) — v4.5 (M2) admin-token rotation runbook (per-user-leak vs admin-leak playbooks + forensic checklist).
 - [`docs/Workspace-Topology.md`](docs/Workspace-Topology.md) — design-only spec for the M4 per-worker editing workspace.
 - [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) — env-var mapping and breaking changes.
 - [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) — `whilly init` PRD-wizard flow.
