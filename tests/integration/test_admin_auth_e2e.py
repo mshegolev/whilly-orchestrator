@@ -757,3 +757,123 @@ async def test_constant_time_bearer_compare_no_timing_oracle(
         f"(mean_valid={mean_valid:.6f}, mean_invalid={mean_invalid:.6f}, "
         f"stdev_pooled={stdev_pooled:.6f}, n={n_iterations})"
     )
+
+
+# ---------------------------------------------------------------------------
+# VAL-CROSS-AUTH-004 — mixed bootstrap origins coexist in same cluster
+# ---------------------------------------------------------------------------
+
+
+async def test_mixed_bootstrap_origins_coexist_in_same_cluster(
+    db_pool: asyncpg.Pool,
+    repo: TaskRepository,
+) -> None:
+    """VAL-CROSS-AUTH-004 — env-var bootstrap and admin-minted bootstrap
+    coexist on the same control-plane.
+
+    Boots a single ``create_app`` with both bootstrap surfaces wired:
+
+    * the legacy ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var fallback
+      (passed through ``bootstrap_token=`` kwarg);
+    * a per-operator bootstrap token minted via
+      :meth:`TaskRepository.mint_bootstrap_token` (mirrors what
+      ``whilly admin bootstrap mint`` writes).
+
+    Registers two workers — one through each bootstrap surface — and
+    asserts that **both** can subsequently heartbeat AND claim against
+    the same cluster. The ``workers`` table reflects two rows whose
+    ``owner_email`` columns differ (``NULL`` for the env-var path,
+    the minted owner for the admin-CLI path).
+    """
+    legacy_bootstrap = "legacy-cross-auth-004-env-var"
+    minted_plaintext = "alice-cross-auth-004-minted"
+    await repo.mint_bootstrap_token(minted_plaintext, owner_email="alice@example.com")
+
+    app = create_app(
+        db_pool,
+        worker_token=None,
+        bootstrap_token=legacy_bootstrap,
+        claim_long_poll_timeout=_LONG_POLL_TIMEOUT,
+        claim_poll_interval=_POLL_INTERVAL,
+    )
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Register worker via env-var bootstrap (legacy path).
+            r_env = await client.post(
+                REGISTER_PATH,
+                json={"hostname": "host-cross-auth-004-env"},
+                headers={"Authorization": f"Bearer {legacy_bootstrap}"},
+            )
+            assert r_env.status_code == 201, r_env.text
+            env_worker_id = r_env.json()["worker_id"]
+            env_bearer = r_env.json()["token"]
+
+            # Register worker via admin-minted bootstrap (per-user path).
+            r_minted = await client.post(
+                REGISTER_PATH,
+                json={"hostname": "host-cross-auth-004-minted"},
+                headers={"Authorization": f"Bearer {minted_plaintext}"},
+            )
+            assert r_minted.status_code == 201, r_minted.text
+            minted_worker_id = r_minted.json()["worker_id"]
+            minted_bearer = r_minted.json()["token"]
+            assert env_worker_id != minted_worker_id
+
+            # Owner-email column reflects the bootstrap origin: NULL for
+            # the env-var path (shared cluster secret cannot identify
+            # an operator), alice@example.com for the per-user path.
+            async with db_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT worker_id, owner_email FROM workers WHERE worker_id IN ($1, $2) ORDER BY worker_id",
+                    env_worker_id,
+                    minted_worker_id,
+                )
+            owner_by_id = {row["worker_id"]: row["owner_email"] for row in rows}
+            assert owner_by_id[env_worker_id] is None
+            assert owner_by_id[minted_worker_id] == "alice@example.com"
+
+            # Both workers heartbeat successfully.
+            for worker_id, bearer in (
+                (env_worker_id, env_bearer),
+                (minted_worker_id, minted_bearer),
+            ):
+                hb = await client.post(
+                    f"/workers/{worker_id}/heartbeat",
+                    json={"worker_id": worker_id},
+                    headers={"Authorization": f"Bearer {bearer}"},
+                )
+                assert hb.status_code == 200, hb.text
+
+            # Both workers claim a task from the same plan.
+            plan_id = "PLAN-CROSS-AUTH-004"
+            await _seed_task(db_pool, plan_id, "T-cross-auth-004-env")
+            await _seed_task(db_pool, plan_id, "T-cross-auth-004-minted")
+
+            claimed_task_ids: dict[str, str] = {}
+            for worker_id, bearer in (
+                (env_worker_id, env_bearer),
+                (minted_worker_id, minted_bearer),
+            ):
+                claim = await client.post(
+                    CLAIM_PATH,
+                    json={"worker_id": worker_id, "plan_id": plan_id},
+                    headers={"Authorization": f"Bearer {bearer}"},
+                )
+                assert claim.status_code == 200, claim.text
+                task_body = claim.json()["task"]
+                assert task_body["status"] == "CLAIMED"
+                claimed_task_ids[worker_id] = task_body["id"]
+            assert claimed_task_ids[env_worker_id] != claimed_task_ids[minted_worker_id], (
+                "each worker must claim a distinct task row"
+            )
+
+            async with db_pool.acquire() as conn:
+                claim_rows = await conn.fetch(
+                    "SELECT id, claimed_by FROM tasks WHERE id IN ($1, $2)",
+                    claimed_task_ids[env_worker_id],
+                    claimed_task_ids[minted_worker_id],
+                )
+            claimed_by_task = {row["id"]: row["claimed_by"] for row in claim_rows}
+            assert claimed_by_task[claimed_task_ids[env_worker_id]] == env_worker_id
+            assert claimed_by_task[claimed_task_ids[minted_worker_id]] == minted_worker_id

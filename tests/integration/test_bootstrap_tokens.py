@@ -444,3 +444,134 @@ def test_token_collision_by_truncation_impossible() -> None:
     h2 = hash_bootstrap_token(t2)
     assert h1[:8] == h2[:8], "rejection sampler did not produce a shared 8-hex prefix"
     assert h1 != h2, "full SHA-256 digests must differ even when the leading 8 hex chars match"
+
+
+# ---------------------------------------------------------------------------
+# VAL-CROSS-AUTH-006 — bootstrap revocation does NOT invalidate per-worker bearers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_revoke_does_not_invalidate_existing_per_worker_bearer(
+    task_repo: TaskRepository,
+    db_pool: asyncpg.Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-CROSS-AUTH-006 — revocation gates ``/workers/register`` only.
+
+    Steady-state RPCs (heartbeat / claim) carry per-worker bearers
+    that authenticate against ``workers.token_hash`` — not against
+    the bootstrap-token row. Revoking the bootstrap therefore must
+    NOT cascade onto already-issued per-worker bearers; only fresh
+    cluster-join attempts (``POST /workers/register``) with the
+    same bootstrap plaintext should fail 401.
+
+    Steps:
+      1. Mint a per-operator bootstrap token (admin-CLI shape).
+      2. Register worker A through the bootstrap; snapshot bearer A.
+      3. Revoke the bootstrap.
+      4. Bearer A continues to heartbeat + claim (3 cycles each per
+         the contract's ``≥3 cycles`` evidence clause).
+      5. A fresh ``POST /workers/register`` with the same bootstrap
+         plaintext returns 401 with the RFC 6750
+         ``WWW-Authenticate: Bearer realm="whilly"`` envelope.
+    """
+    # Local import to keep the test-file's existing import block
+    # unchanged — the rest of this module is repo-only and avoids
+    # the FastAPI / httpx dependency surface.
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from whilly.adapters.transport.auth import reset_legacy_warning_state
+    from whilly.adapters.transport.server import CLAIM_PATH, REGISTER_PATH, create_app
+
+    reset_legacy_warning_state()
+    # Clear any test-runner-leaked legacy env so the assertion exercises the
+    # pure DB-backed auth path: a fresh register attempt with the revoked
+    # plaintext must surface 401 because no row matches AND no legacy
+    # fallback can rescue it.
+    monkeypatch.delenv("WHILLY_WORKER_BOOTSTRAP_TOKEN", raising=False)
+    monkeypatch.delenv("WHILLY_WORKER_TOKEN", raising=False)
+
+    bootstrap_plaintext = "cross-auth-006-bootstrap"
+    bootstrap_hash = await task_repo.mint_bootstrap_token(
+        bootstrap_plaintext,
+        owner_email="alice-cross-auth-006@example.com",
+    )
+
+    app: FastAPI = create_app(
+        db_pool,
+        worker_token=None,
+        bootstrap_token=None,
+        claim_long_poll_timeout=0.3,
+        claim_poll_interval=0.05,
+    )
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Register worker A under the still-active bootstrap.
+            register_a = await client.post(
+                REGISTER_PATH,
+                json={"hostname": "host-cross-auth-006-a"},
+                headers={"Authorization": f"Bearer {bootstrap_plaintext}"},
+            )
+            assert register_a.status_code == 201, register_a.text
+            worker_a_id = register_a.json()["worker_id"]
+            bearer_a = register_a.json()["token"]
+
+            # Revoke the bootstrap row — flips ``revoked_at`` to NOW().
+            await task_repo.revoke_bootstrap_token(bootstrap_hash)
+            revoked_at = await db_pool.fetchval(
+                "SELECT revoked_at FROM bootstrap_tokens WHERE token_hash = $1",
+                bootstrap_hash,
+            )
+            assert revoked_at is not None, "revoke_bootstrap_token must stamp revoked_at"
+
+            # (a) Bearer A continues to heartbeat + claim for ≥3 cycles
+            #     post-revocation. Seed three plan rows so each claim
+            #     cycle has a PENDING task to bind to.
+            plan_id = "PLAN-CROSS-AUTH-006"
+            cycles = 3
+            for cycle_idx in range(cycles):
+                hb = await client.post(
+                    f"/workers/{worker_a_id}/heartbeat",
+                    json={"worker_id": worker_a_id},
+                    headers={"Authorization": f"Bearer {bearer_a}"},
+                )
+                assert hb.status_code == 200, (
+                    f"cycle {cycle_idx}: heartbeat must succeed despite revoked bootstrap; got {hb.status_code} {hb.text}"
+                )
+
+                task_id = f"T-cross-auth-006-{cycle_idx}"
+                async with db_pool.acquire() as conn:
+                    async with conn.transaction():
+                        await conn.execute(
+                            "INSERT INTO plans (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+                            plan_id,
+                            f"plan-{plan_id}",
+                        )
+                        await conn.execute(
+                            "INSERT INTO tasks (id, plan_id, status, priority) VALUES ($1, $2, 'PENDING', 'medium')",
+                            task_id,
+                            plan_id,
+                        )
+
+                claim = await client.post(
+                    CLAIM_PATH,
+                    json={"worker_id": worker_a_id, "plan_id": plan_id},
+                    headers={"Authorization": f"Bearer {bearer_a}"},
+                )
+                assert claim.status_code == 200, (
+                    f"cycle {cycle_idx}: claim must succeed despite revoked bootstrap; got {claim.status_code} {claim.text}"
+                )
+                assert claim.json()["task"]["id"] == task_id
+
+            # (b) A fresh register with the (now revoked) bootstrap
+            #     plaintext is refused 401 with the RFC 6750 envelope.
+            register_replay = await client.post(
+                REGISTER_PATH,
+                json={"hostname": "host-cross-auth-006-replay"},
+                headers={"Authorization": f"Bearer {bootstrap_plaintext}"},
+            )
+            assert register_replay.status_code == 401, register_replay.text
+            assert register_replay.headers.get("WWW-Authenticate", "").startswith('Bearer realm="whilly"')
