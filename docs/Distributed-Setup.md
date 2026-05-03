@@ -251,6 +251,22 @@ once per session (`[funnel ...] discovered URL: https://...lhr.life`)
 so `docker compose logs funnel` is the simplest way to spot the
 latest URL without writing SQL.
 
+### Source-IP forensics: out of scope under localhost.run
+
+localhost.run terminates TLS at the `lhr.life` edge and reverse-tunnels
+the cleartext request over SSH back to the `funnel` sidecar. Both the
+sidecar and the control-plane therefore only ever observe the **funnel
+container's IP** as the request peer — the original external client IP
+is **not** preserved on the wire. As a consequence, `events.payload->>'source_ip'`
+is intentionally **not populated** on `WORKER_REGISTERED` /
+`/api/v1/admin/*` audit events under the M2 deploy path; treat the
+field as absent rather than null-but-meaningful, and do not rely on it
+as an impostor-detection signal in token-rotation runbooks. A future
+paid-tier deploy path (e.g. localhost.run dedicated tunnel surfacing
+`X-Forwarded-For`, or a Caddy reverse-proxy in front of the
+control-plane) would revisit this assertion and start populating
+`source_ip` from the proxy header.
+
 ---
 
 ## VPS A — control-plane
@@ -528,12 +544,6 @@ v4.4, that is a bug — please open an issue.
 | `WHILLY_BIND_HOST` | `127.0.0.1` | Host interface the control-plane's port 8000 is mapped to. Set to `0.0.0.0` (IPv4 wildcard), `::` (IPv6 wildcard), or any explicit interface IP to expose the API beyond loopback. |
 | `WHILLY_USE_CONNECT_FLOW` | unset (legacy) | When truthy (`1`, `true`, `yes`, `on`), the worker container's entrypoint uses `whilly worker connect` instead of the legacy bash-awk register flow. Default OFF preserves byte-equivalent v4.3.1 stderr/stdout. |
 | `WHILLY_WORKER_HOSTNAME` | `whilly-worker` | Hostname the worker self-reports during register. Surfaces in the `workers` table and event payloads — set this to something humans can grep (`macbook-mvs`, `vps-eu-1`). |
-
-> Note: `TAILSCALE_AUTHKEY` / `TAILSCALE_HOSTNAME` /
-> `WHILLY_INCLUDE_TAILSCALE` were removed in the 2026-05-02
-> localhost.run pivot. Setting `TAILSCALE_AUTHKEY` in a leftover
-> `.env` is now a no-op with a one-line warning to stderr — the
-> `funnel` sidecar (M2) replaces them entirely.
 
 ---
 
