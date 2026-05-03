@@ -242,8 +242,8 @@ mints them fresh tokens.
 
 #### 4. Evict suspicious workers
 
-Cross-reference `workers.last_heartbeat` and `workers.host_url`
-against your trusted set. Anything unexpected:
+Cross-reference `workers.last_heartbeat` against your trusted set.
+Anything unexpected:
 
 ```bash
 whilly admin worker revoke w-IMPOSTOR1
