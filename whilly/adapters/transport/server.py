@@ -180,11 +180,11 @@ from whilly.api.event_flusher import (
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
-    AuthDependency,
     IdentityBindingAuthDependency,
     hash_bearer_token,
-    make_bootstrap_auth,
+    make_admin_auth,
     make_db_bearer_auth,
+    make_db_bootstrap_auth,
 )
 from whilly.adapters.transport.schemas import (
     ClaimRequest,
@@ -720,7 +720,13 @@ def create_app(
     # ``POST /workers/register`` is the only thing that can mint
     # per-worker tokens, so without it the cluster cannot grow.
     legacy_worker_token = _resolve_optional_token(worker_token, WORKER_TOKEN_ENV)
-    resolved_bootstrap_token = _resolve_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
+    # M2: ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` is now *optional* — the
+    # primary surface is per-operator rows in ``bootstrap_tokens``
+    # (migration 009) consulted by :func:`make_db_bootstrap_auth`. A
+    # missing env var is fine when the operator has minted at least
+    # one bootstrap-token row; the env var is kept as a one-minor-
+    # version legacy fallback (logs a deprecation warning on hit).
+    legacy_bootstrap_token = _resolve_optional_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
     # Construct the repository once at app build time. The repo is a
     # thin wrapper around the pool, so reusing one instance across all
     # requests is both correct and cheaper than instantiating per
@@ -733,7 +739,16 @@ def create_app(
     # bearer surface (TASK-101); legacy ``WHILLY_WORKER_TOKEN`` rides
     # along as the optional one-minor-version fallback.
     bearer_dep: IdentityBindingAuthDependency = make_db_bearer_auth(repo, legacy_token=legacy_worker_token)
-    bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
+    # M2: bootstrap dep is DB-backed (``bootstrap_tokens`` table) with
+    # the env var as the legacy fallback. The dep stashes
+    # ``request.state.bootstrap_owner_email`` /
+    # ``bootstrap_is_admin`` so the register handler can attribute
+    # the new ``workers`` row to the operator who minted the token.
+    bootstrap_dep: IdentityBindingAuthDependency = make_db_bootstrap_auth(repo, legacy_token=legacy_bootstrap_token)
+    # M2: admin dep gates ``/api/v1/admin/*`` routes — same DB lookup
+    # but requires ``is_admin=true`` on the bootstrap-token row. 401
+    # on missing/invalid bearer, 403 on known non-admin operator.
+    admin_dep: IdentityBindingAuthDependency = make_admin_auth(repo, legacy_token=legacy_bootstrap_token)
 
     # Event flusher (TASK-106). Construction is cheap and non-async — it
     # just allocates an :class:`asyncio.Queue` and stashes config. The
@@ -754,6 +769,7 @@ def create_app(
         app.state.repo = repo
         app.state.bearer_dep = bearer_dep
         app.state.bootstrap_dep = bootstrap_dep
+        app.state.admin_dep = admin_dep
         logger.info("Whilly control-plane app started")
         # Background-task rendezvous (PRD FR-1.4, TASK-025a). The sweep
         # loop checks this event between sleeps; lifespan teardown sets
@@ -943,7 +959,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
         dependencies=[Depends(bootstrap_dep)],
     )
-    async def register_worker(payload: RegisterRequest) -> RegisterResponse:
+    async def register_worker(request: Request, payload: RegisterRequest) -> RegisterResponse:
         """Mint a fresh worker identity and return its bearer token (PRD FR-1.1).
 
         Gated by the *bootstrap* token (cluster-join secret) — the
@@ -972,8 +988,19 @@ def create_app(
         worker_id = _generate_worker_id()
         plaintext_token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
         token_hash = _hash_token(plaintext_token)
+        # M2: when the bootstrap auth dep resolved a per-operator token
+        # (``bootstrap_tokens`` row), bind the new ``workers`` row to
+        # the operator's email — the dep stashed it on
+        # ``request.state.bootstrap_owner_email``. This wins over any
+        # client-supplied ``payload.owner_email`` so an operator
+        # cannot register a worker under someone else's identity by
+        # spoofing the body. Legacy env-fallback path leaves
+        # ``bootstrap_owner_email`` as ``None`` and we fall through to
+        # the explicit body field for backwards compatibility.
+        bootstrap_owner_email: str | None = getattr(request.state, "bootstrap_owner_email", None)
+        resolved_owner_email = bootstrap_owner_email if bootstrap_owner_email is not None else payload.owner_email
         try:
-            await repo.register_worker(worker_id, payload.hostname, token_hash, payload.owner_email)
+            await repo.register_worker(worker_id, payload.hostname, token_hash, resolved_owner_email)
         except asyncpg.UniqueViolationError:
             # Defensive: 64 bits of entropy makes this nearly impossible.
             # If it does fire we surface a 500 rather than retrying with
@@ -1088,9 +1115,16 @@ def create_app(
         # bearer cannot claim a task on behalf of worker B even though
         # the path carries no identity.
         _require_token_owner(request, payload.worker_id)
+        # M2 mission (VAL-M2-ADMIN-AUTH-011): forward the
+        # operator's ``owner_email`` (stashed by the per-worker
+        # bearer auth dep on ``request.state.authenticated_owner_email``)
+        # so the CLAIM event payload attributes the action to the
+        # operator. ``None`` on the legacy fallback path leaves the
+        # payload key omitted, preserving the v4.4.0 baseline shape.
+        authenticated_owner_email: str | None = getattr(request.state, "authenticated_owner_email", None)
         deadline = time.monotonic() + claim_long_poll_timeout
         while True:
-            claimed = await repo.claim_task(payload.worker_id, payload.plan_id)
+            claimed = await repo.claim_task(payload.worker_id, payload.plan_id, owner_email=authenticated_owner_email)
             if claimed is not None:
                 # Hot path: claim succeeded. Wrap the domain Task in
                 # the wire-format payload — ``plan`` is intentionally
@@ -1391,6 +1425,22 @@ def create_app(
                 "prd_file": row["prd_file"],
             }
         )
+
+    @app.get(
+        "/api/v1/admin/health",
+        # Anchor route for the M2 ``/api/v1/admin/*`` namespace. The
+        # full admin surface (mint / revoke / list bootstrap tokens,
+        # revoke worker, etc.) lands in the m2-admin-cli feature,
+        # which appends routes onto the same prefix gated by the same
+        # ``admin_dep``. This minimal probe lets validators assert the
+        # 401/403/200 envelope (VAL-M2-ADMIN-AUTH-008/-010) end-to-end
+        # without requiring the CLI surface to be in place yet.
+        dependencies=[Depends(admin_dep)],
+        include_in_schema=False,
+    )
+    async def admin_health(request: Request) -> JSONResponse:
+        owner = getattr(request.state, "bootstrap_owner_email", None)
+        return JSONResponse({"status": "ok", "owner": owner})
 
     return app
 

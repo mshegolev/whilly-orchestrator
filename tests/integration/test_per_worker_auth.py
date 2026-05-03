@@ -599,7 +599,11 @@ async def test_legacy_worker_token_accepted_with_warning(
         assert r2.status_code == 200, r2.text
 
     deprecation_records = [
-        rec for rec in caplog.records if rec.levelno == logging.WARNING and "deprecated" in rec.getMessage().lower()
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "deprecated" in rec.getMessage().lower()
+        and "WHILLY_WORKER_TOKEN" in rec.getMessage()
     ]
     assert len(deprecation_records) == 1, f"expected exactly one deprecation WARNING, got {len(deprecation_records)}"
 
@@ -690,7 +694,11 @@ async def test_per_worker_bearer_takes_precedence_over_legacy(
         )
     assert r.status_code == 200
     deprecation_records = [
-        rec for rec in caplog.records if rec.levelno == logging.WARNING and "deprecated" in rec.getMessage().lower()
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "deprecated" in rec.getMessage().lower()
+        and "WHILLY_WORKER_TOKEN" in rec.getMessage()
     ]
     assert deprecation_records == [], "per-worker authentication path must NOT emit the legacy deprecation log"
 

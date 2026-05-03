@@ -289,8 +289,39 @@ def reset_legacy_warning_state() -> None:
     emission masks the next test's expected emission). Mirrors
     :func:`reset_lazy_dependencies` for the dependency cache.
     """
-    global _legacy_worker_token_warning_emitted
+    global _legacy_worker_token_warning_emitted, _legacy_bootstrap_token_warning_emitted
     _legacy_worker_token_warning_emitted = False
+    _legacy_bootstrap_token_warning_emitted = False
+
+
+_legacy_bootstrap_token_warning_emitted: bool = False
+
+
+def _maybe_warn_legacy_bootstrap_token() -> None:
+    """Emit the legacy ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` deprecation warning once per process.
+
+    Called from :func:`make_db_bootstrap_auth` (and
+    :func:`make_admin_auth`) when an incoming bearer matched the
+    legacy shared bootstrap token (and not a per-operator
+    ``bootstrap_tokens`` row). Mirrors
+    :func:`_maybe_warn_legacy_worker_token` — once per process,
+    suppressible via :data:`SUPPRESS_WORKER_TOKEN_WARNING_ENV` (kept
+    intentionally shared with the worker-token suppression env so
+    operators in transition only have to flip one switch).
+    """
+    global _legacy_bootstrap_token_warning_emitted
+    if _legacy_bootstrap_token_warning_emitted:
+        return
+    if (os.environ.get(SUPPRESS_WORKER_TOKEN_WARNING_ENV) or "").strip() == "1":
+        _legacy_bootstrap_token_warning_emitted = True
+        return
+    logger.warning(
+        "WHILLY_WORKER_BOOTSTRAP_TOKEN env-var fallback is deprecated; "
+        "mint per-operator bootstrap tokens via `whilly admin bootstrap mint`. "
+        "Suppress: %s=1",
+        SUPPRESS_WORKER_TOKEN_WARNING_ENV,
+    )
+    _legacy_bootstrap_token_warning_emitted = True
 
 
 def _read_required_env(name: str) -> str:
@@ -482,8 +513,24 @@ def make_db_bearer_auth(
     ) -> None:
         token = _extract_bearer(authorization)
         token_hash = hash_bearer_token(token)
-        worker_id = await repo.get_worker_id_by_token_hash(token_hash)
-        if worker_id is not None:
+        # M2: single-round-trip identity lookup that also returns the
+        # operator's ``owner_email`` so handlers (claim / heartbeat /
+        # ...) can attribute audit events to the operator without an
+        # extra SELECT. ``identity is None`` covers the same three
+        # operationally distinct miss cases as the legacy
+        # ``get_worker_id_by_token_hash`` (forged / revoked / row-
+        # gone) and is treated as a 401 from the wire's perspective.
+        # Fallback path: a fake repo (test) that only implements the
+        # legacy ``get_worker_id_by_token_hash`` method still works,
+        # with ``owner_email`` resolved as ``None``.
+        identity_lookup = getattr(repo, "get_worker_identity_by_token_hash", None)
+        if identity_lookup is not None:
+            identity = await identity_lookup(token_hash)
+        else:
+            worker_id_only = await repo.get_worker_id_by_token_hash(token_hash)
+            identity = (worker_id_only, None) if worker_id_only is not None else None
+        if identity is not None:
+            worker_id, owner_email = identity
             # Per-worker bearer takes precedence: even if ``token`` also
             # happens to equal ``legacy_token``, the deprecation warning
             # is NOT emitted on this path — VAL-AUTH-034 pins the
@@ -492,8 +539,11 @@ def make_db_bearer_auth(
             # ``request.state`` so the route handlers'
             # ``_require_token_owner`` helper can compare it against
             # the body / path identity and reject cross-worker calls
-            # with a 403 (VAL-AUTH-024).
+            # with a 403 (VAL-AUTH-024). ``owner_email`` is stashed
+            # alongside (M2: VAL-M2-ADMIN-AUTH-011) so audit-event
+            # payloads can attribute actions to the operator.
             request.state.authenticated_worker_id = worker_id
+            request.state.authenticated_owner_email = owner_email
             return None
         if legacy_token_clean is not None and secrets.compare_digest(token, legacy_token_clean):
             # Legacy fallback hit. The shared ``WHILLY_WORKER_TOKEN``
@@ -504,11 +554,204 @@ def make_db_bearer_auth(
             # one minor version (VAL-AUTH-030/031/034). Emit the
             # one-shot deprecation warning (suppressible).
             request.state.authenticated_worker_id = None
+            request.state.authenticated_owner_email = None
             _maybe_warn_legacy_worker_token()
             return None
         raise _bearer_401("invalid token")
 
     return db_bearer_auth
+
+
+def make_db_bootstrap_auth(
+    repo: TaskRepository,
+    *,
+    legacy_token: str | None = None,
+) -> IdentityBindingAuthDependency:
+    """Build a per-operator bootstrap ``Depends`` callable backed by ``bootstrap_tokens``.
+
+    M2 mission: replaces the single shared
+    ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env var with per-operator rows
+    minted via ``whilly admin bootstrap mint`` (migration 009).
+    Behaves like :func:`make_db_bearer_auth` for the bootstrap surface
+    (``POST /workers/register``):
+
+    1. Extract the bearer per RFC 6750 / RFC 7235.
+    2. Hash the plaintext via :func:`hash_bootstrap_token` (same SHA-256
+       digest the repo's mint path uses) and ask
+       :meth:`TaskRepository.get_bootstrap_token_owner` to resolve it.
+       A hit returns ``(owner_email, is_admin)`` — both stashed on
+       ``request.state.bootstrap_owner_email`` /
+       ``request.state.bootstrap_is_admin`` so the route handler
+       (``register_worker``) can attribute the new ``workers`` row to
+       the operator who minted the token.
+    3. **Optional legacy fallback.** If ``legacy_token`` is set
+       (operator left ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` defined for
+       one-minor-version backwards compatibility), the dep
+       :func:`secrets.compare_digest`-checks the presented bearer
+       against ``legacy_token``. On match the dep accepts the request
+       AND emits a one-shot deprecation warning via
+       :func:`_maybe_warn_legacy_bootstrap_token`. On the legacy path
+       ``request.state.bootstrap_owner_email`` is set to ``None`` and
+       ``bootstrap_is_admin`` to ``False`` — the shared token cannot
+       identify a specific operator and is never admin-scoped.
+    4. Otherwise raise 401 ``invalid bootstrap token``.
+
+    Why a separate factory rather than retrofitting
+    :func:`make_bootstrap_auth`?
+        Symmetry with the per-worker pair (``make_bearer_auth`` vs.
+        ``make_db_bearer_auth``): the static-token form is preserved
+        for tests and ad-hoc scripts that don't need the DB; the
+        DB-backed form is the primary surface for ``create_app``.
+        Re-using one entry point with both shapes would have to
+        sniff arg types (string vs. repo), which obscures intent at
+        the call site.
+
+    Why no DB call on the legacy hit?
+        Two SQL round-trips per failed auth would amplify a
+        password-spray DoS, and the legacy fallback is itself a
+        constant-time comparison against an in-process string —
+        symmetric with :func:`make_db_bearer_auth`'s behaviour.
+
+    Parameters
+    ----------
+    repo:
+        :class:`TaskRepository` bound to the app's asyncpg pool.
+        Captured by the closure. Only
+        :meth:`get_bootstrap_token_owner` is called from this dep.
+    legacy_token:
+        Optional plaintext shared bootstrap secret kept for one
+        minor version (PRD AC: "shared-bearer fallback через env
+        var оставить на одну минорную версию"). When ``None``, the
+        dep is purely DB-backed and any non-matching bearer
+        returns 401.
+
+    Returns
+    -------
+    IdentityBindingAuthDependency
+        Async ``Depends`` callable taking ``Request`` + the
+        ``Authorization`` header. Returns ``None`` on success;
+        side-effect is the ``request.state`` writes documented above.
+    """
+    legacy_token_clean = legacy_token.strip() if legacy_token is not None else None
+    if legacy_token_clean == "":
+        raise RuntimeError(
+            "make_db_bootstrap_auth: legacy_token must be non-empty when provided "
+            "(use None to disable the legacy WHILLY_WORKER_BOOTSTRAP_TOKEN fallback)."
+        )
+
+    async def db_bootstrap_auth(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> None:
+        token = _extract_bearer(authorization)
+        try:
+            owner = await repo.get_bootstrap_token_owner(token)
+        except Exception:
+            logger.exception("make_db_bootstrap_auth: repo lookup raised")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="bootstrap auth backend unavailable",
+            ) from None
+        if owner is not None:
+            owner_email, is_admin = owner
+            request.state.bootstrap_owner_email = owner_email
+            request.state.bootstrap_is_admin = is_admin
+            return None
+        if legacy_token_clean is not None and secrets.compare_digest(token, legacy_token_clean):
+            request.state.bootstrap_owner_email = None
+            request.state.bootstrap_is_admin = False
+            _maybe_warn_legacy_bootstrap_token()
+            return None
+        raise _bearer_401("invalid bootstrap token")
+
+    return db_bootstrap_auth
+
+
+def make_admin_auth(
+    repo: TaskRepository,
+    *,
+    legacy_token: str | None = None,
+) -> IdentityBindingAuthDependency:
+    """Build a FastAPI ``Depends`` that gates ``/api/v1/admin/*`` routes on an admin bootstrap token.
+
+    M2 mission: ``whilly admin bootstrap mint --is-admin`` mints a
+    bootstrap-token row with ``is_admin=true`` (migration 009). This
+    factory wraps the same DB-backed lookup as
+    :func:`make_db_bootstrap_auth` but tightens the verdict:
+
+    * 401 on missing / malformed / wrong bearer (no DB lookup
+      performed when the header is absent / non-Bearer / empty);
+    * 403 on a known active *non-admin* bootstrap token (auth
+      succeeded but the operator is not admin-scoped);
+    * 200 (i.e. dep returns ``None``) on a known active admin
+      bootstrap token; ``request.state.bootstrap_owner_email`` /
+      ``bootstrap_is_admin=True`` are stashed for downstream
+      handlers / audit log emission.
+
+    Legacy ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var fallback is
+    intentionally NOT admin-scoped: the shared cluster bootstrap
+    secret cannot identify an operator and therefore cannot be
+    elevated. A request bearing the legacy token against an admin
+    route returns 403 (auth succeeded as a non-admin operator). One-
+    shot deprecation warning still fires on the legacy hit so the
+    operator notices.
+
+    Why 403 (not 401) for non-admin?
+        RFC 7235 / RFC 6750 §3 : 401 is "I don't know who you are";
+        403 is "I know you, you can't do this". A known-active token
+        is authenticated; admin-scope is the *authorisation* gate.
+        This split lets operator dashboards separate "wrong token"
+        from "right token, wrong scope" cleanly. VAL-M2-ADMIN-AUTH-008
+        / -902 pin this contract.
+
+    Why no DB-existence leak through the response code?
+        Per VAL-M2-ADMIN-AUTH-904: a revoked-but-formerly-admin
+        token, an active non-admin token, and a fully-bogus token
+        each yield well-defined codes that don't disclose existence
+        beyond what the active-set lookup already discloses
+        (revoked / expired / unknown all collapse to 401; active
+        non-admin yields 403). The DB lookup runs only after the
+        bearer header parse passes (VAL-M2-ADMIN-AUTH-010).
+    """
+    legacy_token_clean = legacy_token.strip() if legacy_token is not None else None
+    if legacy_token_clean == "":
+        raise RuntimeError(
+            "make_admin_auth: legacy_token must be non-empty when provided "
+            "(use None to disable the legacy WHILLY_WORKER_BOOTSTRAP_TOKEN fallback)."
+        )
+
+    async def admin_auth(
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> None:
+        token = _extract_bearer(authorization)
+        try:
+            owner = await repo.get_bootstrap_token_owner(token)
+        except Exception:
+            logger.exception("make_admin_auth: repo lookup raised")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="admin auth backend unavailable",
+            ) from None
+        if owner is not None:
+            owner_email, is_admin = owner
+            if not is_admin:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"operator {owner_email!r} is not admin-scoped",
+                )
+            request.state.bootstrap_owner_email = owner_email
+            request.state.bootstrap_is_admin = True
+            return None
+        if legacy_token_clean is not None and secrets.compare_digest(token, legacy_token_clean):
+            _maybe_warn_legacy_bootstrap_token()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="legacy WHILLY_WORKER_BOOTSTRAP_TOKEN is not admin-scoped",
+            )
+        raise _bearer_401("invalid bootstrap token")
+
+    return admin_auth
 
 
 def make_bootstrap_auth(expected_token: str) -> AuthDependency:
@@ -611,9 +854,11 @@ __all__ = [
     "bearer_auth",
     "bootstrap_auth",
     "hash_bearer_token",
+    "make_admin_auth",
     "make_bearer_auth",
     "make_bootstrap_auth",
     "make_db_bearer_auth",
+    "make_db_bootstrap_auth",
     "reset_lazy_dependencies",
     "reset_legacy_warning_state",
 ]
