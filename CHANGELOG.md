@@ -57,6 +57,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control-plane, workers on laptops). Documents the URL-discovery
   strategies (postgres re-discovery vs one-shot static URL), the
   free-tier rotation caveat, and links to the M3 stable-URL path.
+- **M2 cross-host demo gate + orchestrator** (`m2-cross-host-demo`).
+  Two artifacts compose the M2 sign-off path:
+  - `tests/integration/test_m2_cross_host_demo.py` — hermetic
+    in-process gate. Boots a uvicorn control-plane (testcontainers
+    Postgres) and three `whilly-worker` subprocesses (alice / bob /
+    carol), each registered through its own bootstrap token minted
+    via `whilly admin bootstrap mint`. Drains a 6-task plan,
+    live-revokes Alice mid-drain via `whilly admin worker revoke`,
+    asserts Alice's worker exits non-zero within 60 s, that Bob and
+    Carol continue uninterrupted, that the final task histogram is
+    `DONE: 6`, that Alice's bearer is rejected with 401 post-revoke,
+    that the audit log carries `RELEASE` events with
+    `payload.reason='admin_revoked'` (when Alice had claimed before
+    the eviction), and that `workers.owner_email` covers all three
+    minted owners. Pre-merge smoke that fulfils
+    VAL-M2-DEMO-003/004/005/006/901/903 and
+    VAL-CROSS-AUTH-007 / VAL-CROSS-LIFECYCLE-002/004 in process.
+  - `scripts/m2_cross_host_demo.sh` — operator-facing orchestrator
+    for the real VPS demo. SSHes into a remote VPS, brings up the
+    control-plane + funnel sidecar (`--profile funnel`), discovers
+    the `*.lhr.life` URL out of the `funnel_url` table via psql,
+    mints alice / bob / carol bootstrap tokens, captures evidence
+    (compose ps, health headers, workers-pre-revoke snapshot, VPS
+    memory profile), emits per-owner `whilly worker connect`
+    helper scripts under `out/m2-cross-host-demo/`, and runs the
+    `workshop-demo.sh --cli stub` backwards-compat smoke. Drives the
+    validator's surface for VAL-M2-DEMO-001/002/007/008/009/010 and
+    VAL-M2-DEMO-902/904/905.
 
 ### Documentation (v4.5 — date TBD until release)
 
