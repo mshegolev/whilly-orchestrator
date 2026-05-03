@@ -656,10 +656,12 @@ def make_db_bootstrap_auth(
             owner_email, is_admin = owner
             request.state.bootstrap_owner_email = owner_email
             request.state.bootstrap_is_admin = is_admin
+            request.state.bootstrap_token_hash = hash_bearer_token(token)
             return None
         if legacy_token_clean is not None and secrets.compare_digest(token, legacy_token_clean):
             request.state.bootstrap_owner_email = None
             request.state.bootstrap_is_admin = False
+            request.state.bootstrap_token_hash = hash_bearer_token(token)
             _maybe_warn_legacy_bootstrap_token()
             return None
         raise _bearer_401("invalid bootstrap token")

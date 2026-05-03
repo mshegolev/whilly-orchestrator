@@ -503,6 +503,20 @@ def _generate_worker_id() -> str:
     return f"{_WORKER_ID_PREFIX}{secrets.token_urlsafe(_WORKER_ID_ENTROPY_BYTES)}"
 
 
+def _generate_worker_token() -> str:
+    """Mint a per-worker bearer token safe for argv handoff.
+
+    ``whilly worker connect`` execs into ``whilly-worker`` passing the
+    bearer as ``--token <value>``. Argparse treats any value beginning
+    with ``-`` as a flag, so we reject that tiny subset at generation
+    time to keep handoff deterministic.
+    """
+    token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+    while token.startswith("-"):
+        token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+    return token
+
+
 def _resolve_optional_token(arg: str | None, env_name: str) -> str | None:
     """Resolve an *optional* token from an explicit kwarg or the environment.
 
@@ -986,7 +1000,7 @@ def create_app(
         the OpenAPI spec automatically.
         """
         worker_id = _generate_worker_id()
-        plaintext_token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+        plaintext_token = _generate_worker_token()
         token_hash = _hash_token(plaintext_token)
         # M2: when the bootstrap auth dep resolved a per-operator token
         # (``bootstrap_tokens`` row), bind the new ``workers`` row to
@@ -999,8 +1013,15 @@ def create_app(
         # the explicit body field for backwards compatibility.
         bootstrap_owner_email: str | None = getattr(request.state, "bootstrap_owner_email", None)
         resolved_owner_email = bootstrap_owner_email if bootstrap_owner_email is not None else payload.owner_email
+        bootstrap_token_hash: str | None = getattr(request.state, "bootstrap_token_hash", None)
         try:
-            await repo.register_worker(worker_id, payload.hostname, token_hash, resolved_owner_email)
+            await repo.register_worker(
+                worker_id,
+                payload.hostname,
+                token_hash,
+                resolved_owner_email,
+                bootstrap_token_hash=bootstrap_token_hash,
+            )
         except asyncpg.UniqueViolationError:
             # Defensive: 64 bits of entropy makes this nearly impossible.
             # If it does fire we surface a 500 rather than retrying with
