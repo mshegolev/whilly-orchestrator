@@ -426,7 +426,7 @@ async def db_pool(postgres_dsn: str) -> AsyncIterator[asyncpg.Pool]:
     pool = await _retry_create_pool_async(postgres_dsn, min_size=2, max_size=20)
     try:
         async with pool.acquire() as conn:
-            await conn.execute("TRUNCATE events, tasks, plans, workers RESTART IDENTITY CASCADE")
+            await conn.execute("TRUNCATE events, tasks, plans, workers, bootstrap_tokens RESTART IDENTITY CASCADE")
         yield pool
     finally:
         await close_pool(pool)

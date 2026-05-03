@@ -50,6 +50,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "006_plan_github_ref",
     "007_plan_prd_file",
     "008_workers_owner_email",
+    "009_bootstrap_tokens",
 )
 
 
@@ -135,7 +136,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "008_workers_owner_email"
+    assert head_version == "009_bootstrap_tokens"
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -196,6 +197,29 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(owner_email_index_count) == 1
 
+    # 009: ``bootstrap_tokens`` table + partial index exist.
+    bootstrap_tokens_table_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'bootstrap_tokens'
+            """,
+        )
+    )
+    assert int(bootstrap_tokens_table_count) == 1
+    bootstrap_tokens_index_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_indexes
+            WHERE tablename = 'bootstrap_tokens'
+              AND indexname = 'ix_bootstrap_tokens_owner_email_active'
+            """,
+        )
+    )
+    assert int(bootstrap_tokens_index_count) == 1
+
     # Confirm the whilly tables are present (sanity).
     tables = {
         row["table_name"]
@@ -205,12 +229,12 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events')
+                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens')
                 """,
             )
         )
     }
-    assert tables == {"workers", "plans", "tasks", "events"}
+    assert tables == {"workers", "plans", "tasks", "events", "bootstrap_tokens"}
 
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
@@ -229,7 +253,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events')
+                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens')
                 """,
             )
         )
@@ -248,8 +272,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "008_workers_owner_email"
+    assert first_version == "009_bootstrap_tokens"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "008_workers_owner_email"
+    assert second_version == "009_bootstrap_tokens"

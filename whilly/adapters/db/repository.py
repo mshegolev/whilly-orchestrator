@@ -61,9 +61,13 @@ asyncpg + JSONB
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -80,12 +84,14 @@ __all__ = [
     "BUDGET_EXCEEDED_EVENT_TYPE",
     "BUDGET_EXCEEDED_REASON",
     "BUDGET_EXCEEDED_THRESHOLD_PCT",
+    "BootstrapTokenRecord",
     "EventFlusherProtocol",
     "PLAN_APPLIED_EVENT_TYPE",
     "TASK_CREATED_EVENT_TYPE",
     "TASK_SKIPPED_EVENT_TYPE",
     "TaskRepository",
     "VersionConflictError",
+    "hash_bootstrap_token",
 ]
 
 
@@ -901,6 +907,99 @@ RETURNING id, version
 # return a row count to the CLI for the operator-facing summary line.
 _RESET_COUNT_TASKS_SQL: str = "SELECT COUNT(*)::int AS c FROM tasks WHERE plan_id = $1"
 _RESET_DELETE_PLAN_SQL: str = "DELETE FROM plans WHERE id = $1"
+
+
+# Per-user bootstrap-token table (M2 mission, migration 009). Replaces the
+# single shared ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var sentinel with a
+# per-operator row keyed by SHA-256 hex digest of the plaintext bearer.
+# Plaintext NEVER reaches Postgres (PRD NFR-3 — mirrors the
+# ``workers.token_hash`` discipline). The PK on ``token_hash`` enforces
+# uniqueness at the schema level (VAL-M2-BOOTSTRAP-REPO-011).
+_INSERT_BOOTSTRAP_TOKEN_SQL: str = """
+INSERT INTO bootstrap_tokens (token_hash, owner_email, expires_at, is_admin)
+VALUES ($1, $2, $3, $4)
+"""
+
+
+# Idempotent revocation: ``COALESCE(revoked_at, NOW())`` preserves the
+# original ``revoked_at`` if the row was already revoked (re-revoking
+# a token does not clobber the audit timestamp — VAL-M2-BOOTSTRAP-
+# REPO-004). The UPDATE matches even already-revoked rows so the
+# caller can rely on the no-op semantics without a separate SELECT
+# pre-check.
+_REVOKE_BOOTSTRAP_TOKEN_SQL: str = """
+UPDATE bootstrap_tokens
+SET revoked_at = COALESCE(revoked_at, NOW())
+WHERE token_hash = $1
+"""
+
+
+# Active-token lookup: filters out revoked + expired rows so the caller
+# never has to re-evaluate the active-window predicate. ``expires_at IS
+# NULL OR expires_at > NOW()`` mirrors the schema documentation (NULL =
+# never expires). The bound parameter is the SHA-256 hex digest of the
+# presented plaintext (computed by the caller via
+# :func:`hash_bootstrap_token`); a miss returns ``None`` and the auth
+# layer surfaces 401 (VAL-M2-BOOTSTRAP-REPO-006/007/008).
+_LOOKUP_BOOTSTRAP_TOKEN_OWNER_SQL: str = """
+SELECT owner_email, is_admin
+FROM bootstrap_tokens
+WHERE token_hash = $1
+  AND revoked_at IS NULL
+  AND (expires_at IS NULL OR expires_at > NOW())
+LIMIT 1
+"""
+
+
+# Per-operator listing: default returns active+non-expired rows only
+# (VAL-M2-BOOTSTRAP-REPO-009); when ``$1`` is true, the
+# ``include_revoked`` branch returns every row (revoked + expired
+# included) for forensic audits (VAL-M2-BOOTSTRAP-REPO-906). Plaintext
+# is never returned — the row carries only metadata
+# (``token_hash`` / ``owner_email`` / timestamps / ``is_admin``).
+_LIST_ACTIVE_BOOTSTRAP_TOKENS_SQL: str = """
+SELECT token_hash, owner_email, created_at, expires_at, revoked_at, is_admin
+FROM bootstrap_tokens
+WHERE
+    $1::bool = true
+    OR (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW()))
+ORDER BY created_at DESC, token_hash
+"""
+
+
+_OWNER_EMAIL_RE: re.Pattern[str] = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def hash_bootstrap_token(plaintext: str) -> str:
+    """Return the canonical SHA-256 hex digest of a bootstrap-token plaintext.
+
+    Centralised here so the repository's mint / lookup paths share one
+    encoding with any future caller (admin CLI, FastAPI auth dep). The
+    ``utf-8`` byte encoding matches :func:`hash_bearer_token` in
+    :mod:`whilly.adapters.transport.auth` — the two namespaces are
+    deliberately distinct (workers vs. operators) but use the same
+    primitive so a future migration to a salted scheme touches one
+    helper per namespace, not the call sites.
+    """
+    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class BootstrapTokenRecord:
+    """Immutable view of one ``bootstrap_tokens`` row.
+
+    Returned by :meth:`TaskRepository.list_bootstrap_tokens`. Carries
+    only metadata — the plaintext bearer is never reachable from the
+    DB (PRD NFR-3) and is therefore absent from this record by
+    design (VAL-M2-BOOTSTRAP-REPO-010).
+    """
+
+    token_hash: str
+    owner_email: str
+    created_at: datetime
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    is_admin: bool
 
 
 class VersionConflictError(Exception):
@@ -2261,6 +2360,169 @@ class TaskRepository:
             return False
         logger.debug("update_heartbeat: worker %s last_heartbeat refreshed", worker_id)
         return True
+
+    async def mint_bootstrap_token(
+        self,
+        plaintext: str,
+        owner_email: str,
+        *,
+        expires_at: datetime | None = None,
+        is_admin: bool = False,
+    ) -> str:
+        """Mint a per-operator bootstrap token (M2 mission, migration 009).
+
+        Hashes ``plaintext`` via :func:`hash_bootstrap_token` (SHA-256
+        hex digest over UTF-8 bytes) and inserts a single
+        ``bootstrap_tokens`` row with the resulting hash, the operator's
+        email, the optional TTL (``expires_at=None`` means never
+        expires — VAL-M2-BOOTSTRAP-REPO-001), and the admin flag.
+
+        Plaintext NEVER reaches Postgres (VAL-M2-BOOTSTRAP-REPO-002 /
+        PRD NFR-3); the caller is responsible for handing the
+        plaintext back to the operator (e.g. printing it once on the
+        admin CLI).
+
+        Validation
+        ----------
+        * ``plaintext`` must be non-empty after stripping whitespace
+          (VAL-M2-BOOTSTRAP-REPO-903): the bootstrap-auth lookup path
+          rejects empty bearers at the HTTP layer too, but pinning
+          the contract at the data layer prevents an operator from
+          accidentally minting an unusable row.
+        * ``owner_email`` must match a minimal ``local@domain.tld``
+          shape (VAL-M2-BOOTSTRAP-REPO-904). The check is intentionally
+          minimal — the token is operator-keyed, not used for SMTP
+          delivery — so we accept anything that isn't obviously
+          malformed.
+
+        Returns
+        -------
+        str
+            The SHA-256 hex digest stored in the row's ``token_hash``
+            column. Lets the caller emit a "token <hash>" audit line
+            without re-hashing, and gives the admin CLI a stable id
+            to pass to :meth:`revoke_bootstrap_token` later.
+
+        Raises
+        ------
+        ValueError
+            If ``plaintext`` strips to empty, or ``owner_email`` does
+            not match the minimal email shape.
+        asyncpg.UniqueViolationError
+            If the token_hash already exists (VAL-M2-BOOTSTRAP-
+            REPO-011 — PK uniqueness; in practice only collidable on
+            duplicate plaintext from the caller).
+        """
+        if not plaintext or not plaintext.strip():
+            raise ValueError("mint_bootstrap_token: plaintext must be non-empty")
+        normalized_email = owner_email.strip()
+        if not _OWNER_EMAIL_RE.match(normalized_email):
+            raise ValueError(f"mint_bootstrap_token: owner_email {owner_email!r} is not a valid email shape")
+        token_hash = hash_bootstrap_token(plaintext)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _INSERT_BOOTSTRAP_TOKEN_SQL,
+                token_hash,
+                normalized_email,
+                expires_at,
+                is_admin,
+            )
+        logger.info(
+            "mint_bootstrap_token: minted token for owner=%s is_admin=%s expires_at=%s",
+            normalized_email,
+            is_admin,
+            expires_at.isoformat() if expires_at is not None else "<never>",
+        )
+        return token_hash
+
+    async def revoke_bootstrap_token(self, token_hash: str) -> None:
+        """Mark a bootstrap-token row as revoked (M2 mission, migration 009).
+
+        Sets ``revoked_at = NOW()`` for the matching active row.
+        Idempotent: re-revoking an already-revoked token is a no-op
+        (the ``COALESCE(revoked_at, NOW())`` guard preserves the
+        original timestamp — VAL-M2-BOOTSTRAP-REPO-004). A missing
+        ``token_hash`` is silently accepted (no error) so the admin
+        CLI can be re-run without checking the row first.
+
+        No transaction wrapper, no audit-event row: the bootstrap-
+        token table has its own ``revoked_at`` column that serves as
+        the per-row audit timestamp; an additional ``events`` write
+        would duplicate the signal without adding context.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(_REVOKE_BOOTSTRAP_TOKEN_SQL, token_hash)
+        logger.info("revoke_bootstrap_token: token_hash=%s revoked", token_hash)
+
+    async def get_bootstrap_token_owner(self, plaintext: str) -> tuple[str, bool] | None:
+        """Resolve a presented plaintext bearer to ``(owner_email, is_admin)``.
+
+        Hashes the plaintext via :func:`hash_bootstrap_token` and
+        consults :data:`_LOOKUP_BOOTSTRAP_TOKEN_OWNER_SQL`, which
+        filters out revoked + expired rows at the SQL layer. Returns
+        ``None`` for any of:
+
+        * the hash is not in the table (VAL-M2-BOOTSTRAP-REPO-008);
+        * the matching row is revoked (``revoked_at IS NOT NULL`` —
+          VAL-M2-BOOTSTRAP-REPO-006);
+        * the matching row has expired (``expires_at <= NOW()`` —
+          VAL-M2-BOOTSTRAP-REPO-007);
+        * the plaintext is empty / whitespace-only (defensive: an
+          empty bearer is meaningless and we reject it before
+          hashing so we never index the empty-string hash).
+
+        Returning ``None`` rather than raising keeps the auth dep
+        simple: every miss surface is a 401 from the wire's
+        perspective, so distinguishing them at this layer would only
+        leak information to the caller.
+        """
+        if not plaintext or not plaintext.strip():
+            return None
+        token_hash = hash_bootstrap_token(plaintext)
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_LOOKUP_BOOTSTRAP_TOKEN_OWNER_SQL, token_hash)
+        if row is None:
+            return None
+        return (row["owner_email"], bool(row["is_admin"]))
+
+    async def list_bootstrap_tokens(
+        self,
+        *,
+        include_revoked: bool = False,
+    ) -> list[BootstrapTokenRecord]:
+        """List bootstrap-token metadata rows.
+
+        Default (``include_revoked=False``): returns only currently
+        active rows — ``revoked_at IS NULL`` AND ``(expires_at IS
+        NULL OR expires_at > NOW())`` (VAL-M2-BOOTSTRAP-REPO-009).
+        Set ``include_revoked=True`` for forensic audits — the
+        return set then includes revoked + expired rows
+        (VAL-M2-BOOTSTRAP-REPO-906).
+
+        Plaintext is NEVER returned: each :class:`BootstrapTokenRecord`
+        carries metadata only (VAL-M2-BOOTSTRAP-REPO-010). The
+        ``token_hash`` column is the stable id callers use to feed
+        :meth:`revoke_bootstrap_token`; everything else is
+        operational context (owner, lifecycle timestamps, admin
+        bit).
+
+        Ordering is newest-first by ``created_at`` with ``token_hash``
+        as a deterministic tiebreaker so admin-CLI output is stable
+        across re-runs.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(_LIST_ACTIVE_BOOTSTRAP_TOKENS_SQL, include_revoked)
+        return [
+            BootstrapTokenRecord(
+                token_hash=row["token_hash"],
+                owner_email=row["owner_email"],
+                created_at=row["created_at"],
+                expires_at=row["expires_at"],
+                revoked_at=row["revoked_at"],
+                is_admin=bool(row["is_admin"]),
+            )
+            for row in rows
+        ]
 
     async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
         """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).
