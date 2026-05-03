@@ -292,6 +292,25 @@ def load_worker_credential(
     return _read_credentials_file().get(key)
 
 
+def fetch_worker_credential(
+    control_url: str,
+    plan_id: str | None = None,
+    *,
+    service: str = WHILLY_KEYRING_SERVICE,
+) -> str | None:
+    """Return a previously-stored bearer for the ``(control_url, plan_id)`` pair.
+
+    M2 alias around :func:`load_worker_credential`. Storage today is
+    keyed by canonical control URL only (the bearer is per-worker, not
+    per-plan), so ``plan_id`` is accepted for API symmetry with the
+    keyring-resume contract (VAL-M1-DEMO-009) but is not used to scope
+    the lookup. Future revisions that key per ``(control_url, plan_id)``
+    can extend this without touching :mod:`whilly.cli.worker`.
+    """
+    del plan_id  # accepted but not used today; see docstring
+    return load_worker_credential(control_url, service=service)
+
+
 def normalise_control_url_for_storage(url: str) -> str:
     """Strip whitespace and trailing slash from ``url``; no scheme parsing.
 
@@ -312,6 +331,7 @@ __all__ = [
     "canonical_control_url",
     "credentials_dir",
     "credentials_file_path",
+    "fetch_worker_credential",
     "load_worker_credential",
     "normalise_control_url_for_storage",
     "redact",
