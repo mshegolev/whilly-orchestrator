@@ -49,6 +49,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "005_plan_budget",
     "006_plan_github_ref",
     "007_plan_prd_file",
+    "008_workers_owner_email",
 )
 
 
@@ -134,9 +135,9 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "007_plan_prd_file"
+    assert head_version == "008_workers_owner_email"
 
-    # ── Step 3: 006- and 007-specific deltas exist ──────────────────
+    # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
         _fetchval(
             empty_postgres_dsn,
@@ -171,6 +172,29 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
         )
     )
     assert int(prd_file_column_count) == 1
+
+    # 008: ``workers.owner_email`` text NULL + partial index exist.
+    owner_email_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'workers' AND column_name = 'owner_email'
+            """,
+        )
+    )
+    assert int(owner_email_column_count) == 1
+    owner_email_index_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_indexes
+            WHERE tablename = 'workers'
+              AND indexname = 'ix_workers_owner_email'
+            """,
+        )
+    )
+    assert int(owner_email_index_count) == 1
 
     # Confirm the whilly tables are present (sanity).
     tables = {
@@ -224,8 +248,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "007_plan_prd_file"
+    assert first_version == "008_workers_owner_email"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "007_plan_prd_file"
+    assert second_version == "008_workers_owner_email"

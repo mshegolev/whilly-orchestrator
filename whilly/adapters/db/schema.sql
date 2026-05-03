@@ -32,6 +32,12 @@ CREATE TABLE workers (
     -- ages past its threshold (2 min default) and releases the worker's
     -- in-flight tasks back to PENDING.
     status         TEXT NOT NULL DEFAULT 'online',
+    -- Per-user worker attribution (M2 mission, migration 008). NULL for
+    -- workers registered without an owner-email (legacy bootstrap path,
+    -- back-compat); set to the operator's email when registration
+    -- carries it. The partial index ix_workers_owner_email below pins
+    -- the per-owner lookup path in the M2 admin dashboard.
+    owner_email    TEXT,
     CONSTRAINT ck_workers_status_valid CHECK (status IN ('online', 'offline'))
 );
 
@@ -48,6 +54,13 @@ CREATE INDEX ix_workers_status_online_heartbeat ON workers (last_heartbeat)
 -- from the index so revocation does not collide on a single sentinel.
 CREATE UNIQUE INDEX ix_workers_token_hash_unique ON workers (token_hash)
     WHERE token_hash IS NOT NULL;
+-- Partial index on owner_email (M2, migration 008). Speeds up the
+-- per-owner worker listing query in the M2 admin dashboard
+-- (``SELECT ... FROM workers WHERE owner_email = $1``) without
+-- bloating the index footprint with one entry per anonymous /
+-- legacy-bootstrap row.
+CREATE INDEX ix_workers_owner_email ON workers (owner_email)
+    WHERE owner_email IS NOT NULL;
 
 -- ─── plans ───────────────────────────────────────────────────────────────
 CREATE TABLE plans (

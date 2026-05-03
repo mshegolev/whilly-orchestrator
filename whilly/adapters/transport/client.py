@@ -798,7 +798,7 @@ class RemoteWorkerClient:
         response = await self._request(
             "POST",
             REGISTER_PATH,
-            json=request.model_dump(),
+            json=request.model_dump(exclude_none=True),
             bootstrap=True,
         )
         return await self._parse_response(response, RegisterResponse)

@@ -121,15 +121,24 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Script-directory: 007 is the head revision
+# Script-directory: 007 is reachable from base (head moved forward in 008)
 # ---------------------------------------------------------------------------
 
 
-def test_007_is_head_revision() -> None:
-    """The alembic script directory reports ``007_plan_prd_file`` as the head."""
+def test_007_is_reachable_revision() -> None:
+    """The alembic script directory still walks through ``007_plan_prd_file``.
+
+    Originally pinned ``007_plan_prd_file`` as the head, but the M2
+    ``m2-migration-008`` migration shifted the head forward (see
+    ``AGENTS.md → Migration discipline``). The remaining contract for
+    007's tests is that the revision is reachable from base — it is,
+    since the chain still runs ``006_plan_github_ref →
+    007_plan_prd_file → 008_workers_owner_email``.
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "007_plan_prd_file"
+    revisions = {r.revision for r in script.walk_revisions()}
+    assert "007_plan_prd_file" in revisions
 
 
 # ---------------------------------------------------------------------------
@@ -189,10 +198,20 @@ def test_upgrade_adds_prd_file_nullable_text(base_006_dsn: str) -> None:
 
 
 def test_downgrade_removes_prd_file_column(base_006_dsn: str) -> None:
-    """After ``upgrade head`` then ``downgrade -1``, the column is gone."""
+    """After ``upgrade 007`` then ``downgrade -1``, the column is gone.
+
+    Stops at 007 explicitly — the M2 ``008_workers_owner_email``
+    migration shifted ``head`` forward, so a plain
+    ``upgrade head; downgrade -1`` would now land at 007 (still
+    has prd_file) instead of 006. We're testing 007's downgrade
+    contract specifically.
+    """
     cfg = _build_cfg(base_006_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
-    _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "007_plan_prd_file"),
+        op="upgrade 007_plan_prd_file",
+    )
+    _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1 (007→006)")
 
     async def _inspect() -> tuple[int, str | None]:
         col_count = await _fetchval(

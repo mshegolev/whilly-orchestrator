@@ -642,8 +642,8 @@ WHERE worker_id = $1
 # it ever does happen, the unique-violation surface lets the caller retry
 # with a fresh id rather than silently overwriting another worker's row.
 _INSERT_WORKER_SQL: str = """
-INSERT INTO workers (worker_id, hostname, token_hash)
-VALUES ($1, $2, $3)
+INSERT INTO workers (worker_id, hostname, token_hash, owner_email)
+VALUES ($1, $2, $3, $4)
 """
 
 
@@ -2137,6 +2137,7 @@ class TaskRepository:
         worker_id: WorkerId,
         hostname: str,
         token_hash: str,
+        owner_email: str | None = None,
     ) -> None:
         """Insert a new row in ``workers`` for a freshly-registered worker (PRD FR-1.1).
 
@@ -2170,8 +2171,13 @@ class TaskRepository:
             layer that doesn't need it.
         """
         async with self._pool.acquire() as conn:
-            await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash)
-        logger.info("register_worker: registered worker %s on %s", worker_id, hostname)
+            await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash, owner_email)
+        logger.info(
+            "register_worker: registered worker %s on %s (owner_email=%s)",
+            worker_id,
+            hostname,
+            owner_email if owner_email is not None else "<none>",
+        )
 
     async def get_worker_id_by_token_hash(self, token_hash: str) -> WorkerId | None:
         """Resolve a presented bearer's hash to the owning ``worker_id`` (TASK-101).
