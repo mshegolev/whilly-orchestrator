@@ -2,7 +2,7 @@
 # Whilly Orchestrator — production image (опубликован в Docker Hub / GHCR).
 #
 # Этот Dockerfile отличается от Dockerfile.demo:
-#   * Не тащит в runtime тесты, fixtures, examples/, README'ы.
+#   * Не тащит в runtime тесты, fixtures, README'ы. examples/ нужны для workshop-demo.sh.
 #   * Ставит whilly из локального source'а через `pip install '.[server,worker]'`
 #     (не [all], не [dev]) — минимальная зависимость для двух ролей: control-plane
 #     (FastAPI + asyncpg + alembic) и worker (httpx).
@@ -381,6 +381,12 @@ COPY docker/alembic.prod.ini /opt/whilly/alembic.ini
 # передать pool в create_app(pool, ...), поэтому открываем asyncpg pool
 # здесь и зовём create_app(pool) явно — same shape as integration tests.
 COPY docker/control_plane.py /opt/whilly/docker/control_plane.py
+
+# Demo plans consumed by workshop-demo.sh (`whilly plan import
+# /opt/whilly/examples/demo/parallel.json`). Without them the published
+# multi-role image fails the workshop demo at the plan-import step
+# (VAL-M1-COMPOSE-011). The directory is ~10 KB total — negligible.
+COPY examples /opt/whilly/examples/
 
 # Adapter + raw shim + cgroup-aware model picker для agentic CLI workflow:
 #   - cli_adapter.py: транслирует whilly's argv в native argv каждого CLI
