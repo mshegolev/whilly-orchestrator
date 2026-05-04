@@ -126,7 +126,7 @@ _DOCKER_REQUIRED = pytest.mark.skipif(
 # rather than importing from ``tests.conftest`` — keeps the smoke test
 # self-contained per its module docstring). ─────────────────────────────
 
-_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
+_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0, 8.0)
 _TC_REMEDIATION_HINT: str = (
     "Hint: this is the documented colima/testcontainers port-forwarding flake "
     "(see AGENTS.md → 'Known pre-existing issues'). Run `colima restart` and "
@@ -143,7 +143,7 @@ def _retry_colima_flake(
     op: str,
     backoffs: tuple[float, ...] = _TC_RETRY_BACKOFFS,
 ) -> _T:
-    """3-attempt exponential-backoff retry around colima-flake-prone ops.
+    """5-attempt exponential-backoff retry around colima-flake-prone ops.
 
     Same semantics as the sibling helper in ``tests/conftest.py``. See that
     module's docstring for rationale and timing.
@@ -438,11 +438,12 @@ def postgres_dsn() -> Iterator[str]:
     # Match the docker-compose image (TASK-003) so behaviour parity with
     # local dev is guaranteed.
     #
-    # Wrap the testcontainers Postgres start in a 3-attempt exponential-backoff
-    # retry loop (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
-    # port-forwarding flake documented in AGENTS.md ("Known pre-existing
-    # issues"). The container is started imperatively (not via ``with``) so
-    # we can retry; cleanup is in the outer ``finally`` block.
+    # Wrap the testcontainers Postgres start in a 5-attempt exponential-backoff
+    # retry loop (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s; ~15.5 s wall ceiling) to
+    # ride out the colima/Rancher-Desktop port-forwarding flake documented in
+    # AGENTS.md ("Known pre-existing issues"). The container is started
+    # imperatively (not via ``with``) so we can retry; cleanup is in the outer
+    # ``finally`` block.
     # Apply the same orphan-cleanup-friendly label + atexit teardown used by
     # tests/conftest.py and tests/integration/test_alembic_008.py so this
     # fixture's containers participate in the session-start orphan reap and
@@ -503,7 +504,7 @@ def test_alembic_upgrade_head_creates_all_tables(postgres_dsn: str) -> None:
     try:
         # Alembic's first SQL contact also rides through colima's port-forward
         # — same flake surface as the container start. Wrap with the same
-        # 3-attempt exponential-backoff retry helper.
+        # 5-attempt exponential-backoff retry helper.
         _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="alembic.command.upgrade(head)")
 
         async def _inspect() -> dict[str, list[str]]:
@@ -596,7 +597,7 @@ def test_alembic_round_trip_downgrade_then_upgrade(postgres_dsn: str) -> None:
     os.environ["WHILLY_DATABASE_URL"] = postgres_dsn
     try:
         # Alembic's SQL contact also rides through colima's port-forward.
-        # Wrap with the same 3-attempt exponential-backoff retry helper.
+        # Wrap with the same 5-attempt exponential-backoff retry helper.
         # The previous test left us at head; downgrade then re-upgrade.
         _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="alembic.command.downgrade(base)")
         _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="alembic.command.upgrade(head)")
