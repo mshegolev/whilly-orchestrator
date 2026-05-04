@@ -182,6 +182,13 @@ from whilly.api.sse import (
     EventNotifyBroker,
     event_notify_listener_loop,
 )
+from whilly.api.sse_endpoint import (
+    DASHBOARD_DEFAULT_ORIGIN,
+    REPLAY_LIMIT as SSE_REPLAY_LIMIT,
+    _authenticate_stream_request,
+    _parse_last_event_id,
+    stream_event_source,
+)
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
@@ -608,6 +615,7 @@ def create_app(
     event_drain_timeout_seconds: float = EVENT_FLUSHER_DEFAULT_DRAIN_TIMEOUT_SECONDS,
     event_checkpoint_dir: str | None = None,
     dsn: str | None = None,
+    sse_ping_seconds: int = 15,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -1510,6 +1518,59 @@ def create_app(
     async def admin_health(request: Request) -> JSONResponse:
         owner = getattr(request.state, "bootstrap_owner_email", None)
         return JSONResponse({"status": "ok", "owner": owner})
+
+    @app.get(
+        "/events/stream",
+        include_in_schema=True,
+    )
+    async def events_stream(request: Request) -> Response:
+        from sse_starlette.event import ServerSentEvent
+        from sse_starlette.sse import EventSourceResponse
+
+        authorization = request.headers.get("authorization")
+        await _authenticate_stream_request(
+            repo=repo,
+            authorization=authorization,
+            legacy_worker_token=legacy_worker_token,
+            legacy_bootstrap_token=legacy_bootstrap_token,
+        )
+
+        last_event_id_header = request.headers.get("last-event-id")
+        last_event_id = _parse_last_event_id(last_event_id_header)
+
+        broker: EventNotifyBroker | None = getattr(request.app.state, "event_notify_broker", None)
+        if broker is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="event broker not initialised",
+            )
+
+        generator = stream_event_source(
+            request=request,
+            pool=pool,
+            broker=broker,
+            last_event_id=last_event_id,
+            replay_limit=SSE_REPLAY_LIMIT,
+        )
+
+        cors_origin = (
+            request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
+        )
+        response_headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+
+        return EventSourceResponse(
+            generator,
+            ping=sse_ping_seconds,
+            ping_message_factory=lambda: ServerSentEvent(event="ping", data=""),
+            headers=response_headers,
+        )
 
     return app
 
