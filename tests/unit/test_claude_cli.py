@@ -63,7 +63,12 @@ def _make_task(task_id: str = "T-001") -> Task:
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Clear all env vars the wrapper reads so tests don't leak host config."""
-    for key in ("CLAUDE_BIN", "WHILLY_MODEL", "WHILLY_CLAUDE_SAFE"):
+    for key in (
+        "CLAUDE_BIN",
+        "WHILLY_MODEL",
+        "WHILLY_CLAUDE_SAFE",
+        "WHILLY_AGENT_ALLOW_SHELL",
+    ):
         monkeypatch.delenv(key, raising=False)
     yield
 
@@ -149,7 +154,11 @@ def test_exit_codes_are_in_negative_range() -> None:
 def test_build_command_default_uses_claude_bin(clean_env: None) -> None:
     cmd = build_command("hello", "claude-opus-4-6[1m]")
     assert cmd[0] == "claude"
-    assert "--dangerously-skip-permissions" in cmd
+    assert "--dangerously-skip-permissions" not in cmd
+    assert "--disallowedTools" in cmd
+    disallowed = cmd[cmd.index("--disallowedTools") + 1]
+    for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"):
+        assert tool in disallowed
     assert "--output-format" in cmd
     assert cmd[cmd.index("--output-format") + 1] == "json"
     assert cmd[cmd.index("--model") + 1] == "claude-opus-4-6[1m]"
@@ -172,12 +181,13 @@ def test_build_command_safe_mode_switches_permission_args(
     clean_env: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``WHILLY_CLAUDE_SAFE=1`` swaps the unattended permission flag for
-    the attended ``acceptEdits`` mode — operational parity with v3."""
+    """``WHILLY_CLAUDE_SAFE=1`` adds ``--permission-mode acceptEdits``,
+    stacks on the default-deny denylist, and never emits the legacy flag."""
     monkeypatch.setenv("WHILLY_CLAUDE_SAFE", "1")
     cmd = build_command("hello", "m")
     assert "--permission-mode" in cmd
     assert cmd[cmd.index("--permission-mode") + 1] == "acceptEdits"
+    assert "--disallowedTools" in cmd
     assert "--dangerously-skip-permissions" not in cmd
 
 

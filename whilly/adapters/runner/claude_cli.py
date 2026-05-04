@@ -98,18 +98,35 @@ def _resolve_model(model: str | None) -> str:
     return os.environ.get("WHILLY_MODEL") or DEFAULT_MODEL
 
 
+DEFAULT_DISALLOWED_TOOLS: Final[str] = "Write,Edit,MultiEdit,NotebookEdit,Bash"
+
+
 def _permission_args() -> list[str]:
     """Return the permission-related Claude CLI flags.
 
-    Mirrors v3 default: agents run unattended via
-    ``--dangerously-skip-permissions``. Operators wanting an attended TTY
-    flow set ``WHILLY_CLAUDE_SAFE=1`` and get ``--permission-mode acceptEdits``
-    instead — the same env knob the v3 backend honours so the operational
-    contract is unchanged.
+    Default posture (since v4.7.0) is **deny-by-default**: argv carries
+    ``--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash`` and OMITS
+    ``--dangerously-skip-permissions``. To restore the legacy unattended
+    behavior set ``WHILLY_AGENT_ALLOW_SHELL=1`` — this drops the denylist
+    and re-emits ``--dangerously-skip-permissions``.
+
+    ``WHILLY_CLAUDE_SAFE=1`` continues to add ``--permission-mode acceptEdits``
+    and stacks on top of the default-deny denylist; the synchronous
+    ``ClaudeBackend`` honours the same env knobs so both worker dispatch
+    paths produce equivalent argv.
     """
-    if os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes"):
-        return ["--permission-mode", "acceptEdits"]
-    return ["--dangerously-skip-permissions"]
+    safe_mode = os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes")
+    allow_shell = os.environ.get("WHILLY_AGENT_ALLOW_SHELL") in ("1", "true", "yes")
+
+    if allow_shell:
+        if safe_mode:
+            return ["--permission-mode", "acceptEdits"]
+        return ["--dangerously-skip-permissions"]
+
+    args: list[str] = ["--disallowedTools", DEFAULT_DISALLOWED_TOOLS]
+    if safe_mode:
+        args.extend(["--permission-mode", "acceptEdits"])
+    return args
 
 
 def build_command(prompt: str, model: str) -> list[str]:

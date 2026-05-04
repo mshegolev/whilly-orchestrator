@@ -74,23 +74,57 @@ class TestBuildCommand:
         assert "-p" in cmd
         assert cmd[-1] == "hello"
 
-    def test_default_skip_permissions(self):
-        cmd = ClaudeBackend().build_command("x")
-        assert "--dangerously-skip-permissions" in cmd
+    def test_default_denies_dangerous_tools(self):
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd = ClaudeBackend().build_command("x")
+        assert "--dangerously-skip-permissions" not in cmd
         assert "acceptEdits" not in cmd
+        assert "--disallowedTools" in cmd
+        disallowed = cmd[cmd.index("--disallowedTools") + 1]
+        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"):
+            assert tool in disallowed
 
     def test_safe_mode_uses_accept_edits(self):
-        cmd = ClaudeBackend().build_command("x", safe_mode=True)
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd = ClaudeBackend().build_command("x", safe_mode=True)
         assert "--permission-mode" in cmd
         assert "acceptEdits" in cmd
         assert "--dangerously-skip-permissions" not in cmd
+        assert "--disallowedTools" in cmd
 
     def test_safe_mode_via_env(self):
-        cmd_off = ClaudeBackend().build_command("x")
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd_off = ClaudeBackend().build_command("x")
         with patch.dict("os.environ", {"WHILLY_CLAUDE_SAFE": "1"}):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
             cmd_on = ClaudeBackend().build_command("x")
-        assert "--dangerously-skip-permissions" in cmd_off
+        assert "--dangerously-skip-permissions" not in cmd_off
+        assert "--disallowedTools" in cmd_off
         assert "acceptEdits" in cmd_on
+        assert "--disallowedTools" in cmd_on
+
+    def test_allow_shell_env_restores_legacy_flag(self):
+        with patch.dict("os.environ", {"WHILLY_AGENT_ALLOW_SHELL": "1"}):
+            import os as _os
+
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd = ClaudeBackend().build_command("x")
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--disallowedTools" not in cmd
 
     def test_explicit_model(self):
         cmd = ClaudeBackend().build_command("x", model="claude-sonnet-4")
