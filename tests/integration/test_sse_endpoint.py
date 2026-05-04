@@ -365,6 +365,105 @@ def test_parse_last_event_id_treats_blank_as_none() -> None:
     assert _parse_last_event_id(None) is None
 
 
+def test_parse_last_event_id_accepts_bigint_max_boundary() -> None:
+    assert _parse_last_event_id(str((1 << 63) - 1)) == (1 << 63) - 1
+
+
+def test_parse_last_event_id_rejects_bigint_overflow_2_pow_63() -> None:
+    assert _parse_last_event_id(str(1 << 63)) is None
+
+
+def test_parse_last_event_id_rejects_huge_overflow() -> None:
+    assert _parse_last_event_id("9999999999999999999999") is None
+
+
+async def _open_stream_and_assert_no_replay(
+    *,
+    db_pool: asyncpg.Pool,
+    postgres_dsn: str,
+    plaintext_bs: str,
+    owner_email: str,
+    last_event_id_header: str,
+) -> None:
+    repo = TaskRepository(db_pool)
+    await _mint_bootstrap(repo, plaintext_bs, owner_email)
+
+    port = _find_free_port()
+    app = create_app(
+        db_pool,
+        worker_token=None,
+        bootstrap_token=_BOOTSTRAP_TOKEN,
+        claim_long_poll_timeout=_LONG_POLL_TIMEOUT,
+        claim_poll_interval=_POLL_INTERVAL,
+        sse_ping_seconds=1,
+        dsn=postgres_dsn,
+    )
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", lifespan="on", access_log=False)
+    server = uvicorn.Server(config)
+    server_task = asyncio.create_task(server.serve(), name="sse-uvicorn-overflow")
+    try:
+        await _wait_until_started(server)
+        collected = bytearray()
+        async with httpx.AsyncClient(timeout=10.0) as ac:
+            async with ac.stream(
+                "GET",
+                f"http://127.0.0.1:{port}/events/stream",
+                headers={
+                    "Authorization": f"Bearer {plaintext_bs}",
+                    "Last-Event-ID": last_event_id_header,
+                },
+            ) as resp:
+                assert resp.status_code == 200, resp.headers
+                assert "text/event-stream" in resp.headers.get("content-type", "")
+                deadline = asyncio.get_event_loop().time() + 4.0
+                try:
+                    async for chunk in resp.aiter_raw():
+                        collected.extend(chunk)
+                        if b"event: ping" in collected:
+                            break
+                        if asyncio.get_event_loop().time() >= deadline:
+                            break
+                except (httpx.RemoteProtocolError, httpx.ReadError):
+                    pass
+        text = bytes(collected).decode("utf-8", errors="ignore")
+        assert "event: ping" in text, f"expected heartbeat, no replay frames; got: {text!r}"
+        assert "audit." not in text, f"unexpected replay frame for overflow id: {text!r}"
+    finally:
+        server.should_exit = True
+        with suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(server_task, timeout=5.0)
+        if not server_task.done():
+            server_task.cancel()
+            with suppress(asyncio.CancelledError, BaseException):
+                await server_task
+
+
+async def test_stream_opens_with_overflow_last_event_id_2_pow_63(
+    db_pool: asyncpg.Pool,
+    postgres_dsn: str,
+) -> None:
+    await _open_stream_and_assert_no_replay(
+        db_pool=db_pool,
+        postgres_dsn=postgres_dsn,
+        plaintext_bs="overflow-2pow63-bs",
+        owner_email="overflow1@example.com",
+        last_event_id_header=str(1 << 63),
+    )
+
+
+async def test_stream_opens_with_huge_overflow_last_event_id(
+    db_pool: asyncpg.Pool,
+    postgres_dsn: str,
+) -> None:
+    await _open_stream_and_assert_no_replay(
+        db_pool=db_pool,
+        postgres_dsn=postgres_dsn,
+        plaintext_bs="overflow-huge-bs",
+        owner_email="overflow2@example.com",
+        last_event_id_header="9999999999999999999999",
+    )
+
+
 def test_replay_limit_default_is_1000() -> None:
     assert REPLAY_LIMIT == 1000
 
