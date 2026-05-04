@@ -182,6 +182,7 @@ from whilly.api.event_flusher import (
 from whilly.api.sse import (
     EVENT_NOTIFY_LISTENER_TASK_NAME,
     EventNotifyBroker,
+    _ListenerState,
     event_notify_listener_loop,
 )
 from whilly.api.dashboard import render_dashboard as render_dashboard_view
@@ -881,6 +882,14 @@ def create_app(
         # the broker API. The actual fan-out targets the per-subscriber
         # queues created by :meth:`EventNotifyBroker.subscribe`.
         app.state.event_notify_queue = asyncio.Queue()
+        # State-coupled listener_connected flag (VAL-M3-HEALTH-902).
+        # The supervisor task auto-reconnects forever, so ``task.done()``
+        # never reflects a transient pg_terminate_backend window. The
+        # ``_ListenerState.connected`` boolean — toggled True after
+        # ``add_listener`` succeeds and False in the loop's finally
+        # block — is the source of truth ``/health`` reads.
+        event_notify_listener_state = _ListenerState()
+        app.state.event_notify_listener_state = event_notify_listener_state
         try:
             # ``asyncio.TaskGroup`` owns the periodic background sweeps
             # for the duration of the app's lifespan. Tasks are created
@@ -941,6 +950,7 @@ def create_app(
                         event_notify_broker,
                         listener_dsn,
                         sweep_stop,
+                        state=event_notify_listener_state,
                     ),
                     name=EVENT_NOTIFY_LISTENER_TASK_NAME,
                 )
@@ -1002,6 +1012,7 @@ def create_app(
             app.state.event_notify_broker = None
             app.state.event_notify_queue = None
             app.state.event_notify_listener_task = None
+            app.state.event_notify_listener_state = None
             app.state.metrics_refresh_task = None
             app.state.background_tasks = None
             # Drop the repo's flusher reference so subsequent lifespan
@@ -1031,6 +1042,9 @@ def create_app(
         return True, None
 
     def _listener_connected() -> bool:
+        state = getattr(app.state, "event_notify_listener_state", None)
+        if state is not None:
+            return bool(state.connected)
         task = getattr(app.state, "event_notify_listener_task", None)
         if task is None:
             return False

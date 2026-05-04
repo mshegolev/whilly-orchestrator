@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import asyncpg
@@ -21,6 +22,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.transport.server import create_app
 from whilly.api.metrics import METRICS_TOKEN_ENV
+from whilly.api.sse import LISTENER_APPLICATION_NAME
 
 pytestmark = DOCKER_REQUIRED
 
@@ -29,7 +31,7 @@ _BOOTSTRAP_TOKEN = "bootstrap-health-test"
 
 
 @pytest.fixture
-async def app(db_pool: asyncpg.Pool, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[FastAPI]:
+async def app(db_pool: asyncpg.Pool, postgres_dsn: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[FastAPI]:
     monkeypatch.setenv(METRICS_TOKEN_ENV, "health-test-token")
     fastapi_app = create_app(
         db_pool,
@@ -40,8 +42,24 @@ async def app(db_pool: asyncpg.Pool, monkeypatch: pytest.MonkeyPatch) -> AsyncIt
         sse_ping_seconds=1,
         metrics_token="health-test-token",
         metrics_refresh_interval_seconds=0.5,
+        dsn=postgres_dsn,
     )
     async with fastapi_app.router.lifespan_context(fastapi_app):
+        # Wait for the listener task to complete its first add_listener
+        # call so /health.listener_connected is true before the test
+        # body runs (VAL-M3-HEALTH-902: state-coupled flag).
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while loop.time() < deadline:
+            async with db_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT 1 FROM pg_stat_activity WHERE application_name = $1",
+                    LISTENER_APPLICATION_NAME,
+                )
+            state = getattr(fastapi_app.state, "event_notify_listener_state", None)
+            if row is not None and state is not None and state.connected:
+                break
+            await asyncio.sleep(0.05)
         yield fastapi_app
 
 
