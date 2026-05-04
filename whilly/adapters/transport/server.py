@@ -185,6 +185,20 @@ from whilly.api.sse import (
     event_notify_listener_loop,
 )
 from whilly.api.dashboard import render_dashboard as render_dashboard_view
+from whilly.api.metrics import (
+    METRICS_PATH,
+    METRICS_REFRESH_TASK_NAME,
+    REFRESH_INTERVAL_DEFAULT_SECONDS as METRICS_REFRESH_INTERVAL_DEFAULT_SECONDS,
+    check_metrics_token,
+    claim_long_poll_duration_seconds,
+    claims_total,
+    completes_total,
+    fails_total,
+    instrument_app,
+    metrics_refresh_loop,
+    render_metrics,
+    resolve_metrics_token,
+)
 from whilly.api.tasks_api import (
     DEFAULT_LIMIT as TASKS_API_DEFAULT_LIMIT,
     MAX_LIMIT as TASKS_API_MAX_LIMIT,
@@ -625,6 +639,8 @@ def create_app(
     event_checkpoint_dir: str | None = None,
     dsn: str | None = None,
     sse_ping_seconds: int = 15,
+    metrics_token: str | None = None,
+    metrics_refresh_interval_seconds: float = METRICS_REFRESH_INTERVAL_DEFAULT_SECONDS,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -794,6 +810,12 @@ def create_app(
         event_checkpoint_dir if event_checkpoint_dir is not None else os.environ.get("WHILLY_EVENT_FLUSHER_STATE_DIR")
     )
     listener_dsn = dsn if dsn is not None else os.environ.get("WHILLY_DATABASE_URL")
+    if metrics_refresh_interval_seconds <= 0:
+        raise ValueError(
+            f"create_app: metrics_refresh_interval_seconds must be > 0, "
+            f"got {metrics_refresh_interval_seconds!r}; a zero or negative interval would tight-loop the database."
+        )
+    resolved_metrics_token = resolve_metrics_token(metrics_token)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -923,11 +945,21 @@ def create_app(
                     name=EVENT_NOTIFY_LISTENER_TASK_NAME,
                 )
                 app.state.event_notify_listener_task = event_notify_listener_task
+                metrics_refresh_task = tg.create_task(
+                    metrics_refresh_loop(
+                        pool,
+                        sweep_stop,
+                        interval=metrics_refresh_interval_seconds,
+                    ),
+                    name=METRICS_REFRESH_TASK_NAME,
+                )
+                app.state.metrics_refresh_task = metrics_refresh_task
                 app.state.background_tasks = [
                     visibility_sweep_task,
                     offline_worker_sweep_task,
                     event_flusher_task,
                     event_notify_listener_task,
+                    metrics_refresh_task,
                 ]
                 try:
                     yield
@@ -970,6 +1002,7 @@ def create_app(
             app.state.event_notify_broker = None
             app.state.event_notify_queue = None
             app.state.event_notify_listener_task = None
+            app.state.metrics_refresh_task = None
             app.state.background_tasks = None
             # Drop the repo's flusher reference so subsequent lifespan
             # cycles (e.g. test harnesses re-entering the same app)
@@ -984,53 +1017,105 @@ def create_app(
         # /docs (Swagger UI) and /openapi.json on FastAPI defaults —
         # operators expect them there, no reason to relocate.
     )
+    instrument_app(app)
+
+    async def _probe_pool() -> tuple[bool, str | None]:
+        try:
+            async with pool.acquire() as conn:
+                result: Any = await conn.fetchval("SELECT 1")
+        except Exception as exc:
+            logger.warning("Health check failed: %s", exc)
+            return False, str(exc)
+        if result != 1:
+            return False, f"unexpected SELECT 1 result: {result!r}"
+        return True, None
+
+    def _listener_connected() -> bool:
+        task = getattr(app.state, "event_notify_listener_task", None)
+        if task is None:
+            return False
+        return not task.done()
+
+    def _queue_depth() -> int:
+        flusher: EventFlusher | None = getattr(app.state, "event_flusher", None)
+        if flusher is None:
+            return 0
+        try:
+            return int(flusher.queue.qsize())
+        except Exception:
+            return 0
 
     @app.get(
         HEALTH_PATH,
-        # Hidden from /docs because operators reach it from kube probes,
-        # not from the API surface — keeps the OpenAPI schema focused
-        # on worker-facing endpoints (TASK-021b/c).
         include_in_schema=False,
     )
     async def health() -> JSONResponse:
         """Liveness/readiness probe — pings the asyncpg pool with ``SELECT 1``.
 
-        Returns 200 with ``{"status": "ok"}`` when the pool is reachable
-        and Postgres responds to ``SELECT 1``; 503 with
-        ``{"status": "unavailable", "detail": ...}`` on any
-        :class:`Exception` raised by ``acquire()`` / ``fetchval()``.
-
-        We catch :class:`Exception` (not :class:`BaseException`) so
-        cancellation / KeyboardInterrupt still propagates — health
-        endpoints should not swallow process-level signals.
+        Body extended to include ``db_reachable`` / ``listener_connected``
+        / ``queue_depth`` per VAL-M3-HEALTH-901 while preserving the
+        v4.3.1 ``status: ok | unavailable`` field for backwards
+        compatibility.
         """
-        try:
-            async with pool.acquire() as conn:
-                result: Any = await conn.fetchval("SELECT 1")
-        except Exception as exc:
-            # ``logger.warning`` rather than ``error`` because a single
-            # failed health-check is the *signal* operators want to see;
-            # noisy ``error`` lines pollute the alert path when the
-            # outage is already obvious from the 503.
-            logger.warning("Health check failed: %s", exc)
-            return JSONResponse(
-                {"status": "unavailable", "detail": str(exc)},
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        if result != 1:
-            # Defensive: SELECT 1 always returns 1 against a live
-            # Postgres. If we somehow get something else (proxy
-            # rewriting queries, mocked pool returning the wrong type)
-            # we surface it as 503 rather than pretending the system is
-            # healthy.
-            return JSONResponse(
-                {
-                    "status": "unavailable",
-                    "detail": f"unexpected SELECT 1 result: {result!r}",
-                },
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        ok, detail = await _probe_pool()
+        body: dict[str, Any] = {
+            "status": "ok" if ok else "unavailable",
+            "db_reachable": ok,
+            "listener_connected": _listener_connected(),
+            "queue_depth": _queue_depth(),
+        }
+        if not ok:
+            body["detail"] = detail
+            return JSONResponse(body, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return JSONResponse(body)
+
+    @app.get(
+        "/health/live",
+        include_in_schema=False,
+    )
+    async def health_live() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    @app.get(
+        "/health/ready",
+        include_in_schema=False,
+    )
+    async def health_ready() -> JSONResponse:
+        ok, detail = await _probe_pool()
+        listener_ok = _listener_connected()
+        body: dict[str, Any] = {
+            "status": "ok" if (ok and listener_ok) else "unavailable",
+            "db_reachable": ok,
+            "listener_connected": listener_ok,
+            "queue_depth": _queue_depth(),
+        }
+        if not (ok and listener_ok):
+            if detail is not None:
+                body["detail"] = detail
+            return JSONResponse(body, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return JSONResponse(body)
+
+    @app.get(
+        METRICS_PATH,
+        include_in_schema=False,
+    )
+    async def metrics_endpoint(request: Request) -> Response:
+        """Prometheus exposition endpoint, gated by ``WHILLY_METRICS_TOKEN``.
+
+        Fail-closed when the token env var is unset (VAL-M3-METRICS-020):
+        the handler returns 401 with a clear error rather than serving
+        public metrics. ``check_metrics_token`` performs the
+        constant-time comparison.
+        """
+        authorization = request.headers.get("authorization")
+        if not check_metrics_token(authorization, expected_token=resolved_metrics_token):
+            return JSONResponse(
+                {"error": "unauthorized", "detail": "metrics scrape requires bearer token"},
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": 'Bearer realm="metrics"'},
+            )
+        body, content_type = render_metrics()
+        return Response(content=body, media_type=content_type)
 
     @app.post(
         REGISTER_PATH,
@@ -1209,38 +1294,34 @@ def create_app(
         # payload key omitted, preserving the v4.4.0 baseline shape.
         authenticated_owner_email: str | None = getattr(request.state, "authenticated_owner_email", None)
         deadline = time.monotonic() + claim_long_poll_timeout
-        while True:
-            claimed = await repo.claim_task(payload.worker_id, payload.plan_id, owner_email=authenticated_owner_email)
-            if claimed is not None:
-                # Hot path: claim succeeded. Wrap the domain Task in
-                # the wire-format payload — ``plan`` is intentionally
-                # left ``None``: the AC scope is "Task | 204", and a
-                # plan-name lookup would expand the task footprint.
-                # TASK-022b1 / future work can populate it if needed.
-                logger.info(
-                    "claim: worker=%s plan=%s task=%s",
-                    payload.worker_id,
-                    payload.plan_id,
-                    claimed.id,
+        start = time.monotonic()
+        try:
+            while True:
+                claimed = await repo.claim_task(
+                    payload.worker_id, payload.plan_id, owner_email=authenticated_owner_email
                 )
-                return ClaimResponse(task=TaskPayload.from_task(claimed))
+                if claimed is not None:
+                    logger.info(
+                        "claim: worker=%s plan=%s task=%s",
+                        payload.worker_id,
+                        payload.plan_id,
+                        claimed.id,
+                    )
+                    claims_total.labels(plan_id=payload.plan_id, worker_id=payload.worker_id).inc()
+                    return ClaimResponse(task=TaskPayload.from_task(claimed))
 
-            now = time.monotonic()
-            if now >= deadline:
-                # Long-poll budget exhausted. 204 No Content is the AC
-                # contract: the worker should re-issue the claim
-                # immediately (TASK-022b1's behaviour on 204).
-                logger.debug(
-                    "claim: timeout (no PENDING tasks) worker=%s plan=%s",
-                    payload.worker_id,
-                    payload.plan_id,
-                )
-                return Response(status_code=status.HTTP_204_NO_CONTENT)
+                now = time.monotonic()
+                if now >= deadline:
+                    logger.debug(
+                        "claim: timeout (no PENDING tasks) worker=%s plan=%s",
+                        payload.worker_id,
+                        payload.plan_id,
+                    )
+                    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-            # Cap the sleep at the time remaining to the deadline so
-            # the *total* wait time never exceeds ``claim_long_poll_timeout``
-            # — even when the interval doesn't divide the budget evenly.
-            await asyncio.sleep(min(claim_poll_interval, deadline - now))
+                await asyncio.sleep(min(claim_poll_interval, deadline - now))
+        finally:
+            claim_long_poll_duration_seconds.observe(time.monotonic() - start)
 
     @app.post(
         "/tasks/{task_id}/complete",
@@ -1328,6 +1409,9 @@ def create_app(
             updated.version,
             payload.cost_usd,
         )
+        plan_id = await _lookup_plan_id_for_task(pool, updated.id)
+        if plan_id is not None:
+            completes_total.labels(plan_id=plan_id, worker_id=payload.worker_id).inc()
         return CompleteResponse(task=TaskPayload.from_task(updated))
 
     @app.post(
@@ -1386,6 +1470,13 @@ def create_app(
             updated.version,
             payload.reason,
         )
+        plan_id = await _lookup_plan_id_for_task(pool, updated.id)
+        if plan_id is not None:
+            fails_total.labels(
+                plan_id=plan_id,
+                worker_id=payload.worker_id,
+                reason=payload.reason,
+            ).inc()
         return FailResponse(task=TaskPayload.from_task(updated))
 
     @app.post(
@@ -1634,6 +1725,23 @@ def create_app(
         )
 
     return app
+
+
+async def _lookup_plan_id_for_task(pool: asyncpg.Pool, task_id: str) -> str | None:
+    """Look up the ``plan_id`` for a task by its primary key.
+
+    Used by the metrics counter wiring on the complete / fail success
+    paths — :class:`whilly.core.models.Task` does not carry the
+    ``plan_id`` field, and the metric labels need it. Returns ``None``
+    on lookup failure (row gone, transient asyncpg error) so a missing
+    label never crashes the success path of the RPC.
+    """
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchval("SELECT plan_id FROM tasks WHERE id = $1", task_id)
+    except Exception:
+        logger.exception("metrics: plan_id lookup failed for task_id=%r", task_id)
+        return None
 
 
 def _require_token_owner(request: Request, claimed_worker_id: str) -> None:

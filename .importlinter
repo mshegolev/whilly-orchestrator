@@ -58,3 +58,5 @@ forbidden_modules =
     sqlalchemy
     alembic
     uvicorn
+    prometheus_client
+    prometheus_fastapi_instrumentator

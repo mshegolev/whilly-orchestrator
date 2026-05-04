@@ -210,14 +210,23 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 def test_health_returns_200_against_healthy_pool(client: TestClient, healthy_pool: _FakePool) -> None:
-    """The probe pings the pool exactly once and reports ``status=ok``."""
+    """The probe pings the pool exactly once and reports ``status=ok``.
+
+    M3 extends the body with ``db_reachable`` / ``listener_connected`` /
+    ``queue_depth`` fields per VAL-M3-HEALTH-901 while preserving the
+    legacy ``status`` field for backwards compatibility.
+    """
     response = client.get(HEALTH_PATH)
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["db_reachable"] is True
+    assert "listener_connected" in body
+    assert "queue_depth" in body
     # Probe must actually call acquire — a misimplemented endpoint that
     # always returns 200 without touching the pool would silently mask a
     # broken Postgres link in production.
-    assert healthy_pool.acquire_calls == 1
+    assert healthy_pool.acquire_calls >= 1
 
 
 def test_health_works_without_authorization_header(client: TestClient) -> None:
@@ -238,7 +247,9 @@ def test_health_ignores_invalid_authorization_header(client: TestClient) -> None
     """
     response = client.get(HEALTH_PATH, headers={"Authorization": "Bearer not-a-real-token"})
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["db_reachable"] is True
 
 
 def test_health_path_is_hidden_from_openapi_schema(app: FastAPI) -> None:
