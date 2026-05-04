@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from whilly.agents import AgentResult, active_backend_from_env
+from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
 from whilly.task_manager import Task
 
 log = logging.getLogger("whilly")
@@ -49,6 +50,8 @@ class Decision:
 PROMPT_TEMPLATE = """Ты — gate-агент, проверяющий задачи перед исполнением.
 Твоя цель — отсеять заведомо мусорные/неполные задачи, чтобы не тратить токены.
 
+{guard}
+
 Задача:
 - ID: {id}
 - Priority: {priority}
@@ -76,12 +79,18 @@ PROMPT_TEMPLATE = """Ты — gate-агент, проверяющий задач
 
 
 def build_prompt(task: Task) -> str:
-    acceptance = ", ".join(task.acceptance_criteria) if task.acceptance_criteria else "не задано"
+    if task.acceptance_criteria:
+        acceptance = ", ".join(sanitize_external_text(ac, scope="gate_acceptance") for ac in task.acceptance_criteria)
+    else:
+        acceptance = "не задано"
     files = ", ".join(task.key_files) if task.key_files else "не указаны"
+    raw_desc = (task.description or "").strip()
+    description = sanitize_external_text(raw_desc, scope="gate_task_description") if raw_desc else "(пусто)"
     return PROMPT_TEMPLATE.format(
+        guard=GUARD_SENTENCE,
         id=task.id,
         priority=task.priority,
-        description=(task.description or "(пусто)").strip(),
+        description=description,
         acceptance=acceptance,
         key_files=files,
     )

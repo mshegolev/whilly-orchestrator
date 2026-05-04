@@ -22,7 +22,70 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
+from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
+
 log = logging.getLogger("whilly.triz")
+
+
+_TRIZ_TASK_FIELDS = ("description", "acceptance_criteria", "test_steps", "prd_requirement")
+
+
+def _sanitize_tasks_for_prompt(tasks: list[dict]) -> list[dict]:
+    """Return a copy of ``tasks`` with external text fields wrapped via the sanitizer.
+
+    Only string-valued ``description`` / ``prd_requirement`` and list-valued
+    ``acceptance_criteria`` / ``test_steps`` are rewritten; all other keys are
+    passed through unchanged. Original input is not mutated.
+    """
+    sanitized: list[dict] = []
+    for raw in tasks:
+        if not isinstance(raw, dict):
+            sanitized.append(raw)
+            continue
+        copy = dict(raw)
+        for key in _TRIZ_TASK_FIELDS:
+            if key not in copy:
+                continue
+            value = copy[key]
+            if isinstance(value, str):
+                if value:
+                    copy[key] = sanitize_external_text(value, scope=f"triz_task_{key}")
+            elif isinstance(value, list):
+                copy[key] = [
+                    sanitize_external_text(item, scope=f"triz_task_{key}_item") if isinstance(item, str) else item
+                    for item in value
+                ]
+        sanitized.append(copy)
+    return sanitized
+
+
+def _build_analyze_prompt(tasks: list[dict], project_description: str = "") -> str:
+    """Compose the plan-level TRIZ analysis prompt with sanitized task content."""
+    safe_tasks = _sanitize_tasks_for_prompt(tasks)
+    tasks_text = json.dumps(safe_tasks, indent=2, ensure_ascii=False)
+    project = sanitize_external_text(project_description, scope="triz_project") if project_description else ""
+    return (
+        f"{_TRIZ_ANALYZE_PROMPT}\n\n"
+        f"{GUARD_SENTENCE}\n\n"
+        f"Проект: {project}\n\n"
+        f"Задачи ({len(tasks)} шт):\n```json\n{tasks_text}\n```\n"
+    )
+
+
+def _build_challenge_prompt(tasks: list[dict], prd_content: str = "") -> str:
+    """Compose the plan-level TRIZ challenge prompt with sanitized task content."""
+    safe_tasks = _sanitize_tasks_for_prompt(tasks)
+    tasks_text = json.dumps(safe_tasks, indent=2, ensure_ascii=False)
+    prd_section = ""
+    if prd_content:
+        fenced_prd = sanitize_external_text(prd_content[:3000], scope="triz_prd_content")
+        prd_section = f"\nPRD:\n{fenced_prd}\n"
+    return (
+        f"{_CHALLENGE_PROMPT}\n\n"
+        f"{GUARD_SENTENCE}\n\n"
+        f"Задачи ({len(tasks)} шт):\n```json\n{tasks_text}\n```\n{prd_section}"
+    )
+
 
 # ── TRIZ Principles Reference ────────────────────────────────────────
 
@@ -183,13 +246,7 @@ def analyze_plan_triz(
     Returns:
         TrizReport with contradictions, ideality, resources, recommendations.
     """
-    tasks_text = json.dumps(tasks, indent=2, ensure_ascii=False)
-
-    prompt = (
-        f"{_TRIZ_ANALYZE_PROMPT}\n\n"
-        f"Проект: {project_description}\n\n"
-        f"Задачи ({len(tasks)} шт):\n```json\n{tasks_text}\n```\n"
-    )
+    prompt = _build_analyze_prompt(tasks, project_description)
 
     raw = _call_claude(prompt, model)
     data = _parse_json(raw)
@@ -220,10 +277,7 @@ def challenge_plan(
     Returns:
         ChallengeReport with challenges, verdict, recommendations.
     """
-    tasks_text = json.dumps(tasks, indent=2, ensure_ascii=False)
-    prd_section = f"\nPRD:\n```\n{prd_content[:3000]}\n```\n" if prd_content else ""
-
-    prompt = f"{_CHALLENGE_PROMPT}\n\nЗадачи ({len(tasks)} шт):\n```json\n{tasks_text}\n```\n{prd_section}"
+    prompt = _build_challenge_prompt(tasks, prd_content)
 
     raw = _call_claude(prompt, model)
     data = _parse_json(raw)

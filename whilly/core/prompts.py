@@ -17,6 +17,7 @@ remote workers and removes the cwd-magic the v3 loop relied on.
 from __future__ import annotations
 
 from whilly.core.models import Plan, Task
+from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
 
 PROMISE_MARKER = "<promise>COMPLETE</promise>"
 
@@ -41,11 +42,16 @@ def build_task_prompt(task: Task, plan: Plan) -> str:
     lines.append(f"Задача: **{task.id}**")
     lines.append(f"Приоритет: {task.priority.value}")
     if task.prd_requirement:
-        lines.append(f"PRD requirement: {task.prd_requirement}")
+        lines.append("PRD requirement: " + sanitize_external_text(task.prd_requirement, scope="task_prd_requirement"))
+    lines.append("")
+    lines.append(GUARD_SENTENCE)
     lines.append("")
 
     lines.append("## Описание")
-    lines.append(task.description if task.description else "(описание не указано)")
+    if task.description:
+        lines.append(sanitize_external_text(task.description, scope="task_description"))
+    else:
+        lines.append("(описание не указано)")
     lines.append("")
 
     if task.dependencies:
@@ -57,13 +63,13 @@ def build_task_prompt(task: Task, plan: Plan) -> str:
     if task.acceptance_criteria:
         lines.append("## Acceptance criteria")
         for idx, criterion in enumerate(task.acceptance_criteria, start=1):
-            lines.append(f"{idx}. {criterion}")
+            lines.append(f"{idx}. {sanitize_external_text(criterion, scope='task_acceptance_criterion')}")
         lines.append("")
 
     if task.test_steps:
         lines.append("## Test steps")
         for idx, step in enumerate(task.test_steps, start=1):
-            lines.append(f"{idx}. {step}")
+            lines.append(f"{idx}. {sanitize_external_text(step, scope='task_test_step')}")
         lines.append("")
 
     if task.key_files:

@@ -124,7 +124,11 @@ def test_issue_to_task_dict_maps_fields():
     assert d["priority"] == "high"
     assert d["jira_key"] == "ABC-123"
     assert d["url"] == "https://company.atlassian.net/browse/ABC-123"
-    assert d["acceptance_criteria"] == ["login works", "redirect correct"]
+    # M1 sanitizer wraps each acceptance entry in <UNTRUSTED kind=...> fences.
+    assert len(d["acceptance_criteria"]) == 2
+    assert "login works" in d["acceptance_criteria"][0]
+    assert d["acceptance_criteria"][0].startswith("<UNTRUSTED kind=jira_acceptance>")
+    assert "redirect correct" in d["acceptance_criteria"][1]
     label_names = [label["name"] for label in d["labels"]]
     assert "whilly:ready" in label_names
     assert "priority:high" in label_names
