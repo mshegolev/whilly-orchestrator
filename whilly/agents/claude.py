@@ -30,13 +30,19 @@ DEFAULT_MODEL = "claude-opus-4-6[1m]"
 DEFAULT_BIN = "claude"
 
 
+DEFAULT_DISALLOWED_TOOLS = "Write,Edit,MultiEdit,NotebookEdit,Bash"
+
+
 class ClaudeBackend:
     """Claude Code CLI subprocess wrapper.
 
     Configuration via env:
-        CLAUDE_BIN            override the binary path (default: ``claude``)
-        WHILLY_CLAUDE_SAFE    when truthy, use ``--permission-mode acceptEdits``
-                              instead of ``--dangerously-skip-permissions``
+        CLAUDE_BIN                 override the binary path (default: ``claude``)
+        WHILLY_CLAUDE_SAFE         when truthy, add ``--permission-mode acceptEdits``
+                                   (stacks on top of the default-deny denylist)
+        WHILLY_AGENT_ALLOW_SHELL   when truthy, restore the legacy
+                                   ``--dangerously-skip-permissions`` behavior
+                                   and drop the default tool denylist
     """
 
     name = "claude"
@@ -49,16 +55,30 @@ class ClaudeBackend:
     def _permission_args(self, safe_mode: bool | None = None) -> list[str]:
         """Return the permission-related CLI args.
 
-        Defaults to ``--dangerously-skip-permissions`` so Bash/test commands
-        run fully autonomously. Set ``safe_mode=True`` (or
-        ``WHILLY_CLAUDE_SAFE=1``) to revert to ``--permission-mode acceptEdits``
-        (requires an attached TTY).
+        Default posture (since v4.7.0) is **deny-by-default**: argv carries
+        ``--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash`` and OMITS
+        ``--dangerously-skip-permissions``. To restore the legacy
+        ``--dangerously-skip-permissions`` behavior, set
+        ``WHILLY_AGENT_ALLOW_SHELL=1`` — this drops the denylist and grants the
+        agent its full unattended shell power.
+
+        ``WHILLY_CLAUDE_SAFE=1`` still adds ``--permission-mode acceptEdits``
+        and stacks on top of the default-deny denylist (acceptEdits + denylist
+        both present).
         """
         if safe_mode is None:
             safe_mode = os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes")
+        allow_shell = os.environ.get("WHILLY_AGENT_ALLOW_SHELL") in ("1", "true", "yes")
+
+        if allow_shell:
+            if safe_mode:
+                return ["--permission-mode", "acceptEdits"]
+            return ["--dangerously-skip-permissions"]
+
+        args: list[str] = ["--disallowedTools", DEFAULT_DISALLOWED_TOOLS]
         if safe_mode:
-            return ["--permission-mode", "acceptEdits"]
-        return ["--dangerously-skip-permissions"]
+            args.extend(["--permission-mode", "acceptEdits"])
+        return args
 
     # ── Protocol surface ───────────────────────────────────────────────────
 
