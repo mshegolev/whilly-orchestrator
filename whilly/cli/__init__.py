@@ -52,11 +52,48 @@ v4.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
-__all__ = ["main", "run_plan_command"]
+__all__ = ["main", "run_plan_command", "validate_schema"]
+
+
+def validate_schema(plan: dict[str, Any] | str | os.PathLike[str]) -> None:
+    """Legacy v3 plan-shape validator (M1 VAL-SEC-023..026).
+
+    Accepts either a decoded plan dict or a path to a v3-shaped
+    ``tasks.json``. Validates every task ``id`` against the canonical
+    regex via :func:`whilly.core.task_id.validate_task_id`. Raises
+    :class:`ValueError` naming the offending id when validation fails;
+    callers that imported a malformed plan dict get an exception before
+    any downstream side effect.
+
+    The shape check is deliberately narrow: this is the legacy
+    ``cli.validate_schema`` shim referenced in ``CLAUDE.md``. The v4
+    plan import path lives in
+    :mod:`whilly.adapters.filesystem.plan_io` and applies the same
+    validator to every task on the way in.
+    """
+    from whilly.core.task_id import validate_task_id
+
+    if isinstance(plan, dict):
+        data = plan
+    else:
+        data = json.loads(Path(plan).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("plan must decode to a JSON object")
+    raw_tasks = data.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        raise ValueError("'tasks' must be a JSON array")
+    for index, task in enumerate(raw_tasks):
+        if not isinstance(task, dict):
+            raise ValueError(f"task at index {index} is not a JSON object")
+        if "id" in task:
+            validate_task_id(task["id"])
 
 
 _HELP_TEXT = """\
