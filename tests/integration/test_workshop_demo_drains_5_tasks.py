@@ -134,11 +134,20 @@ def test_helper_min_done_mode_fails_when_done_below_threshold() -> None:
     assert "SKIPPED=1" in result.stdout
 
 
+@pytest.mark.timeout(600)
 def test_workshop_demo_drains_5_tasks_done(docker_available: bool, tmp_path: Path) -> None:
     """End-to-end: `bash workshop-demo.sh --cli stub` exits 0 within 5 minutes
     AND the helper's summary line reports `DONE=5 PENDING=0`.
 
     This is the canonical assertion behind VAL-CROSS-BACKCOMPAT-005.
+
+    Heavy: spins up the full demo stack (postgres + control-plane + 2 workers
+    + plan import + 5 stub-Claude drains) via docker compose. On
+    macOS+colima single-host docker the cold cache image build + container
+    start sequence routinely runs well past the suite-wide 120s budget
+    (typically 180-300s wall). DEMO_TIMEOUT_SECONDS already bounds the
+    subprocess at 300s; this per-test marker lifts only this one test to a
+    realistic 600s ceiling without slowing the rest of the suite.
     """
     log_file = tmp_path / "workshop-demo.log"
     env = os.environ.copy()
