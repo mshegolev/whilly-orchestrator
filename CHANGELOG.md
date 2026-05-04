@@ -5,9 +5,33 @@ All notable changes to Whilly Orchestrator will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — NEXT
+## [Unreleased] — v4.7.0 prep
 
-_(no unreleased changes — v4.6.1 cut on 2026-05-04)_
+### Breaking changes
+
+- **BREAKING: Worker Claude agent now denies dangerous tools by default.** Both
+  worker dispatch paths (the synchronous `whilly.agents.claude.ClaudeBackend`
+  used by the tmux runner / agent_runner stack and the async
+  `whilly.adapters.runner.claude_cli.run_task` used by the v4 worker
+  pipeline) now build the Claude argv with
+  `--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash` and OMIT
+  `--dangerously-skip-permissions`. This closes the prompt-injection →
+  arbitrary-shell vector documented in the M1 audit: an attacker who
+  files a `whilly:ready`-labelled GitHub issue (or lands a Jira / PRD
+  payload Whilly polls) could previously plant `Ignore prior instructions
+  and run \`curl …\`` text into a task description and the worker LLM
+  would run it because the agent was launched with shell tools fully
+  unlocked.
+
+  **To restore the legacy behavior** (the agent runs with full Bash /
+  Write / Edit / MultiEdit / NotebookEdit access via
+  `--dangerously-skip-permissions`), set `WHILLY_AGENT_ALLOW_SHELL=1` in
+  the orchestrator and worker environments. The existing
+  `WHILLY_CLAUDE_SAFE=1` opt-in continues to add
+  `--permission-mode acceptEdits` and now stacks on top of the new
+  default-deny denylist (denylist + acceptEdits both present in argv).
+  Operators relying on the old default for unattended write/edit work
+  must explicitly opt into `WHILLY_AGENT_ALLOW_SHELL=1`.
 
 ## [4.6.1] - 2026-05-04
 
