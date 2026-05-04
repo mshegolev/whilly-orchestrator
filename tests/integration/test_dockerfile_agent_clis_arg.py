@@ -146,6 +146,13 @@ def _docker_rmi(tag: str) -> None:
     )
 
 
+# Heavy `docker buildx build` on macOS+colima single-host docker routinely
+# runs 200-450s wall (apt + Node 22 + npm install on a fresh base, all
+# funnelled through the colima VM's bridged docker socket). The default
+# suite-wide 120s budget is intentionally kept tight for fast tests; this
+# per-test override (and the two siblings below) lifts only the docker-build
+# tests to a realistic ceiling without slowing the rest of the suite.
+@pytest.mark.timeout(600)
 @DOCKER_REQUIRED
 def test_slim_build_succeeds_and_opencode_only() -> None:
     """End-to-end: slim build → opencode on PATH → claude NOT on PATH.
@@ -230,6 +237,7 @@ def test_slim_build_succeeds_and_opencode_only() -> None:
         _docker_rmi(tag)
 
 
+@pytest.mark.timeout(600)
 @DOCKER_REQUIRED
 def test_empty_build_skips_npm_install() -> None:
     """Empty ``WHILLY_AGENT_CLIS`` skips the npm install layer cleanly.
