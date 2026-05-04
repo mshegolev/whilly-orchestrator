@@ -147,6 +147,17 @@ services:
       FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
       FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
       FUNNEL_URL_FILE: /funnel/url.txt
+      # M3 (m3-funnel-stable-url-via-ssh-key): when these are set the
+      # sidecar switches from the free anonymous tier to a stable URL
+      # via an account-bound SSH key (and optionally a paid custom
+      # domain). Default empty preserves the v4.5 anonymous-rotating
+      # behaviour byte-for-byte. To enable the SSH-key tier, set
+      # FUNNEL_SSH_KEY_PATH inside the container (e.g. /keys/funnel_id)
+      # and bind-mount your registered key onto that path via a compose
+      # override or `-v` flag — see
+      # docs/Distributed-Setup.md § "Stable URL via SSH key (M3)".
+      FUNNEL_SSH_KEY_PATH: "${FUNNEL_SSH_KEY_PATH:-}"
+      FUNNEL_CUSTOM_DOMAIN: "${FUNNEL_CUSTOM_DOMAIN:-}"
       WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
     volumes:
       - funnel_url_volume:/funnel
