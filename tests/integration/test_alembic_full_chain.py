@@ -52,6 +52,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "008_workers_owner_email",
     "009_bootstrap_tokens",
     "010_funnel_url",
+    "011_events_notify_trigger",
 )
 
 
@@ -137,7 +138,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "010_funnel_url"
+    assert head_version == "011_events_notify_trigger"
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -245,6 +246,33 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(funnel_url_singleton_check) == 1
 
+    # 011: ``whilly_notify_event`` plpgsql function + ``tr_events_notify``
+    # AFTER INSERT trigger on ``events`` exist.
+    notify_fn_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'whilly_notify_event'
+            """,
+        )
+    )
+    assert int(notify_fn_count) == 1
+    notify_trigger_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_trigger t
+            JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE c.relname = 'events'
+              AND t.tgname = 'tr_events_notify'
+              AND NOT t.tgisinternal
+            """,
+        )
+    )
+    assert int(notify_trigger_count) == 1
+
     # Confirm the whilly tables are present (sanity).
     tables = {
         row["table_name"]
@@ -297,8 +325,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "010_funnel_url"
+    assert first_version == "011_events_notify_trigger"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "010_funnel_url"
+    assert second_version == "011_events_notify_trigger"

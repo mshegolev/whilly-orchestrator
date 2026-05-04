@@ -136,11 +136,20 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_010_is_head_revision() -> None:
-    """The alembic script directory reports ``010_funnel_url`` as the head."""
+def test_010_in_chain_with_known_predecessor() -> None:
+    """``010_funnel_url`` is a known revision in the alembic chain.
+
+    The head revision moves forward as new migrations land (011 events
+    notify trigger, …); pinning ``head == "010_funnel_url"`` here would
+    force every downstream worker to update this test. Instead we verify
+    ``010_funnel_url`` is reachable via :class:`ScriptDirectory` and that
+    its ``down_revision`` chain links to ``009``.
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "010_funnel_url"
+    revision = script.get_revision("010_funnel_url")
+    assert revision is not None
+    assert revision.down_revision == "009_bootstrap_tokens"
 
 
 def test_010_depends_on_009() -> None:
@@ -306,7 +315,10 @@ def test_upsert_on_conflict_overwrites_in_place(base_009_dsn: str) -> None:
 
 def test_downgrade_removes_table(base_009_dsn: str) -> None:
     cfg = _build_cfg(base_009_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "010_funnel_url"),
+        op="upgrade 010_funnel_url",
+    )
     _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
 
     async def _inspect() -> tuple[int, str | None]:
