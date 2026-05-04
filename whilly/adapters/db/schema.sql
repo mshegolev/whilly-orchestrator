@@ -171,6 +171,67 @@ CREATE TABLE events (
 
 CREATE INDEX ix_events_task_id_created_at ON events (task_id, created_at);
 
+-- ─── events NOTIFY trigger ───────────────────────────────────────────────
+-- M3 mission, migration 011_events_notify_trigger. Every row inserted
+-- into ``events`` fires ``pg_notify('whilly_events', …)`` with a small
+-- JSON payload that the M3 control-plane's ``_event_notify_listener_loop``
+-- (a dedicated asyncpg connection LISTENing on the ``whilly_events``
+-- channel) drains into the in-memory per-subscriber queue feeding
+-- ``GET /events/stream``.
+--
+-- The function is idempotent (``CREATE OR REPLACE FUNCTION``); the
+-- trigger creation is preceded by ``DROP TRIGGER IF EXISTS`` so a
+-- re-run of the migration succeeds against a database that already
+-- has both objects (VAL-M3-MIGRATE-010-901). Downgrade drops the
+-- trigger first then the function — no ``CASCADE`` (VAL-M3-MIGRATE-
+-- 010-902).
+--
+-- AFTER INSERT (not BEFORE) so ``NEW.id`` is the actual inserted PK
+-- rather than NULL; FOR EACH ROW so a multi-row INSERT
+-- (the existing ``EventFlusher`` batched path) emits one NOTIFY per
+-- row. Postgres delivers NOTIFYs only on COMMIT, so a rolled-back
+-- transaction emits zero NOTIFYs.
+--
+-- Payload size discipline: pg_notify caps at ~8000 bytes; when the
+-- assembled JSON exceeds 7900 bytes the trigger drops the heavy
+-- ``payload`` field and adds ``"truncated": true``.
+
+CREATE OR REPLACE FUNCTION whilly_notify_event() RETURNS trigger
+LANGUAGE plpgsql AS $body$
+DECLARE
+    v_full    jsonb;
+    v_text    text;
+    v_minimal jsonb;
+BEGIN
+    v_full := jsonb_build_object(
+        'event_id',   NEW.id,
+        'event_type', NEW.event_type,
+        'task_id',    NEW.task_id,
+        'plan_id',    NEW.plan_id,
+        'payload',    COALESCE(NEW.payload, '{}'::jsonb)
+    );
+    v_text := v_full::text;
+    IF octet_length(v_text) > 7900 THEN
+        v_minimal := jsonb_build_object(
+            'event_id',   NEW.id,
+            'event_type', NEW.event_type,
+            'task_id',    NEW.task_id,
+            'plan_id',    NEW.plan_id,
+            'truncated',  true
+        );
+        v_text := v_minimal::text;
+    END IF;
+    PERFORM pg_notify('whilly_events', v_text);
+    RETURN NEW;
+END;
+$body$;
+
+DROP TRIGGER IF EXISTS tr_events_notify ON events;
+CREATE TRIGGER tr_events_notify
+    AFTER INSERT ON events
+    FOR EACH ROW
+    EXECUTE FUNCTION whilly_notify_event();
+
 -- ─── bootstrap_tokens ────────────────────────────────────────────────────
 -- Per-user worker-bootstrap auth (M2 mission, migration 009). Replaces
 -- the single shared ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var sentinel
