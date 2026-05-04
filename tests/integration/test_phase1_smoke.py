@@ -443,11 +443,24 @@ def postgres_dsn() -> Iterator[str]:
     # port-forwarding flake documented in AGENTS.md ("Known pre-existing
     # issues"). The container is started imperatively (not via ``with``) so
     # we can retry; cleanup is in the outer ``finally`` block.
-    pg = PostgresContainer("postgres:15-alpine")
-    started = False
+    # Apply the same orphan-cleanup-friendly label + atexit teardown used by
+    # tests/conftest.py and tests/integration/test_alembic_008.py so this
+    # fixture's containers participate in the session-start orphan reap and
+    # survive pytest-timeout / SIGTERM aborts (fix-m3-testcontainers-postgres-leak).
+    from tests.conftest import (
+        WHILLY_TESTCONTAINER_IMAGE,
+        WHILLY_TESTCONTAINER_LABEL_KEY,
+        WHILLY_TESTCONTAINER_LABEL_VALUE,
+        _register_pg_atexit_stop,
+    )
+
+    pg = PostgresContainer(WHILLY_TESTCONTAINER_IMAGE).with_kwargs(
+        labels={WHILLY_TESTCONTAINER_LABEL_KEY: WHILLY_TESTCONTAINER_LABEL_VALUE}
+    )
+    stop_pg = None
     try:
         _retry_colima_flake(pg.start, op="PostgresContainer('postgres:15-alpine').start()")
-        started = True
+        stop_pg = _register_pg_atexit_stop(pg)
         # testcontainers' default DSN uses the psycopg2 driver suffix. We
         # rip it back to plain ``postgresql://`` so env.py does the
         # asyncpg coercion itself — exercises the same code path
@@ -456,11 +469,8 @@ def postgres_dsn() -> Iterator[str]:
         dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
         yield dsn
     finally:
-        if started:
-            try:
-                pg.stop()
-            except Exception:  # noqa: BLE001 — teardown best effort
-                _TC_LOG.warning("PostgresContainer.stop() raised during teardown", exc_info=True)
+        if stop_pg is not None:
+            stop_pg()
         # Restore DOCKER_HOST to whatever the developer had (or unset it).
         if prior_docker_host is None:
             os.environ.pop("DOCKER_HOST", None)
