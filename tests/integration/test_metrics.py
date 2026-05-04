@@ -65,6 +65,8 @@ def _reset_metric_families() -> None:
         if hasattr(labeled, "_metrics"):
             labeled._metrics.clear()
     metrics_module.workers_online.set(0)
+    metrics_module._seen_claims_pending_plan_ids.clear()
+    metrics_module._seen_plan_budget_plan_ids.clear()
     histogram = metrics_module.claim_long_poll_duration_seconds
     if hasattr(histogram, "_sum"):
         try:

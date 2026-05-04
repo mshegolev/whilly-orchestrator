@@ -348,6 +348,18 @@ async def _refresh_plan_budgets(
     return seen
 
 
+_seen_claims_pending_plan_ids: set[str] = set()
+_seen_plan_budget_plan_ids: set[str] = set()
+
+
+def _drop_stale_labels(gauge: Gauge, stale_plan_ids: set[str]) -> None:
+    for plan_id in stale_plan_ids:
+        try:
+            gauge.remove(plan_id)
+        except KeyError:
+            pass
+
+
 async def refresh_gauges(
     pool: _PoolLike,
     *,
@@ -361,10 +373,23 @@ async def refresh_gauges(
     failure in one query family doesn't prevent the others from
     refreshing — the loop's outer ``except Exception`` then logs the
     composite failure.
+
+    After repopulating each per-plan gauge, plan_ids that were present
+    on the previous tick but absent from the current SQL result set are
+    removed from the gauge's label registry (VAL-M3-METRICS-018 /
+    VAL-M3-METRICS-903 — bounded cardinality + parity with SQL truth).
+    Without this, a plan whose tasks all leave the PENDING bucket would
+    keep emitting its last-known ``whilly_claims_pending`` value
+    indefinitely.
     """
+    global _seen_claims_pending_plan_ids, _seen_plan_budget_plan_ids
     await _refresh_workers_online(pool, online_threshold_seconds=online_threshold_seconds)
-    await _refresh_claims_pending(pool)
-    await _refresh_plan_budgets(pool)
+    seen_claims_pending = await _refresh_claims_pending(pool)
+    seen_plan_budgets = await _refresh_plan_budgets(pool)
+    _drop_stale_labels(claims_pending, _seen_claims_pending_plan_ids - seen_claims_pending)
+    _drop_stale_labels(plan_budget_remaining_usd, _seen_plan_budget_plan_ids - seen_plan_budgets)
+    _seen_claims_pending_plan_ids = seen_claims_pending
+    _seen_plan_budget_plan_ids = seen_plan_budgets
 
 
 async def metrics_refresh_loop(
