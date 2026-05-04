@@ -25,6 +25,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from whilly.security.prompt_sanitizer import sanitize_external_text
 from whilly.task_manager import Task
 
 log = logging.getLogger("whilly")
@@ -243,17 +244,23 @@ def issue_to_task(issue: dict) -> tuple[Task, list[str]]:
             snippet = snippet[:480].rsplit("\n", 1)[0] + "\n…"
         description_short = f"{title}\n\n{snippet}"
 
+    fenced_description = sanitize_external_text(description_short, scope="gh_issue_description")
+    fenced_acceptance = [
+        sanitize_external_text(item, scope="gh_issue_acceptance") for item in _extract_section(body, "Acceptance")
+    ]
+    fenced_test_steps = [sanitize_external_text(item, scope="gh_issue_test") for item in _extract_section(body, "Test")]
+
     task = Task(
         id=f"GH-{number}",
         phase="GH-Issues",
         category="github-issue",
         priority=_priority_from_labels(labels),
-        description=description_short,
+        description=fenced_description,
         status="pending",
         dependencies=_extract_inline_field(body, "Depends"),
         key_files=_extract_inline_field(body, "Files"),
-        acceptance_criteria=_extract_section(body, "Acceptance"),
-        test_steps=_extract_section(body, "Test"),
+        acceptance_criteria=fenced_acceptance,
+        test_steps=fenced_test_steps,
         prd_requirement=url,
     )
     return task, _detect_secrets(body)

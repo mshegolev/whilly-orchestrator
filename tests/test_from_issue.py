@@ -99,7 +99,12 @@ def test_fetch_single_issue_writes_plan_file(tmp_path, monkeypatch):
     assert task["id"] == "GH-42"
     assert task["status"] == "pending"
     assert "the single-issue demo" in task["description"]
-    assert task["acceptance_criteria"] == ["thing works", "other thing"]
+    # M1 sanitizer wraps each acceptance entry in <UNTRUSTED kind=gh_issue_acceptance> fences.
+    assert len(task["acceptance_criteria"]) == 2
+    assert "thing works" in task["acceptance_criteria"][0]
+    assert task["acceptance_criteria"][0].startswith("<UNTRUSTED kind=gh_issue_acceptance>")
+    assert "other thing" in task["acceptance_criteria"][1]
+    assert task["acceptance_criteria"][1].startswith("<UNTRUSTED kind=gh_issue_acceptance>")
 
 
 def test_fetch_single_issue_idempotent_on_rerun(tmp_path, monkeypatch):

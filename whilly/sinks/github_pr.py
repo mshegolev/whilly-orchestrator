@@ -19,6 +19,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from whilly.security.prompt_sanitizer import sanitize_external_text, sanitize_title_slot
 from whilly.task_manager import Task
 
 log = logging.getLogger("whilly")
@@ -101,13 +102,24 @@ def _branch_name(task: Task, prefix: str) -> str:
 
 
 def _short_title(task: Task, max_len: int = 60) -> str:
-    """Return a one-line title prefix for the PR. Falls back to task.id."""
+    """Return a one-line title prefix for the PR. Falls back to task.id.
+
+    The result is suitable for direct use as a ``gh pr create --title`` argv
+    slot: control bytes (NUL, ANSI escapes, ``\\n``, ``\\t``) are stripped,
+    secret patterns are redacted, and the entire string is capped at
+    ``max_len`` characters (default 60).
+    """
     raw = (task.description or "").strip().splitlines()[0] if task.description else ""
+    raw = sanitize_title_slot(raw, max_chars=max_len) if raw else ""
     if not raw:
-        return task.id
-    if len(raw) > max_len:
-        raw = raw[: max_len - 1].rstrip() + "…"
-    return f"{task.id}: {raw}"
+        return sanitize_title_slot(task.id, max_chars=max_len)
+    prefix = f"{task.id}: "
+    available = max_len - len(prefix)
+    if available <= 0:
+        return sanitize_title_slot(task.id, max_chars=max_len)
+    if len(raw) > available:
+        raw = raw[: available - 1].rstrip() + "…"
+    return f"{prefix}{raw}"
 
 
 def _extract_issue_number(prd_requirement: str) -> int | None:
@@ -137,26 +149,31 @@ def render_pr_body(
         lines.append(f"Closes #{issue_n}.")
         lines.append("")
     elif task.prd_requirement:
-        lines.append(f"Implements [{task.id}]({task.prd_requirement}).")
+        safe_prd = sanitize_external_text(task.prd_requirement, scope="pr_body_prd_requirement")
+        lines.append(f"Implements [{task.id}]({safe_prd}).")
         lines.append("")
     else:
         lines.append(f"Implements task `{task.id}`.")
         lines.append("")
 
     lines.append("### Description")
-    lines.append((task.description or "(no description)").strip())
+    raw_desc = (task.description or "").strip()
+    if raw_desc:
+        lines.append(sanitize_external_text(raw_desc, scope="pr_body_description"))
+    else:
+        lines.append("(no description)")
     lines.append("")
 
     if task.acceptance_criteria:
         lines.append("### Acceptance criteria")
         for ac in task.acceptance_criteria:
-            lines.append(f"- {ac}")
+            lines.append(f"- {sanitize_external_text(ac, scope='pr_body_acceptance')}")
         lines.append("")
 
     if task.test_steps:
         lines.append("### Validation")
         for ts in task.test_steps:
-            lines.append(f"- {ts}")
+            lines.append(f"- {sanitize_external_text(ts, scope='pr_body_test_step')}")
         lines.append("")
 
     lines.append("### Whilly run")

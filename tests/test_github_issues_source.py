@@ -139,17 +139,24 @@ class TestIssueToTask:
         assert task.priority == "high"
         assert task.status == "pending"
         assert task.key_files == ["app/server.py"]
-        assert task.acceptance_criteria == ["GET /health -> 200"]
-        assert task.test_steps == ["curl -s localhost/health"]
+        # M1 sanitizer wraps each acceptance/test entry in <UNTRUSTED kind=...> fences.
+        assert len(task.acceptance_criteria) == 1
+        assert "GET /health -> 200" in task.acceptance_criteria[0]
+        assert task.acceptance_criteria[0].startswith("<UNTRUSTED kind=gh_issue_acceptance>")
+        assert len(task.test_steps) == 1
+        assert "curl -s localhost/health" in task.test_steps[0]
+        assert task.test_steps[0].startswith("<UNTRUSTED kind=gh_issue_test>")
         assert task.prd_requirement == "https://github.com/foo/bar/issues/42"
         assert "/health endpoint" in task.description
+        assert task.description.startswith("<UNTRUSTED kind=gh_issue_description>")
         assert secrets == []
 
     def test_empty_body(self):
         issue = {"number": 5, "title": "Quick fix", "body": "", "labels": [], "url": ""}
         task, secrets = issue_to_task(issue)
         assert task.id == "GH-5"
-        assert task.description == "Quick fix"
+        assert "Quick fix" in task.description
+        assert task.description.startswith("<UNTRUSTED kind=gh_issue_description>")
         assert task.acceptance_criteria == []
         assert task.priority == "medium"
 
