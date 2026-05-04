@@ -7,7 +7,144 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — NEXT
 
-_(no unreleased changes — v4.5.0 cut on 2026-05-03)_
+_(no unreleased changes — v4.6.0 cut on 2026-05-04)_
+
+## [4.6.0] - 2026-05-04
+
+> **M3 of Whilly Distributed v5.0 — live observability & headline
+> demo.** Ships the live operator surface (HTMX dashboard at `GET /`,
+> SSE event stream at `GET /events/stream`, JSON tasks listing at
+> `GET /api/v1/tasks`, bearer-gated Prometheus `/metrics` with extended
+> `/health` + `/health/live` + `/health/ready` triplet) plus the
+> postgres-backed event-notify fan-out (migration 011 +
+> `whilly-event-notify-listener` lifespan task) that drives the
+> sub-second dashboard updates. The headline two-host demo (macbook +
+> VPS draining a 10-task plan against the localhost.run funnel-sidecar
+> URL with both `worker_id`s visible from any browser) graduates to
+> the validation gate at this release. **Strictly additive** —
+> default `docker compose up` is byte-equivalent to v4.5 (no new
+> compose profiles, no new sidecars); `workshop-demo.sh --cli stub`,
+> all v3-era CLI flag handling, and existing alembic migrations
+> 001-010 continue to work identically.
+
+### Breaking changes
+
+(none)
+
+### Upgrade notes
+
+- `pip install --upgrade whilly-orchestrator==4.6.0` /
+  `pip install --upgrade whilly-worker==4.6.0` (the worker
+  meta-package keeps its `==X.Y.Z` pin to the orchestrator —
+  upgrade both in lockstep).
+- `docker pull mshegolev/whilly:4.6.0` for the multi-arch image.
+- Schema migration: `alembic upgrade head` applies migration **011**
+  (`whilly_notify_event()` PL/pgSQL function + `tr_events_notify`
+  AFTER INSERT trigger on `events`). The migration is additive —
+  pre-v4.6 consumers reading `events` rows are unaffected; the only
+  behavioural change is that every newly inserted `events` row also
+  fires `pg_notify('whilly_events', …)`. The downgrade path drops
+  the trigger and function (no data migration required).
+- The new `/events/stream`, `/api/v1/tasks`, and `/metrics` endpoints
+  require bearer auth (per-worker bearer for `/events/stream` +
+  `/api/v1/tasks`, dedicated `WHILLY_METRICS_TOKEN` bearer for
+  `/metrics` — fail-closed when unset). `GET /` is open by default.
+- The new `[server]` extras pull in three packages —
+  `prometheus-fastapi-instrumentator`, `prometheus-client`,
+  `sse-starlette`, and `jinja2`. Worker installs (`pip install
+  whilly-orchestrator[worker]` / `pip install whilly-worker`) are
+  unaffected; the import-linter contract continues to forbid them
+  from the worker import closure.
+- The HTMX dashboard polls every 5 s as an SSE fallback; no new
+  long-poll connections are introduced over the v4.5 baseline.
+
+### Added
+
+- **Migration 011 — `whilly_notify_event()` + `tr_events_notify`
+  trigger** (`m3-migration-011`). Adds a PL/pgSQL trigger that fires
+  `pg_notify('whilly_events', json_build_object(...)::text)` AFTER
+  INSERT on `events`, carrying `event_id` / `event_type` / `task_id`
+  / `plan_id` and a copy of `payload` (truncated with
+  `truncated:true` if the assembled payload would exceed 7900 bytes
+  — Postgres' 8000-byte `pg_notify` ceiling). Idempotent forward
+  (`CREATE OR REPLACE FUNCTION` + `DROP TRIGGER IF EXISTS` guard
+  before `CREATE TRIGGER`); `whilly/adapters/db/schema.sql` is
+  hand-mirrored in the same commit per the mission migration
+  discipline. Tests:
+  `tests/integration/test_alembic_011.py` (17 cases — forward /
+  backward / idempotent re-apply / AFTER INSERT-only / payload
+  truncation / etc).
+- **`whilly-event-notify-listener` lifespan task + per-subscriber
+  fan-out broker** (`m3-sse-listener`). New
+  `whilly/api/sse.py` module ships `EventNotifyBroker` (per-
+  subscriber `asyncio.Queue`, slow-subscriber drop policy with WS
+  close-code 1015 surfaced to subscribers) and
+  `event_notify_listener_loop` (a dedicated asyncpg `LISTEN
+  whilly_events` connection allocated *outside* the pool with
+  exponential reconnect backoff 1/2/4/8/30 s, malformed-payload
+  defence, clean teardown via the shared `sweep_stop` event). The
+  loop is registered as a `whilly-event-notify-listener` child of
+  `create_app`'s lifespan TaskGroup; the broker is exposed on
+  `app.state.event_notify_broker`. `create_app` grows an optional
+  `dsn=` argument so the listener owns its own session.
+- **`GET /events/stream` SSE endpoint** (`m3-sse-endpoint`). New
+  `whilly/api/sse_endpoint.py` wires `sse-starlette`'s
+  `EventSourceResponse` onto the broker. Authenticates via the
+  per-worker / bootstrap / legacy-env bearer; parses `Last-Event-ID`
+  with malformed → start-fresh fallback; replays from the `events`
+  table capped at 1000 rows (synthetic `replay_truncated` frame on
+  overflow); hands subscribers off to the broker for live tail.
+  Heartbeat is configurable via `sse_ping_seconds` (default 15 s);
+  slow-subscriber drops surface as an SSE `error` frame carrying
+  close_code 1015. Adds `sse-starlette>=2.0` to the `[server]`
+  extras. Fulfils the network-partition recovery invariant: a
+  worker disconnected for ≤ 60 s catches up via `Last-Event-ID`
+  without losing any committed event.
+- **HTMX dashboard at `GET /`** (`m3-htmx-dashboard`). Server-
+  rendered Jinja2 page (`whilly/api/templates/dashboard.html`,
+  `_workers_table.html`, `_tasks_table.html`) delegated to the new
+  `whilly/api/dashboard.py::render_dashboard`. Single SQL trip
+  fetches workers / tasks / summary; HTMX live-swaps rows on `sse:*`
+  events from `/events/stream`; falls back to a 5 s
+  `hx-trigger="every 5s"` poll if the SSE socket fails.
+  `?fragment=workers|tasks` returns just the partial table for the
+  polling fallback. DB failure surfaces as a non-500 error banner
+  with a Retry button so the polling fallback can recover without
+  flashing a blank page. Pico.css from CDN drives
+  `prefers-color-scheme` dark / light; a media query collapses the
+  layout under 480 px (mobile-responsive, 375 × 812 viewport
+  validated via agent-browser). `htmx@1.9.12` and
+  `htmx-ext-sse@2.2.4` are loaded from CDN — zero client-side
+  build pipeline. `jinja2>=3.1` added to `[server]` extras and
+  templates ship via `tool.setuptools.package-data`.
+- **`GET /api/v1/tasks` JSON listing** (`m3-tasks-api`). New
+  `whilly/api/tasks_api.py` (cursor encoding + SQL projection)
+  registers a per-worker-bearer-authenticated cursor-paginated
+  read-only endpoint returning `{tasks: [...], next_cursor: ...}`.
+  Sort: `PRIORITY_ORDER` (critical=0 / high=1 / medium=2 / low=3)
+  ASC then `id` ASC; supports `status` filter, `limit` 1..500 (default
+  100), and an opaque base64url cursor encoding `(priority_rank, id)`
+  so iteration is deterministic across mid-flight inserts. Fulfils
+  VAL-M3-TASKS-API-001..013 / 901..902 and VAL-CROSS-AUTH-003.
+- **Prometheus `/metrics` surface + extended health probes**
+  (`m3-prometheus-metrics`). New `whilly/api/metrics.py` defines the
+  custom counters / gauges / histograms:
+  `whilly_claims_total`, `whilly_completes_total`, `whilly_fails_total`
+  (with `reason` label), `whilly_workers_online`,
+  `whilly_claims_pending`, `whilly_plan_budget_remaining_usd`, and
+  `whilly_claim_long_poll_duration_seconds`. The
+  `prometheus-fastapi-instrumentator` is wired into `create_app` with
+  bearer auth on `/metrics` (`WHILLY_METRICS_TOKEN`, fail-closed
+  when unset). A background `_metrics_refresh_loop` refreshes
+  DB-backed gauges every `metrics_refresh_interval_seconds` (default
+  15 s). Adds `prometheus-fastapi-instrumentator>=7.1.0` and
+  `prometheus-client>=0.20` to the `[server]` extras and to the
+  `.importlinter` worker-forbidden list. The `/health` body grows
+  `db_reachable` / `listener_connected` / `queue_depth` fields and
+  is joined by sibling probes `GET /health/live` (always 200) and
+  `GET /health/ready` (503 when the listener task has exited).
+
+
 
 ## [4.5.0] - 2026-05-03
 
