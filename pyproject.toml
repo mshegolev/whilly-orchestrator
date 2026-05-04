@@ -55,6 +55,7 @@ server = [
     "uvicorn[standard]>=0.27",
     "alembic>=1.13",
     "sqlalchemy[asyncio]>=2.0",
+    "sse-starlette>=2.0",
 ]
 # Convenience: install both deployment shapes in one go (e.g. for an
 # all-in-one demo or for CI that drives both the server and a remote
