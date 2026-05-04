@@ -160,10 +160,12 @@ from contextlib import asynccontextmanager
 from typing import Any, Final
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import status as status_module
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
+from whilly.core.models import TaskStatus
 from whilly.api.event_flusher import (
     DEFAULT_BATCH_LIMIT as EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
 )
@@ -183,6 +185,12 @@ from whilly.api.sse import (
     event_notify_listener_loop,
 )
 from whilly.api.dashboard import render_dashboard as render_dashboard_view
+from whilly.api.tasks_api import (
+    DEFAULT_LIMIT as TASKS_API_DEFAULT_LIMIT,
+    MAX_LIMIT as TASKS_API_MAX_LIMIT,
+    CursorDecodeError,
+    list_tasks as list_tasks_payload,
+)
 from whilly.api.sse_endpoint import (
     DASHBOARD_DEFAULT_ORIGIN,
     REPLAY_LIMIT as SSE_REPLAY_LIMIT,
@@ -1519,6 +1527,50 @@ def create_app(
     async def admin_health(request: Request) -> JSONResponse:
         owner = getattr(request.state, "bootstrap_owner_email", None)
         return JSONResponse({"status": "ok", "owner": owner})
+
+    @app.get(
+        "/api/v1/tasks",
+        # Tags + summary surface in /docs (VAL-M3-TASKS-API-001) so the
+        # operator can discover the endpoint alongside /api/v1/plans.
+        # Bearer auth uses the same ``bearer_dep`` as the steady-state
+        # RPC surface — any registered worker (or a legacy
+        # ``WHILLY_WORKER_TOKEN`` holder) can read; a dashboard origin
+        # without a worker bearer must mint one via /workers/register.
+        dependencies=[Depends(bearer_dep)],
+        tags=["tasks"],
+        summary="List tasks for a plan with pagination + status filter",
+    )
+    async def list_tasks_endpoint(
+        request: Request,
+        plan_id: str = Query(..., min_length=1, max_length=256),
+        status: TaskStatus | None = Query(default=None),
+        limit: int = Query(default=TASKS_API_DEFAULT_LIMIT, gt=0, le=TASKS_API_MAX_LIMIT),
+        cursor: str | None = Query(default=None, max_length=2048),
+    ) -> JSONResponse:
+        try:
+            payload = await list_tasks_payload(
+                pool,
+                plan_id=plan_id,
+                status_filter=status,
+                limit=limit,
+                cursor=cursor,
+            )
+        except CursorDecodeError as exc:
+            raise HTTPException(
+                status_code=status_module.HTTP_400_BAD_REQUEST,
+                detail=f"invalid cursor: {exc}",
+            ) from None
+
+        cors_origin = (
+            request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
+        )
+        headers = {
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+        return JSONResponse(payload, headers=headers)
 
     @app.get(
         "/",
