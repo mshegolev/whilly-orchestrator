@@ -40,7 +40,11 @@ from alembic.script import ScriptDirectory
 from tests.conftest import (
     DOCKER_REQUIRED,
     HAS_TESTCONTAINERS,
+    WHILLY_TESTCONTAINER_IMAGE,
+    WHILLY_TESTCONTAINER_LABEL_KEY,
+    WHILLY_TESTCONTAINER_LABEL_VALUE,
     _build_alembic_config,
+    _register_pg_atexit_stop,
     _retry_colima_flake,
     docker_available,
     resolve_docker_host,
@@ -74,14 +78,21 @@ def base_007_dsn(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
             monkeypatch.setenv("DOCKER_HOST", resolved)
     monkeypatch.setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
 
-    pg = PostgresContainer("postgres:15-alpine")
-    started = False
+    # Same orphan-cleanup-friendly label + atexit teardown applied here as
+    # in the session-scoped postgres_dsn fixture (fix-m3-testcontainers-postgres-leak):
+    # if pytest is killed mid-test, the atexit hook still calls pg.stop(),
+    # and the next session's pytest_sessionstart hook reaps anything that
+    # slipped past atexit.
+    pg = PostgresContainer(WHILLY_TESTCONTAINER_IMAGE).with_kwargs(
+        labels={WHILLY_TESTCONTAINER_LABEL_KEY: WHILLY_TESTCONTAINER_LABEL_VALUE}
+    )
+    stop_pg = None
     try:
         _retry_colima_flake(
             pg.start,
             op="PostgresContainer('postgres:15-alpine').start() (test_alembic_008)",
         )
-        started = True
+        stop_pg = _register_pg_atexit_stop(pg)
         raw = pg.get_connection_url()
         dsn = raw.replace("postgresql+psycopg2://", "postgresql://").replace("+psycopg2", "")
         monkeypatch.setenv("WHILLY_DATABASE_URL", dsn)
@@ -92,11 +103,8 @@ def base_007_dsn(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
         )
         yield dsn
     finally:
-        if started:
-            try:
-                pg.stop()
-            except Exception:  # noqa: BLE001 — teardown best effort
-                pass
+        if stop_pg is not None:
+            stop_pg()
 
 
 def _build_cfg(dsn: str) -> Config:
