@@ -22,6 +22,28 @@
 #   * `set -u` would trip on optional env reads; we use `set -eo
 #     pipefail` instead and gate optional reads with `${VAR:-}`.
 #
+# Tier modes (M3 — m3-funnel-stable-url-via-ssh-key):
+#
+#   1. Anonymous rotating (default). `FUNNEL_SSH_KEY_PATH` unset.
+#      Connects as `nokey@localhost.run`. Free; URL rotates "after
+#      a few hours" per localhost.run docs. Workers must run with
+#      `WHILLY_FUNNEL_URL_SOURCE=postgres|file` to absorb rotation.
+#
+#   2. SSH-key stable. `FUNNEL_SSH_KEY_PATH=/path/to/key` set.
+#      Connects with `-i $FUNNEL_SSH_KEY_PATH` and the
+#      account-default username (`localhost.run`). The SSH key
+#      must be registered against a free localhost.run account at
+#      https://admin.localhost.run/ — the assigned subdomain is
+#      stable across reconnects (e.g. `myproject.lhr.life`).
+#      Workers can use `WHILLY_FUNNEL_URL_SOURCE=static`.
+#
+#   3. Custom domain (paid tier). `FUNNEL_CUSTOM_DOMAIN=foo.example.com`
+#      set in addition to `FUNNEL_SSH_KEY_PATH`. Forward spec
+#      becomes `<domain>:80:<local-host>:<local-port>` so
+#      localhost.run binds the tunnel to the custom domain.
+#      Requires a paid localhost.run subscription that has the
+#      domain configured at https://admin.localhost.run/.
+#
 # Test hooks:
 #   * `FUNNEL_FAKE_URL` — when set, the script bypasses real SSH
 #     and emits a synthetic banner containing that URL. Used by
@@ -31,6 +53,11 @@
 #   * `FUNNEL_ONESHOT` — when truthy, exit after the first publish
 #     instead of looping. Test fixtures set this so the container
 #     terminates deterministically.
+#   * `FUNNEL_DUMP_SSH_ARGS` — when truthy, print the assembled
+#     ssh argv (one token per line) and exit 0 without invoking
+#     ssh. Used by
+#     `tests/integration/test_funnel_stable_url.py` to assert the
+#     SSH-key / custom-domain wiring without a live tunnel.
 
 set -eo pipefail
 
@@ -41,8 +68,11 @@ FUNNEL_RETRY_BACKOFF_SECONDS="${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
 FUNNEL_URL_FILE="${FUNNEL_URL_FILE:-/funnel/url.txt}"
 FUNNEL_REMOTE_HOST="${FUNNEL_REMOTE_HOST:-localhost.run}"
 FUNNEL_REMOTE_USER="${FUNNEL_REMOTE_USER:-nokey}"
+FUNNEL_SSH_KEY_PATH="${FUNNEL_SSH_KEY_PATH:-}"
+FUNNEL_CUSTOM_DOMAIN="${FUNNEL_CUSTOM_DOMAIN:-}"
 FUNNEL_FAKE_URL="${FUNNEL_FAKE_URL:-}"
 FUNNEL_ONESHOT="${FUNNEL_ONESHOT:-0}"
+FUNNEL_DUMP_SSH_ARGS="${FUNNEL_DUMP_SSH_ARGS:-0}"
 
 LHR_REGEX='https://[a-z0-9-]+\.lhr\.life'
 
@@ -170,6 +200,30 @@ publish_url() {
     publish_to_postgres "$url"
 }
 
+build_ssh_args() {
+    local -a args=(
+        -o "ServerAliveInterval=${FUNNEL_SERVER_ALIVE_INTERVAL}"
+        -o ExitOnForwardFailure=yes
+        -o StrictHostKeyChecking=accept-new
+    )
+    local remote_user="${FUNNEL_REMOTE_USER}"
+    local forward_spec="80:${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}"
+
+    if [ -n "$FUNNEL_SSH_KEY_PATH" ]; then
+        args+=( -o IdentitiesOnly=yes -i "$FUNNEL_SSH_KEY_PATH" )
+        if [ "$FUNNEL_REMOTE_USER" = "nokey" ]; then
+            remote_user="localhost.run"
+        fi
+    fi
+
+    if [ -n "$FUNNEL_CUSTOM_DOMAIN" ]; then
+        forward_spec="${FUNNEL_CUSTOM_DOMAIN}:80:${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}"
+    fi
+
+    args+=( -R "$forward_spec" "${remote_user}@${FUNNEL_REMOTE_HOST}" )
+    printf '%s\n' "${args[@]}"
+}
+
 run_ssh_session() {
     if [ -n "$FUNNEL_FAKE_URL" ]; then
         cat <<EOF
@@ -182,12 +236,11 @@ ${FUNNEL_FAKE_URL}
 EOF
         return 0
     fi
-    exec ssh \
-        -o "ServerAliveInterval=${FUNNEL_SERVER_ALIVE_INTERVAL}" \
-        -o ExitOnForwardFailure=yes \
-        -o StrictHostKeyChecking=accept-new \
-        -R "80:${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}" \
-        "${FUNNEL_REMOTE_USER}@${FUNNEL_REMOTE_HOST}"
+    local -a ssh_args=()
+    while IFS= read -r line; do
+        ssh_args+=( "$line" )
+    done < <(build_ssh_args)
+    exec ssh "${ssh_args[@]}"
 }
 
 run_session_and_capture() {
@@ -209,8 +262,24 @@ run_session_and_capture() {
     done < <(run_ssh_session 2>&1)
 }
 
+resolve_tier_label() {
+    if [ -n "$FUNNEL_CUSTOM_DOMAIN" ] && [ -n "$FUNNEL_SSH_KEY_PATH" ]; then
+        printf 'custom-domain (%s)' "$FUNNEL_CUSTOM_DOMAIN"
+    elif [ -n "$FUNNEL_SSH_KEY_PATH" ]; then
+        printf 'ssh-key-stable'
+    elif [ -n "$FUNNEL_CUSTOM_DOMAIN" ]; then
+        printf 'custom-domain (no SSH key — likely misconfigured)'
+    else
+        printf 'anonymous-rotating'
+    fi
+}
+
 main() {
-    log "starting funnel sidecar (local=${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}, remote=${FUNNEL_REMOTE_USER}@${FUNNEL_REMOTE_HOST})"
+    if [ "$FUNNEL_DUMP_SSH_ARGS" = "1" ] || [ "$FUNNEL_DUMP_SSH_ARGS" = "true" ]; then
+        build_ssh_args
+        return 0
+    fi
+    log "starting funnel sidecar (local=${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}, remote=${FUNNEL_REMOTE_USER}@${FUNNEL_REMOTE_HOST}, tier=$(resolve_tier_label))"
     while true; do
         run_session_and_capture || true
         if [ "$FUNNEL_ONESHOT" = "1" ] || [ "$FUNNEL_ONESHOT" = "true" ]; then

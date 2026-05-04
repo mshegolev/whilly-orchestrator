@@ -208,6 +208,12 @@ services:
       FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
       FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
       FUNNEL_URL_FILE: /funnel/url.txt
+      # M3 (m3-funnel-stable-url-via-ssh-key): опционально включает
+      # SSH-key stable URL и paid custom-domain режимы. По дефолту пусто
+      # — поведение байт-в-байт совпадает с v4.5 anonymous-rotating.
+      # См. docs/Distributed-Setup.md § "Stable URL via SSH key (M3)".
+      FUNNEL_SSH_KEY_PATH: "${FUNNEL_SSH_KEY_PATH:-}"
+      FUNNEL_CUSTOM_DOMAIN: "${FUNNEL_CUSTOM_DOMAIN:-}"
       WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
     volumes:
       - funnel_url_volume:/funnel

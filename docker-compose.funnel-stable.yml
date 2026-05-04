@@ -1,0 +1,51 @@
+# Whilly funnel sidecar — SSH-key stable URL override (M3).
+#
+# This file is an *override* layered on top of either
+# `docker-compose.demo.yml` or `docker-compose.control-plane.yml`
+# (M2 base files). It bind-mounts a registered localhost.run SSH key
+# into the sidecar container so the funnel can connect with the
+# account-bound stable-URL flow described in
+# docs/Distributed-Setup.md § "Stable URL via SSH key (M3)".
+#
+# Default `up` of the base file is unchanged; this override is opt-in
+# and stacks on top of `--profile funnel`. Pair it with a `.env` that
+# sets the three variables described in
+# `docs/Distributed-Setup.md` § "Stable URL via SSH key (M3)":
+#   * FUNNEL_SSH_KEY_HOST_PATH — absolute host path to the registered
+#     private key (read-only mount source).
+#   * FUNNEL_SSH_KEY_PATH — in-container path the sidecar reads
+#     (default `/keys/funnel_id`).
+#   * FUNNEL_CUSTOM_DOMAIN — optional paid-tier custom domain
+#     (e.g. `tunnel.example.com`).
+#
+# Then bring everything up:
+#
+#   docker compose \
+#     -f docker-compose.control-plane.yml \
+#     -f docker-compose.funnel-stable.yml \
+#     --profile funnel \
+#     up -d
+#
+# The sidecar runs `ssh -o IdentitiesOnly=yes -i $FUNNEL_SSH_KEY_PATH
+# localhost.run@localhost.run` (and prefixes the `-R` forward with
+# `$FUNNEL_CUSTOM_DOMAIN:` when set). Workers can then opt back in to
+# `WHILLY_FUNNEL_URL_SOURCE=static` because the published URL no
+# longer rotates.
+
+services:
+  funnel:
+    environment:
+      # In-container path of the SSH key. Must match the destination
+      # of the bind-mount below. Default `/keys/funnel_id` — override
+      # only if you also adjust the bind-mount target accordingly.
+      FUNNEL_SSH_KEY_PATH: "${FUNNEL_SSH_KEY_PATH:-/keys/funnel_id}"
+      # Optional paid custom domain. Empty = SSH-key stable URL only
+      # (the assigned `<your-name>.lhr.life` subdomain).
+      FUNNEL_CUSTOM_DOMAIN: "${FUNNEL_CUSTOM_DOMAIN:-}"
+    volumes:
+      # Read-only bind of the operator's host key into the container.
+      # `:ro` is intentional — the sidecar only ever needs to read the
+      # private key. Fail-fast: if FUNNEL_SSH_KEY_HOST_PATH is unset
+      # docker-compose errors out (which is the right behaviour — there
+      # is no useful default for a private key path).
+      - "${FUNNEL_SSH_KEY_HOST_PATH:?set FUNNEL_SSH_KEY_HOST_PATH to your registered localhost.run private key path}:${FUNNEL_SSH_KEY_PATH:-/keys/funnel_id}:ro"

@@ -132,8 +132,10 @@ URL "after a few hours" of session lifetime (per the localhost.run
 FAQ). The sidecar absorbs every reconnect transparently — but workers
 that hard-code the URL (no `WHILLY_FUNNEL_URL_SOURCE=postgres|file`
 re-discovery) need to be restarted manually after a rotation. For a
-**stable URL** (free localhost.run account + dedicated SSH key,
-deferred to M3 in this mission), see [`docs/Deploy-M2.md`
+**stable URL** (free localhost.run account + dedicated SSH key, **shipped
+in v4.6 / M3**), see
+[Stable URL via SSH key (M3)](#stable-url-via-ssh-key-m3) below — and
+the operational comparison in [`docs/Deploy-M2.md`
 § "localhost.run tier — staging vs prod"](Deploy-M2.md#localhostrun-tier--staging-vs-prod).
 
 ### Scenario A — Laptop-host control-plane (most common)
@@ -250,6 +252,175 @@ Both are bumped on every reconnect. The sidecar logs the regex match
 once per session (`[funnel ...] discovered URL: https://...lhr.life`)
 so `docker compose logs funnel` is the simplest way to spot the
 latest URL without writing SQL.
+
+### Stable URL via SSH key (M3)
+
+> **Status: Available since v4.6.** The free anonymous tier in M2
+> rotates the `lhr.life` URL "after a few hours". M3 wires the funnel
+> sidecar to use a **registered localhost.run SSH key** so the
+> assigned subdomain (e.g. `myproject.lhr.life`) is stable across
+> reconnects and laptop-reboots. Workers can then opt back in to
+> `WHILLY_FUNNEL_URL_SOURCE=static` — no postgres / file polling
+> needed.
+>
+> This still uses **localhost.run's free tier** — registering an SSH
+> key only costs you an email account; you do not pay them anything.
+> A separate **paid tier** (custom domain) is documented in
+> [Custom domain (paid tier)](#custom-domain-paid-tier) below.
+
+The decision matrix between the three tiers:
+
+| Tier | URL shape | Stable across reconnects? | Account / payment | When to use |
+|---|---|---|---|---|
+| **Anonymous rotating** (M2 default) | `https://<random>.lhr.life` | ❌ rotates "after a few hours" | None | Demos, smoke tests, anything where re-sharing a fresh URL is cheap |
+| **SSH-key stable** (M3) | `https://<your-name>.lhr.life` | ✅ stable subdomain | Free localhost.run account + dedicated SSH key | Cluster you want to put in a colleague's `~/.bashrc`; long-running deployments |
+| **Custom domain (paid)** (M3) | `https://tunnel.example.com` | ✅ stable + your domain | Paid localhost.run subscription + DNS CNAME | Branded surface; certs you can attest to under your own domain |
+
+#### 1. Create a dedicated SSH key
+
+The funnel sidecar should use a key that is **not** your personal
+laptop key — minting a dedicated `ed25519` keypair scoped only to
+localhost.run keeps the blast radius small if the host is compromised.
+
+```bash
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/whilly_lhr_id_ed25519 \
+    -C "whilly-funnel@$(hostname)"
+
+# Public key — paste this into the localhost.run admin console.
+cat ~/.ssh/whilly_lhr_id_ed25519.pub
+```
+
+> The empty passphrase (`-N ''`) is intentional — the sidecar runs
+> non-interactively in a container and can't be prompted. Mitigate
+> the unencrypted private key with `chmod 600` (default from
+> `ssh-keygen`) and bind-mount it `:ro` (the M3 compose override
+> does this for you — see step 3).
+
+#### 2. Register the key at https://admin.localhost.run/
+
+1. Sign in with the email you want associated with the cluster.
+2. Open the **SSH Keys** tab.
+3. Paste the contents of `~/.ssh/whilly_lhr_id_ed25519.pub` and pick
+   a stable **subdomain** (e.g. `myproject` → results in
+   `myproject.lhr.life`). The subdomain is reserved against your
+   account.
+4. Save.
+
+The same admin console exposes the **custom domain** option for the
+paid tier — see [Custom domain (paid tier)](#custom-domain-paid-tier)
+below if you want to combine both.
+
+#### 3. Bring up the funnel with the SSH-key override
+
+The repo ships an opt-in compose override
+[`docker-compose.funnel-stable.yml`](../docker-compose.funnel-stable.yml)
+that bind-mounts the host key at a fixed in-container path and sets
+`FUNNEL_SSH_KEY_PATH` accordingly. Stack it on top of the M2 base
+file:
+
+```bash
+# .env — alongside docker-compose.{demo,control-plane}.yml.
+# Capture the host key path into an env var first — keeps the .env
+# example below free of literal private-key paths (which would otherwise
+# trip secret-scanners on the way in).
+WHILLY_LHR_KEY="$HOME/.ssh/whilly_lhr_id_ed25519"
+cat >> .env <<EOF
+# Absolute host path of the registered private key (read-only mount).
+FUNNEL_SSH_KEY_HOST_PATH=${WHILLY_LHR_KEY}
+# In-container path (default /keys/funnel_id; override only if you
+# also adjust the bind-mount target in the override file).
+FUNNEL_SSH_KEY_PATH=/keys/funnel_id
+EOF
+
+# Bring up control-plane + funnel with the stable-URL override.
+docker compose \
+    -f docker-compose.control-plane.yml \
+    -f docker-compose.funnel-stable.yml \
+    --profile funnel \
+    up -d
+```
+
+Verify the sidecar logged the new tier:
+
+```bash
+docker compose -f docker-compose.control-plane.yml logs funnel \
+    | grep -E 'tier=ssh-key-stable'
+# [funnel 2026-...] starting funnel sidecar (..., tier=ssh-key-stable)
+```
+
+The published URL — same place as the anonymous tier (the
+`funnel_url` table and `/funnel/url.txt`) — is now your stable
+`<subdomain>.lhr.life`. Spot-check it:
+
+```bash
+psql "$WHILLY_DATABASE_URL" -t -A -c \
+    'SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1'
+# https://myproject.lhr.life
+```
+
+#### 4. Workers can use `WHILLY_FUNNEL_URL_SOURCE=static`
+
+Because the URL no longer rotates, workers can drop the
+postgres / file polling loop and pin the URL once at register-time:
+
+```bash
+whilly worker connect https://myproject.lhr.life \
+    --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
+    --plan demo \
+    --hostname "$(hostname)"
+# WHILLY_FUNNEL_URL_SOURCE defaults to `static` — explicit form:
+#   WHILLY_FUNNEL_URL_SOURCE=static whilly worker connect ...
+```
+
+> **Trade-off.** `static` mode is simpler and avoids one polling
+> loop per worker, but if your localhost.run account is suspended or
+> the key is rotated out, the worker won't auto-recover by reading a
+> new URL from postgres / `/funnel/url.txt`. For multi-cluster
+> setups where you might shuffle keys, keep
+> `WHILLY_FUNNEL_URL_SOURCE=postgres` even on the SSH-key tier — it's
+> cheap insurance.
+
+#### Custom domain (paid tier)
+
+If you've upgraded to a paid localhost.run plan and configured a
+custom domain (e.g. `tunnel.example.com`) bound to the same SSH key,
+add one more line to `.env`:
+
+```bash
+echo 'FUNNEL_CUSTOM_DOMAIN=tunnel.example.com' >> .env
+```
+
+…and re-run the same `docker compose ... up -d` command from
+[step 3](#3-bring-up-the-funnel-with-the-ssh-key-override). The
+sidecar will issue a custom-domain bound `-R` to localhost.run:
+
+```
+ssh -i /keys/funnel_id -R tunnel.example.com:80:control-plane:8000 \
+    localhost.run@localhost.run
+```
+
+Your published URL becomes `https://tunnel.example.com`, served by
+localhost.run's edge proxy under your domain's TLS cert (see the
+paid-tier docs at https://admin.localhost.run/ for the DNS CNAME
+configuration). Workers consume it the same way as the SSH-key tier.
+
+> **DNS prerequisite.** localhost.run's paid tier requires a CNAME
+> from your domain to `<account>.localhost.run`. Set this up
+> *before* bringing the funnel up, otherwise the localhost.run edge
+> rejects the bind-request with `remote forwarding failed` and the
+> sidecar's `ExitOnForwardFailure=yes` exits — `docker compose logs
+> funnel` will surface the underlying SSH error.
+
+#### Reference: env vars added in v4.6 (M3)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FUNNEL_SSH_KEY_PATH` | empty (anon tier) | In-container path to the registered localhost.run private key. When set, the sidecar uses `-i $FUNNEL_SSH_KEY_PATH` and connects as `localhost.run@localhost.run` instead of `nokey@localhost.run`. |
+| `FUNNEL_SSH_KEY_HOST_PATH` | (none) | Host path of the registered key. Consumed only by `docker-compose.funnel-stable.yml` to bind-mount the key into the sidecar. Compose fail-fasts when unset and the override is active. |
+| `FUNNEL_CUSTOM_DOMAIN` | empty | Paid-tier custom domain (e.g. `tunnel.example.com`). When set, the sidecar prepends it to the `-R` forward spec so localhost.run binds the tunnel to your domain. |
+
+All three default to empty strings, so the M2 anonymous-rotating
+behaviour is byte-for-byte unchanged.
 
 ### Source-IP forensics: out of scope under localhost.run
 
