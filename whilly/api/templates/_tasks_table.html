@@ -1,6 +1,6 @@
 <table id="tasks"
        hx-get="/?fragment=tasks"
-       hx-trigger="every 5s, sse:task.claim, sse:task.start, sse:task.complete, sse:task.fail, sse:task.release"
+       hx-trigger="every 5s, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP"
        hx-swap="outerHTML"
        role="grid">
   <thead>
