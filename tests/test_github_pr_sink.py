@@ -98,7 +98,9 @@ class TestRenderBody:
         t = _make_task(prd_requirement="https://example.com/spec/123")
         body = render_pr_body(t)
         assert "Closes #" not in body
-        assert "Implements [GH-42](https://example.com/spec/123)" in body
+        # M1 sanitizer fences external prd_requirement URLs in the PR body.
+        assert "Implements [GH-42](" in body
+        assert "https://example.com/spec/123" in body
 
     def test_without_any_url(self):
         t = _make_task(prd_requirement="")

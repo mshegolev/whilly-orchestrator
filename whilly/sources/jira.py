@@ -30,6 +30,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from whilly.security.prompt_sanitizer import sanitize_external_text
 from whilly.sources.github_issues import FetchStats, GitHubIssuesSource, merge_into_plan
 
 log = logging.getLogger("whilly")
@@ -233,20 +234,23 @@ def issue_to_task_dict(key: str, payload: dict[str, Any]) -> dict[str, Any]:
             snippet = snippet[:480].rsplit("\n", 1)[0] + "\n…"
         description_short = f"{summary}\n\n{snippet}"
 
-    # Return a dict that plays the same role as a gh issue for merge_into_plan.
-    # We monkey-patch `number` to the Jira key so the resulting Task.id becomes
-    # JIRA-<key> via a custom conversion wrapper (handled by `_adapt_for_merge`).
     return {
         "_jira_key": key,
         "number": key,  # merge_into_plan uses this to build the task id
         "title": summary,
         "body": body,
+        "description": sanitize_external_text(description_short, scope="jira_description"),
         "description_short": description_short,
         "labels": labels_for_gh,
         "url": browse_url,
         "priority": _jira_priority(fields),
-        "acceptance_criteria": _extract_section_bullets(body, "Acceptance"),
-        "test_steps": _extract_section_bullets(body, "Test"),
+        "acceptance_criteria": [
+            sanitize_external_text(item, scope="jira_acceptance")
+            for item in _extract_section_bullets(body, "Acceptance")
+        ],
+        "test_steps": [
+            sanitize_external_text(item, scope="jira_test") for item in _extract_section_bullets(body, "Test")
+        ],
         "jira_key": key,
     }
 

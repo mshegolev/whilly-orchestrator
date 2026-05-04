@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from whilly.adapters.runner import proxy
+from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
 
 log = logging.getLogger("whilly.prd")
 
@@ -244,7 +245,8 @@ def _build_tasks_payload(
         raise FileNotFoundError(f"PRD not found: {prd_path}")
 
     prd_content = prd_path.read_text(encoding="utf-8")
-    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\nPRD файл: {prd_path}\n\nСодержимое PRD:\n```\n{prd_content}\n```\n"
+    fenced_prd = sanitize_external_text(prd_content, scope="prd_content", max_chars=200_000)
+    prompt = f"{_TASKS_SYSTEM_PROMPT}\n\n{GUARD_SENTENCE}\n\nPRD файл: {prd_path}\n\nСодержимое PRD:\n{fenced_prd}\n"
 
     log.info("Generating tasks from PRD: %s", prd_path.name)
     content = _call_claude(prompt, model)

@@ -68,6 +68,7 @@ from whilly.forge._gh import (
     fetch_issue,
     flip_label,
 )
+from whilly.security.prompt_sanitizer import sanitize_external_text
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +146,10 @@ def _issue_to_description(issue: dict[str, Any]) -> str:
     parts: list[str] = []
     title = issue.get("title")
     if isinstance(title, str) and title.strip():
-        parts.append(f"# {title.strip()}")
+        parts.append("# " + sanitize_external_text(title.strip(), scope="issue_title"))
     body = issue.get("body")
     if isinstance(body, str) and body.strip():
-        parts.append(body.strip())
+        parts.append(sanitize_external_text(body.strip(), scope="issue_body"))
     comments = issue.get("comments") or []
     if isinstance(comments, list) and comments:
         rendered_comments: list[str] = []
@@ -157,7 +158,8 @@ def _issue_to_description(issue: dict[str, Any]) -> str:
                 continue
             comment_body = comment.get("body")
             if isinstance(comment_body, str) and comment_body.strip():
-                rendered_comments.append(f"### Comment {idx}\n{comment_body.strip()}")
+                fenced = sanitize_external_text(comment_body.strip(), scope=f"issue_comment_{idx}")
+                rendered_comments.append(f"### Comment {idx}\n{fenced}")
         if rendered_comments:
             parts.append("## Discussion\n\n" + "\n\n".join(rendered_comments))
     return "\n\n".join(parts) or "(empty issue)"

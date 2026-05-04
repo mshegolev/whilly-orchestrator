@@ -69,6 +69,7 @@ import subprocess  # noqa: I001 — see module docstring "Layering exception"
 from dataclasses import dataclass
 
 from whilly.core.models import Task
+from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
 
 __all__ = [
     "CLAUDE_BIN",
@@ -188,6 +189,8 @@ class TrizOutcome:
 _PROMPT_TEMPLATE = """\
 You are a TRIZ (Theory of Inventive Problem Solving) analyst.
 
+{guard}
+
 Analyse the task below for a *single* technical or physical contradiction
 that, if present, would block straightforward implementation.
 
@@ -223,12 +226,15 @@ def _build_prompt(task: Task) -> str:
     accidentally returning a malformed dict that we'd nominally
     accept.
     """
-    desc = (task.description or "").strip() or "(no description)"
+    raw_desc = (task.description or "").strip()
+    desc = sanitize_external_text(raw_desc, scope="triz_task_description") if raw_desc else "(no description)"
     if task.acceptance_criteria:
-        acceptance = "\n".join(f"- {ac}" for ac in task.acceptance_criteria)
+        acceptance = "\n".join(
+            f"- {sanitize_external_text(ac, scope='triz_task_acceptance')}" for ac in task.acceptance_criteria
+        )
     else:
         acceptance = "(none)"
-    return _PROMPT_TEMPLATE.format(description=desc, acceptance=acceptance)
+    return _PROMPT_TEMPLATE.format(guard=GUARD_SENTENCE, description=desc, acceptance=acceptance)
 
 
 def _log_warning(event: str, message: str, *args: object) -> None:
