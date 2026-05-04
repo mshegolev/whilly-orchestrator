@@ -138,6 +138,11 @@ def test_docker_publish_workflow_pins_runtime_target() -> None:
     )
 
 
+# Full default-target build (no `--target`) builds runtime + worker stages
+# end-to-end; on macOS+colima this regularly runs 250-500s wall. Per-test
+# timeout override lets this test ride a realistic ceiling while the rest
+# of the suite keeps the tight 120s default.
+@pytest.mark.timeout(600)
 @DOCKER_REQUIRED
 def test_default_target_image_cmd_is_control_plane() -> None:
     """``docker buildx build .`` (no --target) → ``Config.Cmd == ["control-plane"]``.
