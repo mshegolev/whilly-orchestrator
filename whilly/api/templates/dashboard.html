@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Whilly Control Plane</title>
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+        crossorigin="anonymous">
+  <script src="https://unpkg.com/htmx.org@1.9.12"
+          crossorigin="anonymous"
+          defer></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.4/sse.js"
+          crossorigin="anonymous"
+          defer></script>
+  <style>
+    :root { --whilly-mono: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    main.container { padding-block: 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-block: 1rem;
+    }
+    .summary-cards article {
+      margin: 0;
+      padding: 0.75rem 1rem;
+      text-align: center;
+    }
+    .summary-cards article header {
+      font-size: 0.85rem;
+      opacity: 0.75;
+      padding: 0;
+      margin-bottom: 0.25rem;
+    }
+    .summary-cards article .value {
+      font-size: 1.5rem;
+      font-weight: bold;
+      font-variant-numeric: tabular-nums;
+    }
+    .table-wrapper { overflow-x: auto; }
+    code { font-family: var(--whilly-mono); }
+    .status, .priority {
+      display: inline-block;
+      padding: 0.1rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .status-online, .status-DONE, .status-done { color: #0a7d3e; }
+    .status-offline, .status-FAILED, .status-failed { color: #b00020; }
+    .status-PENDING, .status-pending { color: #555; }
+    .status-CLAIMED, .status-claimed,
+    .status-IN_PROGRESS, .status-in_progress { color: #b36b00; }
+    .priority-critical { color: #b00020; }
+    .priority-high { color: #b36b00; }
+    .priority-medium { color: inherit; }
+    .priority-low { opacity: 0.7; }
+    .empty-state { opacity: 0.65; }
+    .error-banner {
+      border-left: 4px solid var(--pico-color-red-500, #b00020);
+      padding-left: 0.75rem;
+    }
+    .error-banner button { margin-top: 0.5rem; }
+    @media (max-width: 480px) {
+      main.container { padding-inline: 0.75rem; }
+      .summary-cards { grid-template-columns: repeat(2, 1fr); }
+      table { font-size: 0.85rem; }
+      table th, table td { padding: 0.4rem 0.4rem; }
+    }
+  </style>
+</head>
+<body hx-ext="sse" sse-connect="/events/stream">
+  <main class="container">
+    <header>
+      <hgroup>
+        <h1>Whilly Control Plane</h1>
+        <p>Live worker + task dashboard. Updates via Server-Sent Events with a 5-second polling fallback.</p>
+      </hgroup>
+    </header>
+
+    {% if error %}
+      <article id="error-banner" class="error-banner" role="alert">
+        <header><strong>Control plane unavailable</strong></header>
+        <p>{{ error }}</p>
+        <button type="button"
+                hx-get="/"
+                hx-target="body"
+                hx-swap="outerHTML"
+                hx-trigger="click">Retry</button>
+      </article>
+    {% endif %}
+
+    <section class="summary-cards" id="summary">
+      <article><header>Workers online</header><div class="value">{{ summary.workers_online }}</div></article>
+      <article><header>Tasks pending</header><div class="value">{{ summary.tasks_pending }}</div></article>
+      <article><header>In progress</header><div class="value">{{ summary.tasks_in_progress }}</div></article>
+      <article><header>Done</header><div class="value">{{ summary.tasks_done }}</div></article>
+      <article><header>Failed</header><div class="value">{{ summary.tasks_failed }}</div></article>
+    </section>
+
+    <section>
+      <header><h2>Workers</h2></header>
+      <div class="table-wrapper">
+        {% include "_workers_table.html" %}
+      </div>
+    </section>
+
+    <section>
+      <header><h2>Tasks</h2></header>
+      <div class="table-wrapper">
+        {% include "_tasks_table.html" %}
+      </div>
+    </section>
+
+    <footer>
+      <small>Whilly v{{ version }} &middot; rendered {{ rendered_at_human }}</small>
+    </footer>
+  </main>
+</body>
+</html>

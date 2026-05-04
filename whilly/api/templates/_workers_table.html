@@ -1,0 +1,32 @@
+<table id="workers"
+       hx-get="/?fragment=workers"
+       hx-trigger="every 5s, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline"
+       hx-swap="outerHTML"
+       role="grid">
+  <thead>
+    <tr>
+      <th scope="col">Worker</th>
+      <th scope="col">Owner</th>
+      <th scope="col">Hostname</th>
+      <th scope="col">Status</th>
+      <th scope="col">Last heartbeat</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if workers %}
+      {% for w in workers %}
+        <tr id="worker-{{ w.worker_id }}">
+          <td><code>{{ w.worker_id }}</code></td>
+          <td>{{ w.owner_email if w.owner_email else "—" }}</td>
+          <td>{{ w.hostname }}</td>
+          <td><span class="status status-{{ w.status }}">{{ w.status }}</span></td>
+          <td><time datetime="{{ w.last_heartbeat_iso }}">{{ w.last_heartbeat_human }}</time></td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr id="workers-empty">
+        <td colspan="5"><em class="empty-state">No workers connected yet.</em></td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>

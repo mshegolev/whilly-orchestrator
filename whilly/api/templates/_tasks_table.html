@@ -1,0 +1,34 @@
+<table id="tasks"
+       hx-get="/?fragment=tasks"
+       hx-trigger="every 5s, sse:task.claim, sse:task.start, sse:task.complete, sse:task.fail, sse:task.release"
+       hx-swap="outerHTML"
+       role="grid">
+  <thead>
+    <tr>
+      <th scope="col">Task</th>
+      <th scope="col">Plan</th>
+      <th scope="col">Status</th>
+      <th scope="col">Priority</th>
+      <th scope="col">Claimed by</th>
+      <th scope="col">Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if tasks %}
+      {% for t in tasks %}
+        <tr id="task-{{ t.id }}">
+          <td><code>{{ t.id }}</code></td>
+          <td>{{ t.plan_id }}</td>
+          <td><span class="status status-{{ t.status|lower }}">{{ t.status }}</span></td>
+          <td><span class="priority priority-{{ t.priority }}">{{ t.priority }}</span></td>
+          <td>{{ t.claimed_by if t.claimed_by else "—" }}</td>
+          <td><time datetime="{{ t.updated_at_iso }}">{{ t.updated_at_human }}</time></td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr id="tasks-empty">
+        <td colspan="6"><em class="empty-state">No tasks in queue.</em></td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>
