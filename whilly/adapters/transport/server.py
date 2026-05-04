@@ -177,6 +177,11 @@ from whilly.api.event_flusher import (
     EVENT_FLUSHER_TASK_NAME,
     EventFlusher,
 )
+from whilly.api.sse import (
+    EVENT_NOTIFY_LISTENER_TASK_NAME,
+    EventNotifyBroker,
+    event_notify_listener_loop,
+)
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
@@ -602,6 +607,7 @@ def create_app(
     event_batch_limit: int = EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
     event_drain_timeout_seconds: float = EVENT_FLUSHER_DEFAULT_DRAIN_TIMEOUT_SECONDS,
     event_checkpoint_dir: str | None = None,
+    dsn: str | None = None,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -770,6 +776,7 @@ def create_app(
     flusher_checkpoint_dir = (
         event_checkpoint_dir if event_checkpoint_dir is not None else os.environ.get("WHILLY_EVENT_FLUSHER_STATE_DIR")
     )
+    listener_dsn = dsn if dsn is not None else os.environ.get("WHILLY_DATABASE_URL")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -822,6 +829,19 @@ def create_app(
         # lifespan cycles (test harnesses re-entering the same app)
         # don't accumulate stale references.
         repo.attach_event_flusher(flusher)
+        # M3 SSE listener (m3-sse-listener / VAL-M3-SSE-LISTENER-001..901).
+        # The broker fans NOTIFY payloads out to per-subscriber queues
+        # owned by ``GET /events/stream`` handlers. The dedicated
+        # asyncpg connection lives inside :func:`event_notify_listener_loop`
+        # so it never returns to the pool (LISTEN is session-scoped).
+        event_notify_broker = EventNotifyBroker()
+        app.state.event_notify_broker = event_notify_broker
+        # ``app.state.event_notify_queue`` is the contract surface in
+        # VAL-M3-SSE-LISTENER-004; it points at a fresh broker-owned
+        # queue so dashboard probes can subscribe without going through
+        # the broker API. The actual fan-out targets the per-subscriber
+        # queues created by :meth:`EventNotifyBroker.subscribe`.
+        app.state.event_notify_queue = asyncio.Queue()
         try:
             # ``asyncio.TaskGroup`` owns the periodic background sweeps
             # for the duration of the app's lifespan. Tasks are created
@@ -844,7 +864,7 @@ def create_app(
             #
             # See PRD R-1 / SC-2 for the layered-recovery rationale.
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(
+                visibility_sweep_task = tg.create_task(
                     _visibility_sweep_loop(
                         repo,
                         sweep_interval=sweep_interval_seconds,
@@ -853,7 +873,7 @@ def create_app(
                     ),
                     name="whilly-visibility-sweep",
                 )
-                tg.create_task(
+                offline_worker_sweep_task = tg.create_task(
                     _offline_worker_sweep_loop(
                         repo,
                         sweep_interval=offline_worker_sweep_interval_seconds,
@@ -872,6 +892,26 @@ def create_app(
                     name=EVENT_FLUSHER_TASK_NAME,
                 )
                 app.state.event_flusher_task = event_flusher_task
+                # M3 SSE listener — owned by the same TaskGroup so a
+                # crash unwinds the whole supervision boundary; ``stop``
+                # is the shared ``sweep_stop`` event so a single signal
+                # tears down sweeps + flusher + listener at once
+                # (VAL-M3-SSE-LISTENER-008).
+                event_notify_listener_task = tg.create_task(
+                    event_notify_listener_loop(
+                        event_notify_broker,
+                        listener_dsn,
+                        sweep_stop,
+                    ),
+                    name=EVENT_NOTIFY_LISTENER_TASK_NAME,
+                )
+                app.state.event_notify_listener_task = event_notify_listener_task
+                app.state.background_tasks = [
+                    visibility_sweep_task,
+                    offline_worker_sweep_task,
+                    event_flusher_task,
+                    event_notify_listener_task,
+                ]
                 try:
                     yield
                 finally:
@@ -906,6 +946,14 @@ def create_app(
             app.state.event_flusher = None
             app.state.event_queue = None
             app.state.event_flusher_task = None
+            try:
+                event_notify_broker.drop_all()
+            except Exception:
+                logger.exception("event_notify_broker drop_all raised on shutdown")
+            app.state.event_notify_broker = None
+            app.state.event_notify_queue = None
+            app.state.event_notify_listener_task = None
+            app.state.background_tasks = None
             # Drop the repo's flusher reference so subsequent lifespan
             # cycles (e.g. test harnesses re-entering the same app)
             # don't pick up the now-defunct queue / coroutine.
