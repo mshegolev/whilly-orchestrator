@@ -124,11 +124,14 @@ def load_fixture_fn() -> Callable[[str], Any]:
 # Postgres inside the container is healthy. Root cause is in the colima/lima
 # vsock proxy, not in the test code.
 #
-# A tight 3-attempt retry with exponential backoff (0.5 s, 1.0 s, 2.0 s) is
-# enough to ride out the transient wedge in nearly every observed case. On
-# *full* failure we re-raise the underlying exception with a pytest-friendly
-# wrapper that calls out the canonical remediation: ``colima restart``.
-_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
+# A 5-attempt retry with exponential backoff (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s)
+# is enough to ride out the transient wedge in every observed case. The earlier
+# 3-attempt ceiling (~3.5 s wall) was occasionally insufficient when scrutiny
+# round-5 ran the full integration suite (~430 tests deep) — the new ceiling
+# (~15.5 s wall) covers the documented vsock-proxy wedge cycle. On *full*
+# failure we re-raise the underlying exception with a pytest-friendly wrapper
+# that calls out the canonical remediation: ``colima restart``.
+_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0, 8.0)
 _TC_REMEDIATION_HINT: str = (
     "Hint: this is the documented colima/testcontainers port-forwarding flake "
     "(see AGENTS.md → 'Known pre-existing issues'). Run `colima restart` and "
@@ -146,10 +149,11 @@ def _retry_colima_flake(
     op: str,
     backoffs: tuple[float, ...] = _TC_RETRY_BACKOFFS,
 ) -> _T:
-    """Run ``fn`` with 3-attempt exponential backoff against colima flake.
+    """Run ``fn`` with 5-attempt exponential backoff against colima flake.
 
-    Sleeps from :data:`_TC_RETRY_BACKOFFS` (default 0.5 s, 1.0 s, 2.0 s)
-    *between* attempts: 4 attempts total (1 initial + len(backoffs) retries).
+    Sleeps from :data:`_TC_RETRY_BACKOFFS` (default 0.5 s, 1.0 s, 2.0 s,
+    4.0 s, 8.0 s) *between* attempts: 6 attempts total (1 initial +
+    len(backoffs) retries).
     Re-raises the *last* exception wrapped in :class:`RuntimeError` whose
     message names the operation and the ``colima restart`` remediation, so
     the failure message in the pytest report points the operator straight
@@ -199,7 +203,7 @@ async def _retry_create_pool_async(
 ) -> asyncpg.Pool:
     """Async sibling of :func:`_retry_colima_flake` for ``create_pool``.
 
-    Mirrors the same 3-attempt exponential-backoff policy. We can't use the
+    Mirrors the same 5-attempt exponential-backoff policy. We can't use the
     sync helper here because ``await create_pool(...)`` must yield to the
     event loop, and ``time.sleep`` would block it. Uses ``asyncio.sleep``
     instead.
@@ -325,17 +329,31 @@ def _register_pg_atexit_stop(pg: _PostgresContainer) -> Callable[[], None]:
     call). atexit handlers run on normal exit, ``sys.exit``, unhandled
     ``SystemExit`` and SIGTERM — covering pytest-timeout aborts and
     ``kill <pid>`` but not ``SIGKILL``.
+
+    The ``PostgresContainer`` reference is held inside a closure-local mutable
+    container and explicitly cleared (set to ``None``) after the first stop
+    fires, so any DockerClient / requests-unixsocket references it transitively
+    keeps alive can be garbage-collected between fixture teardown and final
+    interpreter exit. This matters during long pytest sessions where the
+    accumulated socket references can exacerbate the colima vsock-proxy
+    port-forwarding wedge documented in AGENTS.md.
     """
-    state = {"done": False}
+    state: dict[str, Any] = {"done": False, "pg": pg}
 
     def _stop_once() -> None:
         if state["done"]:
             return
         state["done"] = True
+        if state.get("pg") is None:
+            return
         try:
-            pg.stop()
-        except Exception:  # noqa: BLE001 — atexit best effort
-            _TC_LOG.warning("atexit PostgresContainer.stop() raised", exc_info=True)
+            state["pg"].stop()
+        except Exception as exc:  # noqa: BLE001 — atexit best effort
+            err_msg = f"atexit PostgresContainer.stop() raised: {type(exc).__name__}: {exc!s}"
+            del exc
+            _TC_LOG.warning("%s", err_msg)
+        finally:
+            state["pg"] = None
 
     atexit.register(_stop_once)
     return _stop_once
@@ -485,11 +503,11 @@ def postgres_dsn() -> Iterator[str]:
 
     prior_db_url = os.environ.get("WHILLY_DATABASE_URL")
 
-    # Wrap the testcontainers Postgres start in a 3-attempt exponential-backoff
-    # retry loop (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
-    # port-forwarding flake documented in AGENTS.md. The container is started
-    # imperatively (not via ``with``) so we can retry; cleanup is in the outer
-    # ``finally`` block.
+    # Wrap the testcontainers Postgres start in a 5-attempt exponential-backoff
+    # retry loop (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s; ~15.5 s wall ceiling) to
+    # ride out the colima/Rancher-Desktop port-forwarding flake documented in
+    # AGENTS.md. The container is started imperatively (not via ``with``) so
+    # we can retry; cleanup is in the outer ``finally`` block.
     #
     # The container carries the whilly testcontainer label so the
     # ``pytest_sessionstart`` orphan-cleanup hook can target it across runs
@@ -515,7 +533,7 @@ def postgres_dsn() -> Iterator[str]:
         os.environ["WHILLY_DATABASE_URL"] = dsn
         # Alembic's first SQL contact also rides through colima's port-forward
         # — same flake surface as the container start above. Retry with the
-        # same 3-attempt exponential backoff.
+        # same 5-attempt exponential backoff.
         _retry_colima_flake(
             lambda: command.upgrade(_build_alembic_config(dsn), "head"),
             op="alembic.command.upgrade(head)",
@@ -555,8 +573,8 @@ async def db_pool(postgres_dsn: str) -> AsyncIterator[asyncpg.Pool]:
     block, RESTART IDENTITY so the BIGSERIAL events.id sequence
     starts fresh) — see module docstring for the rationale.
 
-    Pool creation is wrapped in a 3-attempt exponential-backoff retry
-    (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
+    Pool creation is wrapped in a 5-attempt exponential-backoff retry
+    (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s) to ride out the colima/Rancher-Desktop
     port-forwarding flake documented in AGENTS.md — the symptom
     surfaces here as ``OSError: [Errno 61] Connect call failed`` from
     ``pool.acquire()``'s ``SELECT 1`` health check inside whilly's
