@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 
 REPLAY_LIMIT: Final[int] = 1000
 
+_BIGINT_MAX: Final[int] = (1 << 63) - 1
+
 DASHBOARD_DEFAULT_ORIGIN: Final[str] = "*"
 
 _REPLAY_SQL: Final[str] = (
@@ -68,7 +70,7 @@ def _parse_last_event_id(raw: str | None) -> int | None:
     except ValueError:
         logger.warning("invalid Last-Event-ID header, starting fresh: %r", raw)
         return None
-    if value < 0:
+    if value < 0 or value > _BIGINT_MAX:
         logger.warning("invalid Last-Event-ID header, starting fresh: %r", raw)
         return None
     return value
