@@ -1634,15 +1634,28 @@ def create_app(
     async def list_tasks_endpoint(
         request: Request,
         plan_id: str = Query(..., min_length=1, max_length=256),
-        status: TaskStatus | None = Query(default=None),
+        status: str | None = Query(default=None, max_length=32),
         limit: int = Query(default=TASKS_API_DEFAULT_LIMIT, gt=0, le=TASKS_API_MAX_LIMIT),
         cursor: str | None = Query(default=None, max_length=2048),
     ) -> JSONResponse:
+        status_filter: TaskStatus | None
+        if status is None:
+            status_filter = None
+        else:
+            try:
+                status_filter = TaskStatus(status)
+            except ValueError:
+                valid = sorted(member.value for member in TaskStatus)
+                raise HTTPException(
+                    status_code=status_module.HTTP_400_BAD_REQUEST,
+                    detail=f"invalid status: {status!r}; expected one of {valid}",
+                ) from None
+
         try:
             payload = await list_tasks_payload(
                 pool,
                 plan_id=plan_id,
-                status_filter=status,
+                status_filter=status_filter,
                 limit=limit,
                 cursor=cursor,
             )
