@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Any
 
 from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.task_id import validate_task_id
 
 __all__ = ["PlanParseError", "parse_plan", "parse_plan_dict", "serialize_plan"]
 
@@ -251,6 +252,11 @@ def _task_from_dict(raw: Any, *, index: int, source: str) -> Task:
     raw_id = raw.get("id")
     if not isinstance(raw_id, str) or not raw_id:
         raise PlanParseError(f"{source}: task at index {index} has missing or empty 'id'")
+
+    try:
+        validate_task_id(raw_id)
+    except ValueError as exc:
+        raise PlanParseError(f"{source}: task at index {index}: {exc}") from exc
 
     for required in _REQUIRED_TASK_FIELDS:
         if required not in raw:
