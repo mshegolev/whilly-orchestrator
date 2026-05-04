@@ -161,7 +161,7 @@ from typing import Any, Final
 
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.api.event_flusher import (
@@ -182,6 +182,7 @@ from whilly.api.sse import (
     EventNotifyBroker,
     event_notify_listener_loop,
 )
+from whilly.api.dashboard import render_dashboard as render_dashboard_view
 from whilly.api.sse_endpoint import (
     DASHBOARD_DEFAULT_ORIGIN,
     REPLAY_LIMIT as SSE_REPLAY_LIMIT,
@@ -1518,6 +1519,14 @@ def create_app(
     async def admin_health(request: Request) -> JSONResponse:
         owner = getattr(request.state, "bootstrap_owner_email", None)
         return JSONResponse({"status": "ok", "owner": owner})
+
+    @app.get(
+        "/",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def dashboard_index(request: Request, fragment: str | None = None) -> Response:
+        return await render_dashboard_view(request=request, pool=pool, fragment=fragment)
 
     @app.get(
         "/events/stream",
