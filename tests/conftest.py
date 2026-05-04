@@ -46,6 +46,7 @@ its declared footprint.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -54,7 +55,7 @@ import subprocess
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import asyncpg
 import pytest
@@ -62,6 +63,9 @@ from alembic import command
 from alembic.config import Config
 
 from whilly.adapters.db import MIGRATIONS_DIR, TaskRepository, close_pool, create_pool
+
+if TYPE_CHECKING:
+    from testcontainers.postgres import PostgresContainer as _PostgresContainer  # type: ignore[import-untyped]
 
 # ─── Fixture-file loader (M1 readiness baseline) ─────────────────────────
 #
@@ -229,6 +233,136 @@ async def _retry_create_pool_async(
     ) from last_exc
 
 
+# ─── Testcontainer orphan cleanup (whilly-labeled postgres:15-alpine) ────
+#
+# Background: testcontainers' Ryuk reaper is disabled in this project
+# (TESTCONTAINERS_RYUK_DISABLED=true) because Ryuk's host-docker-socket
+# bind-mount is rejected by colima. With Ryuk off, the only teardown path
+# is the fixture's ``finally`` block calling ``pg.stop()``. When pytest is
+# killed mid-run (pytest-timeout wall-clock budget, SIGTERM from worker
+# pause, OOM, kill -9, mid-fixture exception in ``_retry_colima_flake``),
+# ``finally`` does NOT execute and ``postgres:15-alpine`` containers leak.
+# Repeated mission runs accumulate orphan containers (one per aborted run).
+#
+# Two-part fix (per fix-m3-testcontainers-postgres-leak):
+#
+# 1. Pre-flight session-start cleanup (this module's ``pytest_sessionstart``
+#    hook) force-removes any container with image=postgres:15-alpine AND
+#    label ``org.whilly.testcontainers=true`` BEFORE booting a new one.
+#    The label-targeted filter prevents touching the user's own
+#    docker-compose postgres or any unrelated container.
+#
+# 2. atexit-based teardown registration: each ``PostgresContainer`` that
+#    starts in this module also registers an ``atexit`` handler that
+#    calls ``pg.stop()``. ``atexit`` fires on normal interpreter exit,
+#    ``sys.exit``, ``SystemExit`` and ``SIGTERM`` (covers pytest-timeout
+#    abort, ``kill <pid>``); it does NOT fire on ``SIGKILL`` / ``kill -9``,
+#    which is unavoidable without a kernel-level reaper.
+WHILLY_TESTCONTAINER_LABEL_KEY: str = "org.whilly.testcontainers"
+WHILLY_TESTCONTAINER_LABEL_VALUE: str = "true"
+WHILLY_TESTCONTAINER_IMAGE: str = "postgres:15-alpine"
+
+
+def _cleanup_orphan_testcontainers(
+    *,
+    image: str = WHILLY_TESTCONTAINER_IMAGE,
+    label_key: str = WHILLY_TESTCONTAINER_LABEL_KEY,
+    label_value: str = WHILLY_TESTCONTAINER_LABEL_VALUE,
+) -> list[str]:
+    """Force-remove whilly-labeled orphan testcontainer postgres instances.
+
+    Runs ``docker ps -aq --filter label=<key>=<value>
+    --filter ancestor=<image>`` then ``docker rm -f <ids...>``. Idempotent
+    and silent on a clean system: returns ``[]`` when nothing matches and
+    swallows docker CLI / OS errors so a flaky daemon never blocks a
+    pytest session start.
+    """
+    docker_bin = shutil.which("docker")
+    if docker_bin is None:
+        return []
+    label_filter = f"{label_key}={label_value}"
+    try:
+        ls = subprocess.run(
+            [
+                docker_bin,
+                "ps",
+                "-aq",
+                "--filter",
+                f"label={label_filter}",
+                "--filter",
+                f"ancestor={image}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    if ls.returncode != 0:
+        return []
+    ids = [token for token in ls.stdout.split() if token]
+    if not ids:
+        return []
+    try:
+        subprocess.run(
+            [docker_bin, "rm", "-f", *ids],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return ids
+
+
+def _register_pg_atexit_stop(pg: _PostgresContainer) -> Callable[[], None]:
+    """Register an idempotent atexit hook that calls ``pg.stop()``.
+
+    Returns the hook itself so the fixture's normal teardown path can also
+    invoke it directly (and the hook still no-ops on the redundant atexit
+    call). atexit handlers run on normal exit, ``sys.exit``, unhandled
+    ``SystemExit`` and SIGTERM — covering pytest-timeout aborts and
+    ``kill <pid>`` but not ``SIGKILL``.
+    """
+    state = {"done": False}
+
+    def _stop_once() -> None:
+        if state["done"]:
+            return
+        state["done"] = True
+        try:
+            pg.stop()
+        except Exception:  # noqa: BLE001 — atexit best effort
+            _TC_LOG.warning("atexit PostgresContainer.stop() raised", exc_info=True)
+
+    atexit.register(_stop_once)
+    return _stop_once
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Force-remove leftover whilly testcontainer postgres orphans before any test runs.
+
+    Uses the label/ancestor filter so it never touches the user's
+    docker-compose postgres or unrelated containers. Safe when Docker is
+    absent — the helper returns ``[]`` and the hook is a no-op.
+    """
+    if not docker_available():
+        return
+    try:
+        removed = _cleanup_orphan_testcontainers()
+    except Exception:  # noqa: BLE001 — never let cleanup crash collection
+        _TC_LOG.warning("orphan testcontainer cleanup raised", exc_info=True)
+        return
+    if removed:
+        _TC_LOG.warning(
+            "Force-removed %d orphan whilly testcontainer(s) at session start: %s",
+            len(removed),
+            removed,
+        )
+
+
 try:
     from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
 
@@ -356,11 +490,21 @@ def postgres_dsn() -> Iterator[str]:
     # port-forwarding flake documented in AGENTS.md. The container is started
     # imperatively (not via ``with``) so we can retry; cleanup is in the outer
     # ``finally`` block.
-    pg = PostgresContainer("postgres:15-alpine")
-    started = False
+    #
+    # The container carries the whilly testcontainer label so the
+    # ``pytest_sessionstart`` orphan-cleanup hook can target it across runs
+    # without touching unrelated docker workloads.
+    pg = PostgresContainer(WHILLY_TESTCONTAINER_IMAGE).with_kwargs(
+        labels={WHILLY_TESTCONTAINER_LABEL_KEY: WHILLY_TESTCONTAINER_LABEL_VALUE}
+    )
+    stop_pg: Callable[[], None] | None = None
     try:
         _retry_colima_flake(pg.start, op="PostgresContainer('postgres:15-alpine').start()")
-        started = True
+        # Register atexit teardown immediately after a successful start so a
+        # mid-fixture exception below (alembic flake, pytest-timeout abort,
+        # SIGTERM) still triggers a stop. The hook is idempotent — calling
+        # it again from the ``finally`` block is a no-op.
+        stop_pg = _register_pg_atexit_stop(pg)
         raw = pg.get_connection_url()
         # testcontainers ships ``postgresql+psycopg2://`` by default; rip
         # back to plain ``postgresql://`` so env.py's own asyncpg coercion
@@ -379,11 +523,8 @@ def postgres_dsn() -> Iterator[str]:
 
         yield dsn
     finally:
-        if started:
-            try:
-                pg.stop()
-            except Exception:  # noqa: BLE001 — teardown best effort
-                _TC_LOG.warning("PostgresContainer.stop() raised during teardown", exc_info=True)
+        if stop_pg is not None:
+            stop_pg()
         if prior_docker_host is None:
             os.environ.pop("DOCKER_HOST", None)
         else:
