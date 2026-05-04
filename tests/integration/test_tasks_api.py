@@ -12,7 +12,7 @@ Coverage map vs. the validation contract (m3-tasks-api):
 * VAL-M3-TASKS-API-005: each task has id, plan_id, status, priority, claimed_by,
   claimed_at, version, key_files, description, acceptance_criteria, test_steps
 * VAL-M3-TASKS-API-006: pagination via ``limit`` + ``cursor`` walks the full list
-* VAL-M3-TASKS-API-007: ``status`` filter narrows the result set
+* VAL-M3-TASKS-API-007: ``status`` filter narrows the result set; invalid status → 400
 * VAL-M3-TASKS-API-009: unknown plan_id returns 200 + empty list (documented choice)
 * VAL-M3-TASKS-API-011: Content-Type ``application/json`` + CORS headers
 * VAL-M3-TASKS-API-012: missing ``plan_id`` → 422
@@ -230,16 +230,34 @@ async def test_status_filter_returns_only_matching(
     assert ids == ["d1"]
 
 
-async def test_invalid_status_returns_422(
+async def test_invalid_status_returns_400(
     client: AsyncClient,
     db_pool: asyncpg.Pool,
 ) -> None:
     _, token = await _register(client)
     response = await client.get(
-        f"{TASKS_PATH}?plan_id=irrelevant&status=NOT_A_STATUS",
+        f"{TASKS_PATH}?plan_id=irrelevant&status=BOGUS",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 400, response.text
+    body = response.json()
+    detail = body["detail"]
+    assert "invalid status" in detail
+    assert "BOGUS" in detail
+    for valid in ("PENDING", "CLAIMED", "IN_PROGRESS", "DONE", "FAILED", "SKIPPED"):
+        assert valid in detail
+
+
+async def test_invalid_status_lowercase_returns_400(
+    client: AsyncClient,
+) -> None:
+    _, token = await _register(client)
+    response = await client.get(
+        f"{TASKS_PATH}?plan_id=irrelevant&status=done",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 400, response.text
+    assert "invalid status" in response.json()["detail"]
 
 
 # ─── VAL-M3-TASKS-API-009: unknown plan_id ───────────────────────────
