@@ -1,11 +1,17 @@
 # Whilly Orchestrator
 
-> 🚀 **v4.1 — release-ready.** Whilly is a distributed orchestrator for AI coding agents:
-> Postgres-backed task queue, FastAPI control plane, remote workers over HTTP, and an
-> append-only `events` audit log. The legacy v3.x single-process loop has been retired —
-> it lives at tag [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final)
-> for teams that still need it. There is **no backwards compatibility** with v3.x runtime
-> state — see [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md).
+> 🚀 **v4.6.1 — Live observability + multi-host demo (M3 of Whilly Distributed v5.0).**
+> Whilly is a distributed orchestrator for AI coding agents: Postgres-backed task queue,
+> FastAPI control plane, remote workers over HTTP, and an append-only `events` audit
+> log. Live operator surface: HTMX dashboard at `GET /`, SSE event stream at
+> `GET /events/stream`, JSON tasks listing at `GET /api/v1/tasks`, bearer-gated
+> Prometheus `/metrics`, extended `/health` + `/health/live` + `/health/ready`
+> triplet, and the `localhost.run` funnel sidecar for free public-internet exposure
+> (rotating `https://<random>.lhr.life` URL — no Tailscale or Caddy needed). The
+> legacy v3.x single-process loop lives at tag
+> [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final);
+> there is **no backwards compatibility** with v3.x runtime state — see
+> [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md).
 
 [![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -14,6 +20,65 @@
 🇷🇺 [Краткое описание на русском](README-RU.md)
 
 > "I'm helping — and I've read TRIZ." — Whilly Wiggum
+
+## What's new in v4.6.1 (M3 of Whilly Distributed v5.0)
+
+The M3 milestone closes the live-observability surface and ships the headline
+two-host demo. Headline changes (full detail in [`CHANGELOG.md`](CHANGELOG.md);
+M2 / v4.5 release notes follow below):
+
+- **HTMX dashboard at `GET /`** — server-rendered Jinja2 page (Pico.css from CDN
+  for `prefers-color-scheme` dark / light, mobile-responsive at 375 × 812),
+  HTMX live-swaps tasks / workers rows on `sse:*` events from `/events/stream`,
+  and falls back to a 5 s `hx-trigger="every 5s"` poll if the SSE socket fails.
+  `?fragment=workers|tasks` returns just the partial table for the polling
+  fallback. Zero client-side build pipeline — `htmx@1.9.12` and
+  `htmx-ext-sse@2.2.4` are loaded from CDN.
+- **`GET /events/stream` SSE endpoint** — `sse-starlette` `EventSourceResponse`
+  wired onto a per-subscriber broker. Authenticates via per-worker / bootstrap
+  / legacy-env bearer; honours `Last-Event-ID` for catch-up replay (capped at
+  1000 rows with a synthetic `replay_truncated` frame on overflow); slow
+  subscribers are dropped with WS close-code 1015 surfaced as an SSE `error`
+  frame. A worker disconnected for ≤ 60 s catches up via `Last-Event-ID`
+  without losing any committed event.
+- **`GET /api/v1/tasks` JSON listing** — cursor-paginated read-only endpoint
+  returning `{tasks: [...], next_cursor: ...}`. Sort: `PRIORITY_ORDER`
+  (`critical=0` / `high=1` / `medium=2` / `low=3`) ASC then `id` ASC; supports
+  `status` filter, `limit` 1..500 (default 100), and an opaque base64url
+  cursor encoding `(priority_rank, id)` so iteration is deterministic across
+  mid-flight inserts. Bearer auth required.
+- **Bearer-gated Prometheus `/metrics` + extended health probes** —
+  `prometheus-fastapi-instrumentator` exposes `whilly_claims_total`,
+  `whilly_completes_total`, `whilly_fails_total{reason=...}`,
+  `whilly_workers_online`, `whilly_claims_pending`,
+  `whilly_plan_budget_remaining_usd`, and
+  `whilly_claim_long_poll_duration_seconds`. `/metrics` requires
+  `WHILLY_METRICS_TOKEN` (fail-closed when unset). `/health` body grows
+  `db_reachable` / `listener_connected` / `queue_depth`; sibling probes
+  `GET /health/live` (always 200) and `GET /health/ready` (503 when the
+  listener task has exited) round out the triplet.
+- **`pg_notify`-driven event flusher** — migration **011** adds the
+  `whilly_notify_event()` PL/pgSQL function and `tr_events_notify` AFTER
+  INSERT trigger on `events`, so every newly inserted row also fires
+  `pg_notify('whilly_events', …)`. The `whilly-event-notify-listener`
+  lifespan task owns a dedicated `LISTEN whilly_events` connection
+  *outside* the asyncpg pool with exponential reconnect backoff (1/2/4/8/30 s)
+  and feeds the per-subscriber broker that drives the SSE fan-out.
+- **Two-host demo via `localhost.run` sidecar** — the headline demo runs the
+  control-plane on one host (laptop or VPS) and remote workers on the other
+  side of the public internet, connected via the rotating
+  `https://<random>.lhr.life` URL published by the funnel sidecar. The
+  sidecar publishes the URL into the `funnel_url` Postgres singleton table
+  AND `/funnel/url.txt`; workers re-discover the URL via
+  `WHILLY_FUNNEL_URL_SOURCE=postgres|file` and re-register idempotently with
+  the same `worker_id` on URL rotation. Replaces the previously-planned
+  Caddy + ACME + Tailscale Funnel stack — Tailscale is **removed** from the
+  architecture (2026-05-02 pivot).
+
+For forward-looking scope deferred to the next mission
+(`whilly-v6.0-hardening`: prompt-injection guard, dangerous-command
+deny-list, optional sandboxing, rollback / backup-tag tooling), see
+[`library/deferred-v6-hardening.md`](library/deferred-v6-hardening.md).
 
 ## What's new in v4.1
 
@@ -96,13 +161,19 @@ Every migration is round-trippable via `alembic upgrade head → downgrade base
 
 ## Quick start
 
-> **⚠️ Python 3.12+ required.** `pip install whilly-orchestrator==4.4.0`
-> (and every release since) will fail on Python 3.10 / 3.11 with
+> **⚠️ Python 3.12+ required.** `pip install whilly-orchestrator==4.6.1`
+> (and every release since v4.4.0) will fail on Python 3.10 / 3.11 with
 > `Could not find a version that satisfies the requirement
-> whilly-orchestrator==4.4.0`. Install on a 3.12+ interpreter
+> whilly-orchestrator==4.6.1`. Install on a 3.12+ interpreter
 > instead — e.g.
-> `python3.12 -m pip install whilly-orchestrator`, or pin via
+> `python3.12 -m pip install whilly-orchestrator==4.6.1`, or pin via
 > `pyenv install 3.12 && pyenv local 3.12` before running `pip install`.
+>
+> **🐳 Docker users:** the multi-arch image is published as
+> `mshegolev/whilly:4.6.1` (linux/amd64 + linux/arm64). Pull with
+> `docker pull mshegolev/whilly:4.6.1` — this is the tag wired into
+> [`docker-compose.control-plane.yml`](docker-compose.control-plane.yml)
+> and [`docker-compose.worker.yml`](docker-compose.worker.yml) by default.
 
 ```bash
 # 0. Set placeholders so the block below is copy-paste-runnable as-is.
@@ -164,7 +235,13 @@ uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
 A complete reproducible single-host demo (Postgres + control plane + remote
 worker, all on loopback) lives in [`docs/demo-remote-worker.sh`](docs/demo-remote-worker.sh).
 
-### Distributed (multi-host) deployment — v4.4 / M1
+### Distributed (multi-host) deployment — v4.4 / M1, hardened in v4.5–v4.6.1
+
+> The default image tag in [`docker-compose.control-plane.yml`](docker-compose.control-plane.yml)
+> and [`docker-compose.worker.yml`](docker-compose.worker.yml) is
+> `mshegolev/whilly:4.6.1` (multi-arch: linux/amd64 + linux/arm64). Override
+> with `WHILLY_IMAGE=mshegolev/whilly:<other-tag>` if you need to pin to a
+> different release.
 
 For split-host deployments — control-plane on a VPS, workers on laptops —
 two new compose files (additive; the single-host
@@ -304,11 +381,12 @@ deprecation via `log.warning(...)` + env-flag suppression (not Python's
 - [`CLAUDE.md`](CLAUDE.md) — coding conventions and architecture pointers.
 - [`docs/Whilly-v4-Architecture.md`](docs/Whilly-v4-Architecture.md) — hexagonal layout, scheduling, locks.
 - [`docs/Whilly-v4-Worker-Protocol.md`](docs/Whilly-v4-Worker-Protocol.md) — HTTP wire protocol, auth, long-polling.
-- [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md) — v4.4 multi-host deployment (VPS control-plane + laptop workers).
+- [`docs/Distributed-Setup.md`](docs/Distributed-Setup.md) — v4.4 multi-host deployment (VPS control-plane + laptop workers); the `localhost.run` funnel-sidecar exposure path for two-host demos is documented under the "Two-host via localhost.run" section.
 - [`docs/Deploy-M2.md`](docs/Deploy-M2.md) — v4.5 (M2) public-internet exposure via the localhost.run sidecar (staging vs prod decision matrix, both topologies, env-var reference).
 - [`docs/Cert-Renewal.md`](docs/Cert-Renewal.md) — v4.5 (M2) TLS / cert renewal runbook (file paths, force-renew, migration off localhost.run).
 - [`docs/Token-Rotation.md`](docs/Token-Rotation.md) — v4.5 (M2) admin-token rotation runbook (per-user-leak vs admin-leak playbooks + forensic checklist).
 - [`docs/Workspace-Topology.md`](docs/Workspace-Topology.md) — design-only spec for the M4 per-worker editing workspace.
+- [`library/deferred-v6-hardening.md`](library/deferred-v6-hardening.md) — forward-looking scope deferred to the next mission (`whilly-v6.0-hardening`): security & isolation hardening (block A) plus rollback / safety-net tooling (block D).
 - [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md) — env-var mapping and breaking changes.
 - [`docs/Whilly-Init-Guide.md`](docs/Whilly-Init-Guide.md) — `whilly init` PRD-wizard flow.
 - [`docs/Whilly-Claude-Proxy-Guide.md`](docs/Whilly-Claude-Proxy-Guide.md) — Claude CLI through HTTPS proxy / SSH tunnel.
