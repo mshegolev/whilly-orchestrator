@@ -123,6 +123,8 @@ services:
       LLM_X_TITLE: ${LLM_X_TITLE:-}
       LLM_FORCE_COMPLETE: ${LLM_FORCE_COMPLETE:-0}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+      WHILLY_INSECURE: "${WHILLY_INSECURE:-}"
+      WHILLY_USE_CONNECT_FLOW: "${WHILLY_USE_CONNECT_FLOW:-}"
     volumes:
       # PLACEHOLDER for M4 (per-worker plan-workspace topology — see
       # docs/Workspace-Topology.md). At M1 this mount is declared but
