@@ -23,7 +23,12 @@ control-plane crashed on boot with::
 
 Fix-m3-compose-default-image-tag-bump bumped the default to
 ``mshegolev/whilly:4.6.0`` (the LIVE release at fix time, equal to
-``whilly.__version__``). This module pins both halves of that contract:
+``whilly.__version__`` then). The v4.6.1 patch release lifted that
+default again to ``mshegolev/whilly:4.6.1`` so operators pulling the
+unpinned default get the M3 user-facing fix bundle (UPPERCASE SSE
+event names, tasks-API 400 validation, metrics stale plan-label
+cleanup, Last-Event-ID overflow guard, listener_connected health
+flag). This module pins both halves of that contract:
 
 1. Both compose files declare an image string of the literal form
    ``${WHILLY_IMAGE:-mshegolev/whilly:<X.Y.Z>}`` — so an unset
@@ -104,7 +109,7 @@ def test_image_uses_whilly_image_var_with_published_default(compose_path: Path, 
 
     Operators that ``export WHILLY_IMAGE=whilly:dev`` get their override.
     Operators that don't export anything fall back to a published tag.
-    Anything else (bare ``mshegolev/whilly:4.6.0``, or a non-mshegolev
+    Anything else (bare ``mshegolev/whilly:4.6.1``, or a non-mshegolev
     fallback) silently breaks one of those two paths.
     """
     image = _service_image(compose_path, service_name)
