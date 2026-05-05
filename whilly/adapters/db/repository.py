@@ -87,6 +87,13 @@ __all__ = [
     "BootstrapTokenRecord",
     "EventFlusherProtocol",
     "PLAN_APPLIED_EVENT_TYPE",
+    "PR_EVENT_TYPES",
+    "PR_ITERATION_COMPLETED_EVENT_TYPE",
+    "PR_ITERATION_REQUESTED_EVENT_TYPE",
+    "PR_MERGED_EVENT_TYPE",
+    "PR_OPENED_EVENT_TYPE",
+    "PR_REVIEW_APPROVED_EVENT_TYPE",
+    "PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE",
     "TASK_CREATED_EVENT_TYPE",
     "TASK_SKIPPED_EVENT_TYPE",
     "TaskRepository",
@@ -175,6 +182,44 @@ TASK_CREATED_EVENT_TYPE: str = "task.created"
 # exactly once per ``whilly plan apply`` invocation after the strict
 # gate iteration completes.
 PLAN_APPLIED_EVENT_TYPE: str = "plan.applied"
+
+# Canonical event_type literals for the M2 PR-review feedback loop
+# (mission ``m2-pr-review-feedback``, feature
+# ``m2-alembic-pull-requests-and-events``). Each literal is the
+# audit-log identifier the corresponding M2 producer / poller /
+# iterate path emits — names are dotted lower-case for parity with
+# the existing plan-scoped event types (``plan.budget_exceeded``,
+# ``task.skipped``, ...). The reverse-DNS-style ``pr.review.*``
+# suffixes mirror GitHub's own ``reviewDecision`` taxonomy verbatim
+# (``APPROVED`` → ``pr.review.approved``,
+# ``CHANGES_REQUESTED`` → ``pr.review.changes_requested``) so an
+# operator-side ``jq '.event_type | startswith("pr.")'`` filter
+# captures the entire surface.
+PR_OPENED_EVENT_TYPE: str = "pr.opened"
+PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE: str = "pr.review.changes_requested"
+PR_REVIEW_APPROVED_EVENT_TYPE: str = "pr.review.approved"
+PR_ITERATION_REQUESTED_EVENT_TYPE: str = "pr.iteration.requested"
+PR_ITERATION_COMPLETED_EVENT_TYPE: str = "pr.iteration.completed"
+PR_MERGED_EVENT_TYPE: str = "pr.merged"
+
+# Closed-set tuple over the M2 PR event taxonomy (mission
+# ``m2-pr-review-feedback``). :meth:`TaskRepository.emit_pr_event`
+# rejects unknown event_types at the application layer to keep the
+# round-trip contract auditable from a single literal site — adding a
+# new PR event in the future requires extending this tuple
+# explicitly. The order is the documented event-sequence ordering
+# from VAL-PR-021 (``pr.opened`` → ``pr.review.changes_requested``
+# → ``pr.iteration.requested`` → ``pr.iteration.completed`` →
+# ``pr.review.approved`` → ``pr.merged``).
+PR_EVENT_TYPES: tuple[str, ...] = (
+    PR_OPENED_EVENT_TYPE,
+    PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE,
+    PR_REVIEW_APPROVED_EVENT_TYPE,
+    PR_ITERATION_REQUESTED_EVENT_TYPE,
+    PR_ITERATION_COMPLETED_EVENT_TYPE,
+    PR_MERGED_EVENT_TYPE,
+)
+
 
 # Canonical event_type literal for "worker registered" audit events
 # (M2 fix-feature VAL-M2-ADMIN-AUTH-903). Emitted exactly once per
@@ -2761,6 +2806,116 @@ class TaskRepository:
                 },
             )
         return (found, released)
+
+    async def emit_pr_event(
+        self,
+        event_type: str,
+        *,
+        plan_id: PlanId | None,
+        task_id: TaskId | None,
+        payload: dict[str, Any],
+    ) -> int:
+        """Record one PR-feedback audit row in Postgres + JSONL mirror (M2).
+
+        The canonical entry point for every M2 ``pr.*`` event
+        producer (the post-COMPLETE PR opener, the poller, the
+        re-iterate path). Inserts one row into ``events`` carrying
+        the supplied ``event_type`` / ``task_id`` / ``plan_id`` /
+        ``payload`` triple and, after the Postgres transaction
+        commits, mirrors the same payload to the JSONL audit sink so
+        Postgres ``events.detail`` and the JSONL
+        ``payload`` keys round-trip byte-identically (VAL-PR-004).
+
+        ``event_type`` must be one of :data:`PR_EVENT_TYPES`. Anything
+        else raises :class:`ValueError` before any I/O — keeps the
+        audit-log surface auditable from a single literal site and
+        prevents typos (``pr.opend``) from silently falling through
+        to a no-op match against the events insert path.
+
+        ``plan_id`` is required for plan-scoped events (every PR
+        event that has a parent plan, which in practice is all of
+        them) — passing ``None`` is permitted only when the producer
+        legitimately has no plan reference (e.g. a poll-cycle
+        diagnostics event). The column itself is nullable in the
+        schema; we don't enforce a required value here so a future
+        global-scope PR event (e.g. ``pr.poller.started``) can land
+        without a code change.
+
+        ``task_id`` mirrors ``plan_id``: required for per-task events
+        (``pr.opened``, ``pr.review.*``, ``pr.iteration.*``,
+        ``pr.merged``), optional for the rare plan-scoped variant.
+        Producers should pass the *originating* task id — for
+        ``pr.iteration.requested`` that is the original task
+        (``payload['orig_task_id']``); the new follow-up task id
+        rides on the payload as ``new_task_id``.
+
+        Why is the helper not split into per-event-type methods?
+            Every PR event shares the exact same insert path
+            (``_INSERT_TASK_EVENT_WITH_PLAN_SQL`` + JSONL mirror) and
+            the same payload-shape contract. Splitting into
+            ``emit_pr_opened`` / ``emit_pr_review_approved`` / ...
+            would duplicate the JSONL-mirror discipline at six call
+            sites without adding compile-time safety (the payload
+            fields are still untyped JSON). One helper with a
+            closed-set ``event_type`` argument is the cheaper
+            ergonomics; a future M3+ feature can add typed wrappers
+            on top if the producer surface justifies it.
+
+        Returns
+        -------
+        int
+            The newly-inserted ``events.id``. Producers persist this
+            id alongside the ``pull_requests`` row when correlating
+            audit events with PR state transitions (e.g. the poller
+            updates ``pull_requests.last_seen_review_id`` keyed off
+            the ``pr.review.*`` event ids). Mirrors the existing
+            ``next_ready`` / ``release_stale_tasks`` shape — methods
+            that perform mutations return the salient post-update
+            value rather than the raw asyncpg row.
+
+        Raises
+        ------
+        ValueError
+            ``event_type`` is not in :data:`PR_EVENT_TYPES`.
+        """
+        if event_type not in PR_EVENT_TYPES:
+            raise ValueError(
+                f"emit_pr_event: event_type={event_type!r} is not one of {PR_EVENT_TYPES!r}",
+            )
+        payload_json = json.dumps(payload)
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                event_id = await conn.fetchval(
+                    """
+                    INSERT INTO events (task_id, plan_id, event_type, payload)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    RETURNING id
+                    """,
+                    task_id,
+                    plan_id,
+                    event_type,
+                    payload_json,
+                )
+        # JSONL mirror after commit so a rolled-back insert never
+        # leaks an orphaned line (VAL-CROSS-BACKCOMPAT-907 +
+        # VAL-PR-004). The mirror payload is the *same dict* the
+        # caller supplied — no reshape — so a pytest assertion
+        # comparing ``events.payload`` to the JSONL ``payload`` key
+        # round-trips byte-identically.
+        self._emit_jsonl(
+            event_type,
+            task_id=task_id,
+            plan_id=plan_id,
+            payload=payload,
+        )
+        logger.info(
+            "emit_pr_event: event_type=%s plan=%s task=%s event_id=%s",
+            event_type,
+            plan_id,
+            task_id,
+            event_id,
+        )
+        return int(event_id)
 
     async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
         """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).

@@ -154,11 +154,19 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_011_is_head_revision() -> None:
-    """The alembic script directory reports ``011_events_notify_trigger`` as head."""
+def test_011_is_in_chain() -> None:
+    """``011_events_notify_trigger`` is a known revision reachable from the head.
+
+    The head moves forward as new migrations land (012 pull_requests,
+    ...); pinning ``head == "011_events_notify_trigger"`` would force
+    every downstream worker to update this test. Instead we verify
+    011 is reachable via :class:`ScriptDirectory` and that its
+    ``down_revision`` chain links to 010 (a separate test below).
+    """
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "011_events_notify_trigger"
+    revision = script.get_revision("011_events_notify_trigger")
+    assert revision is not None
 
 
 def test_011_depends_on_010() -> None:
@@ -612,7 +620,10 @@ def test_raw_upgrade_sql_is_idempotent_on_double_apply(base_010_dsn: str) -> Non
 
 def test_downgrade_removes_function_and_trigger(base_010_dsn: str) -> None:
     cfg = _build_cfg(base_010_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, "011_events_notify_trigger"),
+        op="upgrade 011_events_notify_trigger",
+    )
     _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
 
     async def _inspect() -> tuple[int, int, str | None]:
