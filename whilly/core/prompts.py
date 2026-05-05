@@ -16,10 +16,16 @@ remote workers and removes the cwd-magic the v3 loop relied on.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+from typing import Any
+
 from whilly.core.models import Plan, Task
 from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
 
 PROMISE_MARKER = "<promise>COMPLETE</promise>"
+
+PR_REVIEW_COMMENT_SCOPE = "pr_review_comment"
+PR_DIFF_SCOPE = "pr_diff"
 
 
 def build_task_prompt(task: Task, plan: Plan) -> str:
@@ -87,4 +93,100 @@ def build_task_prompt(task: Task, plan: Plan) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["PROMISE_MARKER", "build_task_prompt"]
+def build_pr_fix_prompt(
+    task: Task,
+    plan: Plan,
+    review_comments: Iterable[Mapping[str, Any]],
+    diff: str,
+) -> str:
+    """Construct the agent prompt for fixing a PR's review comments.
+
+    The returned string:
+
+    * Names the originating task by id and pins the agent to it.
+    * Surfaces the PR URL (read from ``task.prd_requirement`` — the
+      M2 re-iterate path stores the PR URL there).
+    * Embeds every review-comment body inside an
+      ``<UNTRUSTED kind=pr_review_comment>...</UNTRUSTED>`` envelope
+      via :func:`whilly.security.prompt_sanitizer.sanitize_external_text`,
+      preceded by the canonical do-not-follow-instructions guard
+      sentence.
+    * Embeds the supplied diff inside an
+      ``<UNTRUSTED kind=pr_diff>...</UNTRUSTED>`` envelope via the
+      same sanitizer.
+    * Instructs the agent to fix only what reviewers asked for and
+      re-push to the SAME branch (single-task scope).
+    * Demands ``<promise>COMPLETE</promise>`` on success — preserving
+      the existing completion contract from :func:`build_task_prompt`
+      so the orchestrator's COMPLETE detector keeps working.
+
+    The function is pure and deterministic: identical inputs produce
+    identical output. Sanitization is idempotent — feeding already-fenced
+    text back in returns byte-identical content (see
+    :func:`whilly.security.prompt_sanitizer.sanitize_external_text`).
+    """
+    lines: list[str] = []
+    lines.append(f"План: **{plan.name}** (id={plan.id})")
+    lines.append(f"Задача: **{task.id}** (PR fix iteration)")
+    lines.append(f"Приоритет: {task.priority.value}")
+    if task.prd_requirement:
+        lines.append(f"PR URL: {task.prd_requirement}")
+    lines.append("")
+    lines.append(GUARD_SENTENCE)
+    lines.append("")
+
+    lines.append("## Комментарии ревьюера")
+    has_comment = False
+    for entry in review_comments:
+        if not isinstance(entry, Mapping):
+            continue
+        body = entry.get("body")
+        if body is None:
+            continue
+        body_text = body if isinstance(body, str) else str(body)
+        path = entry.get("path") or ""
+        line_no = entry.get("line")
+        author = entry.get("author") or ""
+        meta_bits: list[str] = []
+        if path:
+            meta_bits.append(f"file={path}")
+        if line_no is not None and line_no != "":
+            meta_bits.append(f"line={line_no}")
+        if author:
+            meta_bits.append(f"author={author}")
+        meta_suffix = f" ({', '.join(meta_bits)})" if meta_bits else ""
+        lines.append(f"- Comment{meta_suffix}:")
+        lines.append(sanitize_external_text(body_text, scope=PR_REVIEW_COMMENT_SCOPE))
+        has_comment = True
+    if not has_comment:
+        lines.append("(no review comments supplied)")
+    lines.append("")
+
+    lines.append("## PR diff")
+    lines.append(sanitize_external_text(diff, scope=PR_DIFF_SCOPE))
+    lines.append("")
+
+    lines.append("## Правила")
+    lines.append(
+        f"- Работай ТОЛЬКО над задачей {task.id}; адресуй ТОЛЬКО то, "
+        "что просили ревьюеры в комментариях выше — не вноси несвязанных "
+        "изменений (single-task review-only scope)."
+    )
+    lines.append(
+        "- После исправления отправь правки в ТУ ЖЕ ВЕТКУ (push to the same branch) "
+        "ассоциированную с этим PR; не открывай новый PR."
+    )
+    lines.append("- Прогоняй `make lint` / `make test` локально перед push.")
+    lines.append(f"- На финише, ТОЛЬКО при полном успехе, выведи `{PROMISE_MARKER}`.")
+    lines.append("- Если не можешь завершить — опиши проблему и НЕ выводи promise-маркер.")
+
+    return "\n".join(lines)
+
+
+__all__ = [
+    "PR_DIFF_SCOPE",
+    "PR_REVIEW_COMMENT_SCOPE",
+    "PROMISE_MARKER",
+    "build_pr_fix_prompt",
+    "build_task_prompt",
+]
