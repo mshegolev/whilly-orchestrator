@@ -98,11 +98,12 @@ Drives Jira transitions via REST v3. Uses `urllib` stdlib — no extra deps.
 ## Companion commands
 
 ```bash
+export PLAN_FILE=tasks.json                    # placeholder — your plan json path
 whilly --config show                           # merged config, secrets redacted
 whilly --config path                           # OS-native user config location
 whilly --config migrate                        # legacy .env → whilly.toml + keyring
 whilly --ensure-board-statuses                 # create missing Projects v2 columns
-whilly --post-merge <plan.json>                # after an out-of-band merge: flush cards/tickets to Done
+whilly --post-merge "$PLAN_FILE"               # after an out-of-band merge: flush cards/tickets to Done
 ```
 
 ## Inspecting task logs
@@ -121,9 +122,10 @@ Every plan run writes per-task artifacts under `whilly_logs/`:
 Three viewer subcommands sit in front of these files — no Rich, no extra deps:
 
 ```bash
-whilly logs --list                   # table: task_id, status, duration, cost, last event
-whilly logs <task-id>                # prompt + events timeline + stdout for one task
-whilly logs --tail <task-id>         # live follow (also -f); Ctrl-C to exit
+export TASK_ID=TASK-001               # placeholder — your task id
+whilly logs --list                    # table: task_id, status, duration, cost, last event
+whilly logs "$TASK_ID"                # prompt + events timeline + stdout for one task
+whilly logs --tail "$TASK_ID"         # live follow (also -f); Ctrl-C to exit
 ```
 
 `whilly logs` is a read-only viewer — it does not run the startup banner, does not

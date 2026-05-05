@@ -96,6 +96,14 @@ Every migration is round-trippable via `alembic upgrade head → downgrade base
 
 ## Quick start
 
+> **⚠️ Python 3.12+ required.** `pip install whilly-orchestrator==4.4.0`
+> (and every release since) will fail on Python 3.10 / 3.11 with
+> `Could not find a version that satisfies the requirement
+> whilly-orchestrator==4.4.0`. Install on a 3.12+ interpreter
+> instead — e.g.
+> `python3.12 -m pip install whilly-orchestrator`, or pin via
+> `pyenv install 3.12 && pyenv local 3.12` before running `pip install`.
+
 ```bash
 # 0. Set placeholders so the block below is copy-paste-runnable as-is.
 export PLAN_FILE=examples/demo/tasks.json
