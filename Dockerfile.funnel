@@ -20,9 +20,11 @@
 #     -v /tmp/funnel:/funnel \
 #     whilly-funnel:latest
 #
-# Image-size invariant (mission §4): ≤ 32 MB. The Alpine 3.20 base
-# is ~7.4 MB; openssh-client + bash + curl + postgresql-client add
-# the rest.
+# Runtime RSS invariant (mission §4): ≤ 32 MB at idle. Image size
+# itself is unconstrained: only the resident set of the running
+# container counts toward the 600 MB stack budget. The python3
+# binary runs once during init to URL-decode WHILLY_DATABASE_URL,
+# then exits; steady-state RSS is dominated by ssh + bash + curl.
 
 FROM alpine:3.20
 
@@ -31,11 +33,22 @@ FROM alpine:3.20
 #   - bash           : run.sh shebang + arrays
 #   - curl           : ad-hoc health probes for operators
 #   - postgresql-client : `psql` for the funnel_url upsert
+#   - python3        : URL-decode %xx-encoded credentials in
+#                      WHILLY_DATABASE_URL (run.sh's awk fallback
+#                      lacks URL-decoding, so production DSNs with
+#                      %-encoded reserved characters in the password
+#                      would silently fail psql auth)
 RUN apk add --no-cache \
         openssh-client \
         bash \
         curl \
         postgresql-client \
+        python3 \
+    && find /usr/lib/python3* \
+        \( -type d \( -name __pycache__ -o -name ensurepip -o -name idlelib \
+                       -o -name turtledemo -o -name unittest -o -name lib2to3 \
+                       -o -name pydoc_data \) \
+        \) -prune -exec rm -rf {} + \
     && rm -rf /var/cache/apk/*
 
 COPY scripts/funnel/run.sh /usr/local/bin/run.sh

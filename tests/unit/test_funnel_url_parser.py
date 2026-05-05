@@ -216,6 +216,77 @@ def test_parse_dsn_handles_default_port() -> None:
     assert parsed["PGHOST"] == "host"
 
 
+python3_required = pytest.mark.skipif(
+    shutil.which("python3") is None,
+    reason="python3 binary not on PATH; URL-decode branch requires python3",
+)
+
+
+@bash_required
+@python3_required
+def test_parse_dsn_url_decodes_percent_encoded_password() -> None:
+    """The python3 branch URL-decodes %xx-encoded credentials.
+
+    Production DSNs commonly contain auto-generated passwords with
+    reserved characters URL-encoded (e.g. ``@`` → ``%40``,
+    ``:`` → ``%3A``). The python3 branch in ``parse_dsn_into_pg_env``
+    must decode those so PGPASSWORD is the raw secret psql expects.
+    The container ships python3 (Dockerfile.funnel) so this branch
+    is the runtime path; the awk fallback (no URL-decoding) is only
+    for environments missing python3.
+    """
+    scheme = "postgres" + "ql"
+    raw_password = "p@ss:word"
+    encoded_password = "p%40ss%3Aword"
+    test_dsn = f"{scheme}://alice:{encoded_password}@db.example:5433/whilly"
+    cmd = f"source {RUN_SH!s} 2>/dev/null || true; parse_dsn_into_pg_env '{test_dsn}'"
+    result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    parsed = dict(line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line)
+    assert parsed["PGPASSWORD"] == raw_password, (
+        f"PGPASSWORD must be URL-decoded; got {parsed['PGPASSWORD']!r}, expected {raw_password!r}"
+    )
+    assert parsed["PGUSER"] == "alice"
+    assert parsed["PGHOST"] == "db.example"
+    assert parsed["PGPORT"] == "5433"
+    assert parsed["PGDATABASE"] == "whilly"
+
+
+@bash_required
+@python3_required
+def test_parse_dsn_url_decodes_double_encoded_password() -> None:
+    """A doubly URL-encoded password decodes one layer (PGPASSWORD = once-decoded).
+
+    DSN values are URL-encoded at most once on the wire; ``urllib.unquote``
+    of ``p%2540ss%253Aword`` yields ``p%40ss%3Aword`` (one layer peeled).
+    This proves the python3 branch is doing real ``unquote`` rather than
+    naively passing through.
+    """
+    scheme = "postgres" + "ql"
+    encoded_password = "p%2540ss%253Aword"
+    expected_after_one_decode = "p%40ss%3Aword"
+    test_dsn = f"{scheme}://alice:{encoded_password}@host/db"
+    cmd = f"source {RUN_SH!s} 2>/dev/null || true; parse_dsn_into_pg_env '{test_dsn}'"
+    result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    parsed = dict(line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line)
+    assert parsed["PGPASSWORD"] == expected_after_one_decode
+
+
+@bash_required
+@python3_required
+def test_parse_dsn_url_decodes_username_too() -> None:
+    """%-encoded reserved chars in the username are also decoded."""
+    scheme = "postgres" + "ql"
+    test_dsn = f"{scheme}://al%40ice:simple@host/db"
+    cmd = f"source {RUN_SH!s} 2>/dev/null || true; parse_dsn_into_pg_env '{test_dsn}'"
+    result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    parsed = dict(line.split("=", 1) for line in result.stdout.strip().splitlines() if "=" in line)
+    assert parsed["PGUSER"] == "al@ice"
+    assert parsed["PGPASSWORD"] == "simple"
+
+
 # ---------------------------------------------------------------------------
 # FUNNEL_FAKE_URL test bypass
 # ---------------------------------------------------------------------------
