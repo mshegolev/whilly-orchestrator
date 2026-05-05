@@ -129,6 +129,7 @@ import ipaddress
 import logging
 import os
 import socket
+import subprocess
 import sys
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -156,6 +157,7 @@ from whilly.worker.remote import (
 )
 
 __all__ = [
+    "BIG_PICKLE_HEALTHCHECK_ENV",
     "BOOTSTRAP_TOKEN_ENV",
     "CONTROL_URL_ENV",
     "EXIT_CONNECT_ERROR",
@@ -169,6 +171,7 @@ __all__ = [
     "build_connect_parser",
     "build_register_parser",
     "build_worker_parser",
+    "check_opencode_big_pickle_availability",
     "check_opencode_groq_credentials",
     "classify_control_url",
     "main",
@@ -195,6 +198,16 @@ WORKER_ID_ENV: Final[str] = "WHILLY_WORKER_ID"
 #: ``whilly worker register`` subcommand reads the same value the
 #: control plane writes (single source of truth for the env name).
 BOOTSTRAP_TOKEN_ENV: Final[str] = "WHILLY_WORKER_BOOTSTRAP_TOKEN"
+
+#: Opt-in flag for the OpenCode Zen ``opencode/big-pickle`` availability
+#: probe (misc-m1-big-pickle-sunset-watch). Default OFF so a fresh
+#: worker boot doesn't pay the ~10s subprocess timeout when the
+#: operator doesn't care; ops / CI scripts that DO care set it to
+#: exactly ``"1"``. Any other value (including ``"true"``, ``"yes"``,
+#: ``""``) leaves the probe inactive — the strict literal match keeps
+#: the toggle unambiguous and matches the existing
+#: ``WHILLY_USE_TMUX=1`` / ``WHILLY_USE_WORKSPACE=1`` style.
+BIG_PICKLE_HEALTHCHECK_ENV: Final[str] = "WHILLY_BIG_PICKLE_HEALTHCHECK"
 
 # Exit codes — kept aligned with :mod:`whilly.cli.run` so callers comparing
 # against the v4 CLI never see numbering drift between subcommands.
@@ -533,6 +546,16 @@ def run_worker_command(
     """
     parser = build_worker_parser()
     args = parser.parse_args(list(argv))
+
+    # Optional one-shot OpenCode Zen Big Pickle availability probe
+    # (misc-m1-big-pickle-sunset-watch). Gated behind
+    # ``WHILLY_BIG_PICKLE_HEALTHCHECK=1`` so it's a no-op for users
+    # who don't care; when enabled, a 401/403 from the free-tier
+    # endpoint emits a clear multi-line warning with the three
+    # documented escape hatches but does NOT abort the worker boot.
+    big_pickle_warning = check_opencode_big_pickle_availability()
+    if big_pickle_warning is not None:
+        print(big_pickle_warning, file=sys.stderr, end="")
 
     # CLI flag > env > error. The hand-rolled validation lets us produce
     # one diagnostic per missing input that names the env var, instead of
@@ -1086,6 +1109,127 @@ def check_opencode_groq_credentials() -> str | None:
         "(or unset WHILLY_MODEL to use the zero-key opencode/big-pickle default). "
         "See https://console.groq.com to obtain a free key."
     )
+
+
+_BIG_PICKLE_PROBE_CMD: Final[tuple[str, ...]] = (
+    "opencode",
+    "run",
+    "--format",
+    "json",
+    "--model",
+    "opencode/big-pickle",
+    "ping",
+)
+_BIG_PICKLE_PROBE_TIMEOUT_SECONDS: Final[float] = 10.0
+
+_BIG_PICKLE_AUTH_FAILURE_MARKERS: Final[tuple[str, ...]] = (
+    "401",
+    "403",
+    "unauthorized",
+    "api key required",
+    "requires api key",
+    "requires an api key",
+    "provide an api key",
+    "api key is required",
+    "missing api key",
+    "no api key",
+)
+
+_BIG_PICKLE_SUNSET_WARNING: Final[str] = (
+    "whilly worker: WARNING — opencode/big-pickle availability probe failed with auth error.\n"
+    "OpenCode Zen documents Big Pickle as free 'for a limited time'; a 401/403/'API key\n"
+    "required' response means the free tier likely sunset. The worker will keep running,\n"
+    "but every agent run that targets opencode/big-pickle will fail.\n"
+    "\n"
+    "Pick one of these escape hatches and re-launch the worker:\n"
+    "\n"
+    "  1) Groq (free tier, ~14k req/day — https://console.groq.com):\n"
+    "       export GROQ_API_KEY=gsk_...\n"
+    "       export WHILLY_MODEL=groq/openai/gpt-oss-120b\n"
+    "\n"
+    "  2) Anthropic Claude (https://console.anthropic.com):\n"
+    "       export ANTHROPIC_API_KEY=sk-ant-...\n"
+    "       export WHILLY_MODEL=anthropic/claude-opus-4-6\n"
+    "\n"
+    "  3) OpenAI (https://platform.openai.com):\n"
+    "       export OPENAI_API_KEY=sk-...\n"
+    "       export WHILLY_MODEL=openai/gpt-4o-mini\n"
+    "\n"
+    f"To silence this probe, unset {BIG_PICKLE_HEALTHCHECK_ENV}.\n"
+)
+
+
+def _big_pickle_probe_indicates_auth_failure(stdout: str, stderr: str) -> bool:
+    """Return True iff the probe output looks like an auth-tier failure.
+
+    Token-based heuristic over both streams (case-insensitive). Pure
+    function — no env, no I/O — so the unit test can drive every
+    fixture through it without subprocess plumbing.
+    """
+    haystack = f"{stdout}\n{stderr}".lower()
+    return any(marker in haystack for marker in _BIG_PICKLE_AUTH_FAILURE_MARKERS)
+
+
+def check_opencode_big_pickle_availability() -> str | None:
+    """Probe OpenCode Zen's ``opencode/big-pickle`` and return a sunset warning on auth failure.
+
+    Forward-compatibility safety net for the v4.4.2 zero-key default
+    (misc-m1-big-pickle-sunset-watch). When OpenCode Zen flips
+    ``opencode/big-pickle`` from "free, anonymous" to "requires API
+    key", every fresh worker that ships with the v4.4.2 default will
+    silently fail at the FIRST agent run with an unhelpful provider
+    401. This helper detects the flip at worker startup and emits a
+    clear multi-line warning naming the three documented escape
+    hatches with copy-paste-ready ``WHILLY_MODEL=...`` lines.
+
+    Behaviour
+    ---------
+    * Gated behind ``WHILLY_BIG_PICKLE_HEALTHCHECK`` (must equal the
+      literal string ``"1"`` after stripping whitespace; any other
+      value leaves the helper inactive). Default OFF — operators who
+      don't care don't pay the ~10s probe cost on every worker boot.
+    * When active, runs ``opencode run --format json --model
+      opencode/big-pickle 'ping'`` with a 10-second wall-clock timeout
+      under :func:`subprocess.run`.
+    * Healthy probe (return code 0, no auth-failure markers in
+      stdout/stderr) → returns ``None``.
+    * Auth-failure probe (any of ``401`` / ``403`` / ``"API key
+      required"`` / ``"unauthorized"`` markers in stdout or stderr) →
+      returns the multi-line warning string (caller writes it to
+      stderr; the worker DOES NOT exit).
+    * Probe execution failure (``opencode`` not on ``PATH``,
+      subprocess timeout, any other ``OSError``) → returns ``None``.
+      The helper is a safety net, not a hard gate; falsely warning a
+      user whose laptop happens to be offline would be worse than the
+      occasional missed sunset alert (the weekly CI workflow at
+      ``.github/workflows/big-pickle-health.yml`` is the actual
+      early-warning system).
+
+    Why a separate helper, not folded into ``check_opencode_groq_credentials``?
+        The groq guard is a *config* check — it inspects ``os.environ``
+        only, runs in microseconds, and is unconditionally invoked at
+        the top of ``run_connect_command``. This helper performs a
+        ~seconds-scale subprocess probe and MUST stay opt-in; sharing
+        a function would force operators who don't care about Big
+        Pickle to either disable it explicitly or eat the latency.
+    """
+    flag = (os.environ.get(BIG_PICKLE_HEALTHCHECK_ENV) or "").strip()
+    if flag != "1":
+        return None
+    try:
+        result = subprocess.run(
+            list(_BIG_PICKLE_PROBE_CMD),
+            capture_output=True,
+            text=True,
+            timeout=_BIG_PICKLE_PROBE_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not _big_pickle_probe_indicates_auth_failure(result.stdout or "", result.stderr or ""):
+        return None
+    return _BIG_PICKLE_SUNSET_WARNING
 
 
 def run_connect_command(argv: Sequence[str]) -> int:
