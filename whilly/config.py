@@ -122,6 +122,11 @@ class WhillyConfig:
     JIRA_ADD_COMMENTS: bool = True  # Add completion comments to Jira
     JIRA_TRANSITION_TO: str = "Done"  # Target status for closing Jira tasks
 
+    # M2 PR-review feedback loop (mission ``m2-pr-review-feedback``)
+    ITERATE_ON_FAILURE: bool = False  # WHILLY_ITERATE_ON_FAILURE=1 — master switch for the iterate flow
+    PR_FEEDBACK_POLL_INTERVAL: int = 60  # WHILLY_PR_FEEDBACK_POLL_INTERVAL — seconds between polls in long-running mode
+    MAX_REVIEW_ITERATIONS: int = 3  # WHILLY_MAX_REVIEW_ITERATIONS — cap on follow-up rev tasks per originating task
+
     @classmethod
     def from_env(cls) -> WhillyConfig:
         """Load config using the full layered pipeline.
