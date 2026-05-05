@@ -409,40 +409,30 @@ async def test_lookup_record_dataclass_is_immutable() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _mint_pair_with_shared_hash_prefix(prefix_len: int = 8, max_attempts: int = 200_000) -> tuple[str, str]:
-    """Rejection-sample two distinct plaintexts whose SHA-256 hex digests
-    share the first ``prefix_len`` hex characters. Returns ``(t1, t2)``.
-
-    With prefix_len=8 (32 bits) the expected number of samples is ~2**16
-    = 65 536 — well within the 200 k budget for a deterministic local
-    fixture.
-    """
-    import secrets as _secrets
-
-    seen: dict[str, str] = {}
-    for _ in range(max_attempts):
-        plaintext = _secrets.token_hex(16)
-        digest = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
-        prefix = digest[:prefix_len]
-        existing = seen.get(prefix)
-        if existing is not None and existing != plaintext:
-            return existing, plaintext
-        seen[prefix] = plaintext
-    raise RuntimeError(
-        f"could not find two plaintexts whose SHA-256 share the first {prefix_len} hex chars "
-        f"in {max_attempts} attempts (extremely unlikely; check the RNG)"
-    )
+# Pre-computed offline by deterministic ascending search over plaintexts of
+# the form ``whilly-prefix-collision-fixture-<n>`` (n=0,1,2,...). The pair
+# below is the first collision encountered where the two SHA-256 digests
+# share their leading 8 hex characters. Hard-coding the pair makes this
+# test O(2 hashes) and deterministic on every run; the previous probabilistic
+# rejection-sampling implementation occasionally timed out under CI load
+# (see fix-m2-prefix-collision-test-flaky).
+_SHARED_PREFIX_HEX_CHARS = 8
+_COLLIDING_PLAINTEXT_A = "whilly-prefix-collision-fixture-57857"
+_COLLIDING_PLAINTEXT_B = "whilly-prefix-collision-fixture-102435"
 
 
 def test_token_collision_by_truncation_impossible() -> None:
     """VAL-M2-ADMIN-AUTH-013 — two distinct plaintexts whose digests share
     a leading 8-hex prefix still produce DISTINCT full SHA-256 digests.
     """
-    t1, t2 = _mint_pair_with_shared_hash_prefix(prefix_len=8)
+    t1, t2 = _COLLIDING_PLAINTEXT_A, _COLLIDING_PLAINTEXT_B
     assert t1 != t2
     h1 = hash_bootstrap_token(t1)
     h2 = hash_bootstrap_token(t2)
-    assert h1[:8] == h2[:8], "rejection sampler did not produce a shared 8-hex prefix"
+    assert h1[:_SHARED_PREFIX_HEX_CHARS] == h2[:_SHARED_PREFIX_HEX_CHARS], (
+        "static fixture pair must share a leading 8-hex SHA-256 prefix; "
+        "regenerate the fixture if hash_bootstrap_token semantics change"
+    )
     assert h1 != h2, "full SHA-256 digests must differ even when the leading 8 hex chars match"
 
 
