@@ -1,23 +1,39 @@
-# Whilly funnel sidecar — localhost.run reverse-SSH tunnel publisher (M2).
+# Whilly funnel sidecar — localhost.run reverse-SSH tunnel publisher
+# (v6.0 paid-plan replacement of the v5.0 free-tier sidecar).
 #
-# Holds an outbound SSH reverse-tunnel against `nokey@localhost.run`
-# (free anonymous tier, no account / no key required), parses the
-# assigned `https://<random>.lhr.life` URL from SSH stdout, and
-# publishes it to:
-#   1. Postgres `funnel_url` singleton table (primary)
-#   2. Shared-volume file `/funnel/url.txt` (fallback)
+# Holds an outbound SSH reverse-tunnel against `plan@localhost.run`
+# using a private SSH key registered in the operator's localhost.run
+# dashboard. Pins the public hostname `whilly-orchestrator.lhr.rocks`
+# (or whatever value `LHR_HOSTNAME` is set to) so the URL is STABLE
+# across reconnects — no random-subdomain rotation. Publishes the
+# constant URL to:
+#   1. Postgres `funnel_url` singleton table (primary; back-compat for
+#      v5.0 readers — `updated_at` becomes a "last reconnect" timestamp,
+#      not "URL changed at").
+#   2. Shared-volume file `/funnel/url.txt` (fallback).
 #
-# Auto-reconnect with backoff on disconnect. See
-# `scripts/funnel/run.sh` for the loop and
-# `docs/Deploy-M2.md` § "Topology A/B" for the operator walkthrough.
+# Auto-reconnect with backoff on disconnect. SSH keepalives
+# (ServerAliveInterval=30 / ServerAliveCountMax=3 /
+# ExitOnForwardFailure=yes) detect silent drops fast. See
+# `scripts/funnel/run.sh` for the loop and AGENTS.md
+# § "Funnel URL hygiene" for the operator walkthrough.
 #
 # Build (multi-arch via buildx is recommended for cross-host demos):
 #   docker buildx build -f Dockerfile.funnel -t whilly-funnel:latest .
 #
 # Run (standalone smoke — fake-URL bypass; see scripts/funnel/run.sh):
 #   docker run --rm \
-#     -e FUNNEL_FAKE_URL=https://abc123.lhr.life \
+#     -e FUNNEL_FAKE_URL=https://whilly-orchestrator.lhr.rocks \
 #     -v /tmp/funnel:/funnel \
+#     whilly-funnel:latest
+#
+# Run (real paid-plan tunnel — operator path):
+#   docker run --rm \
+#     -e LHR_HOSTNAME=whilly-orchestrator.lhr.rocks \
+#     -e LHR_REMOTE_USER=plan@localhost.run \
+#     -e LHR_REMOTE_HOST=localhost.run \
+#     -e LHR_LOCAL_TARGET=control-plane:8000 \
+#     -v /root/.ssh/lhr_paid_id_ed25519:/etc/whilly-funnel/ssh-key:ro \
 #     whilly-funnel:latest
 #
 # Runtime RSS invariant (mission §4): ≤ 32 MB at idle. Image size
@@ -57,6 +73,6 @@ RUN chmod +x /usr/local/bin/run.sh
 # `/funnel` is the shared-volume mountpoint where the sidecar writes
 # `url.txt` (atomic rename). Workers without postgres reachability
 # read from this file instead.
-RUN mkdir -p /funnel
+RUN mkdir -p /funnel /etc/whilly-funnel
 
 CMD ["/usr/local/bin/run.sh"]

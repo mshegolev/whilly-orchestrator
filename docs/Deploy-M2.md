@@ -13,7 +13,7 @@
 > control-plane with **either** Caddy + Let's Encrypt **or** Tailscale
 > Funnel. Both paths were CANCELLED. M2 now ships exactly one public-
 > exposure mechanism: a **localhost.run sidecar** (free anonymous SSH
-> reverse tunnel, wildcard `*.lhr.life` cert managed upstream). This
+> reverse tunnel, wildcard `*.lhr.rocks` cert managed upstream). This
 > doc reflects that decision.
 
 This is the operator-facing deploy + ops doc for v4.5. It covers:
@@ -49,7 +49,7 @@ This is the operator-facing deploy + ops doc for v4.5. It covers:
 | `Dockerfile.funnel` | New small alpine image (`alpine + openssh-client + bash + curl + postgresql-client`, ≤ 32 MB). |
 | Migration 008 | `workers.owner_email` column + partial index. |
 | Migration 009 | `bootstrap_tokens` table — per-operator bootstrap minting. |
-| Migration 010 | `funnel_url` singleton table — sidecar publishes the live `lhr.life` URL here. |
+| Migration 010 | `funnel_url` singleton table — sidecar publishes the live `lhr.rocks` URL here. |
 | `whilly admin bootstrap mint\|revoke\|list` | Per-operator bootstrap CLI; never reveals plaintext after mint. |
 | `whilly admin worker revoke <id>` | Live worker eviction + RELEASE of in-flight tasks. |
 | `make_admin_auth` factory | DB-backed admin bearer with `is_admin` scope check; legacy `WHILLY_WORKER_BOOTSTRAP_TOKEN` falls back to non-admin (one-minor compat window). |
@@ -71,7 +71,7 @@ and **which localhost.run tier you use**. Pick one row from each.
 
 Either way the `funnel` sidecar runs **on whichever host owns the
 control-plane** (laptop or VPS) and publishes a rotating
-`https://<random>.lhr.life` URL that workers anywhere on the public
+`https://<random>.lhr.rocks` URL that workers anywhere on the public
 internet can reach.
 
 ### localhost.run tier — staging vs prod
@@ -82,12 +82,12 @@ free + ephemeral + safe-to-poke-at, the other is for real users.
 
 | Tier | URL shape | Lifetime | Auth required | Use when |
 |---|---|---|---|---|
-| **Free anonymous (staging)** | `https://<random>.lhr.life` | Rotates "after a few hours" of session lifetime | None — `nokey@localhost.run` over SSH | Demos, proofs of concept, M2 sign-off, anything you can re-share a fresh URL for. **Default in v4.5.** |
-| **SSH-key stable (prod)** | `https://<your-name>.lhr.life` (or your own custom domain on the paid tier) | Stable across reconnects | Free localhost.run account + dedicated SSH key registered with them | A cluster you want to put into a colleague's `~/.bashrc`. **Deferred to M3 in this mission**, but supported by the sidecar today if you wire your own key in. |
+| **Free anonymous (staging)** | `https://<random>.lhr.rocks` | Rotates "after a few hours" of session lifetime | None — `nokey@localhost.run` over SSH | Demos, proofs of concept, M2 sign-off, anything you can re-share a fresh URL for. **Default in v4.5.** |
+| **SSH-key stable (prod)** | `https://<your-name>.lhr.rocks` (or your own custom domain on the paid tier) | Stable across reconnects | Free localhost.run account + dedicated SSH key registered with them | A cluster you want to put into a colleague's `~/.bashrc`. **Deferred to M3 in this mission**, but supported by the sidecar today if you wire your own key in. |
 
 > **staging vs prod warning.** The free anonymous tier rotates the
 > public URL on a cadence localhost.run does not pin (their FAQ says
-> "after a few hours"). **Do NOT bake the live `lhr.life` URL into
+> "after a few hours"). **Do NOT bake the live `lhr.rocks` URL into
 > any persistent artifact** — `.bashrc`, GitHub Actions secret,
 > wiki page, kubeconfig, monitoring config, etc. Workers must read
 > the URL through `WHILLY_FUNNEL_URL_SOURCE=postgres` or `=file` so
@@ -104,7 +104,7 @@ between attempts; never cache it across runs.
 
 ## staging vs prod warning callout
 
-> ⚠️ **Read this before pasting any `*.lhr.life` URL anywhere.**
+> ⚠️ **Read this before pasting any `*.lhr.rocks` URL anywhere.**
 >
 > The free-tier (staging) localhost.run URL is **ephemeral by design**.
 > It rotates on a cadence the upstream documents as "after a few
@@ -146,7 +146,7 @@ docker compose -f docker-compose.demo.yml \
 # Verify postgres + control-plane are healthy:
 docker compose -f docker-compose.demo.yml ps
 
-# Verify the sidecar parsed an `lhr.life` URL within ~10 s:
+# Verify the sidecar parsed an `lhr.rocks` URL within ~10 s:
 docker compose -f docker-compose.demo.yml logs funnel | grep -E 'https://[a-z0-9-]+\.lhr\.life'
 ```
 
@@ -172,15 +172,15 @@ list` only ever shows the truncated `token_hash` — capture the
 plaintext at mint time and hand it to alice through whatever secure
 channel you'd normally use for shared secrets.
 
-### A.3. Discover the live `lhr.life` URL
+### A.3. Discover the live `lhr.rocks` URL
 
 ```bash
 URL=$(psql "$WHILLY_DATABASE_URL" -t -A -c \
     "SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1")
-echo "$URL"     # → https://abc123def456.lhr.life
+echo "$URL"     # → https://abc123def456.lhr.rocks
 ```
 
-### A.4. Worker (any host) joins via the lhr.life URL
+### A.4. Worker (any host) joins via the lhr.rocks URL
 
 ```bash
 # Either pip install (Python path) or use the Docker worker image.
@@ -198,7 +198,7 @@ whilly worker connect "$URL" \
 
 > The `--insecure` loopback-bypass is **not needed** here. That flag
 > exists for plain-HTTP-to-non-loopback edge cases (LAN demos before
-> M2 lands). Once you're on `https://*.lhr.life`, drop it.
+> M2 lands). Once you're on `https://*.lhr.rocks`, drop it.
 
 For URL-rotation tolerance, the worker host should run with
 `WHILLY_FUNNEL_URL_SOURCE=postgres` (preferred) or `=file`. See
@@ -272,7 +272,7 @@ Two operational concerns are split into their own runbooks so you can
 find them by name:
 
 * [`docs/Cert-Renewal.md`](Cert-Renewal.md) — TLS-cert lifecycle for
-  the localhost.run wildcard `*.lhr.life` cert (what to check when
+  the localhost.run wildcard `*.lhr.rocks` cert (what to check when
   workers start failing handshake), and a forward-looking section on
   the BYO-cert path you'll want when you outgrow localhost.run.
 * [`docs/Token-Rotation.md`](Token-Rotation.md) — separate playbooks

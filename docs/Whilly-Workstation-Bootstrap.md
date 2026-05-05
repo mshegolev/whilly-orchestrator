@@ -173,7 +173,7 @@ export WHILLY_DATABASE_URL=$(printf 'postgresql://%s:%s@%s:%s/%s' whilly "$PG_PA
 Когда [TASK-111](https://github.com/mshegolev/whilly-orchestrator/issues?q=TASK-111) ландится, секцию 4.2 / 4.3 можно будет заменить на одну команду:
 
 ```bash
-export SHARE_URL=https://example.lhr.life     # placeholder — published share URL
+export SHARE_URL=https://example.lhr.rocks     # placeholder — published share URL
 # (placeholder — недоступно на момент TASK-110)
 ./scripts/whilly-share.sh --serve             # на A
 ./scripts/whilly-share.sh --connect "$SHARE_URL"  # на B

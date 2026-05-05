@@ -20,7 +20,7 @@ The market in 2026 has consolidated around five usable options. This is the comp
 
 | Plan                  | What it gives                                                    |
 | --------------------- | ---------------------------------------------------------------- |
-| Free                  | Random `*.lhr.life` subdomain, 1 tunnel, ~6 h disconnect         |
+| Free                  | Random `*.lhr.rocks` subdomain, 1 tunnel, ~6 h disconnect         |
 | Plus ($3.50/mo)       | Custom subdomain, multiple tunnels, longer sessions              |
 | Pro / Team ($10+/mo)  | Own domain, API, analytics, SLA                                  |
 
@@ -46,7 +46,7 @@ Concretely:
 
 - `scripts/whilly-share.sh` (TASK-111) will detect available tunnel binaries in this priority order: `ssh` → `cloudflared` → `ngrok`. First match wins; the user can override with `WHILLY_TUNNEL_TOOL={lhr,cloudflared,ngrok}`.
 - The default invocation is `ssh -R 80:127.0.0.1:${PORT} nokey@localhost.run` (no account, no signup, runs from any laptop with `ssh`).
-- The script extracts the assigned `*.lhr.life` URL from the SSH banner and writes it to `.whilly_share/url` for downstream consumers (worker bootstrap, doc snippets, Telegram pings).
+- The script extracts the assigned `*.lhr.rocks` URL from the SSH banner and writes it to `.whilly_share/url` for downstream consumers (worker bootstrap, doc snippets, Telegram pings).
 - Documentation in `docs/Continuing-On-Another-Machine.md` is updated to reference the wrapper script instead of hand-rolled SSH commands.
 
 ## Considered alternatives

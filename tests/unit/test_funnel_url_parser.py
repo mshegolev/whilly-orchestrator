@@ -311,7 +311,7 @@ def test_fake_url_bypass_emits_banner_and_publishes(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, f"run.sh exited {result.returncode}: {result.stderr!r}"
     assert "https://fake-test.lhr.life" in result.stdout
-    assert "discovered URL" in result.stdout
+    assert "publishing stable URL" in result.stdout
     assert url_file.read_text(encoding="utf-8").strip() == "https://fake-test.lhr.life"
 
 

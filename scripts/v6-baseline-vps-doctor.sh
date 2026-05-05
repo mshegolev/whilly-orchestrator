@@ -16,12 +16,16 @@
 #      `scripts/v6-baseline-vps-up.sh --skip-smoke --skip-sync` to
 #      bring the topology up idempotently. With --no-bringup, exit
 #      non-zero with a clear single-line stderr.
-#   4. Read the FRESH lhr.life URL from postgres `funnel_url` table
-#      (column `url`) AND its `updated_at` timestamp. The doctor
-#      NEVER caches a URL across runs — lhr.life rotates after a few
-#      hours.
-#   5. Probe `<lhr_url>/health` from the operator host with
-#      `curl --max-time 15`.
+#   4. Resolve the stable public URL from `LHR_HOSTNAME`
+#      (default `whilly-orchestrator.lhr.rocks` — the paid
+#      localhost.run plan pins this). For backwards-compat with v5.0
+#      readers we still query postgres `funnel_url` to surface the
+#      `updated_at` timestamp, which on the paid plan tracks
+#      "last reconnect" rather than "URL changed at" — the URL
+#      itself does NOT rotate.
+#   5. Probe `<lhr_url>/health` 3 times within 15 seconds; declare
+#      ready only if all 3 return HTTP 200 (tightened stability
+#      window vs. the v5.0 free-tier single-shot probe).
 #   6. Probe `<lhr_url>/metrics` with the WHILLY_METRICS_TOKEN bearer
 #      discovered from the running whilly-cp-control-plane container
 #      env. Verifies auth still gates correctly:
@@ -73,9 +77,12 @@ set -euo pipefail
 VPS_HOST="${VPS_HOST:-root@213.159.6.155}"
 VPS_PORT="${VPS_PORT:-23422}"
 VPS_DIR="${VPS_DIR:-/root/whilly}"
+LHR_HOSTNAME="${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-out/v6-baseline-vps-doctor}"
 JSON_MODE=0
 NO_BRINGUP=0
+HEALTH_PROBE_COUNT=3
+HEALTH_PROBE_WINDOW_SECONDS=15
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -233,36 +240,51 @@ else
     log "[3/8] skipping bringup (stack already running — idempotent no-op)"
 fi
 
-# ── 4: fresh lhr.life URL ───────────────────────────────────────────────
-log "[4/8] reading FRESH lhr.life URL from postgres funnel_url (NEVER cached across runs)"
+# ── 4: stable public URL (env-pinned; postgres last-reconnect age) ─────
+log "[4/8] resolving stable public URL from LHR_HOSTNAME (paid-plan pinning)"
+lhr_url="https://${LHR_HOSTNAME}"
 URL_ROW=$(ssh_run "docker exec whilly-cp-postgres psql -U whilly -d whilly -tAF '|' -c \"SELECT url, EXTRACT(EPOCH FROM (NOW() - updated_at))::int FROM funnel_url WHERE id = 1\" 2>/dev/null" 2>>"$LOG_FILE" || true)
 URL_ROW="$(printf '%s' "$URL_ROW" | tr -d '\r' | head -n1)"
-if [[ -z "$URL_ROW" || "$URL_ROW" != *"|"* ]]; then
-    record_failure "ERR lhr_url: funnel_url table empty or unreachable"
-    write_state
-    exit 1
+if [[ -n "$URL_ROW" && "$URL_ROW" == *"|"* ]]; then
+    pg_url="${URL_ROW%%|*}"
+    pg_age="${URL_ROW##*|}"
+    pg_url="$(printf '%s' "$pg_url" | tr -d '[:space:]')"
+    pg_age="$(printf '%s' "$pg_age" | tr -d '[:space:]')"
+    if [[ -n "$pg_age" && "$pg_age" =~ ^-?[0-9]+$ ]]; then
+        lhr_url_age_seconds="$pg_age"
+    fi
+    if [[ -n "$pg_url" && "$pg_url" != "$lhr_url" ]]; then
+        log "  warn: postgres funnel_url=$pg_url differs from env-pinned $lhr_url (sidecar reconnect in flight?)"
+    fi
 fi
-lhr_url="${URL_ROW%%|*}"
-lhr_url_age_seconds="${URL_ROW##*|}"
-lhr_url="$(printf '%s' "$lhr_url" | tr -d '[:space:]')"
-lhr_url_age_seconds="$(printf '%s' "$lhr_url_age_seconds" | tr -d '[:space:]')"
-if [[ -z "$lhr_url" || "$lhr_url" != https://* ]]; then
-    record_failure "ERR lhr_url: invalid URL '$lhr_url'"
-    write_state
-    exit 1
-fi
-log "  lhr_url=$lhr_url age=${lhr_url_age_seconds}s"
+log "  lhr_url=$lhr_url last_reconnect_age=${lhr_url_age_seconds}s (semantics: time-since-last-reconnect; URL is constant)"
 
-# ── 5: /health probe ────────────────────────────────────────────────────
-log "[5/8] probing $lhr_url/health"
+# ── 5: /health stability window (3 probes within 15s) ─────────────────
+log "[5/8] probing $lhr_url/health — require ${HEALTH_PROBE_COUNT} successes within ${HEALTH_PROBE_WINDOW_SECONDS}s"
 HEALTH_BODY_FILE="$RUN_DIR/health-body.json"
-HEALTH_HTTP_CODE=$(curl -sS -o "$HEALTH_BODY_FILE" -w '%{http_code}' --max-time 15 "$lhr_url/health" 2>>"$LOG_FILE" || echo "000")
-if [[ "$HEALTH_HTTP_CODE" == "200" ]]; then
+HEALTH_PROBE_INTERVAL=$(( HEALTH_PROBE_WINDOW_SECONDS / HEALTH_PROBE_COUNT ))
+if [[ $HEALTH_PROBE_INTERVAL -lt 1 ]]; then
+    HEALTH_PROBE_INTERVAL=1
+fi
+HEALTH_SUCCESSES=0
+HEALTH_LAST_CODE="000"
+for probe in $(seq 1 "$HEALTH_PROBE_COUNT"); do
+    HEALTH_LAST_CODE=$(curl -sS -o "$HEALTH_BODY_FILE" -w '%{http_code}' --max-time 15 "$lhr_url/health" 2>>"$LOG_FILE" || echo "000")
+    log "  probe $probe/${HEALTH_PROBE_COUNT}: HTTP $HEALTH_LAST_CODE"
+    if [[ "$HEALTH_LAST_CODE" == "200" ]]; then
+        HEALTH_SUCCESSES=$(( HEALTH_SUCCESSES + 1 ))
+    fi
+    if [[ "$probe" -lt "$HEALTH_PROBE_COUNT" ]]; then
+        sleep "$HEALTH_PROBE_INTERVAL"
+    fi
+done
+if [[ "$HEALTH_SUCCESSES" -eq "$HEALTH_PROBE_COUNT" ]]; then
     health_ok=true
     health_response="$(tr -d '\r\n' <"$HEALTH_BODY_FILE" | head -c 512)"
+    log "  stability window passed: ${HEALTH_SUCCESSES}/${HEALTH_PROBE_COUNT} probes returned 200"
 else
-    record_failure "ERR health: $lhr_url/health returned HTTP $HEALTH_HTTP_CODE"
-    health_response="HTTP $HEALTH_HTTP_CODE"
+    record_failure "ERR health: ${HEALTH_SUCCESSES}/${HEALTH_PROBE_COUNT} probes succeeded within ${HEALTH_PROBE_WINDOW_SECONDS}s window (last HTTP $HEALTH_LAST_CODE)"
+    health_response="HTTP $HEALTH_LAST_CODE (${HEALTH_SUCCESSES}/${HEALTH_PROBE_COUNT})"
 fi
 
 # ── 6: /metrics probe (auth gating) ─────────────────────────────────────

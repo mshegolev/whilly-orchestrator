@@ -107,7 +107,7 @@ docker pull mshegolev/whilly:4.4.0
 > **`funnel` sidecar** (`m2-localhostrun-funnel-sidecar`) that holds an
 > outbound SSH reverse tunnel to **localhost.run** (free anonymous
 > tier — no account, no SSH key) and publishes the assigned
-> `https://<random>.lhr.life` URL into:
+> `https://<random>.lhr.rocks` URL into:
 >
 > 1. The Postgres `funnel_url` singleton table (primary; created by
 >    migration 010).
@@ -163,7 +163,7 @@ docker compose -f docker-compose.control-plane.yml \
     --profile funnel \
     up -d
 
-# 2. Wait for the sidecar to parse its lhr.life URL (~10s).
+# 2. Wait for the sidecar to parse its lhr.rocks URL (~10s).
 docker compose -f docker-compose.control-plane.yml logs funnel \
     | grep -oE 'https://[a-z0-9-]+\.lhr\.life' \
     | head -n1
@@ -259,16 +259,16 @@ docker compose -f docker-compose.control-plane.yml exec funnel \
 ```
 
 Both are bumped on every reconnect. The sidecar logs the regex match
-once per session (`[funnel ...] discovered URL: https://...lhr.life`)
+once per session (`[funnel ...] discovered URL: https://...lhr.rocks`)
 so `docker compose logs funnel` is the simplest way to spot the
 latest URL without writing SQL.
 
 ### Stable URL via SSH key (M3)
 
 > **Status: Available since v4.6.** The free anonymous tier in M2
-> rotates the `lhr.life` URL "after a few hours". M3 wires the funnel
+> rotates the `lhr.rocks` URL "after a few hours". M3 wires the funnel
 > sidecar to use a **registered localhost.run SSH key** so the
-> assigned subdomain (e.g. `myproject.lhr.life`) is stable across
+> assigned subdomain (e.g. `myproject.lhr.rocks`) is stable across
 > reconnects and laptop-reboots. Workers can then opt back in to
 > `WHILLY_FUNNEL_URL_SOURCE=static` — no postgres / file polling
 > needed.
@@ -282,8 +282,8 @@ The decision matrix between the three tiers:
 
 | Tier | URL shape | Stable across reconnects? | Account / payment | When to use |
 |---|---|---|---|---|
-| **Anonymous rotating** (M2 default) | `https://<random>.lhr.life` | ❌ rotates "after a few hours" | None | Demos, smoke tests, anything where re-sharing a fresh URL is cheap |
-| **SSH-key stable** (M3) | `https://<your-name>.lhr.life` | ✅ stable subdomain | Free localhost.run account + dedicated SSH key | Cluster you want to put in a colleague's `~/.bashrc`; long-running deployments |
+| **Anonymous rotating** (M2 default) | `https://<random>.lhr.rocks` | ❌ rotates "after a few hours" | None | Demos, smoke tests, anything where re-sharing a fresh URL is cheap |
+| **SSH-key stable** (M3) | `https://<your-name>.lhr.rocks` | ✅ stable subdomain | Free localhost.run account + dedicated SSH key | Cluster you want to put in a colleague's `~/.bashrc`; long-running deployments |
 | **Custom domain (paid)** (M3) | `https://tunnel.example.com` | ✅ stable + your domain | Paid localhost.run subscription + DNS CNAME | Branded surface; certs you can attest to under your own domain |
 
 #### 1. Create a dedicated SSH key
@@ -312,7 +312,7 @@ cat ~/.ssh/whilly_lhr_id_ed25519.pub
 2. Open the **SSH Keys** tab.
 3. Paste the contents of `~/.ssh/whilly_lhr_id_ed25519.pub` and pick
    a stable **subdomain** (e.g. `myproject` → results in
-   `myproject.lhr.life`). The subdomain is reserved against your
+   `myproject.lhr.rocks`). The subdomain is reserved against your
    account.
 4. Save.
 
@@ -360,12 +360,12 @@ docker compose -f docker-compose.control-plane.yml logs funnel \
 
 The published URL — same place as the anonymous tier (the
 `funnel_url` table and `/funnel/url.txt`) — is now your stable
-`<subdomain>.lhr.life`. Spot-check it:
+`<subdomain>.lhr.rocks`. Spot-check it:
 
 ```bash
 psql "$WHILLY_DATABASE_URL" -t -A -c \
     'SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1'
-# https://myproject.lhr.life
+# https://myproject.lhr.rocks
 ```
 
 #### 4. Workers can use `WHILLY_FUNNEL_URL_SOURCE=static`
@@ -374,7 +374,7 @@ Because the URL no longer rotates, workers can drop the
 postgres / file polling loop and pin the URL once at register-time:
 
 ```bash
-whilly worker connect https://myproject.lhr.life \
+whilly worker connect https://myproject.lhr.rocks \
     --bootstrap-token "$WHILLY_WORKER_BOOTSTRAP_TOKEN" \
     --plan demo \
     --hostname "$(hostname)"
@@ -434,7 +434,7 @@ behaviour is byte-for-byte unchanged.
 
 ### Source-IP forensics: out of scope under localhost.run
 
-localhost.run terminates TLS at the `lhr.life` edge and reverse-tunnels
+localhost.run terminates TLS at the `lhr.rocks` edge and reverse-tunnels
 the cleartext request over SSH back to the `funnel` sidecar. Both the
 sidecar and the control-plane therefore only ever observe the **funnel
 container's IP** as the request peer — the original external client IP
@@ -601,7 +601,7 @@ at mode `0600` instead.
 > plaintext over the LAN — this is a **dev-only loopback-bypass**.
 > HTTPS is the recommended production path; once **M2** lands the
 > localhost.run `funnel` sidecar, drop `--insecure` and point the
-> worker at the rotating `https://<random>.lhr.life` URL instead.
+> worker at the rotating `https://<random>.lhr.rocks` URL instead.
 > See
 > [`--insecure` semantics: trust-store vs hostname verification](#--insecure-semantics-trust-store-vs-hostname-verification)
 > below for the precise scope of what `--insecure` does and does
