@@ -313,20 +313,33 @@ require_bin() {
   command -v "$1" >/dev/null 2>&1 || { err "missing required binary: $1"; exit 1; }
 }
 
+# NOTE: The first line MUST be `local rc=$?` and the last line MUST be
+# `return $rc`. EXIT-trap functions inherit the script's exit status via $?,
+# but any subsequent command inside this body (warn/dim/compose down/...)
+# clobbers $? before the trap returns. Without snapshotting + restoring
+# the original rc, a failing demo (e.g. `exit 5` from the DONE-count
+# guard) would surface as rc=0 because the cleanup commands succeeded.
+# Treat the rc-capture pattern below as load-bearing.
+#
+# Cleanup also runs unconditionally on failure (unless --keep-running was
+# passed) so callers / CI never end up with an orphan whilly-demo-* stack.
+# Pre-failure logs can still be retrieved with `--keep-running`.
 cleanup_on_exit() {
   local rc=$?
   if (( KEEP_RUNNING )); then
     dim "(--keep-running set; стек оставлен в живых)"
     dim "Остановить вручную: ${COMPOSE[*]} -f $COMPOSE_FILE down -v"
-  elif (( rc != 0 )); then
-    warn "скрипт упал (rc=$rc); стек оставлен для диагностики"
-    dim "Логи: ${COMPOSE[*]} -f $COMPOSE_FILE logs"
-    dim "Остановить: ${COMPOSE[*]} -f $COMPOSE_FILE down -v"
   else
-    step "тушим стек"
+    if (( rc != 0 )); then
+      warn "скрипт упал (rc=$rc); тушим стек"
+      dim "Если нужно расследовать — перезапустите с --keep-running"
+    else
+      step "тушим стек"
+    fi
     compose down -v >/dev/null 2>&1 || true
     ok "стек остановлен"
   fi
+  return $rc
 }
 trap cleanup_on_exit EXIT
 
@@ -568,13 +581,18 @@ all_status_rows="$(
      ORDER BY id;
   " 2>/dev/null || true
 )"
+demo_min_done=5  # default --min-done 5 per VAL-CROSS-BACKCOMPAT-005
+if [[ "${WHILLY_DEMO_INJECT_FAILURE:-}" == "min-done-999" ]]; then
+  warn "WHILLY_DEMO_INJECT_FAILURE=min-done-999 — forcing DONE-count guard to fail (expect rc=5)"
+  demo_min_done=999
+fi
 if ! printf '%s\n' "$all_status_rows" \
      | bash "$REPO_ROOT/scripts/check_demo_tasks_terminal.sh" \
-            --min-done 5 --plan "$PLAN_ID"; then
-  err "demo aborted: DONE-count below 5 (see breakdown above)"
+            --min-done "$demo_min_done" --plan "$PLAN_ID"; then
+  err "demo aborted: DONE-count below $demo_min_done (see breakdown above)"
   exit 5
 fi
-ok "плановое количество DONE достигнуто (>= 5)"
+ok "плановое количество DONE достигнуто (>= $demo_min_done)"
 
 # ─── 8. Done ─────────────────────────────────────────────────────────────────
 echo
