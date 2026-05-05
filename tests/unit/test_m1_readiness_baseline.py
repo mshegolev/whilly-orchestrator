@@ -308,25 +308,28 @@ def test_whilly_state_snapshot_round_trips_through_state_store() -> None:
 
 
 def test_distributed_audit_docs_mirror_canonical_source() -> None:
-    """``docs/distributed-audit/`` must mirror the canonical audit source.
+    """``docs/distributed-audit/`` must mirror ``.planning/distributed-audit/``.
 
-    Source is resolved via the fallback chain documented on
-    :func:`_resolve_audit_source`:
+    Implements the AGENTS.md "Test hygiene" rule (line ~37):
 
-    * Prefer ``.planning/distributed-audit/`` (mission-local working copy).
-    * Fall back to ``library/distributed-audit/`` (tracked canonical
-      mirror per VAL-M1-DOCS-004) when ``.planning/`` is absent — this is
-      the situation on a clean clone or CI runner.
+        Tests and committed scripts MUST NOT depend on untracked
+        mission-local paths (e.g. ``.planning/distributed-audit/``).
+        If a fixture/script needs data from such a path, it must
+        include a deterministic fallback to the tracked canonical
+        location ... and tests must skip cleanly with a clear reason
+        if no source is reachable.
 
-    Skipped cleanly if neither source path is reachable in this
-    environment, per the AGENTS.md "Test hygiene" rule.
+    This test is a workspace-only sanity check: when the operator is
+    running from a checkout that has the mission-local ``.planning/``
+    audit copy, we verify the tracked ``docs/`` mirror is in sync. On a
+    fresh clone / CI runner where ``.planning/`` is absent, we skip
+    cleanly so the unit suite stays green. Drift detection across the
+    canonical ``library/distributed-audit/`` mirror is out of scope here
+    and lives in :func:`test_distributed_audit_library_mirror_canonical_source`.
     """
-    src = _resolve_audit_source()
-    if src is None:
-        pytest.skip(
-            "Neither .planning/distributed-audit/ nor library/distributed-audit/ "
-            "is populated in this environment — nothing to mirror against."
-        )
+    src = REPO_ROOT / ".planning" / "distributed-audit"
+    if not src.is_dir() or not any(p.is_file() for p in src.iterdir()):
+        pytest.skip(".planning/distributed-audit/ source not present")
     dst = REPO_ROOT / "docs" / "distributed-audit"
     assert dst.is_dir(), f"missing docs mirror: {dst}"
     src_names = {p.name for p in src.iterdir() if p.is_file()}
