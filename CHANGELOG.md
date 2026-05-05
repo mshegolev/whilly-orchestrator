@@ -7,7 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — NEXT
 
-_(no unreleased changes — v4.6.0 cut on 2026-05-04)_
+_(no unreleased changes — v4.6.1 cut on 2026-05-04)_
+
+## [4.6.1] - 2026-05-04
+
+> **Patch release — bundles five M3 user-facing fixes that landed
+> after v4.6.0 was cut.** No new features. Strictly additive: every
+> v4.6.0 user should upgrade. Fixes were already on `main` since the
+> day after the v4.6.0 publish; this release simply gets them into
+> the published artefacts (PyPI sdist + wheel and the multi-arch
+> `mshegolev/whilly:4.6.1` Docker Hub tag) so operators running the
+> default `WHILLY_IMAGE` get the fixed live-dashboard /
+> tasks-API / metrics / SSE / health surfaces without a manual
+> rebuild.
+
+### Breaking changes
+
+(none)
+
+### Upgrade notes
+
+- `pip install --upgrade whilly-orchestrator==4.6.1` /
+  `pip install --upgrade whilly-worker==4.6.1` (the worker
+  meta-package keeps its `==X.Y.Z` pin to the orchestrator —
+  upgrade both in lockstep).
+- `docker pull mshegolev/whilly:4.6.1` for the multi-arch image.
+- No schema migration required (alembic head stays at `011`).
+- No env-var changes.
+
+### Fixed
+
+- **HTMX dashboard live row swaps now subscribe to the broker's
+  UPPERCASE SSE event names** (`fix-m3-htmx-tasks-table-sse-event-names`,
+  `299031e`). The tasks-table fragment template's
+  `hx-trigger="sse:..."` list previously used lowercase
+  `sse:task.claim` / `sse:task.complete` / `sse:task.fail` /
+  `sse:task.release` selectors, but the broker fan-out emits the
+  event-type names in UPPERCASE (`TASK.CLAIM`, `TASK.COMPLETE`,
+  …) per the canonical event-types contract. The template is
+  realigned to the broker, and the validation contract assertion
+  `VAL-M3-HTMX-010` (live dashboard updates within ≤ 2 s of a
+  state transition) now passes against the published image.
+- **`GET /api/v1/tasks?status=BOGUS` returns 400 with an
+  informative error** (`fix-m3-tasks-api-status-validation`,
+  `1e0e990`). The endpoint previously coerced unknown statuses to
+  an empty result-set, masking a typo as an empty queue. It now
+  surfaces a `400 Bad Request` with body
+  `{"detail":"invalid status filter '<value>': allowed values are
+  pending, in_progress, …"}` so dashboards / CLI consumers fail
+  fast on a typo. Allowed-values list is enumerated from
+  `whilly.core.models.TaskStatus` so future status additions are
+  picked up automatically.
+- **Prometheus metrics refresh drops stale `plan_id` gauge labels**
+  (`fix-m3-prometheus-metrics-stale-plan-labels`, `20d0ca9`). The
+  `_metrics_refresh_loop` now diffs the current label set against
+  the previous tick and removes label combinations that no longer
+  appear in the result-set, so a deleted plan no longer keeps a
+  ghost `whilly_plan_budget_remaining_usd{plan_id="…"}` series in
+  the scrape output forever. Active plans are unaffected.
+- **`GET /events/stream` rejects bigint-overflow `Last-Event-ID`
+  headers** (`fix-m3-sse-endpoint-last-event-id-overflow`,
+  `411e06b`). `_parse_last_event_id` now bounds the parsed
+  integer to Postgres' `bigint` range
+  (`[-2^63, 2^63-1]`); values outside that range are treated as
+  malformed and fall through to the existing start-fresh path
+  (instead of letting asyncpg raise `OutOfRangeError` on the
+  replay query and 500-ing the SSE connection). Within-range IDs
+  are unaffected.
+- **`GET /health` `listener_connected` reads
+  `_ListenerState.connected` instead of `task.done()`**
+  (`fix-m3-health-listener-connected-tracks-conn-state`,
+  `c4b1f78`). The listener task is intentionally long-running, so
+  `task.done()` was always `False` even when the underlying
+  asyncpg LISTEN connection had dropped and the loop was in its
+  exponential-backoff reconnect window — which made
+  `listener_connected:true` lie. The probe now reads the
+  state-coupled `connected` flag, which flips false during
+  reconnect attempts and true again once the LISTEN handshake
+  completes, aligning the health probe with the readiness-probe
+  semantics (`GET /health/ready` already returned 503 in this
+  scenario).
+
+### Verification
+
+- `pip install --upgrade whilly-orchestrator==4.6.1
+  whilly-worker==4.6.1` succeeds against
+  `files.pythonhosted.org`.
+- `docker buildx imagetools inspect mshegolev/whilly:4.6.1` →
+  both `linux/amd64` and `linux/arm64` manifests present.
+- `mshegolev/whilly:latest` moved to point at v4.6.1 (Docker Hub
+  tag rewrite; v4.6.1 digest stable for users pinning by digest).
+- `tests/integration/test_compose_default_image_tag.py` passes
+  with the bumped 4.6.1 default in
+  `docker-compose.control-plane.yml` /
+  `docker-compose.worker.yml` / `.env.worker.example`.
+- M3 user-testing-validator round 4 will re-run
+  `VAL-M3-HTMX-010` against the published 4.6.1 image (no
+  contract change required).
 
 ## [4.6.0] - 2026-05-04
 

@@ -73,13 +73,14 @@ services:
 
   # ─── App: control-plane (FastAPI / uvicorn). No worker baked in here. ─────
   control-plane:
-    # Default to the published image (matches the current v4.6.0 release
-    # artifact — the first tag that knows alembic migrations 010_funnel_url
-    # (M2) and 011_events_notify_trigger (M3); older defaults like 4.3.1
-    # crashed the control-plane on boot with "Can't locate revision
-    # identified by '010_funnel_url'"). Override with WHILLY_IMAGE=<tag>
-    # for dev / local-build workflows.
-    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.6.0}
+    # Default to the published image (matches the current v4.6.1 release
+    # artifact — the first tag that bundles the m3 user-facing fixes
+    # for UPPERCASE SSE event names + tasks-API 400 + metrics stale
+    # plan labels + Last-Event-ID overflow guard + listener_connected
+    # health flag; older defaults like 4.3.1 / 4.6.0 either crashed on
+    # boot or shipped with the round-3 user-testing regressions).
+    # Override with WHILLY_IMAGE=<tag> for dev / local-build workflows.
+    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.6.1}
     container_name: whilly-cp-control-plane
     restart: unless-stopped
     depends_on:
