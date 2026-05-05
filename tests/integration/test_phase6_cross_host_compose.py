@@ -41,6 +41,29 @@ What the compose-based gate proves on top of the cheap one
    is ``DONE`` for every row in the plan; there is nothing stuck at
    ``CLAIMED`` or ``IN_PROGRESS``.
 
+Tech-debt fixes (misc-m1-phase6-cross-host-compose-timeout)
+-----------------------------------------------------------
+Two pre-existing failures were resolved together:
+
+1. **30s pytest timeout was too tight.** Compose stack bringup +
+   image start + healthcheck + first-batch drain + worker restart +
+   second-batch drain genuinely needs > 30s on a cold colima/Docker
+   Desktop. The default `pytest tests/integration/ -q --timeout=30`
+   never selects this test (it's behind ``-m compose``), so the
+   default sweep is unaffected, but the per-test marker below
+   guarantees the budget when an operator opts in via ``-m compose``.
+
+2. **Worker URL guard rejected plain-HTTP host.docker.internal.**
+   The worker's URL scheme guard refuses plain HTTP to a non-loopback
+   host unless ``--insecure`` is passed (or ``WHILLY_INSECURE=1`` is
+   set). The compose worker stack here talks to the control-plane via
+   ``http://host.docker.internal:<port>`` — explicitly non-loopback —
+   so we must opt the worker container into the insecure mode and
+   into the connect-flow code path that honours the env switch.
+   Both env vars are propagated through ``docker-compose.worker.yml``
+   (see the ``WHILLY_INSECURE`` / ``WHILLY_USE_CONNECT_FLOW``
+   passthroughs there).
+
 Skipping policy
 ---------------
 This test is **opt-in** by design:
@@ -53,13 +76,18 @@ This test is **opt-in** by design:
   clear message — it never *fails* due to environment unavailability.
 * Building / pulling a current ``whilly`` image is the operator's
   responsibility. By default this test pulls the published image from
-  Docker Hub (``${WHILLY_IMAGE:-mshegolev/whilly:4.4.0}``), but the
-  environment variable can point at any locally-built tag (e.g.
-  ``WHILLY_IMAGE=whilly:dev``). When the image is not present locally
-  AND cannot be pulled (offline laptop, private registry without
-  credentials, etc.), the compose ``up`` step fails fast and the test
-  ``pytest.skip``s with the captured stderr so it is visible WHY the
-  gate did not run.
+  Docker Hub (``${WHILLY_IMAGE:-mshegolev/whilly:4.6.1}``, kept in
+  lock-step with the default in ``docker-compose.control-plane.yml``
+  and ``docker-compose.worker.yml``), but the environment variable
+  can point at any locally-built tag (e.g. ``WHILLY_IMAGE=whilly:dev``).
+  Note: the image MUST contain ``/opt/whilly/tests/fixtures/fake_claude_demo.sh``
+  which the worker compose file uses as the default ``CLAUDE_BIN``;
+  pre-v4.6 release images do not ship that fixture and will cause the
+  worker to bail with "claude binary not found". When the image is not
+  present locally AND cannot be pulled (offline laptop, private registry
+  without credentials, etc.), the compose ``up`` step fails fast and the
+  test ``pytest.skip``s with the captured stderr so it is visible WHY
+  the gate did not run.
 
 Hermetic by construction (project-name isolation)
 -------------------------------------------------
@@ -194,7 +222,17 @@ DOCKER_COMPOSE_REQUIRED = pytest.mark.skipif(not _DOCKER_OK, reason=_DOCKER_REAS
 # runs (which don't pass `-m compose`) skip it. Tests in this file only
 # run when both gates pass: the marker is selected AND docker is
 # reachable.
-pytestmark = [DOCKER_COMPOSE_REQUIRED, pytest.mark.compose]
+pytestmark = [
+    DOCKER_COMPOSE_REQUIRED,
+    pytest.mark.compose,
+    # Per-test budget large enough for cold-start image boot +
+    # healthcheck + first-drain + worker restart + second-drain.
+    # The default suite-wide --timeout=30 (services.yaml `test`) is too
+    # tight even though `-m "not compose"` deselects this file — the
+    # budget below applies only when an operator opts in via
+    # ``-m compose`` (e.g. services.yaml `m1_phase6_cross_host_compose`).
+    pytest.mark.timeout(600),
+]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
@@ -404,7 +442,7 @@ def compose_stacks() -> Iterator[dict[str, Any]]:
     suffix = secrets.token_hex(4)
     control_project = f"{PROJECT_PREFIX}-cp-{suffix}"
     worker_project = f"{PROJECT_PREFIX}-w-{suffix}"
-    image = os.environ.get("WHILLY_IMAGE") or "mshegolev/whilly:4.4.0"
+    image = os.environ.get("WHILLY_IMAGE") or "mshegolev/whilly:4.6.1"
 
     cp_env: dict[str, str] = {
         "WHILLY_BIND_HOST": "0.0.0.0",
@@ -424,6 +462,17 @@ def compose_stacks() -> Iterator[dict[str, Any]]:
         "WHILLY_WORKER_BOOTSTRAP_TOKEN": BOOTSTRAP_TOKEN,
         "WHILLY_WORKER_HOSTNAME": WORKER_HOSTNAME,
         "WHILLY_PLAN_ID": PLAN_ID,
+        # The control-plane URL above is plain HTTP to a non-loopback
+        # gateway (host.docker.internal). The worker's scheme guard
+        # rejects that without an explicit insecure opt-in — set both
+        # env switches the entrypoint reads. WHILLY_USE_CONNECT_FLOW=1
+        # routes through `whilly worker connect`, which honours
+        # WHILLY_INSECURE=1 to forward `--insecure` to the worker.
+        # Without these the worker container exits immediately with
+        # "plain HTTP to non-loopback host 'host.docker.internal'
+        # requires --insecure" before any task can be claimed.
+        "WHILLY_INSECURE": "1",
+        "WHILLY_USE_CONNECT_FLOW": "1",
         # Use the in-image fake claude so we never depend on a real LLM
         # key. The image already ships /opt/whilly/tests/fixtures/...
         # is NOT shipped — but Dockerfile's CLAUDE_BIN default here is
@@ -442,7 +491,7 @@ def compose_stacks() -> Iterator[dict[str, Any]]:
                 control_project,
                 args=["up", "-d"],
                 env=cp_env,
-                timeout=120.0,
+                timeout=240.0,
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
@@ -473,7 +522,7 @@ def compose_stacks() -> Iterator[dict[str, Any]]:
             worker_project,
             args=["up", "-d"],
             env=worker_env,
-            timeout=120.0,
+            timeout=240.0,
             check=False,
         )
         if up_w.returncode != 0:
