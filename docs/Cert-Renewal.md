@@ -10,7 +10,7 @@
 > path and the Tailscale Funnel path. The current public-exposure
 > mechanism is the **localhost.run sidecar** — TLS is terminated at
 > the localhost.run edge with a public Let's Encrypt cert for the
-> wildcard `*.lhr.life` zone. Whilly does NOT run an ACME client and
+> wildcard `*.lhr.rocks` zone. Whilly does NOT run an ACME client and
 > does NOT manage the cert directly. This runbook reflects that —
 > it documents what to verify, what files / paths matter, and how to
 > migrate to a self-managed cert when you outgrow localhost.run.
@@ -33,10 +33,10 @@
 
 | Layer | Owner | What is stored | Where |
 |---|---|---|---|
-| **TLS terminator** | localhost.run (upstream) | Let's Encrypt prod wildcard cert for `*.lhr.life` | localhost.run edge — **not on your host**. You cannot `cat` it. |
+| **TLS terminator** | localhost.run (upstream) | Let's Encrypt prod wildcard cert for `*.lhr.rocks` | localhost.run edge — **not on your host**. You cannot `cat` it. |
 | **Sidecar SSH client** | The `funnel` service in `docker-compose.demo.yml` / `docker-compose.control-plane.yml` | SSH known_hosts entries for `localhost.run` | Container-local: `~root/.ssh/known_hosts` (alpine image). Recreated on container restart with `StrictHostKeyChecking=accept-new`. |
-| **Funnel URL state** | The control-plane Postgres | Latest `lhr.life` URL | `funnel_url` table (singleton row, `id=1`). |
-| **Funnel URL fallback** | The `funnel_url_volume` named volume | Latest `lhr.life` URL | `/funnel/url.txt` inside the sidecar; mounted from the host volume. |
+| **Funnel URL state** | The control-plane Postgres | Latest `lhr.rocks` URL | `funnel_url` table (singleton row, `id=1`). |
+| **Funnel URL fallback** | The `funnel_url_volume` named volume | Latest `lhr.rocks` URL | `/funnel/url.txt` inside the sidecar; mounted from the host volume. |
 | **Worker trust store** | The OS / Python runtime | Standard `certifi` CA bundle | Worker container: typical `python:3.12-slim` cert path; macOS workers: System Roots; Linux workers: `/etc/ssl/certs/ca-certificates.crt`. **No custom CA bundle is required** because localhost.run uses Let's Encrypt prod, which is in the system trust store everywhere. |
 
 > **Key consequence.** Because the cert lives at the localhost.run
@@ -52,7 +52,7 @@
 | Symptom | Likely cause | Fix path |
 |---|---|---|
 | Worker stderr: `httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate has expired` | Worker CA bundle is stale (e.g. `certifi` package > 1 year old in a frozen image) | `pip install -U certifi` in the worker image, or rebuild from a fresh Python base image. |
-| Worker stderr: `httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] hostname '<random>.lhr.life' doesn't match` | Worker is using a stale URL (rotated upstream) | Restart worker; ensure `WHILLY_FUNNEL_URL_SOURCE=postgres` or `=file`. See [`docs/Deploy-M2.md` § Worker-side URL re-discovery](Deploy-M2.md#worker-side-url-re-discovery). |
+| Worker stderr: `httpx.ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] hostname '<random>.lhr.rocks' doesn't match` | Worker is using a stale URL (rotated upstream) | Restart worker; ensure `WHILLY_FUNNEL_URL_SOURCE=postgres` or `=file`. See [`docs/Deploy-M2.md` § Worker-side URL re-discovery](Deploy-M2.md#worker-side-url-re-discovery). |
 | Sidecar log: `kex_exchange_identification: Connection closed by remote host` | localhost.run rejected the SSH session (rate-limit, transient outage, blocked source IP) | Wait for the sidecar's backoff loop to retry; check `https://status.localhost.run` if it persists. |
 | Sidecar log: `Permission denied (publickey)` after switching to a stable URL | You've started passing an SSH key (M3 prod path) but the key isn't registered with localhost.run | Re-register the key in your localhost.run account; or fall back to anonymous tier by clearing the key. |
 | `psql -c 'SELECT url FROM funnel_url ...'` returns NULL or stale value | Sidecar exited / never published | `docker compose logs funnel` and force-renew (next section). |
@@ -98,7 +98,7 @@ echo | openssl s_client -connect "$HOST":443 -servername "$HOST" -showcerts 2>/d
     | openssl x509 -noout -subject -issuer -dates
 ```
 
-You should see `subject=CN = *.lhr.life`, `issuer=…Let's Encrypt…`,
+You should see `subject=CN = *.lhr.rocks`, `issuer=…Let's Encrypt…`,
 and `notAfter` in the future.
 
 If `notAfter` is in the past, the upstream cert is expired — that's
@@ -139,7 +139,7 @@ docker compose -f docker-compose.demo.yml logs -f --tail=50 funnel
 ```
 
 Within ~10 seconds you should see the sidecar print a new
-`https://<random>.lhr.life` URL and write it to both the
+`https://<random>.lhr.rocks` URL and write it to both the
 `funnel_url` table and `/funnel/url.txt`.
 
 Then verify worker pickup:
@@ -225,7 +225,7 @@ The localhost.run free anonymous tier serves the same Let's Encrypt
 Let's Encrypt staging cert. There is no untrusted-CA pitfall to
 work around. What's "staging-like" about the free tier is the
 **URL rotation cadence**, not the cert: the URL changes "after a
-few hours", the cert (`*.lhr.life`) does not. Workers do not need
+few hours", the cert (`*.lhr.rocks`) does not. Workers do not need
 a custom CA bundle on either tier.
 
 If you migrate to **Option 2** (bring your own domain) and stand up

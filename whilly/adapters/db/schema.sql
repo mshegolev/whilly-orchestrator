@@ -302,20 +302,22 @@ CREATE INDEX ix_bootstrap_tokens_owner_email_active ON bootstrap_tokens (owner_e
     WHERE revoked_at IS NULL;
 
 -- ─── funnel_url ──────────────────────────────────────────────────────────
--- Singleton table the M2 localhost.run sidecar (m2-localhostrun-funnel-
--- sidecar, migration 010) upserts on every reconnect with the latest
--- assigned ``https://<random>.lhr.life`` URL. Workers re-discover the URL
--- via ``SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1`` (or
--- the equivalent ``WHERE id = 1`` lookup since the singleton invariant
--- guarantees a single row at most). The shared-volume file
--- ``/funnel/url.txt`` is the fallback for environments without postgres
--- reachability.
+-- Singleton table the localhost.run sidecar (migration 010) upserts on
+-- every reconnect with the public URL the funnel exposes. As of the
+-- v6.0 paid-plan switch (replace-funnel-with-lhr-paid) the URL is
+-- pinned via ``LHR_HOSTNAME`` (default
+-- ``https://whilly-orchestrator.lhr.rocks``) and is constant across
+-- reconnects — ``updated_at`` tracks "last reconnect" rather than
+-- "URL changed at". v5.0 readers continue to consume
+-- ``SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1``
+-- unchanged. The shared-volume file ``/funnel/url.txt`` remains the
+-- fallback for environments without postgres reachability.
 --
 -- The ``CHECK (id = 1)`` constraint pins the singleton invariant at the
 -- schema level — no second row can ever land. The sidecar upsert uses
 -- ``INSERT INTO funnel_url (id, url) VALUES (1, $URL)
 -- ON CONFLICT (id) DO UPDATE SET url=EXCLUDED.url, updated_at=NOW();``
--- to overwrite the row in place on every URL rotation.
+-- to refresh the row in place on every reconnect.
 CREATE TABLE funnel_url (
     id         INTEGER PRIMARY KEY DEFAULT 1,
     url        TEXT NOT NULL,

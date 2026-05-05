@@ -712,12 +712,15 @@ async def _async_worker(
 
     When ``WHILLY_FUNNEL_URL_SOURCE`` (or its ``--funnel-source``
     override) selects a non-static discovery mode, the loop runs
-    inside :func:`run_remote_worker_with_url_rotation` so a rotating
-    ``lhr.life`` URL is absorbed transparently — the worker releases
-    any in-flight task, closes the previous client, opens a new one
-    against the new URL, and resumes. The same ``worker_id`` and
-    bearer are reused across rotations, so the control plane sees a
-    single identity reconnecting (no duplicate-worker error).
+    inside :func:`run_remote_worker_with_url_rotation` so a
+    funnel-side URL change is absorbed transparently — the worker
+    releases any in-flight task, closes the previous client, opens a
+    new one against the new URL, and resumes. The same ``worker_id``
+    and bearer are reused across rotations, so the control plane
+    sees a single identity reconnecting (no duplicate-worker error).
+    With the v6.0 paid-plan funnel the URL is constant across
+    reconnects, so steady-state operation effectively short-circuits
+    this branch.
 
     Static mode behaves byte-equivalently to the v4.4 baseline: one
     :class:`RemoteWorkerClient` for the lifetime of the loop, no

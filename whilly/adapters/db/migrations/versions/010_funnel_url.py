@@ -2,7 +2,7 @@
 
 Adds a one-row table the funnel sidecar (m2-localhostrun-funnel-
 sidecar) upserts on every reconnect with the latest assigned
-``https://<random>.lhr.life`` URL. Workers re-discover the URL via
+``https://<random>.lhr.rocks`` URL. Workers re-discover the URL via
 ``SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1`` (or
 ``WHERE id = 1`` since the singleton invariant guarantees a single
 row at most). The shared-volume file ``/funnel/url.txt`` is the
@@ -15,7 +15,7 @@ Schema shape
   can ever land. Sidecar upsert uses ``INSERT ... ON CONFLICT (id)
   DO UPDATE`` to overwrite the row in place on every URL rotation.
 * ``url text NOT NULL`` — the latest published
-  ``https://<random>.lhr.life`` URL.
+  ``https://<random>.lhr.rocks`` URL.
 * ``updated_at timestamptz NOT NULL DEFAULT NOW()`` — sidecar
   bumps this on every upsert; consumers (worker URL re-discovery,
   validator probes) order by it.

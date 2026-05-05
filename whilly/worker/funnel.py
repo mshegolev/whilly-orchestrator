@@ -1,7 +1,7 @@
 """Funnel URL discovery sources for the M2 worker URL-rotation flow.
 
 The M2 localhost.run sidecar publishes a rotating
-``https://<random>.lhr.life`` URL into both Postgres (``funnel_url``
+``https://<random>.lhr.rocks`` URL into both Postgres (``funnel_url``
 singleton table, migration 010) and a shared-volume file
 (``/funnel/url.txt``). Workers absorb the rotation transparently by
 polling one of those sources on a configurable cadence.

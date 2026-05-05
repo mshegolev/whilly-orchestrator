@@ -1,17 +1,33 @@
 #!/usr/bin/env bash
-# Whilly funnel sidecar runtime loop (M2: m2-localhostrun-funnel-sidecar).
+# Whilly funnel sidecar runtime loop — v6.0 paid-plan replacement of
+# the v5.0 free-tier sidecar flow.
 #
-# Holds an outbound SSH reverse-tunnel against `nokey@localhost.run`
-# (free anonymous tier), parses the assigned
-# `https://<random>.lhr.life` URL from SSH stdout, and publishes it
-# to:
-#   1. Postgres `funnel_url` singleton table (primary; gated on
-#      WHILLY_DATABASE_URL being set)
-#   2. Shared-volume file `$FUNNEL_URL_FILE` (fallback; written via
-#      tmp + atomic rename)
+# Holds an outbound SSH reverse-tunnel against `plan@localhost.run`
+# using a private SSH key registered in the operator's localhost.run
+# dashboard, force-binds the public hostname
+# `whilly-orchestrator.lhr.rocks` (configurable via `LHR_HOSTNAME`),
+# and publishes the STABLE URL to:
+#   1. Postgres `funnel_url` singleton table (primary; back-compat
+#      for v5.0 readers). The URL is constant across reconnects, so
+#      `updated_at` simply tracks the last reconnect, not a URL
+#      rotation.
+#   2. Shared-volume file `${FUNNEL_URL_FILE}` (fallback; written via
+#      tmp + atomic rename).
 #
-# On SSH exit (rotation / network blip / server-side close) the
-# script sleeps `FUNNEL_RETRY_BACKOFF_SECONDS` and reconnects.
+# On SSH exit (network blip / server-side close) the script sleeps
+# `FUNNEL_RETRY_BACKOFF_SECONDS` and reconnects. SSH keepalives
+# (ServerAliveInterval=30, ServerAliveCountMax=3,
+# ExitOnForwardFailure=yes) detect silent drops fast.
+#
+# Failure modes (clear stderr, non-zero exit):
+#   1. SSH key file missing at the configured path — the operator
+#      forgot to drop the private key on the VPS. Stderr cites the
+#      dashboard URL (https://localhost.run/dashboard/ssh-keys/) and
+#      the expected on-disk path.
+#   2. SSH key present but not registered in the dashboard — sshd
+#      rejects auth, the script lets ssh propagate the auth-failure
+#      message, prints a diagnostic suffix that names the dashboard
+#      URL, and exits non-zero.
 #
 # Security:
 #   * `WHILLY_DATABASE_URL` is parsed once into discrete
@@ -19,73 +35,69 @@
 #     NEVER passed to `psql` on the command line — that would leak
 #     the password into `ps` output and the container's stdout
 #     stream.
-#   * `set -u` would trip on optional env reads; we use `set -eo
-#     pipefail` instead and gate optional reads with `${VAR:-}`.
-#
-# Tier modes (M3 — m3-funnel-stable-url-via-ssh-key):
-#
-#   1. Anonymous rotating (default). `FUNNEL_SSH_KEY_PATH` unset.
-#      Connects as `nokey@localhost.run`. Free; URL rotates "after
-#      a few hours" per localhost.run docs. Workers must run with
-#      `WHILLY_FUNNEL_URL_SOURCE=postgres|file` to absorb rotation.
-#
-#   2. SSH-key stable. `FUNNEL_SSH_KEY_PATH=/path/to/key` set.
-#      Connects with `-i $FUNNEL_SSH_KEY_PATH` and the
-#      account-default username (`localhost.run`). The SSH key
-#      must be registered against a free localhost.run account at
-#      https://admin.localhost.run/ — the assigned subdomain is
-#      stable across reconnects (e.g. `myproject.lhr.life`).
-#      Workers can use `WHILLY_FUNNEL_URL_SOURCE=static`.
-#
-#   3. Custom domain (paid tier). `FUNNEL_CUSTOM_DOMAIN=foo.example.com`
-#      set in addition to `FUNNEL_SSH_KEY_PATH`. Forward spec
-#      becomes `<domain>:80:<local-host>:<local-port>` so
-#      localhost.run binds the tunnel to the custom domain.
-#      Requires a paid localhost.run subscription that has the
-#      domain configured at https://admin.localhost.run/.
+#   * The SSH private key is mounted read-only at the in-container
+#     path; the script verifies its existence + permissions BEFORE
+#     dialling out so a permission slip surfaces immediately.
 #
 # Test hooks:
 #   * `FUNNEL_FAKE_URL` — when set, the script bypasses real SSH
 #     and emits a synthetic banner containing that URL. Used by
-#     `tests/integration/test_funnel_sidecar_url_publish.py` to
-#     exercise the publish path without depending on the public
-#     localhost.run service.
+#     unit/integration tests to exercise the publish path without
+#     depending on the public localhost.run service.
 #   * `FUNNEL_ONESHOT` — when truthy, exit after the first publish
 #     instead of looping. Test fixtures set this so the container
 #     terminates deterministically.
 #   * `FUNNEL_DUMP_SSH_ARGS` — when truthy, print the assembled
 #     ssh argv (one token per line) and exit 0 without invoking
-#     ssh. Used by
-#     `tests/integration/test_funnel_stable_url.py` to assert the
-#     SSH-key / custom-domain wiring without a live tunnel.
+#     ssh. Used by the static-contract test to assert the SSH
+#     command shape without a live tunnel.
+#   * `FUNNEL_SKIP_KEY_CHECK` — when truthy, skip the on-disk SSH
+#     key existence check. Only used by tests that exercise the
+#     dump-args path with no key file present.
 
 set -eo pipefail
 
-FUNNEL_LOCAL_HOST="${FUNNEL_LOCAL_HOST:-control-plane}"
-FUNNEL_LOCAL_PORT="${FUNNEL_LOCAL_PORT:-8000}"
-FUNNEL_SERVER_ALIVE_INTERVAL="${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
+LHR_HOSTNAME="${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
+LHR_REMOTE_USER="${LHR_REMOTE_USER:-plan@localhost.run}"
+LHR_REMOTE_HOST="${LHR_REMOTE_HOST:-localhost.run}"
+LHR_LOCAL_TARGET="${LHR_LOCAL_TARGET:-control-plane:8000}"
+LHR_SSH_KEY_PATH_INSIDE="${LHR_SSH_KEY_PATH_INSIDE:-/etc/whilly-funnel/ssh-key}"
+LHR_DASHBOARD_URL="${LHR_DASHBOARD_URL:-https://localhost.run/dashboard/ssh-keys/}"
+
+FUNNEL_SERVER_ALIVE_INTERVAL="${FUNNEL_SERVER_ALIVE_INTERVAL:-30}"
+FUNNEL_SERVER_ALIVE_COUNT_MAX="${FUNNEL_SERVER_ALIVE_COUNT_MAX:-3}"
 FUNNEL_RETRY_BACKOFF_SECONDS="${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
 FUNNEL_URL_FILE="${FUNNEL_URL_FILE:-/funnel/url.txt}"
-FUNNEL_REMOTE_HOST="${FUNNEL_REMOTE_HOST:-localhost.run}"
-FUNNEL_REMOTE_USER="${FUNNEL_REMOTE_USER:-nokey}"
-FUNNEL_SSH_KEY_PATH="${FUNNEL_SSH_KEY_PATH:-}"
-FUNNEL_CUSTOM_DOMAIN="${FUNNEL_CUSTOM_DOMAIN:-}"
 FUNNEL_FAKE_URL="${FUNNEL_FAKE_URL:-}"
 FUNNEL_ONESHOT="${FUNNEL_ONESHOT:-0}"
 FUNNEL_DUMP_SSH_ARGS="${FUNNEL_DUMP_SSH_ARGS:-0}"
+FUNNEL_SKIP_KEY_CHECK="${FUNNEL_SKIP_KEY_CHECK:-0}"
 
-LHR_REGEX='https://[a-z0-9-]+\.lhr\.life'
+if [ -n "$FUNNEL_FAKE_URL" ]; then
+    PUBLIC_URL="$FUNNEL_FAKE_URL"
+else
+    PUBLIC_URL="${PUBLIC_URL:-https://${LHR_HOSTNAME}}"
+fi
 
 log() {
     printf '[funnel %s] %s\n' "$(date -u +%FT%TZ)" "$*"
 }
 
-# Parse a postgres:// DSN into discrete PG* env vars so `psql` can
-# authenticate without seeing the URL on argv.
-#
-# WHILLY_DATABASE_URL contains the password; passing it as
-# `psql "$URL"` would leak the secret into `ps` output and into
-# the stdout stream tee'd to docker logs (see SECURITY note above).
+err() {
+    printf '[funnel %s] ERROR: %s\n' "$(date -u +%FT%TZ)" "$*" >&2
+}
+
+split_local_target() {
+    local target="$1"
+    local host="${target%%:*}"
+    local port="${target##*:}"
+    if [ "$host" = "$target" ] || [ -z "$port" ]; then
+        port="8000"
+        host="$target"
+    fi
+    printf '%s\n%s\n' "$host" "$port"
+}
+
 parse_dsn_into_pg_env() {
     local dsn="${1:-}"
     if [ -z "$dsn" ]; then
@@ -186,7 +198,7 @@ publish_to_postgres() {
     sql=$(printf "INSERT INTO funnel_url (id, url) VALUES (1, '%s') ON CONFLICT (id) DO UPDATE SET url=EXCLUDED.url, updated_at=NOW();" \
         "$(printf '%s' "$url" | sed "s/'/''/g")")
     if psql -v ON_ERROR_STOP=1 -c "$sql" >/dev/null 2>&1; then
-        log "wrote URL to postgres funnel_url table"
+        log "wrote URL to postgres funnel_url table (last-reconnect timestamp refreshed)"
     else
         log "psql upsert failed (db unreachable or schema missing — migration 010 not yet applied?)"
     fi
@@ -195,32 +207,46 @@ publish_to_postgres() {
 
 publish_url() {
     local url="$1"
-    log "discovered URL: $url"
+    log "publishing stable URL: $url"
     publish_to_file "$url"
     publish_to_postgres "$url"
 }
 
+verify_ssh_key_present() {
+    if [ "$FUNNEL_SKIP_KEY_CHECK" = "1" ] || [ "$FUNNEL_SKIP_KEY_CHECK" = "true" ]; then
+        return 0
+    fi
+    if [ -n "$FUNNEL_FAKE_URL" ]; then
+        return 0
+    fi
+    if [ ! -f "$LHR_SSH_KEY_PATH_INSIDE" ]; then
+        err "funnel: SSH key not found at $LHR_SSH_KEY_PATH_INSIDE — register key at $LHR_DASHBOARD_URL and drop private key on VPS"
+        return 1
+    fi
+    return 0
+}
+
 build_ssh_args() {
+    local host port
+    while IFS= read -r line; do
+        if [ -z "${host:-}" ]; then
+            host="$line"
+        else
+            port="$line"
+        fi
+    done < <(split_local_target "$LHR_LOCAL_TARGET")
+    local forward_spec="${LHR_HOSTNAME}:80:${host}:${port}"
     local -a args=(
         -o "ServerAliveInterval=${FUNNEL_SERVER_ALIVE_INTERVAL}"
+        -o "ServerAliveCountMax=${FUNNEL_SERVER_ALIVE_COUNT_MAX}"
         -o ExitOnForwardFailure=yes
         -o StrictHostKeyChecking=accept-new
+        -o IdentitiesOnly=yes
+        -i "$LHR_SSH_KEY_PATH_INSIDE"
+        -R "$forward_spec"
+        -N
+        "${LHR_REMOTE_USER%@*}@${LHR_REMOTE_HOST}"
     )
-    local remote_user="${FUNNEL_REMOTE_USER}"
-    local forward_spec="80:${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}"
-
-    if [ -n "$FUNNEL_SSH_KEY_PATH" ]; then
-        args+=( -o IdentitiesOnly=yes -i "$FUNNEL_SSH_KEY_PATH" )
-        if [ "$FUNNEL_REMOTE_USER" = "nokey" ]; then
-            remote_user="localhost.run"
-        fi
-    fi
-
-    if [ -n "$FUNNEL_CUSTOM_DOMAIN" ]; then
-        forward_spec="${FUNNEL_CUSTOM_DOMAIN}:80:${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}"
-    fi
-
-    args+=( -R "$forward_spec" "${remote_user}@${FUNNEL_REMOTE_HOST}" )
     printf '%s\n' "${args[@]}"
 }
 
@@ -240,46 +266,38 @@ EOF
     while IFS= read -r line; do
         ssh_args+=( "$line" )
     done < <(build_ssh_args)
-    exec ssh "${ssh_args[@]}"
+    if ! ssh "${ssh_args[@]}"; then
+        local rc=$?
+        err "funnel: ssh exited $rc — if this looks like an auth failure, register the public key at $LHR_DASHBOARD_URL"
+        return $rc
+    fi
 }
 
 run_session_and_capture() {
-    local published=0
-    local line
-    while IFS= read -r line; do
-        printf '%s\n' "$line"
-        if [ "$published" -eq 0 ]; then
-            local match
-            match=$(printf '%s' "$line" | grep -oE "$LHR_REGEX" | head -n1 || true)
-            if [ -n "$match" ]; then
-                publish_url "$match"
-                published=1
-                if [ "$FUNNEL_ONESHOT" = "1" ] || [ "$FUNNEL_ONESHOT" = "true" ]; then
-                    return 0
-                fi
-            fi
-        fi
-    done < <(run_ssh_session 2>&1)
+    publish_url "$PUBLIC_URL"
+    if [ "$FUNNEL_ONESHOT" = "1" ] || [ "$FUNNEL_ONESHOT" = "true" ]; then
+        return 0
+    fi
+    run_ssh_session
 }
 
 resolve_tier_label() {
-    if [ -n "$FUNNEL_CUSTOM_DOMAIN" ] && [ -n "$FUNNEL_SSH_KEY_PATH" ]; then
-        printf 'custom-domain (%s)' "$FUNNEL_CUSTOM_DOMAIN"
-    elif [ -n "$FUNNEL_SSH_KEY_PATH" ]; then
-        printf 'ssh-key-stable'
-    elif [ -n "$FUNNEL_CUSTOM_DOMAIN" ]; then
-        printf 'custom-domain (no SSH key — likely misconfigured)'
-    else
-        printf 'anonymous-rotating'
-    fi
+    printf 'paid-plan-stable (%s)' "$LHR_HOSTNAME"
 }
 
 main() {
     if [ "$FUNNEL_DUMP_SSH_ARGS" = "1" ] || [ "$FUNNEL_DUMP_SSH_ARGS" = "true" ]; then
+        if ! verify_ssh_key_present; then
+            FUNNEL_SKIP_KEY_CHECK=1 build_ssh_args
+            return 0
+        fi
         build_ssh_args
         return 0
     fi
-    log "starting funnel sidecar (local=${FUNNEL_LOCAL_HOST}:${FUNNEL_LOCAL_PORT}, remote=${FUNNEL_REMOTE_USER}@${FUNNEL_REMOTE_HOST}, tier=$(resolve_tier_label))"
+    if ! verify_ssh_key_present; then
+        return 1
+    fi
+    log "starting funnel sidecar (public=${PUBLIC_URL}, target=${LHR_LOCAL_TARGET}, remote=${LHR_REMOTE_USER%@*}@${LHR_REMOTE_HOST}, tier=$(resolve_tier_label))"
     while true; do
         run_session_and_capture || true
         if [ "$FUNNEL_ONESHOT" = "1" ] || [ "$FUNNEL_ONESHOT" = "true" ]; then

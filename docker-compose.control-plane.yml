@@ -118,22 +118,19 @@ services:
     mem_reservation: 128m
     command: ["control-plane"]
 
-  # ─── (Optional) funnel sidecar — localhost.run reverse SSH tunnel ─────────
+  # ─── funnel sidecar — localhost.run paid-plan reverse SSH tunnel ─────────
   #
-  # Profile-gated behind `--profile funnel` — the default
-  # `docker compose -f docker-compose.control-plane.yml up` is byte-equivalent
-  # to v4.4 (no sidecar). Operators opt in with
-  # `docker compose -f docker-compose.control-plane.yml --profile funnel up -d`.
+  # Profile-gated behind `--profile funnel`. v6.0 paid-plan replacement
+  # of the v5.0 free-tier sidecar — the URL is STABLE
+  # (whilly-orchestrator.lhr.rocks by default; no <random> rotation).
   #
-  # Holds an outbound SSH reverse-tunnel against `nokey@localhost.run`
-  # (free anonymous tier) and publishes the assigned
-  # `https://<random>.lhr.life` URL into:
-  #   1. Postgres `funnel_url` singleton table (primary; migration 010).
-  #   2. Shared-volume file `/funnel/url.txt` (fallback).
-  # Auto-reconnects with exponential backoff on disconnect. See
-  # `Dockerfile.funnel`, `scripts/funnel/run.sh`,
-  # `docs/Deploy-M2.md` § Topology B, and `docs/Distributed-Setup.md`
-  # § "Two-host via localhost.run".
+  # Auth: SSH key registered in the operator's localhost.run dashboard
+  # (https://localhost.run/dashboard/ssh-keys/, organisation
+  # 8f6cc6d6-26a7-422a-86a1-8d5834a07829) and bind-mounted from the
+  # host into the container at /etc/whilly-funnel/ssh-key:ro.
+  #
+  # See `Dockerfile.funnel`, `scripts/funnel/run.sh`, AGENTS.md
+  # § "Funnel URL hygiene" for the operator walkthrough.
   funnel:
     build:
       context: .
@@ -147,25 +144,18 @@ services:
       control-plane:
         condition: service_healthy
     environment:
-      FUNNEL_LOCAL_HOST: control-plane
-      FUNNEL_LOCAL_PORT: "8000"
-      FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
+      LHR_HOSTNAME: "${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
+      LHR_REMOTE_USER: "${LHR_REMOTE_USER:-plan@localhost.run}"
+      LHR_REMOTE_HOST: "${LHR_REMOTE_HOST:-localhost.run}"
+      LHR_LOCAL_TARGET: "${LHR_LOCAL_TARGET:-control-plane:8000}"
+      FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-30}"
+      FUNNEL_SERVER_ALIVE_COUNT_MAX: "${FUNNEL_SERVER_ALIVE_COUNT_MAX:-3}"
       FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
       FUNNEL_URL_FILE: /funnel/url.txt
-      # M3 (m3-funnel-stable-url-via-ssh-key): when these are set the
-      # sidecar switches from the free anonymous tier to a stable URL
-      # via an account-bound SSH key (and optionally a paid custom
-      # domain). Default empty preserves the v4.5 anonymous-rotating
-      # behaviour byte-for-byte. To enable the SSH-key tier, set
-      # FUNNEL_SSH_KEY_PATH inside the container (e.g. /keys/funnel_id)
-      # and bind-mount your registered key onto that path via a compose
-      # override or `-v` flag — see
-      # docs/Distributed-Setup.md § "Stable URL via SSH key (M3)".
-      FUNNEL_SSH_KEY_PATH: "${FUNNEL_SSH_KEY_PATH:-}"
-      FUNNEL_CUSTOM_DOMAIN: "${FUNNEL_CUSTOM_DOMAIN:-}"
       WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
     volumes:
       - funnel_url_volume:/funnel
+      - "${LHR_SSH_KEY_PATH:?must-be-set-on-VPS-see-AGENTS.md}:/etc/whilly-funnel/ssh-key:ro"
     # Mission §4 cap: ~32 MB image; allow 64 MB headroom for psql + ssh.
     mem_limit: 64m
     mem_reservation: 16m

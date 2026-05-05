@@ -6,7 +6,7 @@
 # docs/Deploy-M2.md § Topology B against a remote VPS:
 #
 #   1. Brings up control-plane + funnel sidecar on the VPS (compose
-#      profile=funnel) so the public *.lhr.life URL is published into
+#      profile=funnel) so the public *.lhr.rocks URL is published into
 #      the `funnel_url` table by the sidecar.
 #   2. Discovers that public URL via `psql` over SSH (so this script
 #      is hermetic — no scraping of stdout, no log parsing).
@@ -15,7 +15,7 @@
 #      plaintext bearer is captured into the per-owner credentials
 #      file under out/m2-cross-host-demo/.
 #   4. Imports a 6-task plan and starts three local workers (one per
-#      owner) that connect to the *public* lhr.life URL — exercising
+#      owner) that connect to the *public* lhr.rocks URL — exercising
 #      the full TLS chain + HTTP→HTTPS redirect surface of M2.
 #   5. Waits for the drain to begin, then live-revokes Alice via
 #      `whilly admin worker revoke <alice_worker_id>`. Asserts:
@@ -32,7 +32,7 @@
 #   The hermetic 3-worker contract is already covered by
 #   tests/integration/test_m2_cross_host_demo.py — that's the cheap
 #   pre-merge smoke. THIS script targets the validator's surface:
-#   real VPS, real lhr.life, real LE-prod cert, real memory budget.
+#   real VPS, real lhr.rocks, real LE-prod cert, real memory budget.
 #   It is intentionally SSH-anchored and never expected to run inside
 #   the in-memory pytest harness.
 #
@@ -132,8 +132,8 @@ ssh_run "cd '$VPS_DIR' && docker compose -f docker-compose.control-plane.yml --p
 ssh_run "cd '$VPS_DIR' && docker compose -f docker-compose.control-plane.yml ps" \
     | tee "$EVIDENCE_DIR/compose-ps.txt"
 
-# ── 2: discover the public lhr.life URL via psql ────────────────────────
-echo "[2/7] discovering public *.lhr.life URL from funnel_url table …"
+# ── 2: discover the public lhr.rocks URL via psql ────────────────────────
+echo "[2/7] discovering public *.lhr.rocks URL from funnel_url table …"
 PUBLIC_URL=""
 for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
     PUBLIC_URL=$(ssh_run "cd '$VPS_DIR' && docker compose -f docker-compose.control-plane.yml exec -T postgres \

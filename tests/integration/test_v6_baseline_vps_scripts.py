@@ -119,8 +119,10 @@ def test_up_invokes_compose_control_plane_yml(up_text: str) -> None:
     assert "docker-compose.control-plane.yml" in up_text
 
 
-def test_up_discovers_funnel_url_from_postgres(up_text: str) -> None:
-    assert "funnel_url" in up_text and "psql" in up_text
+def test_up_resolves_stable_url_from_lhr_hostname(up_text: str) -> None:
+    """v6.0 paid plan pins the URL — env-driven LHR_HOSTNAME, no postgres lookup."""
+    assert "LHR_HOSTNAME" in up_text
+    assert "https://${LHR_HOSTNAME}" in up_text
 
 
 def test_up_health_probe_through_public_url(up_text: str) -> None:

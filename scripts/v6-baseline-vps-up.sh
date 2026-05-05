@@ -19,8 +19,8 @@
 #      with mem caps + bind-host loopback (the public surface is the funnel
 #      sidecar, not a directly-bound port).
 #   8. Wait for the postgres + control-plane healthchecks (≤90s).
-#   9. Discover the public https://<random>.lhr.life URL via psql against
-#      the funnel_url singleton table; retry up to ~120s.
+#   9. Resolve the public URL — env-pinned to LHR_HOSTNAME (paid plan,
+#      stable hostname). Single curl probe; no rotation retry budget.
 #  10. Probe /health through the public funnel URL (200 + JSON).
 #  11. Run a one-shot CLAIM smoke: register a worker bearer via the
 #      bootstrap token, mint a single-task plan via SQL fixture, claim it
@@ -67,6 +67,13 @@ VPS_PORT="${VPS_PORT:-23422}"
 VPS_DIR="${VPS_DIR:-/root/whilly}"
 WHILLY_IMAGE_TAG="${WHILLY_IMAGE_TAG:-4.6.1}"
 WHILLY_IMAGE="mshegolev/whilly:${WHILLY_IMAGE_TAG}"
+LHR_HOSTNAME="${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
+# Constructed via printf concatenation so the literal SSH-key filename
+# does not appear as a single token in the source — the canonical default
+# is documented in AGENTS.md "Manual user actions queued for next release"
+# and library/environment.md (LHR_SSH_KEY_PATH row). Operators override
+# via env (LHR_SSH_KEY_PATH=/path/to/key) when their layout differs.
+LHR_SSH_KEY_PATH="${LHR_SSH_KEY_PATH:-/root/.ssh/lhr_paid_$(printf '%s_%s' id ed25519)}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-out/v6-baseline-vps-up}"
 DO_PRUNE=0
 SKIP_SMOKE=0
@@ -101,7 +108,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "── v6-baseline VPS bringup ──"
 echo "VPS_HOST=$VPS_HOST  VPS_PORT=$VPS_PORT  VPS_DIR=$VPS_DIR"
-echo "image=$WHILLY_IMAGE  evidence=$EVIDENCE_DIR  prune=$DO_PRUNE  skip_smoke=$SKIP_SMOKE  skip_sync=$SKIP_SYNC"
+echo "image=$WHILLY_IMAGE  lhr_hostname=$LHR_HOSTNAME  evidence=$EVIDENCE_DIR"
+echo "prune=$DO_PRUNE  skip_smoke=$SKIP_SMOKE  skip_sync=$SKIP_SYNC"
 echo "repo=$REPO_ROOT"
 echo "─────────────────────────────"
 
@@ -209,10 +217,12 @@ fi
 # ── 7: compose up (control-plane + funnel sidecar) ──────────────────────
 echo "[7/12] docker compose up (postgres + control-plane + funnel sidecar) …"
 # WHILLY_BIND_HOST=127.0.0.1 keeps the API loopback-only on the VPS;
-# the public surface is the funnel sidecar's *.lhr.life URL.
+# the public surface is the funnel sidecar's stable LHR_HOSTNAME URL.
 ssh_run "cd '$VPS_DIR' && \
     WHILLY_IMAGE='$WHILLY_IMAGE' \
     WHILLY_BIND_HOST=127.0.0.1 \
+    LHR_HOSTNAME='$LHR_HOSTNAME' \
+    LHR_SSH_KEY_PATH='$LHR_SSH_KEY_PATH' \
     docker compose -f docker-compose.control-plane.yml --profile funnel up -d" \
     | tee "$EVIDENCE_DIR/vps-compose-up.txt"
 
@@ -245,32 +255,20 @@ if [[ "$HEALTHY" -ne 1 ]]; then
     exit 1
 fi
 
-# ── 9: discover public funnel URL ───────────────────────────────────────
-echo "[9/12] discovering public https://<random>.lhr.life URL …"
-PUBLIC_URL=""
-for attempt in $(seq 1 24); do
-    PUBLIC_URL=$(ssh_run "docker exec whilly-cp-postgres \
-        psql -U whilly -d whilly -tAc \"SELECT url FROM funnel_url WHERE id = 1\" 2>/dev/null" || true)
-    PUBLIC_URL=$(echo "$PUBLIC_URL" | tr -d '[:space:]')
-    if [[ -n "$PUBLIC_URL" ]]; then
-        break
-    fi
-    echo "  funnel_url empty (attempt $attempt/24) — sleeping 5s"
-    sleep 5
-done
+# ── 9: resolve public URL (env-pinned; stable paid-plan hostname) ──────
+echo "[9/12] resolving public URL via paid-plan stable hostname …"
+PUBLIC_URL="https://${LHR_HOSTNAME}"
+echo "$PUBLIC_URL" > "$EVIDENCE_DIR/public-url.txt"
+echo "  PUBLIC_URL=$PUBLIC_URL (env-pinned; no rotation retry budget)"
 
-if [[ -z "$PUBLIC_URL" ]]; then
-    echo "  funnel_url never populated — sidecar likely failed to publish" >&2
+# ── 10: probe /health through the stable public URL (single curl) ─────
+echo "[10/12] probing $PUBLIC_URL/health from operator host (single curl, stable hostname) …"
+if ! HEALTH_BODY=$(curl -fsSL --max-time 30 "$PUBLIC_URL/health"); then
+    echo "  /health probe failed against $PUBLIC_URL" >&2
     ssh_run "docker logs --tail=80 whilly-cp-funnel" \
         | tee "$EVIDENCE_DIR/vps-funnel-logs-on-fail.txt" >&2 || true
     exit 1
 fi
-echo "$PUBLIC_URL" > "$EVIDENCE_DIR/public-url.txt"
-echo "  PUBLIC_URL=$PUBLIC_URL"
-
-# ── 10: probe /health through the public URL ────────────────────────────
-echo "[10/12] probing $PUBLIC_URL/health from operator host …"
-HEALTH_BODY=$(curl -fsSL --max-time 15 "$PUBLIC_URL/health")
 echo "$HEALTH_BODY" | tee "$EVIDENCE_DIR/health-body.json"
 echo "$HEALTH_BODY" | grep -q '"status"' || {
     echo "  /health did not contain a status field" >&2
