@@ -33,7 +33,7 @@ deployment artifacts that make a multi-host control-plane possible.
 ## Contents
 
 1. [Prerequisites](#prerequisites)
-2. [Two-host via localhost.run (M2 in progress, not yet shipped)](#two-host-via-localhostrun-m2-in-progress-not-yet-shipped)
+2. [Two-host via localhost.run](#two-host-via-localhostrun)
 3. [VPS A — control-plane](#vps-a--control-plane)
 4. [Laptop B / C — workers](#laptop-b--c--workers)
 5. [Verifying the cluster](#verifying-the-cluster)
