@@ -111,6 +111,8 @@ Commands:
   admin       Operator CLI (`admin bootstrap mint|revoke|list`,
               `admin worker revoke`).
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
+  pr-feedback Poll open PRs for a plan and emit review events
+              (`pr-feedback poll --plan <id>`).
 
 Run `whilly <command> --help` for command-specific options.
 
@@ -384,6 +386,12 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.forge.intake import run_forge_command
 
         return run_forge_command(rest)
+    if cmd == "pr-feedback":
+        # Lazy import keeps ``whilly --help`` fast — the pr_feedback
+        # module transitively imports asyncpg via TaskRepository.
+        from whilly.cli import pr_feedback as _pr_feedback_module
+
+        return _pr_feedback_module.run_pr_feedback_command(rest)
     if cmd == "worker":
         # Sub-dispatch ``whilly worker register ...`` and
         # ``whilly worker connect ...`` to their handlers before falling
