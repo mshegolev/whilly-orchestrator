@@ -75,6 +75,16 @@ deployment artifacts that make a multi-host control-plane possible.
 
 Two install closures cover the worker side. Pick whichever fits the host:
 
+> **⚠️ Python 3.12+ required for the native install.**
+> `pip install whilly-orchestrator==4.4.0` (and every later release)
+> will fail on Python 3.10 / 3.11 with
+> `Could not find a version that satisfies the requirement
+> whilly-orchestrator==4.4.0`. Run `python3.12 -m pip install
+> whilly-orchestrator` on a 3.12+ interpreter, or pin via
+> `pyenv install 3.12 && pyenv local 3.12` before `pip install`.
+> The Docker install path below is unaffected — the image already
+> ships a 3.12 runtime.
+
 ```bash
 # Python install (no Docker on the laptop required)
 pip install 'whilly-orchestrator[worker]'

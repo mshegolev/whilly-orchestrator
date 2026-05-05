@@ -120,12 +120,15 @@ alembic upgrade head
 ### 5. Re-import your plan
 
 ```bash
+export PLAN_FILE=tasks.json    # placeholder — your plan json path
+export PLAN_ID=demo            # placeholder — the plan id
+
 # Old: whilly --tasks tasks.json
 # New:
-whilly plan import path/to/tasks.json
+whilly plan import "$PLAN_FILE"
 
 # Verify
-whilly plan show <plan_id>     # ASCII DAG of tasks + dependencies
+whilly plan show "$PLAN_ID"    # ASCII DAG of tasks + dependencies
 ```
 
 The v4 plan JSON schema is mostly the same as v3's. Required task fields:
@@ -138,8 +141,10 @@ task id.
 ### 6. Run
 
 ```bash
+export PLAN_ID=demo            # placeholder — the plan id
+
 # Local (control plane embedded in worker — single process)
-whilly run --plan <plan_id>
+whilly run --plan "$PLAN_ID"
 
 # Distributed
 # a) on the control-plane box
@@ -150,13 +155,14 @@ uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
 # b) on each worker box
 whilly-worker --connect https://control.example.com:8000 \
               --token "$WHILLY_WORKER_TOKEN" \
-              --plan <plan_id>
+              --plan "$PLAN_ID"
 ```
 
 ### 7. Watch progress
 
 ```bash
-whilly dashboard --plan <plan_id>     # Rich Live TUI
+export PLAN_ID=demo                   # placeholder — the plan id
+whilly dashboard --plan "$PLAN_ID"    # Rich Live TUI
 ```
 
 ## Env-var mapping

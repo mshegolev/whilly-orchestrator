@@ -188,12 +188,13 @@ per-operator tokens are unaffected.
 **If an admin bootstrap-token leaked:**
 
 ```bash
+export LEAKED_PREFIX=abc123def456    # placeholder — token_hash prefix of leaked row
 # Find the leaked admin row:
 whilly admin bootstrap list
 # Note the token_hash prefix of the leaked admin row.
 
 # Revoke it:
-whilly admin bootstrap revoke <leaked-prefix>
+whilly admin bootstrap revoke "$LEAKED_PREFIX"
 ```
 
 > If you don't know the exact token prefix (e.g. you only have the
