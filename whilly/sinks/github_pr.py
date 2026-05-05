@@ -33,6 +33,20 @@ DEFAULT_GIT_BIN = "git"
 DEFAULT_BASE_BRANCH = "main"
 
 _ISSUE_URL_RE = re.compile(r"github\.com/[^/]+/[^/]+/issues/(\d+)", re.IGNORECASE)
+_PR_URL_RE = re.compile(r"github\.com/[^/]+/[^/]+/pull/(\d+)", re.IGNORECASE)
+
+
+def _extract_pr_number_from_url(url: str) -> int | None:
+    """Return the integer PR number from a ``…/pull/<n>`` URL, or ``None``."""
+    if not url:
+        return None
+    m = _PR_URL_RE.search(url)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -43,6 +57,11 @@ class PRResult:
     pr_url: str = ""
     branch: str = ""
     reason: str = ""  # populated on failure
+    pr_number: int | None = None
+    head_sha: str | None = None
+    failure_mode: str = ""  # one of "git_push_failed", "git_push_timeout", "gh_pr_create_failed", "gh_pr_create_timeout", "worktree_missing"
+    push_exit_code: int | None = None
+    gh_exit_code: int | None = None
 
 
 @dataclass
@@ -220,17 +239,33 @@ def open_pr_for_task(
     body = render_pr_body(task, cost_usd=cost_usd, duration_s=duration_s, log_file=log_file)
 
     if not worktree_path.exists():
-        return PRResult(ok=False, branch=branch, reason=f"worktree not found: {worktree_path}")
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason=f"worktree not found: {worktree_path}",
+            failure_mode="worktree_missing",
+        )
 
     # 1) push
     push_cmd = [git_bin, "push", "origin", f"HEAD:{branch}", "--force-with-lease"]
     try:
         push_proc = _run(push_cmd, cwd=worktree_path, timeout=push_timeout)
     except subprocess.TimeoutExpired:
-        return PRResult(ok=False, branch=branch, reason="git push timeout")
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason="git push timeout",
+            failure_mode="git_push_timeout",
+        )
     if push_proc.returncode != 0:
         msg = (push_proc.stderr or push_proc.stdout or "").strip().splitlines()[-1:] or ["unknown"]
-        return PRResult(ok=False, branch=branch, reason=f"git push failed: {msg[0]}")
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason=f"git push failed: {msg[0]}",
+            failure_mode="git_push_failed",
+            push_exit_code=int(push_proc.returncode),
+        )
 
     # 2) gh pr create
     pr_cmd = [
@@ -252,23 +287,45 @@ def open_pr_for_task(
     try:
         pr_proc = _run(pr_cmd, cwd=worktree_path, timeout=pr_timeout)
     except subprocess.TimeoutExpired:
-        return PRResult(ok=False, branch=branch, reason="gh pr create timeout")
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason="gh pr create timeout",
+            failure_mode="gh_pr_create_timeout",
+        )
 
     if pr_proc.returncode != 0:
         # If a PR already exists we treat that as ok and try to extract its URL via gh pr view.
         stderr = (pr_proc.stderr or "").strip()
         if "already exists" in stderr.lower():
-            view_proc = _run([gh_bin, "pr", "view", branch, "--json", "url"], cwd=worktree_path)
+            view_proc = _run(
+                [gh_bin, "pr", "view", branch, "--json", "url,number,headRefOid"],
+                cwd=worktree_path,
+            )
             if view_proc.returncode == 0:
                 try:
                     import json
 
-                    url = json.loads(view_proc.stdout).get("url", "")
-                    return PRResult(ok=True, pr_url=url, branch=branch, reason="pr already existed")
+                    parsed = json.loads(view_proc.stdout)
+                    return PRResult(
+                        ok=True,
+                        pr_url=parsed.get("url", ""),
+                        branch=branch,
+                        reason="pr already existed",
+                        pr_number=int(parsed["number"]) if parsed.get("number") is not None else None,
+                        head_sha=parsed.get("headRefOid") or None,
+                    )
                 except Exception:  # noqa: BLE001
                     return PRResult(ok=True, pr_url="", branch=branch, reason="pr already existed")
         msg = stderr.splitlines()[-1:] or ["unknown"]
-        return PRResult(ok=False, branch=branch, reason=f"gh pr create failed: {msg[0]}")
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason=f"gh pr create failed: {msg[0]}",
+            failure_mode="gh_pr_create_failed",
+            gh_exit_code=int(pr_proc.returncode),
+        )
 
     pr_url = (pr_proc.stdout or "").strip().splitlines()[-1] if pr_proc.stdout else ""
-    return PRResult(ok=True, pr_url=pr_url, branch=branch)
+    pr_number = _extract_pr_number_from_url(pr_url)
+    return PRResult(ok=True, pr_url=pr_url, branch=branch, pr_number=pr_number)

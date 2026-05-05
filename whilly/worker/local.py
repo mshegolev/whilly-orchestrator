@@ -255,6 +255,7 @@ async def run_local_worker(
     idle_wait: float = DEFAULT_IDLE_WAIT,
     max_iterations: int | None = None,
     stop: asyncio.Event | None = None,
+    post_complete_hook: Callable[[Task], Awaitable[None]] | None = None,
 ) -> WorkerStats:
     """Run the local worker loop against ``plan.id`` for ``worker_id``.
 
@@ -413,6 +414,16 @@ async def run_local_worker(
                 continue
             completed += 1
             log.info("worker=%s task=%s → DONE", worker_id, running.id)
+            if post_complete_hook is not None:
+                try:
+                    await post_complete_hook(running)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "worker=%s task=%s: post_complete_hook raised (%s); swallowing",
+                        worker_id,
+                        running.id,
+                        exc,
+                    )
         else:
             reason = _build_fail_reason(result)
             try:

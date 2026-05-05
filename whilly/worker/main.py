@@ -87,11 +87,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Final
 
 from whilly.adapters.db.repository import TaskRepository
-from whilly.core.models import Plan, WorkerId
+from whilly.core.models import Plan, Task, WorkerId
 from whilly.worker.local import (
     DEFAULT_IDLE_WAIT,
     RunnerCallable,
@@ -262,6 +262,7 @@ async def run_worker(
     max_iterations: int | None = None,
     install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
+    post_complete_hook: Callable[[Task], Awaitable[None]] | None = None,
 ) -> WorkerStats:
     """Run :func:`run_local_worker` paired with heartbeat + signal handlers.
 
@@ -327,6 +328,7 @@ async def run_worker(
                 idle_wait=idle_wait,
                 max_iterations=max_iterations,
                 stop=stop,
+                post_complete_hook=post_complete_hook,
             )
         finally:
             stop.set()
