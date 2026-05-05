@@ -2987,6 +2987,89 @@ class TaskRepository:
         )
         return int(new_id)
 
+    async def list_open_pull_requests(self, plan_id: PlanId) -> list[dict[str, Any]]:
+        """Return every ``pull_requests`` row for ``plan_id`` whose ``state='open'``.
+
+        Used by the M2 PR-feedback poller (mission
+        ``m2-pr-review-feedback``, feature
+        ``m2-pr-feedback-poller``) to enumerate the PRs that still
+        warrant a ``gh pr view``/``gh api …/reviews``/``…/comments``
+        cycle. Rows are returned as plain dicts so the poller can be
+        unit-tested with a fake repo without depending on
+        :class:`asyncpg.Record`. Ordered by ``id`` ascending so a poll
+        cycle is deterministic across restarts.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, plan_id, task_id, pr_number, pr_url, branch, head_sha,
+                       state, review_decision, last_seen_review_id,
+                       last_seen_check_run_id, last_synced_at
+                FROM pull_requests
+                WHERE plan_id = $1 AND state = 'open'
+                ORDER BY id
+                """,
+                plan_id,
+            )
+        return [dict(row) for row in rows]
+
+    async def update_pull_request_state(self, pr_id: int, state: str) -> None:
+        """Update ``pull_requests.state`` (and ``updated_at``) for ``pr_id``.
+
+        Used by the M2 poller when ``gh pr view`` reports
+        ``state='MERGED'`` so the row no longer matches the
+        ``state='open'`` filter on the next poll cycle (VAL-PR-024
+        — ``pr.merged`` event must not re-emit on subsequent polls).
+        Permissible values are constrained at the DB layer by the
+        ``ck_pull_requests_state_valid`` CHECK; the application layer
+        rejects unknown states by deferring to the constraint rather
+        than re-implementing the closed set here.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pull_requests SET state = $1, updated_at = NOW() WHERE id = $2",
+                state,
+                pr_id,
+            )
+
+    async def advance_pull_request_cursor(
+        self,
+        pr_id: int,
+        *,
+        last_seen_review_id: int | None,
+        last_seen_check_run_id: int | None,
+    ) -> None:
+        """Advance the per-PR poll cursor and stamp ``last_synced_at``.
+
+        Called once per successfully-polled PR row at the end of each
+        poll cycle (M2 ``pr-feedback-poller``). The cursor advance is
+        the idempotency hinge for VAL-PR-012: after the first
+        successful poll, ``last_seen_review_id`` is the highest review
+        id observed by ``gh api …/reviews`` so the next cycle can
+        skip review rows it already emitted events for. Identical
+        semantics for ``last_seen_check_run_id`` against the check-run
+        rollup. Both arguments must be supplied — pass the
+        pre-existing column value to leave a cursor unchanged for
+        ``None`` / empty responses. ``last_synced_at`` always advances
+        to ``NOW()`` so an operator can answer "when did the poller
+        last touch this PR?" with a single ``SELECT`` regardless of
+        whether any new reviews / checks were observed in the cycle.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE pull_requests
+                SET last_seen_review_id = $1,
+                    last_seen_check_run_id = $2,
+                    last_synced_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $3
+                """,
+                last_seen_review_id,
+                last_seen_check_run_id,
+                pr_id,
+            )
+
     async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
         """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).
 
