@@ -74,6 +74,7 @@ import socket
 import sys
 import uuid
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Final
 
 from whilly.adapters.db import TaskRepository, close_pool, create_pool
@@ -81,6 +82,10 @@ from whilly.adapters.runner import run_task
 from whilly.audit import JsonlEventSink
 from whilly.cli.plan import _select_plan_with_tasks
 from whilly.core.models import WorkerId
+from whilly.sinks.post_complete_pr_hook import (
+    is_auto_open_pr_enabled,
+    make_post_complete_hook,
+)
 from whilly.worker import (
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_IDLE_WAIT,
@@ -341,6 +346,22 @@ async def _async_run(
         # are logged but never raised, so the orchestrator stays
         # functional on read-only filesystems / disk-full hosts.
         repo = TaskRepository(pool, jsonl_sink=JsonlEventSink())
+
+        # Post-COMPLETE PR opener hook (M2, VAL-PR-005..008 +
+        # VAL-PR-022 / VAL-PR-023). Only built when
+        # ``WHILLY_AUTO_OPEN_PR=1`` is set; otherwise the worker stays
+        # bit-for-bit equivalent to the v4.4 baseline. The hook itself
+        # additionally short-circuits when ``plan.github_issue_ref`` is
+        # NULL — the env-var gate is the cheap pre-check; the
+        # github_issue_ref guard is the per-plan one.
+        post_complete_hook = None
+        if is_auto_open_pr_enabled():
+            post_complete_hook = make_post_complete_hook(
+                repo,
+                plan_id=plan.id,
+                worktree_path=Path.cwd(),
+            )
+
         return await run_worker(
             repo,
             runner,
@@ -350,6 +371,7 @@ async def _async_run(
             heartbeat_interval=(heartbeat_interval if heartbeat_interval is not None else DEFAULT_HEARTBEAT_INTERVAL),
             max_iterations=max_iterations,
             install_signal_handlers=install_signal_handlers,
+            post_complete_hook=post_complete_hook,
         )
     finally:
         await close_pool(pool)

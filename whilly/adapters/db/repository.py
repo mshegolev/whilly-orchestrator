@@ -92,6 +92,7 @@ __all__ = [
     "PR_ITERATION_REQUESTED_EVENT_TYPE",
     "PR_MERGED_EVENT_TYPE",
     "PR_OPENED_EVENT_TYPE",
+    "PR_OPEN_FAILED_EVENT_TYPE",
     "PR_REVIEW_APPROVED_EVENT_TYPE",
     "PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE",
     "TASK_CREATED_EVENT_TYPE",
@@ -201,6 +202,7 @@ PR_REVIEW_APPROVED_EVENT_TYPE: str = "pr.review.approved"
 PR_ITERATION_REQUESTED_EVENT_TYPE: str = "pr.iteration.requested"
 PR_ITERATION_COMPLETED_EVENT_TYPE: str = "pr.iteration.completed"
 PR_MERGED_EVENT_TYPE: str = "pr.merged"
+PR_OPEN_FAILED_EVENT_TYPE: str = "pr.open_failed"
 
 # Closed-set tuple over the M2 PR event taxonomy (mission
 # ``m2-pr-review-feedback``). :meth:`TaskRepository.emit_pr_event`
@@ -218,6 +220,7 @@ PR_EVENT_TYPES: tuple[str, ...] = (
     PR_ITERATION_REQUESTED_EVENT_TYPE,
     PR_ITERATION_COMPLETED_EVENT_TYPE,
     PR_MERGED_EVENT_TYPE,
+    PR_OPEN_FAILED_EVENT_TYPE,
 )
 
 
@@ -2916,6 +2919,73 @@ class TaskRepository:
             event_id,
         )
         return int(event_id)
+
+    async def get_plan_github_issue_ref(self, plan_id: PlanId) -> str | None:
+        """Return ``plans.github_issue_ref`` for ``plan_id`` (or ``None``).
+
+        Used by the post-COMPLETE PR opener hook (M2) to gate hook
+        firing on the canonical issue ref the forge intake recorded
+        when the plan was created. ``None`` is returned both when the
+        plan does not exist and when the row exists but
+        ``github_issue_ref`` is ``NULL`` — the hook treats both as
+        "no issue ref" and skips opening a PR (VAL-PR-008).
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT github_issue_ref FROM plans WHERE id = $1",
+                plan_id,
+            )
+        if row is None:
+            return None
+        ref = row["github_issue_ref"]
+        return None if ref is None else str(ref)
+
+    async def insert_pull_request(
+        self,
+        *,
+        plan_id: PlanId,
+        task_id: TaskId,
+        pr_number: int,
+        pr_url: str,
+        branch: str,
+        head_sha: str | None,
+        state: str = "open",
+    ) -> int:
+        """Insert one ``pull_requests`` row and return the new ``id``.
+
+        Used by the post-COMPLETE PR opener hook (VAL-PR-005). The row's
+        ``state`` defaults to ``"open"``; failure paths that opt to
+        record a row instead of skipping it pass ``state="failed"``.
+        Composite UNIQUE on ``(plan_id, pr_number)`` rejects accidental
+        duplicates from a retry loop with a SQL ``UniqueViolationError``
+        — callers are expected to log and continue rather than
+        re-raising.
+        """
+        async with self._pool.acquire() as conn:
+            new_id = await conn.fetchval(
+                """
+                INSERT INTO pull_requests
+                    (plan_id, task_id, pr_number, pr_url, branch, head_sha, state)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id
+                """,
+                plan_id,
+                task_id,
+                pr_number,
+                pr_url,
+                branch,
+                head_sha,
+                state,
+            )
+        logger.info(
+            "insert_pull_request: plan=%s task=%s pr_number=%s state=%s id=%s",
+            plan_id,
+            task_id,
+            pr_number,
+            state,
+            new_id,
+        )
+        return int(new_id)
 
     async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
         """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).
