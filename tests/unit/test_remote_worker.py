@@ -44,6 +44,7 @@ import pytest
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import VersionConflictError
+from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON
 from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON
 from whilly.worker import remote as worker_remote
@@ -423,6 +424,38 @@ async def test_prompt_injection_blocks_before_remote_runner_and_sends_detail(fak
     assert detail is not None
     assert detail["matched_marker"] == "</system>"
     assert detail["task_id"] == "T-remote-prompt"
+    assert detail["plan_id"] == PLAN_ID
+
+
+async def test_shell_deny_blocks_before_remote_runner_and_sends_detail(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    claimed = _make_task("T-remote-shell", status=TaskStatus.CLAIMED, version=1)
+    claimed = replace(claimed, description="git push --force origin main")
+    failed = replace(claimed, status=TaskStatus.FAILED, version=2)
+
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:  # pragma: no cover
+        raise AssertionError("shell deny-list must block before remote runner is called")
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+    )
+
+    assert stats.failed == 1
+    assert client.complete_calls == []
+    assert client.fail_calls == [("T-remote-shell", WORKER_ID, 1, SHELL_COMMAND_FAIL_REASON)]
+    detail = client.fail_details[0]
+    assert detail is not None
+    assert detail["pattern_matched"] == "git-force-push"
+    assert detail["task_id"] == "T-remote-shell"
     assert detail["plan_id"] == PLAN_ID
 
 

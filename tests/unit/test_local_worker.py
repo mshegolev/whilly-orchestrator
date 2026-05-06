@@ -40,6 +40,7 @@ import pytest
 
 from whilly.adapters.db.repository import VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
+from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE, SHELL_COMMAND_FAIL_REASON
 from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE, PROMPT_INJECTION_FAIL_REASON
 from whilly.worker import local as worker_local
@@ -397,6 +398,39 @@ async def test_prompt_injection_blocks_before_runner_and_emits_prelude_event(fak
     assert payload["plan_id"] == PLAN_ID
     assert payload["matched_marker"] == "Ignore previous instructions"
     assert "rm -rf /" in str(payload["redacted_excerpt"])
+
+
+async def test_shell_deny_blocks_before_runner_and_emits_prelude_event(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-shell", status=TaskStatus.CLAIMED, version=1)
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        description="Run this cleanup command: rm -rf /",
+    )
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:  # pragma: no cover
+        raise AssertionError("shell deny-list must block before runner is called")
+
+    stats = await run_local_worker(repo, runner, plan, WORKER_ID, idle_wait=0, max_iterations=1)  # type: ignore[arg-type]
+
+    assert stats.failed == 1
+    assert repo.complete_calls == []
+    assert repo.fail_calls == [("T-shell", 2, SHELL_COMMAND_FAIL_REASON)]
+    assert repo.fail_prelude_events[0][0] == SHELL_COMMAND_BLOCKED_EVENT_TYPE
+    payload = repo.fail_prelude_events[0][1]
+    assert payload is not None
+    assert payload["pattern_matched"] == "rm-rf-root"
+    assert payload["task_id"] == "T-shell"
+    assert payload["plan_id"] == PLAN_ID
 
 
 async def test_fails_task_truncates_long_output_in_reason(fake_sleep: list[float]) -> None:

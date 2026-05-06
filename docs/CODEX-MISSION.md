@@ -64,12 +64,11 @@ Status:
 
 ## Pending Feature Queue
 
-1. `a2-shell-deny-list`
-2. `a3-a4-sandbox-and-secrets-lint`
-3. `d1-d3-backup-tag-and-auto-restore`
-4. `d2-branch-protection-preflight`
-5. `d4-smart-rollback-cli`
-6. `misc-v6-htmx-cdn-inline-or-route-stub`
+1. `a3-a4-sandbox-and-secrets-lint`
+2. `d1-d3-backup-tag-and-auto-restore`
+3. `d2-branch-protection-preflight`
+4. `d4-smart-rollback-cli`
+5. `misc-v6-htmx-cdn-inline-or-route-stub`
 
 Completed baseline/support features include VPS topology bringup, v6 fixture harness,
 VPS doctor, paid localhost.run funnel migration, funnel resilience, tunnel-stability
@@ -82,6 +81,9 @@ Completed Block A features:
   `BEGIN-WHILLY-DESC-<nonce16>` / `END-WHILLY-DESC-<nonce16>`, baseline plus
   `WHILLY_PROMPT_DENY_PATTERNS` markers are blocked before runner invocation,
   and blocked tasks emit `prompt_injection_blocked` immediately before `FAIL`.
+- `a2-shell-deny-list`: task-authored command surfaces are scanned before
+  runner invocation with baseline plus `WHILLY_SHELL_DENY_PATTERNS` patterns;
+  blocked tasks emit `shell_command_blocked` immediately before `FAIL`.
 
 ## Hard Boundaries
 
