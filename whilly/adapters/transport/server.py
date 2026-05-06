@@ -440,7 +440,11 @@ def _read_preview(path: Path | None, *, raw_jsonl: bool = False) -> tuple[str, s
     if raw_jsonl:
         lines = text.splitlines()
         text = "\n".join(lines[:LLM_OPS_UI_MAX_RAW_LINES])
-        suffix = f"\n\n... truncated after {LLM_OPS_UI_MAX_RAW_LINES} lines ..." if len(lines) > LLM_OPS_UI_MAX_RAW_LINES else ""
+        suffix = (
+            f"\n\n... truncated after {LLM_OPS_UI_MAX_RAW_LINES} lines ..."
+            if len(lines) > LLM_OPS_UI_MAX_RAW_LINES
+            else ""
+        )
         return str(path), text + suffix
     if len(text) > LLM_OPS_UI_MAX_PREVIEW_CHARS:
         return str(path), text[:LLM_OPS_UI_MAX_PREVIEW_CHARS] + "\n\n... truncated ..."
@@ -1958,8 +1962,8 @@ def create_app(
             if not rows:
                 return _html_page(
                     f"LLM Ops - {task_id}",
-                    f"<p><a href=\"/llm-ops\">← all tasks</a></p><h1>{html.escape(task_id)}</h1>"
-                    "<p class=\"bad\">No LLM Ops events found for this task.</p>",
+                    f'<p><a href="/llm-ops">← all tasks</a></p><h1>{html.escape(task_id)}</h1>'
+                    '<p class="bad">No LLM Ops events found for this task.</p>',
                 )
 
             latest = _decode_json_value(rows[-1]["detail"]) or _decode_json_value(rows[-1]["payload"])
@@ -1984,7 +1988,7 @@ def create_app(
 <h1>LLM Ops: {html.escape(task_id)}</h1>
 <table>
   <thead><tr><th>Time</th><th>Event</th><th>Status</th><th>Provider</th><th>Model</th></tr></thead>
-  <tbody>{''.join(event_items)}</tbody>
+  <tbody>{"".join(event_items)}</tbody>
 </table>
 <h2>Prompt <span class="muted">{html.escape(prompt_label)}</span></h2>
 <pre>{html.escape(prompt_text)}</pre>
@@ -2019,10 +2023,10 @@ def create_app(
             status_class = "ok" if payload.get("status") == "success" else ""
             body_rows.append(
                 "<tr>"
-                f"<td><a href=\"/llm-ops?task_id={html.escape(row['task_id'])}\">"
+                f'<td><a href="/llm-ops?task_id={html.escape(row["task_id"])}">'
                 f"{html.escape(row['task_id'])}</a></td>"
                 f"<td>{html.escape(str(row['task_status'] or ''))}</td>"
-                f"<td class=\"{status_class}\">{html.escape(str(payload.get('status', '')))}</td>"
+                f'<td class="{status_class}">{html.escape(str(payload.get("status", "")))}</td>'
                 f"<td>{html.escape(str(payload.get('provider', '')))}</td>"
                 f"<td>{html.escape(str(payload.get('model', '')))}</td>"
                 f"<td>{html.escape(str(payload.get('usage', {}).get('duration_ms', '')))}</td>"
@@ -2037,7 +2041,7 @@ def create_app(
   <thead>
     <tr><th>Task</th><th>Task Status</th><th>LLM Status</th><th>Provider</th><th>Model</th><th>Duration ms</th><th>Updated</th></tr>
   </thead>
-  <tbody>{''.join(body_rows)}</tbody>
+  <tbody>{"".join(body_rows)}</tbody>
 </table>
 """
         return _html_page("LLM Ops", body)
