@@ -1061,6 +1061,8 @@ class RemoteWorkerClient:
         worker_id: str,
         version: int,
         reason: str,
+        *,
+        detail: dict[str, Any] | None = None,
     ) -> FailResponse:
         """Mark ``task_id`` ``FAILED`` (``POST /tasks/{task_id}/fail``, PRD FR-2.4).
 
@@ -1116,11 +1118,11 @@ class RemoteWorkerClient:
         RuntimeError
             If called outside the ``async with`` block.
         """
-        request = FailRequest(worker_id=worker_id, version=version, reason=reason)
+        request = FailRequest(worker_id=worker_id, version=version, reason=reason, detail=detail)
         response = await self._request(
             "POST",
             fail_path(task_id),
-            json=request.model_dump(),
+            json=request.model_dump(exclude_none=True),
         )
         return await self._parse_response(response, FailResponse)
 

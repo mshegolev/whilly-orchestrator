@@ -166,6 +166,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.core.models import TaskStatus
+from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE
 from whilly.api.event_flusher import (
     DEFAULT_BATCH_LIMIT as EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
 )
@@ -1558,8 +1559,20 @@ def create_app(
         # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
         # bearer cannot fail a task on behalf of worker B.
         _require_token_owner(request, payload.worker_id)
+        prelude_event_type: str | None = None
+        prelude_payload: dict[str, Any] | None = None
+        if payload.detail and payload.detail.get("event_type") == PROMPT_INJECTION_BLOCKED_EVENT_TYPE:
+            prelude_event_type = PROMPT_INJECTION_BLOCKED_EVENT_TYPE
+            prelude_payload = dict(payload.detail)
         try:
-            updated = await repo.fail_task(task_id, payload.version, payload.reason)
+            updated = await repo.fail_task(
+                task_id,
+                payload.version,
+                payload.reason,
+                detail=payload.detail,
+                prelude_event_type=prelude_event_type,
+                prelude_payload=prelude_payload,
+            )
         except VersionConflictError as exc:
             logger.info(
                 "fail_task conflict: worker=%s task=%s expected_version=%d actual_version=%s actual_status=%s",
