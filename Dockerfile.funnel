@@ -46,6 +46,12 @@ FROM alpine:3.20
 
 # Sidecar dependencies:
 #   - openssh-client : the reverse-tunnel transport
+#   - autossh        : v6-baseline-r3 hardening — autossh -M 0
+#                      reconnect daemon. When present, run.sh
+#                      execs autossh in lieu of bare ssh so the
+#                      reconnect loop runs inside autossh itself.
+#                      The bash supervisor still wraps it as a
+#                      defence-in-depth safety net.
 #   - bash           : run.sh shebang + arrays
 #   - curl           : ad-hoc health probes for operators
 #   - postgresql-client : `psql` for the funnel_url upsert
@@ -56,6 +62,7 @@ FROM alpine:3.20
 #                      would silently fail psql auth)
 RUN apk add --no-cache \
         openssh-client \
+        autossh \
         bash \
         curl \
         postgresql-client \
