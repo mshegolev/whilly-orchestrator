@@ -42,6 +42,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CONTROL_PLANE_COMPOSE: Path = REPO_ROOT / "docker-compose.control-plane.yml"
 UP_SCRIPT = REPO_ROOT / "scripts" / "v6-baseline-vps-up.sh"
 DOWN_SCRIPT = REPO_ROOT / "scripts" / "v6-baseline-vps-down.sh"
 
@@ -54,6 +55,11 @@ def up_text() -> str:
 @pytest.fixture(scope="module")
 def down_text() -> str:
     return DOWN_SCRIPT.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def control_plane_compose_text() -> str:
+    return CONTROL_PLANE_COMPOSE.read_text(encoding="utf-8")
 
 
 def test_up_script_exists_and_executable() -> None:
@@ -117,6 +123,19 @@ def test_up_uses_funnel_profile(up_text: str) -> None:
 
 def test_up_invokes_compose_control_plane_yml(up_text: str) -> None:
     assert "docker-compose.control-plane.yml" in up_text
+
+
+def test_up_installs_private_metrics_bearer_env_file(up_text: str) -> None:
+    assert "WHILLY_METRICS_ENV_FILE" in up_text
+    assert "WHILLY_METRICS_TOKEN" in up_text
+    assert "V6_BASELINE_METRICS_TOKEN" in up_text
+    assert "secrets.token_urlsafe" in up_text
+    assert "--env-file '$WHILLY_METRICS_ENV_FILE'" in up_text
+    assert "WHILLY_METRICS_TOKEN masked" in up_text
+
+
+def test_control_plane_compose_wires_metrics_token_env(control_plane_compose_text: str) -> None:
+    assert "WHILLY_METRICS_TOKEN: ${WHILLY_METRICS_TOKEN:-}" in control_plane_compose_text
 
 
 def test_up_resolves_stable_url_from_lhr_hostname(up_text: str) -> None:

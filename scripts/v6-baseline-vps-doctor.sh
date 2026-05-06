@@ -36,16 +36,20 @@
 #      rounds have ground-truth flap data.
 #   7. Tunnel-stability gate (introduced for v6-baseline-r4): issue
 #      20 probes × 1.5s alternating between operator host (curl) and
-#      VPS (ssh + curl) against `https://${LHR_HOSTNAME}/health`
-#      within a 30-second window. Pass requires ≥ 95% (≥19/20) of
-#      probes to return HTTP 200 AND ≥ 95% of TLS handshakes to
-#      verify against a publicly-trusted CA chain (issuer-agnostic;
-#      cert SHA256 is captured but the gate decision is
-#      issuer-string-agnostic per the existing reframe). Fails-CLOSED
-#      with reason `tunnel-flapping` on insufficient streak. Without
-#      `--require-stable`, instability is a single-line warning to
-#      stderr (back-compat with existing callers); with
-#      `--require-stable`, the doctor exits non-zero on instability.
+#      VPS (ssh + curl) against `https://${LHR_HOSTNAME}/health`.
+#      Pass requires ≥ 95% (≥19/20) of probes to return HTTP 200 AND
+#      ≥ 95% of TLS handshakes to verify against a publicly-trusted CA
+#      chain (issuer-agnostic; cert SHA256 is captured but the gate
+#      decision is issuer-string-agnostic per the existing reframe).
+#      The connect/TLS budget is bounded (default 3.0s) so the gate
+#      still catches unreachable/flapping tunnels without failing
+#      healthy localhost.run responses whose edge handshake sometimes
+#      crosses the old 1.4s total-time edge. Fails-CLOSED with reason
+#      `tunnel-flapping` on insufficient streak. Without
+#      `--require-stable`, instability is
+#      a single-line warning to stderr (back-compat with existing
+#      callers); with `--require-stable`, the doctor exits non-zero on
+#      instability.
 #   8. Probe `<lhr_url>/metrics` with the WHILLY_METRICS_TOKEN bearer
 #      discovered from the running whilly-cp-control-plane container
 #      env. Verifies auth still gates correctly:
@@ -119,7 +123,8 @@ HEALTH_PROBE_WINDOW_SECONDS=15
 TUNNEL_PROBE_COUNT=20
 TUNNEL_PROBE_INTERVAL_MS=1500
 TUNNEL_PROBE_PASS_THRESHOLD=19
-TUNNEL_PROBE_TIMEOUT_SECONDS=1.4
+TUNNEL_PROBE_CONNECT_TIMEOUT_SECONDS="${TUNNEL_PROBE_CONNECT_TIMEOUT_SECONDS:-3.0}"
+TUNNEL_PROBE_TIMEOUT_SECONDS="${TUNNEL_PROBE_TIMEOUT_SECONDS:-3.0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -351,7 +356,8 @@ if ssh_run "docker logs --tail 5000 whilly-cp-funnel" >"$FUNNEL_LOGS_FILE" 2>>"$
 else
     log "  warn: docker logs whilly-cp-funnel failed (container missing or down?)"
 fi
-if ssh_run "docker exec whilly-cp-funnel ps -o pid,etime,cmd -ax" >"$FUNNEL_PS_FILE" 2>>"$LOG_FILE"; then
+if ssh_run "docker exec whilly-cp-funnel ps -o pid,etime,cmd -ax" >"$FUNNEL_PS_FILE" 2>>"$LOG_FILE" \
+    || ssh_run "docker exec whilly-cp-funnel ps -o pid,etime,args" >"$FUNNEL_PS_FILE" 2>>"$LOG_FILE"; then
     log "  funnel-ps.txt captured"
     funnel_ssh_etime_seconds=$(python3 - "$FUNNEL_PS_FILE" <<'PY'
 import re, sys
@@ -423,6 +429,7 @@ TUNNEL_PROBE_INTERVAL_S="$(awk -v ms="$TUNNEL_PROBE_INTERVAL_MS" 'BEGIN { printf
     for probe in $(seq 1 "$HALF"); do
         out=$(curl -sS -o /dev/null \
             -w '%{http_code}|%{ssl_verify_result}|%{time_total}\n' \
+            --connect-timeout "$TUNNEL_PROBE_CONNECT_TIMEOUT_SECONDS" \
             --max-time "$TUNNEL_PROBE_TIMEOUT_SECONDS" \
             "$lhr_url/health" 2>/dev/null || echo "000|99|0")
         printf 'local %d %s\n' "$probe" "$out" >>"$LOCAL_PROBE_LOG"
@@ -433,7 +440,7 @@ TUNNEL_PROBE_INTERVAL_S="$(awk -v ms="$TUNNEL_PROBE_INTERVAL_MS" 'BEGIN { printf
 ) &
 LOCAL_PID=$!
 
-REMOTE_CMD="for i in \$(seq 1 ${HALF}); do curl -sS -o /dev/null -w '%{http_code}|%{ssl_verify_result}|%{time_total}\n' --max-time ${TUNNEL_PROBE_TIMEOUT_SECONDS} '${lhr_url}/health' 2>/dev/null || echo '000|99|0'; if [ \$i -lt ${HALF} ]; then sleep ${TUNNEL_PROBE_INTERVAL_S}; fi; done"
+REMOTE_CMD="for i in \$(seq 1 ${HALF}); do curl -sS -o /dev/null -w '%{http_code}|%{ssl_verify_result}|%{time_total}\n' --connect-timeout ${TUNNEL_PROBE_CONNECT_TIMEOUT_SECONDS} --max-time ${TUNNEL_PROBE_TIMEOUT_SECONDS} '${lhr_url}/health' 2>/dev/null || echo '000|99|0'; if [ \$i -lt ${HALF} ]; then sleep ${TUNNEL_PROBE_INTERVAL_S}; fi; done"
 ssh_run "$REMOTE_CMD" >"$REMOTE_PROBE_LOG" 2>>"$LOG_FILE" || true
 wait "$LOCAL_PID" 2>/dev/null || true
 

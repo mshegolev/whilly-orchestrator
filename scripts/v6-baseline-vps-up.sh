@@ -42,7 +42,12 @@
 #   VPS_PORT=23422
 #   VPS_DIR=/root/whilly
 #   WHILLY_IMAGE_TAG=4.6.1               # v6-baseline image floor
+#   WHILLY_METRICS_ENV_FILE=.env.v6-baseline
 #   EVIDENCE_DIR=out/v6-baseline-vps-up  # all artefacts captured here
+#
+# Optional env:
+#   WHILLY_METRICS_TOKEN=<token>          # explicit metrics bearer to install
+#   V6_BASELINE_METRICS_TOKEN=<token>     # alias for the same validator token
 #
 # Optional flags:
 #   --prune              run `docker system prune -af --volumes` on the VPS
@@ -67,6 +72,7 @@ VPS_PORT="${VPS_PORT:-23422}"
 VPS_DIR="${VPS_DIR:-/root/whilly}"
 WHILLY_IMAGE_TAG="${WHILLY_IMAGE_TAG:-4.6.1}"
 WHILLY_IMAGE="mshegolev/whilly:${WHILLY_IMAGE_TAG}"
+WHILLY_METRICS_ENV_FILE="${WHILLY_METRICS_ENV_FILE:-.env.v6-baseline}"
 LHR_HOSTNAME="${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
 # Constructed via printf concatenation so the literal SSH-key filename
 # does not appear as a single token in the source — the canonical default
@@ -124,7 +130,7 @@ scp_to() {
 
 # ── 1: operator-host pre-flight ─────────────────────────────────────────
 echo "[1/12] operator-host pre-flight …"
-for tool in ssh scp curl docker-compose; do
+for tool in ssh scp curl docker-compose python3; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "  missing tool: $tool" >&2
         exit 2
@@ -218,12 +224,40 @@ fi
 echo "[7/12] docker compose up (postgres + control-plane + funnel sidecar) …"
 # WHILLY_BIND_HOST=127.0.0.1 keeps the API loopback-only on the VPS;
 # the public surface is the funnel sidecar's stable LHR_HOSTNAME URL.
+if [[ -n "${WHILLY_METRICS_TOKEN:-}" ]]; then
+    RESOLVED_METRICS_TOKEN="$WHILLY_METRICS_TOKEN"
+    METRICS_TOKEN_SOURCE="operator WHILLY_METRICS_TOKEN"
+elif [[ -n "${V6_BASELINE_METRICS_TOKEN:-}" ]]; then
+    RESOLVED_METRICS_TOKEN="$V6_BASELINE_METRICS_TOKEN"
+    METRICS_TOKEN_SOURCE="operator V6_BASELINE_METRICS_TOKEN"
+else
+    EXISTING_METRICS_TOKEN=$(ssh_run "cd '$VPS_DIR' && \
+        awk -F= '/^WHILLY_METRICS_TOKEN=/{print substr(\$0, index(\$0,\"=\")+1); exit}' '$WHILLY_METRICS_ENV_FILE' 2>/dev/null" || true)
+    EXISTING_METRICS_TOKEN="${EXISTING_METRICS_TOKEN//$'\r'/}"
+    EXISTING_METRICS_TOKEN="${EXISTING_METRICS_TOKEN//$'\n'/}"
+    if [[ -n "$EXISTING_METRICS_TOKEN" ]]; then
+        RESOLVED_METRICS_TOKEN="$EXISTING_METRICS_TOKEN"
+        METRICS_TOKEN_SOURCE="existing $WHILLY_METRICS_ENV_FILE"
+    else
+        RESOLVED_METRICS_TOKEN=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+        RESOLVED_METRICS_TOKEN="${RESOLVED_METRICS_TOKEN//$'\r'/}"
+        RESOLVED_METRICS_TOKEN="${RESOLVED_METRICS_TOKEN//$'\n'/}"
+        METRICS_TOKEN_SOURCE="generated"
+    fi
+fi
+if [[ -z "${RESOLVED_METRICS_TOKEN:-}" ]]; then
+    echo "  could not resolve a non-empty WHILLY_METRICS_TOKEN" >&2
+    exit 2
+fi
+printf 'WHILLY_METRICS_TOKEN=%s\n' "$RESOLVED_METRICS_TOKEN" \
+    | ssh_run "cd '$VPS_DIR' && umask 077 && cat > '$WHILLY_METRICS_ENV_FILE'"
+echo "  installed $VPS_DIR/$WHILLY_METRICS_ENV_FILE (WHILLY_METRICS_TOKEN masked; source=$METRICS_TOKEN_SOURCE)"
 ssh_run "cd '$VPS_DIR' && \
     WHILLY_IMAGE='$WHILLY_IMAGE' \
     WHILLY_BIND_HOST=127.0.0.1 \
     LHR_HOSTNAME='$LHR_HOSTNAME' \
     LHR_SSH_KEY_PATH='$LHR_SSH_KEY_PATH' \
-    docker compose -f docker-compose.control-plane.yml --profile funnel up -d" \
+    docker compose --env-file '$WHILLY_METRICS_ENV_FILE' -f docker-compose.control-plane.yml --profile funnel up -d" \
     | tee "$EVIDENCE_DIR/vps-compose-up.txt"
 
 # Label the running stack so v6_baseline_vps_smoke (services.yaml) finds it.

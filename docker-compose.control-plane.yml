@@ -95,6 +95,10 @@ services:
       # Cluster-join secret consumed by `whilly worker connect`. Keep it out
       # of git in real deployments; see docs/Distributed-Setup.md.
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
+      # Dedicated Prometheus bearer. Empty by default so /metrics remains
+      # fail-closed; v6-baseline-vps-up writes a private env-file for the
+      # live validator so it can verify both 200-with-bearer and 401-without.
+      WHILLY_METRICS_TOKEN: ${WHILLY_METRICS_TOKEN:-}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
     ports:
       # Long-form port mapping: host_ip is a SEPARATE field, which means

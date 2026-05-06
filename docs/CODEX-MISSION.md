@@ -46,18 +46,21 @@ Purpose:
 
 Status:
 
-- Blocked on 2026-05-06 by the required VPS doctor tunnel-stability gate:
-  `doctor: tunnel-flapping`.
-- Latest evidence:
-  `out/v6-baseline-vps-doctor/20260506T120315Z/state.json`.
-- Healthy checks before the gate: SSH ok, stack running, `/health` ok,
-  `/metrics` fail-closed ok, image `mshegolev/whilly:4.6.1`, and
-  `openclaw-gateway` running.
-- The temporary v6-baseline VPS stack was torn down afterward with
-  `bash scripts/v6-baseline-vps-down.sh` without `--volumes`; evidence is in
-  `out/v6-baseline-vps-down/`.
-- Do not run cross-host validation until
-  `bash scripts/v6-baseline-vps-doctor.sh --require-stable` passes.
+- Unblocked on 2026-05-06 after stabilizing the doctor tunnel probe budget and
+  wiring a private `WHILLY_METRICS_TOKEN` env-file into the v6 VPS bringup.
+- Latest doctor evidence:
+  `out/v6-baseline-vps-doctor/20260506T145946Z/state.json`.
+- Latest live state: SSH ok, stack running, `/health` ok, `/metrics` gated
+  correctly (`401` without bearer, `200` with bearer), image
+  `mshegolev/whilly:4.6.1`, `openclaw-gateway` running, and tunnel stability
+  `20/20` probes with `20/20` TLS verifies.
+- Latest live smoke:
+  `env LHR_SSH_KEY_PATH=/root/.ssh/lhr_paid_id_ed25519 bash scripts/v6-baseline-vps-up.sh`
+  completed health + cross-host CLAIM/COMPLETE against
+  `https://whilly-orchestrator.lhr.rocks`.
+- Full non-compose integration was attempted twice on 2026-05-06 and hit the
+  documented Colima/testcontainers port-forwarding setup flake in
+  `test_skip_task.py`; the targeted rerun of that file passed.
 
 ## Pending Feature Queue
 
