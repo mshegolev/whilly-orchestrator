@@ -14,10 +14,30 @@
 #   2. Shared-volume file `${FUNNEL_URL_FILE}` (fallback; written via
 #      tmp + atomic rename).
 #
-# On SSH exit (network blip / server-side close) the script sleeps
-# `FUNNEL_RETRY_BACKOFF_SECONDS` and reconnects. SSH keepalives
-# (ServerAliveInterval=30, ServerAliveCountMax=3,
-# ExitOnForwardFailure=yes) detect silent drops fast.
+# On SSH exit (network blip / server-side close) the supervisor
+# loop sleeps `FUNNEL_RETRY_BACKOFF_SECONDS + rand(0,
+# FUNNEL_RETRY_BACKOFF_JITTER_MAX)` seconds and reconnects. The
+# jitter is computed at runtime via awk's srand()/rand() (the
+# alpine image has no python3.random in steady-state hot path).
+#
+# v6-baseline round-3 hardening (harden-funnel-sidecar-resilience):
+#   * Relaxed SSH keepalive — `ServerAliveInterval=60` +
+#     `ServerAliveCountMax=5` + `TCPKeepAlive=yes` give roughly
+#     5 minutes of tolerance against keepalive drops vs. the v6.0
+#     ship default's 90 s.
+#   * `ExitOnForwardFailure=yes` is REMOVED. We rely on this
+#     supervisor loop (or autossh -M 0 when the binary is
+#     present) to retry instead of letting a single missed
+#     keepalive nuke the SSH process.
+#   * When `autossh` is on PATH the wrapper uses it (`autossh
+#     -M 0 ...`) so the reconnect loop runs inside autossh
+#     itself; otherwise the bash supervisor below restarts ssh.
+#   * Each session emits structured stderr lines so operators can
+#     grep `docker logs whilly-cp-funnel | grep 'session ended'`
+#     to count flap events:
+#       funnel: ssh session up at <iso8601>
+#       funnel: ssh session ended after <duration>s, sleeping <jitter>s
+#       funnel: ssh session reconnecting (attempt N) at <iso8601>
 #
 # Failure modes (clear stderr, non-zero exit):
 #   1. SSH key file missing at the configured path — the operator
@@ -64,9 +84,11 @@ LHR_LOCAL_TARGET="${LHR_LOCAL_TARGET:-control-plane:8000}"
 LHR_SSH_KEY_PATH_INSIDE="${LHR_SSH_KEY_PATH_INSIDE:-/etc/whilly-funnel/ssh-key}"
 LHR_DASHBOARD_URL="${LHR_DASHBOARD_URL:-https://localhost.run/dashboard/ssh-keys/}"
 
-FUNNEL_SERVER_ALIVE_INTERVAL="${FUNNEL_SERVER_ALIVE_INTERVAL:-30}"
-FUNNEL_SERVER_ALIVE_COUNT_MAX="${FUNNEL_SERVER_ALIVE_COUNT_MAX:-3}"
+FUNNEL_SERVER_ALIVE_INTERVAL="${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
+FUNNEL_SERVER_ALIVE_COUNT_MAX="${FUNNEL_SERVER_ALIVE_COUNT_MAX:-5}"
+FUNNEL_TCP_KEEPALIVE="${FUNNEL_TCP_KEEPALIVE:-yes}"
 FUNNEL_RETRY_BACKOFF_SECONDS="${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
+FUNNEL_RETRY_BACKOFF_JITTER_MAX="${FUNNEL_RETRY_BACKOFF_JITTER_MAX:-10}"
 FUNNEL_URL_FILE="${FUNNEL_URL_FILE:-/funnel/url.txt}"
 FUNNEL_FAKE_URL="${FUNNEL_FAKE_URL:-}"
 FUNNEL_ONESHOT="${FUNNEL_ONESHOT:-0}"
@@ -79,12 +101,32 @@ else
     PUBLIC_URL="${PUBLIC_URL:-https://${LHR_HOSTNAME}}"
 fi
 
+iso8601_now() {
+    date -u +%FT%TZ
+}
+
 log() {
-    printf '[funnel %s] %s\n' "$(date -u +%FT%TZ)" "$*"
+    printf '[funnel %s] %s\n' "$(iso8601_now)" "$*"
 }
 
 err() {
-    printf '[funnel %s] ERROR: %s\n' "$(date -u +%FT%TZ)" "$*" >&2
+    printf '[funnel %s] ERROR: %s\n' "$(iso8601_now)" "$*" >&2
+}
+
+compute_jitter_seconds() {
+    awk -v max="${FUNNEL_RETRY_BACKOFF_JITTER_MAX}" 'BEGIN{srand();print int(rand()*(max+1))}'
+}
+
+emit_session_event() {
+    printf 'funnel: ssh session %s\n' "$*" >&2
+}
+
+select_ssh_transport() {
+    if command -v autossh >/dev/null 2>&1; then
+        printf 'autossh\n'
+    else
+        printf 'ssh\n'
+    fi
 }
 
 split_local_target() {
@@ -239,7 +281,7 @@ build_ssh_args() {
     local -a args=(
         -o "ServerAliveInterval=${FUNNEL_SERVER_ALIVE_INTERVAL}"
         -o "ServerAliveCountMax=${FUNNEL_SERVER_ALIVE_COUNT_MAX}"
-        -o ExitOnForwardFailure=yes
+        -o "TCPKeepAlive=${FUNNEL_TCP_KEEPALIVE}"
         -o StrictHostKeyChecking=accept-new
         -o IdentitiesOnly=yes
         -i "$LHR_SSH_KEY_PATH_INSIDE"
@@ -266,11 +308,18 @@ EOF
     while IFS= read -r line; do
         ssh_args+=( "$line" )
     done < <(build_ssh_args)
-    if ! ssh "${ssh_args[@]}"; then
-        local rc=$?
-        err "funnel: ssh exited $rc — if this looks like an auth failure, register the public key at $LHR_DASHBOARD_URL"
-        return $rc
+    local transport rc=0
+    transport=$(select_ssh_transport)
+    if [ "$transport" = "autossh" ]; then
+        AUTOSSH_GATETIME="${AUTOSSH_GATETIME:-0}" autossh -M 0 "${ssh_args[@]}" || rc=$?
+    else
+        ssh "${ssh_args[@]}" || rc=$?
     fi
+    if [ "$rc" -ne 0 ]; then
+        err "funnel: ssh exited $rc — if this looks like an auth failure, register the public key at $LHR_DASHBOARD_URL"
+        return "$rc"
+    fi
+    return 0
 }
 
 run_session_and_capture() {
@@ -297,15 +346,30 @@ main() {
     if ! verify_ssh_key_present; then
         return 1
     fi
-    log "starting funnel sidecar (public=${PUBLIC_URL}, target=${LHR_LOCAL_TARGET}, remote=${LHR_REMOTE_USER%@*}@${LHR_REMOTE_HOST}, tier=$(resolve_tier_label))"
+    local transport
+    transport=$(select_ssh_transport)
+    log "starting funnel sidecar (public=${PUBLIC_URL}, target=${LHR_LOCAL_TARGET}, remote=${LHR_REMOTE_USER%@*}@${LHR_REMOTE_HOST}, tier=$(resolve_tier_label), transport=${transport})"
+    local attempt=0
     while true; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -gt 1 ]; then
+            emit_session_event "reconnecting (attempt ${attempt}) at $(iso8601_now)"
+        fi
+        emit_session_event "up at $(iso8601_now)"
+        local started_epoch
+        started_epoch=$(date +%s)
         run_session_and_capture || true
         if [ "$FUNNEL_ONESHOT" = "1" ] || [ "$FUNNEL_ONESHOT" = "true" ]; then
             log "FUNNEL_ONESHOT set; exiting after first session"
             return 0
         fi
-        log "ssh session ended; sleeping ${FUNNEL_RETRY_BACKOFF_SECONDS}s before reconnect"
-        sleep "$FUNNEL_RETRY_BACKOFF_SECONDS"
+        local ended_epoch duration jitter sleep_total
+        ended_epoch=$(date +%s)
+        duration=$((ended_epoch - started_epoch))
+        jitter=$(compute_jitter_seconds)
+        sleep_total=$((FUNNEL_RETRY_BACKOFF_SECONDS + jitter))
+        emit_session_event "ended after ${duration}s, sleeping ${sleep_total}s"
+        sleep "$sleep_total"
     done
 }
 

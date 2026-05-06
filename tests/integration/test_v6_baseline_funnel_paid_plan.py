@@ -24,8 +24,12 @@ Pinned contract:
    * passes the SSH key with ``IdentitiesOnly=yes -i
      /etc/whilly-funnel/ssh-key`` (in-container path);
    * dials ``plan@localhost.run`` (the paid-plan account user);
-   * sets keepalives ``ServerAliveInterval=30``,
-     ``ServerAliveCountMax=3``, and ``ExitOnForwardFailure=yes``;
+   * sets keepalives ``ServerAliveInterval=60``,
+     ``ServerAliveCountMax=5``, and ``TCPKeepAlive=yes`` (relaxed
+     in v6-baseline-r3 hardening — see
+     ``test_v6_funnel_resilience.py``); ``ExitOnForwardFailure=yes``
+     is intentionally absent — the supervisor loop / autossh
+     handles reconnects;
    * sets ``StrictHostKeyChecking=accept-new`` for first-run TOFU;
    * fails fast with a clear stderr referencing
      ``https://localhost.run/dashboard/ssh-keys/`` when the SSH key
@@ -222,9 +226,13 @@ def test_default_ssh_argv_pins_hostname() -> None:
 
 def test_keepalives_set() -> None:
     args = _dump_ssh_args({})
-    assert "ServerAliveInterval=30" in args, f"ServerAliveInterval must be 30s: {args}"
-    assert "ServerAliveCountMax=3" in args, f"ServerAliveCountMax must be 3: {args}"
-    assert "ExitOnForwardFailure=yes" in args, f"ExitOnForwardFailure must be yes: {args}"
+    assert "ServerAliveInterval=60" in args, f"ServerAliveInterval must be 60s: {args}"
+    assert "ServerAliveCountMax=5" in args, f"ServerAliveCountMax must be 5: {args}"
+    assert "TCPKeepAlive=yes" in args, f"TCPKeepAlive must be yes: {args}"
+    assert "ExitOnForwardFailure=yes" not in args, (
+        "ExitOnForwardFailure=yes must be REMOVED — supervisor loop / autossh handles reconnects "
+        f"(harden-funnel-sidecar-resilience): {args}"
+    )
 
 
 def test_strict_host_key_checking_accept_new() -> None:
