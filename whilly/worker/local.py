@@ -82,7 +82,12 @@ from typing import Final
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.core.models import Plan, Task, WorkerId
-from whilly.core.prompts import build_task_prompt
+from whilly.core.prompts import (
+    PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
+    PROMPT_INJECTION_FAIL_REASON,
+    PromptInjectionBlocked,
+    build_task_prompt,
+)
 
 log = logging.getLogger(__name__)
 
@@ -356,7 +361,35 @@ async def run_local_worker(
             )
             continue
 
-        prompt = build_task_prompt(running, plan)
+        try:
+            prompt = build_task_prompt(running, plan)
+        except PromptInjectionBlocked as exc:
+            try:
+                await repo.fail_task(
+                    running.id,
+                    running.version,
+                    PROMPT_INJECTION_FAIL_REASON,
+                    detail=exc.event_payload,
+                    prelude_event_type=PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
+                    prelude_payload=exc.event_payload,
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "prompt guard fail_task lost the race: task=%s expected_version=%d actual=%s",
+                    running.id,
+                    running.version,
+                    conflict.actual_version,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "worker=%s task=%s → FAILED (%s marker=%r)",
+                worker_id,
+                running.id,
+                PROMPT_INJECTION_FAIL_REASON,
+                exc.match.matched_marker,
+            )
+            continue
 
         # Race the runner against ``stop`` so SIGTERM mid-runner doesn't
         # have to wait for an arbitrarily long agent call before we can

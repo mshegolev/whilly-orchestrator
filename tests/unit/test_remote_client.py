@@ -1249,6 +1249,41 @@ async def test_fail() -> None:
     assert exc.error_code == "version_conflict"
 
 
+async def test_fail_sends_optional_detail_when_provided() -> None:
+    captured: dict[str, Any] = {}
+    post_update = _sample_task_payload(version=2, status=TaskStatus.FAILED)
+
+    def happy_handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"task": post_update.model_dump(mode="json")})
+
+    detail = {
+        "event_type": "prompt_injection_blocked",
+        "matched_marker": "</system>",
+        "task_id": "TASK-guard",
+        "plan_id": "plan-guard",
+        "redacted_excerpt": "[blocked] override",
+    }
+
+    async with _make_client(happy_handler) as client:
+        await client.fail(
+            task_id="TASK-guard",
+            worker_id="w-1",
+            version=1,
+            reason="prompt_injection_blocked",
+            detail=detail,
+        )
+
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "version": 1,
+        "reason": "prompt_injection_blocked",
+        "detail": detail,
+    }
+
+
 async def test_fail_rejects_empty_reason_at_schema_layer() -> None:
     """An empty ``reason`` raises :class:`pydantic.ValidationError` before the wire call.
 

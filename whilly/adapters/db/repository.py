@@ -1708,6 +1708,8 @@ class TaskRepository:
         reason: str,
         *,
         detail: dict[str, Any] | None = None,
+        prelude_event_type: str | None = None,
+        prelude_payload: dict[str, Any] | None = None,
     ) -> Task:
         """Atomically transition ``task_id`` from ``CLAIMED`` | ``IN_PROGRESS`` → ``FAILED``.
 
@@ -1735,6 +1737,11 @@ class TaskRepository:
         ``events.payload`` (``version`` / ``reason``); ``detail`` is
         free-form caller diagnostics.
 
+        ``prelude_event_type`` / ``prelude_payload`` let security guards
+        append a companion audit event in the same transaction immediately
+        before the canonical ``FAIL`` row. If the optimistic-lock update
+        loses the race, neither event is inserted.
+
         Per-task TRIZ hook
         ~~~~~~~~~~~~~~~~~~
         After the FAIL transition commits, the method optionally
@@ -1748,11 +1755,27 @@ class TaskRepository:
         fail modes (claude absent, timeout, malformed JSON, claude
         non-zero exit).
         """
+        prelude_payload_dict: dict[str, Any] | None = None
+        prelude_task_id: TaskId | None = None
+        prelude_plan_id: PlanId | None = None
+
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(_FAIL_SQL, task_id, version)
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
+
+                if prelude_event_type is not None:
+                    prelude_payload_dict = dict(prelude_payload or {})
+                    await conn.execute(
+                        _INSERT_TASK_EVENT_WITH_PLAN_SQL,
+                        row["id"],
+                        row["plan_id"],
+                        prelude_event_type,
+                        json.dumps(prelude_payload_dict),
+                    )
+                    prelude_task_id = row["id"]
+                    prelude_plan_id = row["plan_id"]
 
                 # FAIL event payload (v4.4.0 enriched shape;
                 # VAL-CROSS-BACKCOMPAT-911). The v4.3.1 baseline already
@@ -1791,6 +1814,13 @@ class TaskRepository:
                 fail_task_id = row["id"]
                 fail_plan_id = row["plan_id"]
         # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        if prelude_event_type is not None and prelude_payload_dict is not None:
+            self._emit_jsonl(
+                prelude_event_type,
+                task_id=prelude_task_id,
+                plan_id=prelude_plan_id,
+                payload=prelude_payload_dict,
+            )
         self._emit_jsonl(
             Transition.FAIL.value,
             task_id=fail_task_id,

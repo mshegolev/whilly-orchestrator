@@ -64,18 +64,24 @@ Status:
 
 ## Pending Feature Queue
 
-1. `a1-prompt-injection-guard`
-2. `a2-shell-deny-list`
-3. `a3-a4-sandbox-and-secrets-lint`
-4. `d1-d3-backup-tag-and-auto-restore`
-5. `d2-branch-protection-preflight`
-6. `d4-smart-rollback-cli`
-7. `misc-v6-htmx-cdn-inline-or-route-stub`
+1. `a2-shell-deny-list`
+2. `a3-a4-sandbox-and-secrets-lint`
+3. `d1-d3-backup-tag-and-auto-restore`
+4. `d2-branch-protection-preflight`
+5. `d4-smart-rollback-cli`
+6. `misc-v6-htmx-cdn-inline-or-route-stub`
 
 Completed baseline/support features include VPS topology bringup, v6 fixture harness,
 VPS doctor, paid localhost.run funnel migration, funnel resilience, tunnel-stability
 doctor gate, changelog breaking-section fix, frozen-file byte-equality follow-up,
 and the dashboard SSE / `whilly-worker` publish close-out.
+
+Completed Block A features:
+
+- `a1-prompt-injection-guard`: prompt descriptions are wrapped in
+  `BEGIN-WHILLY-DESC-<nonce16>` / `END-WHILLY-DESC-<nonce16>`, baseline plus
+  `WHILLY_PROMPT_DENY_PATTERNS` markers are blocked before runner invocation,
+  and blocked tasks emit `prompt_injection_blocked` immediately before `FAIL`.
 
 ## Hard Boundaries
 
