@@ -115,6 +115,7 @@ from typing import Final
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import HTTPClientError, RemoteWorkerClient, VersionConflictError
+from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON, scan_task_command_surface
 from whilly.core.models import Plan, Task, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON, PromptInjectionBlocked, build_task_prompt
 
@@ -417,6 +418,35 @@ async def run_remote_worker(
                 claimed.id,
                 PROMPT_INJECTION_FAIL_REASON,
                 exc.match.matched_marker,
+            )
+            continue
+
+        shell_scan = scan_task_command_surface(claimed)
+        if shell_scan.blocked:
+            try:
+                await client.fail(
+                    claimed.id,
+                    worker_id,
+                    claimed.version,
+                    SHELL_COMMAND_FAIL_REASON,
+                    detail=shell_scan.event_payload(task_id=claimed.id, plan_id=plan.id),
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "remote shell guard fail lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+                    claimed.id,
+                    claimed.version,
+                    conflict.actual_version,
+                    conflict.actual_status.value if conflict.actual_status else None,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "remote worker=%s task=%s → FAILED (%s pattern=%r)",
+                worker_id,
+                claimed.id,
+                SHELL_COMMAND_FAIL_REASON,
+                shell_scan.pattern_matched,
             )
             continue
 

@@ -166,6 +166,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.core.models import TaskStatus
+from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE
 from whilly.api.event_flusher import (
     DEFAULT_BATCH_LIMIT as EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
@@ -1561,8 +1562,12 @@ def create_app(
         _require_token_owner(request, payload.worker_id)
         prelude_event_type: str | None = None
         prelude_payload: dict[str, Any] | None = None
-        if payload.detail and payload.detail.get("event_type") == PROMPT_INJECTION_BLOCKED_EVENT_TYPE:
-            prelude_event_type = PROMPT_INJECTION_BLOCKED_EVENT_TYPE
+        security_prelude_events = {
+            PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
+            SHELL_COMMAND_BLOCKED_EVENT_TYPE,
+        }
+        if payload.detail and payload.detail.get("event_type") in security_prelude_events:
+            prelude_event_type = str(payload.detail["event_type"])
             prelude_payload = dict(payload.detail)
         try:
             updated = await repo.fail_task(
