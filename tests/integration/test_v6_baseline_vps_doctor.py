@@ -247,8 +247,166 @@ def test_doctor_state_json_schema_round_trip(tmp_path: Path) -> None:
         "metrics_ok": True,
         "control_plane_image_tag": "mshegolev/whilly:4.6.1",
         "openclaw_gateway_status": "running",
+        "tunnel_stability_ok": True,
+        "tunnel_probes_passed": 20,
+        "tunnel_handshake_verifies_passed": 20,
+        "funnel_ssh_etime_seconds": 3600,
     }
     out_file = tmp_path / "state.json"
     out_file.write_text(json.dumps(sample_state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     parsed = json.loads(out_file.read_text(encoding="utf-8"))
     assert parsed == sample_state
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Tunnel-stability gate (v6-baseline-r4) — --require-stable, new state
+# fields, evidence captures, and stderr semantics.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_doctor_help_lists_require_stable_flag() -> None:
+    bash = shutil.which("bash")
+    assert bash is not None
+    res = subprocess.run([bash, str(DOCTOR_SCRIPT), "--help"], capture_output=True, text=True, timeout=15)
+    assert res.returncode == 0
+    out = res.stdout + res.stderr
+    assert "--require-stable" in out, "--help must list --require-stable flag"
+    assert "tunnel-flapping" in out.lower(), "--help must describe the tunnel-flapping failure mode"
+
+
+def test_doctor_require_stable_flag_recognized(doctor_text: str) -> None:
+    assert "--require-stable" in doctor_text, "doctor must declare --require-stable case in flag parser"
+    assert "REQUIRE_STABLE=1" in doctor_text, "doctor must set REQUIRE_STABLE=1 when flag is passed"
+
+
+def test_doctor_require_stable_does_not_break_existing_flags(doctor_text: str) -> None:
+    for legacy in ("--no-bringup", "--json", "--evidence-dir"):
+        assert legacy in doctor_text, f"existing flag {legacy} must be preserved (back-compat)"
+    assert "NO_BRINGUP=1" in doctor_text
+    assert "JSON_MODE=1" in doctor_text
+
+
+def test_doctor_state_includes_new_tunnel_stability_fields(doctor_text: str) -> None:
+    for field in (
+        "tunnel_stability_ok",
+        "tunnel_probes_passed",
+        "tunnel_handshake_verifies_passed",
+        "funnel_ssh_etime_seconds",
+    ):
+        assert field in doctor_text, f"state.json must include `{field}`"
+
+
+def test_doctor_runs_20_probes_with_1_5s_interval(doctor_text: str) -> None:
+    assert "TUNNEL_PROBE_COUNT=20" in doctor_text, "doctor must use 20 probes for the stability gate"
+    assert "TUNNEL_PROBE_INTERVAL_MS=1500" in doctor_text, "doctor must use 1.5s probe interval (1500ms)"
+    assert "TUNNEL_PROBE_PASS_THRESHOLD=19" in doctor_text, "doctor must require ≥19/20 (95%) probes to pass"
+
+
+def test_doctor_dual_source_probes_ops_and_vps(doctor_text: str) -> None:
+    assert "tunnel-probes-local.txt" in doctor_text or "tunnel-probes-vps.txt" in doctor_text, (
+        "doctor must record both ops-side and vps-side probe results"
+    )
+    assert "ssh_run" in doctor_text and "curl" in doctor_text, "doctor must drive both ssh+curl and curl probes"
+    assert "ssl_verify_result" in doctor_text, (
+        "doctor must capture TLS verification status from curl (ssl_verify_result writeout)"
+    )
+
+
+def test_doctor_stability_failure_message_format(doctor_text: str) -> None:
+    assert "doctor: tunnel-flapping" in doctor_text, "stability failure message must use the exact prefix"
+    assert "${tunnel_probes_passed}" in doctor_text and "${tunnel_handshake_verifies_passed}" in doctor_text, (
+        "tunnel-flapping message must include both counters (N/20 probes, M/20 verifies)"
+    )
+    assert "probes passed" in doctor_text and "verifies passed" in doctor_text
+
+
+def test_doctor_require_stable_promotes_warning_to_failure(doctor_text: str) -> None:
+    assert 'REQUIRE_STABLE" -eq 1' in doctor_text or "REQUIRE_STABLE -eq 1" in doctor_text, (
+        "doctor must check REQUIRE_STABLE to decide between warning and record_failure"
+    )
+    assert re.search(
+        r'if\s*\[\[\s*"\$tunnel_stability_ok"\s*!=\s*"true"\s*\]\]',
+        doctor_text,
+    ), "doctor must branch on tunnel_stability_ok != true to apply the gate"
+
+
+def test_doctor_warning_path_does_not_fail_without_require_stable(doctor_text: str) -> None:
+    pattern = re.compile(
+        r'if\s*\[\[\s*"\$REQUIRE_STABLE"\s*-eq\s*1\s*\]\];?\s*then\s*\n\s*record_failure[\s\S]+?else\s*\n\s*echo\s+"\$STABILITY_MSG"\s*>&2',
+        re.MULTILINE,
+    )
+    assert pattern.search(doctor_text), (
+        "without --require-stable, tunnel-flapping must print to stderr but NOT call record_failure"
+    )
+
+
+def test_doctor_captures_funnel_logs_evidence(doctor_text: str) -> None:
+    assert "docker logs --tail 5000 whilly-cp-funnel" in doctor_text, (
+        "doctor must capture `docker logs --tail 5000 whilly-cp-funnel` on every invocation"
+    )
+    assert "funnel-logs.txt" in doctor_text
+
+
+def test_doctor_captures_funnel_ps_evidence(doctor_text: str) -> None:
+    assert "docker exec whilly-cp-funnel ps -o pid,etime,cmd -ax" in doctor_text, (
+        "doctor must capture `docker exec whilly-cp-funnel ps -o pid,etime,cmd -ax` on every invocation"
+    )
+    assert "funnel-ps.txt" in doctor_text
+
+
+def test_doctor_funnel_ssh_etime_parser_handles_formats(doctor_text: str) -> None:
+    assert "funnel_ssh_etime_seconds" in doctor_text
+    assert "etime" in doctor_text.lower()
+    assert "86400" in doctor_text, "etime parser must convert days portion to seconds (24*3600)"
+
+
+def test_doctor_gate_threshold_is_95_percent(doctor_text: str) -> None:
+    assert "TUNNEL_PROBE_PASS_THRESHOLD=19" in doctor_text, (
+        "95% of 20 = 19 — gate threshold must be 19 (≥19/20 pass required)"
+    )
+    threshold_check = re.search(
+        r"tunnel_probes_passed.*-ge.*TUNNEL_PROBE_PASS_THRESHOLD",
+        doctor_text,
+        re.DOTALL,
+    )
+    assert threshold_check is not None, "doctor must compare tunnel_probes_passed against the threshold"
+    verify_check = re.search(
+        r"tunnel_handshake_verifies_passed.*-ge.*TUNNEL_PROBE_PASS_THRESHOLD",
+        doctor_text,
+        re.DOTALL,
+    )
+    assert verify_check is not None, "doctor must also gate on tunnel_handshake_verifies_passed >= threshold"
+
+
+def test_doctor_flag_unrecognised_other_than_require_stable() -> None:
+    """Sanity-check: --require-stable must not be classified as 'unknown flag'."""
+    bash = shutil.which("bash")
+    assert bash is not None
+    res = subprocess.run(
+        [bash, str(DOCTOR_SCRIPT), "--require-stable", "--no-bringup"],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        env={**os.environ, "VPS_HOST": "root@127.0.0.1", "VPS_PORT": "65500"},
+    )
+    assert "unknown flag" not in res.stderr.lower(), (
+        f"--require-stable must be recognized; stderr was: {res.stderr[:400]}"
+    )
+
+
+def test_agents_md_directs_validator_to_require_stable() -> None:
+    agents_md = Path(
+        os.environ.get(
+            "WHILLY_MISSION_AGENTS_MD",
+            "/Users/m.v.shchegolev/.factory/missions/75d95174-16a0-4392-a6c8-c5508a381918/AGENTS.md",
+        )
+    )
+    if not agents_md.is_file():
+        pytest.skip(f"mission AGENTS.md not present at {agents_md}")
+    text = agents_md.read_text(encoding="utf-8")
+    assert "--require-stable" in text, (
+        "AGENTS.md must instruct user-testing-validator-v6-baseline to run doctor with --require-stable"
+    )
+    assert "tunnel-flapping" in text, (
+        "AGENTS.md must reference the tunnel-flapping abort status so validators recognize it"
+    )
