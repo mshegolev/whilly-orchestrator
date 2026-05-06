@@ -280,6 +280,12 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 | `WHILLY_TRACE_HTTP`               | `0`                    | Same as `--trace`: `ANTHROPIC_LOG=debug` + `tasks/http_trace.jsonl` (full bodies) |
 | `WHILLY_ORCHESTRATOR`             | `file`                 | `file` (key-files collisions) or `llm` (LLM batching) |
 | `WHILLY_VOICE`                    | `1`                    | macOS voice notifications |
+| `SLACK_ACCESS_TOKEN`              | *(unset)*              | Slack bot/user token; `whilly run` posts a summary to `WHILLY_SLACK_CHANNEL` when set (also accepts `WHILLY_SLACK_ACCESS_TOKEN`) |
+| `WHILLY_SLACK_CHANNEL`            | *(unset)*              | Target channel id, e.g. `C0B1WT58EBE` — must be a channel the token's app/user is a member of |
+| `WHILLY_SLACK_ENABLED`            | `1`                    | Kill switch; setting to `0` skips Slack even when token + channel are set |
+| `WHILLY_SLACK_API_BASE_URL`       | `https://slack.com/api` | Override the API root (test stubs / on-prem proxies) |
+| `WHILLY_SLACK_TIMEOUT_S`          | `5.0`                  | HTTP timeout for `chat.postMessage` |
+| `WHILLY_SLACK_MESSAGE_TEMPLATE`   | *(see `whilly/config.py`)* | `str.format`-style template; placeholders match `RunCompletedEvent` fields plus `completed_at_iso` |
 | `WHILLY_HEADLESS`                 | `0`                    | JSON stdout, no TUI (auto when stdout is not a TTY) |
 | `WHILLY_DECOMPOSE_EVERY`          | `5`                    | Re-plan oversized pending tasks every N iterations |
 | `WHILLY_AUTO_MERGE`               | `ask`                  | `ask` / `yes` / `claude` / `no` on plan completion |
@@ -289,6 +295,37 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 
 Every `WHILLY_*` variable corresponds to an equivalent `whilly.toml` field (same name, any case).
 See `whilly.example.toml` for the complete template.
+
+### Slack run-completed notifications
+
+`whilly run` posts one Slack message per invocation, summarising the
+plan id, worker id, hostname, and `WorkerStats` counters. The hook is
+in :mod:`whilly.cli.run`; the adapter is :mod:`whilly.adapters.notifications.slack`.
+
+Operator setup (one-time):
+
+1. Create a Slack app, add the `chat:write` scope, install it into the
+   target workspace.
+2. Either invite the bot to channel `C0B1WT58EBE` (or your own) or use
+   a user token whose owner is a member of that channel.
+3. Export the env vars:
+
+   ```bash
+   export SLACK_ACCESS_TOKEN=xoxb-...        # or xoxe.xoxp-... (rotated user)
+   export WHILLY_SLACK_CHANNEL=C0B1WT58EBE
+   ```
+
+The feature stays off when `SLACK_ACCESS_TOKEN` is empty
+(:func:`whilly.adapters.notifications.factory.make_notifier` returns a
+no-op `NullNotifier`). Slack outages and `chat.postMessage`
+`{"ok": false}` responses are logged at WARNING but never change the
+CLI exit code.
+
+The summary text is a `str.format` template; override
+`WHILLY_SLACK_MESSAGE_TEMPLATE` to customise the message without
+touching code. Available placeholders match the
+:class:`whilly.core.notifications.RunCompletedEvent` fields plus
+`{completed_at_iso}`.
 
 ## Keyboard Shortcuts
 
@@ -340,6 +377,8 @@ whilly/
   reporter.py               JSON + Markdown cost reports
   decomposer.py             Task decomposition via LLM
   notifications.py          macOS voice alerts
+  core/notifications.py     RunCompletedEvent + NotificationPort (pure)
+  adapters/notifications/   Slack + Null impls; `make_notifier(cfg)` factory
   sources/                  Input adapters (GitHub Issues, Project v2, unified)
   sinks/                    Output adapters (PR creation, etc.)
   agents/                   Pluggable backends (claude, opencode)
