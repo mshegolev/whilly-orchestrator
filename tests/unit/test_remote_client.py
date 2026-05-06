@@ -47,6 +47,7 @@ from whilly.adapters.transport.client import (
     complete_path,
     fail_path,
     heartbeat_path,
+    task_event_path,
 )
 from whilly.adapters.transport.schemas import (
     CompleteResponse,
@@ -54,6 +55,7 @@ from whilly.adapters.transport.schemas import (
     FailResponse,
     HeartbeatResponse,
     RegisterResponse,
+    TaskEventResponse,
     TaskPayload,
 )
 from whilly.core.models import Priority, Task, TaskStatus
@@ -1131,6 +1133,40 @@ async def test_complete() -> None:
     # ``actual_status`` directly and treat DONE as idempotent success.
     assert exc.actual_status == TaskStatus.DONE
     assert exc.error_code == "version_conflict"
+
+
+async def test_record_event_posts_llm_diagnostic_payload() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"ok": True})
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        response = await client.record_event(
+            "TASK-022a3",
+            "w-1",
+            "llm.run_finished",
+            payload={"status": "success"},
+            detail={"artifact_ref": "whilly_logs/tasks/TASK-022a3/attempt-1"},
+        )
+
+    assert isinstance(response, TaskEventResponse)
+    assert response.ok is True
+    assert captured["method"] == "POST"
+    assert captured["path"] == task_event_path("TASK-022a3")
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "event_type": "llm.run_finished",
+        "payload": {"status": "success"},
+        "detail": {"artifact_ref": "whilly_logs/tasks/TASK-022a3/attempt-1"},
+    }
 
 
 async def test_complete_propagates_auth_error_on_403(captured_sleeps: list[float]) -> None:

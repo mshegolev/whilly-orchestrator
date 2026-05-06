@@ -539,6 +539,23 @@ VALUES ($1, $2, $3, $4::jsonb)
 """
 
 
+# Generic task+plan event insert with optional detail. Used for diagnostic
+# events such as ``llm.run_started`` / ``llm.run_finished`` where the task
+# state does not change, but operators still need the row anchored to both
+# the task and its parent plan for audit queries.
+_INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL: str = """
+INSERT INTO events (task_id, plan_id, event_type, payload, detail)
+VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+"""
+
+
+_SELECT_TASK_PLAN_ID_SQL: str = """
+SELECT plan_id
+FROM tasks
+WHERE id = $1
+"""
+
+
 # Optimistic-locking FAIL: ``CLAIMED`` | ``IN_PROGRESS`` → ``FAILED``. FAIL
 # is allowed from CLAIMED because a worker can crash before issuing START
 # (claim → run → die before run_task even forks the subprocess); the
@@ -1517,6 +1534,42 @@ class TaskRepository:
             payload=payload_dict,
         )
         return started_task
+
+    async def record_task_event(
+        self,
+        task_id: TaskId,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Append a diagnostic event for ``task_id`` without changing state.
+
+        This is intentionally separate from the state-transition methods:
+        LLM Ops events describe what the worker did during a run, while
+        ``claim_task`` / ``complete_task`` / ``fail_task`` remain the only
+        methods that mutate task status. ``detail`` is for larger structured
+        metadata such as artifact paths; raw transcripts stay on disk.
+        """
+
+        payload_dict = payload or {}
+        payload_json = json.dumps(payload_dict)
+        detail_json = json.dumps(detail) if detail is not None else None
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(_SELECT_TASK_PLAN_ID_SQL, task_id)
+                if row is None:
+                    raise ValueError(f"record_task_event: unknown task_id={task_id!r}")
+                plan_id = row["plan_id"]
+                await conn.execute(
+                    _INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL,
+                    task_id,
+                    plan_id,
+                    event_type,
+                    payload_json,
+                    detail_json,
+                )
+        self._emit_jsonl(event_type, task_id=task_id, plan_id=plan_id, payload=payload_dict)
 
     async def complete_task(
         self,

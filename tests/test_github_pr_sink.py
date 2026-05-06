@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 
 from whilly.sinks import github_pr as gp
+from whilly import github_pr as legacy_gp
 from whilly.sinks.github_pr import (
     GitHubPRSink,
     PRResult,
@@ -188,3 +189,11 @@ class TestGitHubPRSinkClass:
         assert m.call_args.kwargs["base"] == "develop"
         assert m.call_args.kwargs["draft"] is True
         assert m.call_args.kwargs["branch_prefix"] == "whilly"
+
+
+class TestLegacyModuleShim:
+    def test_legacy_import_path_reexports_public_pr_sink_api(self):
+        assert legacy_gp.GitHubPRSink is gp.GitHubPRSink
+        assert legacy_gp.PRResult is gp.PRResult
+        assert legacy_gp.open_pr_for_task is gp.open_pr_for_task
+        assert legacy_gp.render_pr_body is gp.render_pr_body

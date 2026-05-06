@@ -74,8 +74,11 @@ services:
       # Cluster-join secret (тоже хардкод для демо).
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+      WHILLY_LOG_DIR: /logs
     ports:
       - "127.0.0.1:${WHILLY_CONTROL_PORT:-8000}:8000"
+    volumes:
+      - whilly_demo_logs:/logs:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 3s
@@ -175,6 +178,22 @@ services:
       LLM_X_TITLE: ${LLM_X_TITLE:-}
       LLM_FORCE_COMPLETE: ${LLM_FORCE_COMPLETE:-0}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+      WHILLY_LOG_DIR: /logs
+      # Optional demo Slack notifications. Set WHILLY_SLACK_WEBHOOK_URL
+      # to an Incoming Webhook and tasks will post STARTED/DONE/FAILED
+      # messages with links back to the built-in LLM Ops UI.
+      WHILLY_SLACK_WEBHOOK_URL: ${WHILLY_SLACK_WEBHOOK_URL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      WHILLY_SLACK_ACCESS_TOKEN: ${WHILLY_SLACK_ACCESS_TOKEN:-}
+      SLACK_ACCESS_TOKEN: ${SLACK_ACCESS_TOKEN:-}
+      WHILLY_SLACK_CHANNEL: ${WHILLY_SLACK_CHANNEL:-C0B1WT58EBE}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-C0B1WT58EBE}
+      WHILLY_SLACK_API_BASE_URL: ${WHILLY_SLACK_API_BASE_URL:-https://slack.com/api}
+      WHILLY_SLACK_ENABLED: ${WHILLY_SLACK_ENABLED:-1}
+      WHILLY_SLACK_NOTIFY_EVENTS: ${WHILLY_SLACK_NOTIFY_EVENTS:-terminal}
+      WHILLY_PUBLIC_BASE_URL: ${WHILLY_PUBLIC_BASE_URL:-http://127.0.0.1:8000}
+    volumes:
+      - whilly_demo_logs:/logs
     command: ["worker"]
 
   # ─── 4. (Опционально) funnel sidecar — localhost.run reverse SSH tunnel ────
@@ -249,3 +268,5 @@ volumes:
   # populated when `--profile funnel` is active.
   funnel_url_volume:
     name: whilly_demo_funnel_url
+  whilly_demo_logs:
+    name: whilly_demo_logs

@@ -37,6 +37,8 @@ from whilly.adapters.transport.schemas import (
     PlanPayload,
     RegisterRequest,
     RegisterResponse,
+    TaskEventRequest,
+    TaskEventResponse,
     TaskPayload,
 )
 from whilly.core.models import Plan, Priority, Task, TaskStatus
@@ -166,6 +168,18 @@ def test_heartbeat_response_ok_field() -> None:
     """Mirrors :meth:`TaskRepository.update_heartbeat` boolean return."""
     assert HeartbeatResponse(ok=True).ok is True
     assert HeartbeatResponse(ok=False).ok is False
+
+
+def test_task_event_request_response_happy_path() -> None:
+    req = TaskEventRequest(
+        worker_id="w",
+        event_type="llm.run_finished",
+        payload={"status": "success"},
+        detail={"artifact_ref": "whilly_logs/tasks/T-1/attempt-1"},
+    )
+    assert req.payload["status"] == "success"
+    assert req.detail == {"artifact_ref": "whilly_logs/tasks/T-1/attempt-1"}
+    assert TaskEventResponse().ok is True
 
 
 def test_error_response_carries_version_conflict_fields() -> None:

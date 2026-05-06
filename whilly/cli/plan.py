@@ -106,6 +106,7 @@ from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, seria
 from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
 from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
+from whilly.core.triz import analyze_plan_triz, format_plan_triz_report, plan_triz_report_to_dict
 
 __all__ = ["build_plan_parser", "render_plan_graph", "run_plan_command"]
 
@@ -322,6 +323,29 @@ def build_plan_parser() -> argparse.ArgumentParser:
         help="Force plain ASCII output (default: auto-detect via isatty).",
     )
 
+    # ── plan triz ────────────────────────────────────────────────────────
+    # v4-safe replacement for the useful v3 plan-level TRIZ/challenge
+    # preflight. It reads an already-imported plan from Postgres and runs a
+    # pure deterministic analysis over the task DAG.
+    p_triz = sub.add_parser(
+        "triz",
+        help="Run deterministic TRIZ/challenge preflight on an imported plan.",
+    )
+    p_triz.add_argument(
+        "plan_id",
+        help="Plan id to analyse (matches the 'plan_id' field in the original JSON).",
+    )
+    p_triz.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the report as JSON instead of text.",
+    )
+    p_triz.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return exit code 1 when the TRIZ verdict is REVISE or REJECT.",
+    )
+
     # ── plan reset ───────────────────────────────────────────────────────
     # Operator-facing recovery primitive (TASK-103). Two modes:
     #   --keep-tasks → soft: tasks → PENDING, events purged, RESET row
@@ -410,6 +434,8 @@ def run_plan_command(argv: Sequence[str]) -> int:
         return _run_export(args.plan_id)
     if args.action == "show":
         return _run_show(args.plan_id, no_color=bool(args.no_color))
+    if args.action == "triz":
+        return _run_triz(args.plan_id, as_json=bool(args.json), strict=bool(args.strict))
     if args.action == "reset":
         return _run_reset(
             args.plan_id,
@@ -1206,6 +1232,44 @@ def _should_use_color(*, no_color: bool) -> bool:
     except (io.UnsupportedOperation, ValueError):
         # Closed buffer / detached file descriptor.
         return False
+
+
+def _run_triz(plan_id: str, *, as_json: bool, strict: bool) -> int:
+    """Implement ``whilly plan triz <plan_id>``.
+
+    This is the v4 migration of the legacy v3 plan-level TRIZ/challenge
+    surface: read a plan from Postgres, run the pure analyzer, print a
+    compact report, and optionally fail CI via ``--strict`` when the
+    verdict is not ``approve``.
+    """
+
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan triz: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    result = asyncio.run(_async_export(dsn, plan_id))
+    if result is None:
+        print(
+            f"whilly plan triz: plan {plan_id!r} not found — check the id matches the "
+            "'plan_id' you used at import time.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    plan, tasks = result
+    report = analyze_plan_triz(Plan(id=plan.id, name=plan.name, tasks=tuple(tasks)))
+    if as_json:
+        print(json.dumps(plan_triz_report_to_dict(report), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(format_plan_triz_report(report), end="")
+    if strict and report.verdict != "approve":
+        return EXIT_VALIDATION_ERROR
+    return EXIT_OK
 
 
 # ── plan reset (TASK-103) ────────────────────────────────────────────────

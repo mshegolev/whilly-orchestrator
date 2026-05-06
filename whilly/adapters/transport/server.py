@@ -151,12 +151,15 @@ requests.
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 import os
 import secrets
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Final
 
 import asyncpg
@@ -248,6 +251,8 @@ from whilly.adapters.transport.schemas import (
     RegisterResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskEventRequest,
+    TaskEventResponse,
     TaskPayload,
 )
 
@@ -341,6 +346,9 @@ HEARTBEAT_TIMEOUT_DEFAULT_SECONDS: Final[int] = 2 * 60
 #: stays fast.
 OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS: Final[float] = 30.0
 
+LLM_OPS_UI_MAX_PREVIEW_CHARS: Final[int] = 80_000
+LLM_OPS_UI_MAX_RAW_LINES: Final[int] = 160
+
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
 #: where rainbow / dictionary attacks become irrelevant, so plain SHA-256
@@ -367,6 +375,76 @@ _WORKER_ID_PREFIX: Final[str] = "w-"
 #: to ``__version__``.
 _API_TITLE: Final[str] = "Whilly Control Plane"
 _API_VERSION: Final[str] = "4.0.0-dev"
+
+
+def _decode_json_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _html_page(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{ font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; margin: 24px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 16px; }}
+    th, td {{ border-bottom: 1px solid #8884; padding: 8px; text-align: left; vertical-align: top; }}
+    code, pre {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    pre {{ border: 1px solid #8884; border-radius: 8px; overflow: auto; padding: 12px; max-height: 520px; }}
+    .muted {{ color: #777; }}
+    .ok {{ color: #178a43; }}
+    .bad {{ color: #b42318; }}
+    a {{ color: #2563eb; }}
+  </style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+    )
+
+
+def _artifact_path(raw: str | None) -> Path | None:
+    if not raw:
+        return None
+    base = Path(os.environ.get("WHILLY_LOG_DIR") or "whilly_logs").expanduser()
+    base = base if base.is_absolute() else Path.cwd() / base
+    candidate = Path(raw).expanduser()
+    candidate = candidate if candidate.is_absolute() else Path.cwd() / candidate
+    try:
+        candidate.resolve().relative_to(base.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def _read_preview(path: Path | None, *, raw_jsonl: bool = False) -> tuple[str, str]:
+    if path is None:
+        return "not configured", ""
+    if not path.is_file():
+        return f"missing: {path}", ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if raw_jsonl:
+        lines = text.splitlines()
+        text = "\n".join(lines[:LLM_OPS_UI_MAX_RAW_LINES])
+        suffix = f"\n\n... truncated after {LLM_OPS_UI_MAX_RAW_LINES} lines ..." if len(lines) > LLM_OPS_UI_MAX_RAW_LINES else ""
+        return str(path), text + suffix
+    if len(text) > LLM_OPS_UI_MAX_PREVIEW_CHARS:
+        return str(path), text[:LLM_OPS_UI_MAX_PREVIEW_CHARS] + "\n\n... truncated ..."
+    return str(path), text
 
 
 async def _visibility_sweep_loop(
@@ -1524,6 +1602,62 @@ def create_app(
         return CompleteResponse(task=TaskPayload.from_task(updated))
 
     @app.post(
+        "/tasks/{task_id}/events",
+        response_model=TaskEventResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": TaskEventResponse,
+                "description": "Diagnostic task event appended.",
+            },
+            status.HTTP_400_BAD_REQUEST: {
+                "model": ErrorResponse,
+                "description": "Only llm.* diagnostic events are accepted on this endpoint.",
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Task does not exist.",
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def record_task_event(
+        request: Request, task_id: str, payload: TaskEventRequest
+    ) -> TaskEventResponse | JSONResponse:
+        """Append a non-state-changing diagnostic event for a task."""
+
+        _require_token_owner(request, payload.worker_id)
+        if not payload.event_type.startswith("llm."):
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_event_type",
+                    detail="diagnostic endpoint accepts only llm.* event types",
+                ).model_dump(exclude_none=True),
+            )
+        try:
+            await repo.record_task_event(
+                task_id,
+                payload.event_type,
+                payload.payload,
+                detail=payload.detail,
+            )
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        logger.debug(
+            "record_task_event: worker=%s task=%s event_type=%s",
+            payload.worker_id,
+            task_id,
+            payload.event_type,
+        )
+        return TaskEventResponse()
+
+    @app.post(
         "/tasks/{task_id}/fail",
         response_model=FailResponse,
         responses={
@@ -1801,6 +1935,112 @@ def create_app(
             "Vary": "Origin",
         }
         return JSONResponse(payload, headers=headers)
+
+    @app.get(
+        "/llm-ops",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def llm_ops_index(task_id: str | None = None) -> Response:
+        """Minimal browser UI for LLM Ops task traces and artifacts."""
+
+        if task_id:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT event_type, payload, detail, created_at
+                    FROM events
+                    WHERE task_id = $1 AND event_type LIKE 'llm.%'
+                    ORDER BY id
+                    """,
+                    task_id,
+                )
+            if not rows:
+                return _html_page(
+                    f"LLM Ops - {task_id}",
+                    f"<p><a href=\"/llm-ops\">← all tasks</a></p><h1>{html.escape(task_id)}</h1>"
+                    "<p class=\"bad\">No LLM Ops events found for this task.</p>",
+                )
+
+            latest = _decode_json_value(rows[-1]["detail"]) or _decode_json_value(rows[-1]["payload"])
+            prompt_label, prompt_text = _read_preview(_artifact_path(latest.get("prompt_path")))
+            summary_label, summary_text = _read_preview(_artifact_path(latest.get("summary_path")))
+            raw_label, raw_text = _read_preview(_artifact_path(latest.get("raw_log_path")), raw_jsonl=True)
+            final_label, final_text = _read_preview(_artifact_path(latest.get("final_path")))
+            event_items = []
+            for row in rows:
+                payload = _decode_json_value(row["payload"])
+                event_items.append(
+                    "<tr>"
+                    f"<td>{html.escape(str(row['created_at']))}</td>"
+                    f"<td><code>{html.escape(row['event_type'])}</code></td>"
+                    f"<td>{html.escape(str(payload.get('status', '')))}</td>"
+                    f"<td>{html.escape(str(payload.get('provider', '')))}</td>"
+                    f"<td>{html.escape(str(payload.get('model', '')))}</td>"
+                    "</tr>"
+                )
+            body = f"""
+<p><a href="/llm-ops">← all tasks</a> · <a href="/">dashboard</a></p>
+<h1>LLM Ops: {html.escape(task_id)}</h1>
+<table>
+  <thead><tr><th>Time</th><th>Event</th><th>Status</th><th>Provider</th><th>Model</th></tr></thead>
+  <tbody>{''.join(event_items)}</tbody>
+</table>
+<h2>Prompt <span class="muted">{html.escape(prompt_label)}</span></h2>
+<pre>{html.escape(prompt_text)}</pre>
+<h2>Summary <span class="muted">{html.escape(summary_label)}</span></h2>
+<pre>{html.escape(summary_text)}</pre>
+<h2>Raw CLI Stream <span class="muted">{html.escape(raw_label)}</span></h2>
+<pre>{html.escape(raw_text)}</pre>
+<h2>Final Output <span class="muted">{html.escape(final_label)}</span></h2>
+<pre>{html.escape(final_text)}</pre>
+"""
+            return _html_page(f"LLM Ops - {task_id}", body)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (e.task_id)
+                    e.task_id,
+                    t.status AS task_status,
+                    e.event_type,
+                    e.payload,
+                    e.created_at
+                FROM events e
+                LEFT JOIN tasks t ON t.id = e.task_id
+                WHERE e.task_id IS NOT NULL AND e.event_type LIKE 'llm.%'
+                ORDER BY e.task_id, e.id DESC
+                """
+            )
+        rows = sorted(rows, key=lambda row: row["created_at"], reverse=True)
+        body_rows = []
+        for row in rows:
+            payload = _decode_json_value(row["payload"])
+            status_class = "ok" if payload.get("status") == "success" else ""
+            body_rows.append(
+                "<tr>"
+                f"<td><a href=\"/llm-ops?task_id={html.escape(row['task_id'])}\">"
+                f"{html.escape(row['task_id'])}</a></td>"
+                f"<td>{html.escape(str(row['task_status'] or ''))}</td>"
+                f"<td class=\"{status_class}\">{html.escape(str(payload.get('status', '')))}</td>"
+                f"<td>{html.escape(str(payload.get('provider', '')))}</td>"
+                f"<td>{html.escape(str(payload.get('model', '')))}</td>"
+                f"<td>{html.escape(str(payload.get('usage', {}).get('duration_ms', '')))}</td>"
+                f"<td>{html.escape(str(row['created_at']))}</td>"
+                "</tr>"
+            )
+        body = f"""
+<p><a href="/">dashboard</a></p>
+<h1>LLM Ops</h1>
+<p class="muted">Task-level LLM traces from Postgres events plus files from WHILLY_LOG_DIR.</p>
+<table>
+  <thead>
+    <tr><th>Task</th><th>Task Status</th><th>LLM Status</th><th>Provider</th><th>Model</th><th>Duration ms</th><th>Updated</th></tr>
+  </thead>
+  <tbody>{''.join(body_rows)}</tbody>
+</table>
+"""
+        return _html_page("LLM Ops", body)
 
     @app.get(
         "/",

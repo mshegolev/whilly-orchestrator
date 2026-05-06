@@ -201,6 +201,7 @@ no effect.
 | `whilly --init "desc"` | (deferred to v4.1; PRD wizard is v3-only) |
 | `whilly --prd-wizard` | (deferred to v4.1) |
 | `whilly --workspace` / `--worktree` | (removed) |
+| v3 plan-level TRIZ challenge | `whilly plan triz <plan_id> [--json] [--strict]` |
 | (new) | `whilly plan show <plan_id>` — ASCII DAG |
 | (new) | `whilly plan export <plan_id> > tasks.json` |
 | (new) | `whilly dashboard --plan <plan_id>` — Rich Live TUI |

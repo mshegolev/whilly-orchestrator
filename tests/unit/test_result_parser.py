@@ -164,6 +164,48 @@ def test_full_envelope_is_parsed_into_all_fields() -> None:
     )
 
 
+def test_claude_stream_event_array_uses_final_result_for_usage() -> None:
+    """Claude Code can emit a JSON array of stream events even in json mode."""
+
+    raw = json.dumps(
+        [
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "running checks"}]},
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "duration_ms": 30002,
+                "num_turns": 6,
+                "result": "All checks pass.\n\n" + COMPLETION_MARKER,
+                "total_cost_usd": 0.22756335,
+                "usage": {
+                    "input_tokens": 5,
+                    "cache_creation_input_tokens": 51121,
+                    "cache_read_input_tokens": 84382,
+                    "output_tokens": 702,
+                },
+            },
+        ]
+    )
+
+    result = parse_output(raw)
+
+    assert result.output == "All checks pass.\n\n" + COMPLETION_MARKER
+    assert result.is_complete is True
+    assert result.usage == AgentUsage(
+        input_tokens=5,
+        output_tokens=702,
+        cache_read_tokens=84382,
+        cache_create_tokens=51121,
+        cost_usd=0.22756335,
+        num_turns=6,
+        duration_ms=30002,
+    )
+
+
 def test_envelope_without_marker_is_not_complete() -> None:
     result = parse_output(_envelope(result="No completion signal here."))
     assert result.is_complete is False

@@ -61,14 +61,18 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 # fmt: off
 import shutil  # noqa: I001 — see module docstring "Layering exception"
 import subprocess  # noqa: I001 — see module docstring "Layering exception"
 # fmt: on
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from typing import Literal
 
-from whilly.core.models import Task
+from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
+from whilly.core.models import Plan, Task, TaskId
+from whilly.core.scheduler import detect_cycles
 from whilly.security.prompt_sanitizer import GUARD_SENTENCE, sanitize_external_text
 
 __all__ = [
@@ -76,11 +80,16 @@ __all__ = [
     "LOG_EVENT_CLAUDE_MISSING",
     "LOG_EVENT_PARSE_ERROR",
     "LOG_EVENT_TIMEOUT",
+    "PlanTrizFinding",
+    "PlanTrizReport",
     "TIMEOUT_SECONDS",
     "TrizFinding",
     "TrizOutcome",
     "analyze_contradiction",
     "analyze_contradiction_with_outcome",
+    "analyze_plan_triz",
+    "format_plan_triz_report",
+    "plan_triz_report_to_dict",
 ]
 
 logger = logging.getLogger(__name__)
@@ -119,6 +128,54 @@ LOG_EVENT_PARSE_ERROR: str = "triz.parse_error"
 ERROR_REASON_TIMEOUT: str = "timeout"
 ERROR_REASON_CLAUDE_MISSING: str = "claude_missing"
 ERROR_REASON_PARSE_ERROR: str = "parse_error"
+
+PlanTrizSeverity = Literal["critical", "high", "medium", "low"]
+PlanTrizVerdict = Literal["approve", "revise", "reject"]
+
+_OVER_ENGINEERING_TERMS: tuple[str, ...] = (
+    "abstraction",
+    "framework",
+    "generic",
+    "pluggable",
+    "future-proof",
+    "scalable",
+    "универсаль",
+    "фреймворк",
+    "абстракц",
+)
+_NORMALIZE_RE = re.compile(r"[^a-z0-9а-яё]+", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class PlanTrizFinding:
+    """Deterministic v4 plan-level TRIZ/challenge finding.
+
+    This is the v4 port of the useful part of the legacy plan-level TRIZ
+    analyzer: before dispatch, challenge plan structure for contradictions,
+    waste, sequencing errors, and weak task definitions. It is deliberately
+    pure and deterministic; no LLM call is made here.
+    """
+
+    severity: PlanTrizSeverity
+    category: str
+    task_ids: tuple[TaskId, ...]
+    title: str
+    recommendation: str
+    triz_principle: int | None = None
+
+
+@dataclass(frozen=True)
+class PlanTrizReport:
+    """Plan-level TRIZ preflight report for a v4 imported plan."""
+
+    plan_id: str
+    task_count: int
+    verdict: PlanTrizVerdict
+    ideality_score: float
+    findings: tuple[PlanTrizFinding, ...]
+    mergeable_groups: tuple[tuple[TaskId, ...], ...] = ()
+    removable_tasks: tuple[TaskId, ...] = ()
+    summary: str = ""
 
 
 @dataclass(frozen=True)
@@ -179,6 +236,252 @@ class TrizOutcome:
 
     finding: TrizFinding | None
     error_reason: str | None = None
+
+
+def analyze_plan_triz(plan: Plan) -> PlanTrizReport:
+    """Run a deterministic plan-level TRIZ preflight.
+
+    Legacy v3 had an LLM-backed ``challenge_plan``/``analyze_plan_triz``
+    pass over a whole task list. v4's original port only kept per-task
+    TRIZ on FAIL transitions. This function restores the plan-level
+    operator value in a v4-safe way: it inspects the imported
+    :class:`Plan` directly, uses the pure Decision Gate, and returns a
+    serialisable report without touching subprocesses, the network, or
+    Postgres.
+    """
+
+    tasks = tuple(plan.tasks)
+    findings: list[PlanTrizFinding] = []
+
+    findings.extend(_decision_gate_findings(tasks))
+    findings.extend(_dependency_findings(plan))
+    duplicate_groups = _duplicate_description_groups(tasks)
+    findings.extend(_duplicate_findings(duplicate_groups))
+    file_groups = _shared_file_groups(tasks)
+    findings.extend(_shared_file_findings(file_groups))
+    findings.extend(_over_engineering_findings(tasks))
+
+    removable = tuple(tid for group in duplicate_groups for tid in group[1:])
+    mergeable = tuple(duplicate_groups + file_groups)
+    verdict = _plan_triz_verdict(findings)
+    score = _ideality_score(len(tasks), findings)
+    summary = _plan_triz_summary(verdict, findings)
+    return PlanTrizReport(
+        plan_id=plan.id,
+        task_count=len(tasks),
+        verdict=verdict,
+        ideality_score=score,
+        findings=tuple(findings),
+        mergeable_groups=mergeable,
+        removable_tasks=removable,
+        summary=summary,
+    )
+
+
+def plan_triz_report_to_dict(report: PlanTrizReport) -> dict[str, object]:
+    """Return a JSON-friendly dict for :class:`PlanTrizReport`."""
+
+    return asdict(report)
+
+
+def format_plan_triz_report(report: PlanTrizReport) -> str:
+    """Render a compact operator-facing TRIZ report."""
+
+    lines = [
+        f"TRIZ Plan Analysis: {report.plan_id}",
+        "────────────────────────────────────────",
+        f"Verdict: {report.verdict.upper()}",
+        f"Ideality: {report.ideality_score:.0%}",
+        f"Tasks: {report.task_count}",
+    ]
+    if report.summary:
+        lines.append(f"Summary: {report.summary}")
+    if report.mergeable_groups:
+        groups = ["+".join(group) for group in report.mergeable_groups]
+        lines.append(f"Mergeable/resource groups: {', '.join(groups)}")
+    if report.removable_tasks:
+        lines.append(f"Removable candidates: {', '.join(report.removable_tasks)}")
+    lines.append("")
+
+    if not report.findings:
+        lines.append("No TRIZ preflight findings.")
+        return "\n".join(lines) + "\n"
+
+    lines.append("Findings:")
+    for idx, finding in enumerate(report.findings, 1):
+        principle = f" · TRIZ #{finding.triz_principle}" if finding.triz_principle is not None else ""
+        tasks = ", ".join(finding.task_ids) if finding.task_ids else "-"
+        lines.append(f"{idx}. [{finding.severity.upper()}] {finding.category}{principle}")
+        lines.append(f"   Tasks: {tasks}")
+        lines.append(f"   {finding.title}")
+        lines.append(f"   Recommendation: {finding.recommendation}")
+    return "\n".join(lines) + "\n"
+
+
+def _decision_gate_findings(tasks: tuple[Task, ...]) -> list[PlanTrizFinding]:
+    findings: list[PlanTrizFinding] = []
+    for task in tasks:
+        verdict = evaluate_decision_gate(task)
+        if verdict.kind == GateVerdictKind.ALLOW:
+            continue
+        missing = ", ".join(verdict.missing)
+        severity: PlanTrizSeverity = "high" if "description" in verdict.missing else "medium"
+        findings.append(
+            PlanTrizFinding(
+                severity=severity,
+                category="weak_task_definition",
+                task_ids=(task.id,),
+                title=f"Task fails Decision Gate: missing {missing}",
+                recommendation="Add concrete acceptance criteria and test steps before dispatch.",
+                triz_principle=10,
+            )
+        )
+    return findings
+
+
+def _dependency_findings(plan: Plan) -> list[PlanTrizFinding]:
+    tasks = tuple(plan.tasks)
+    by_id = {task.id: task for task in tasks}
+    findings: list[PlanTrizFinding] = []
+    for cycle in detect_cycles(plan):
+        cycle_ids = tuple(cycle)
+        findings.append(
+            PlanTrizFinding(
+                severity="critical",
+                category="dependency_contradiction",
+                task_ids=cycle_ids,
+                title="Tasks depend on each other cyclically, so no valid execution order exists.",
+                recommendation="Break the cycle by extracting a prerequisite task or removing a false dependency.",
+                triz_principle=2,
+            )
+        )
+    for task in tasks:
+        missing = tuple(dep for dep in task.dependencies if dep not in by_id)
+        if not missing:
+            continue
+        findings.append(
+            PlanTrizFinding(
+                severity="high",
+                category="missing_dependency_resource",
+                task_ids=(task.id,),
+                title=f"Task references dependency id(s) not present in the plan: {', '.join(missing)}",
+                recommendation="Import the missing prerequisite task or remove the dependency edge.",
+                triz_principle=10,
+            )
+        )
+    return findings
+
+
+def _duplicate_description_groups(tasks: tuple[Task, ...]) -> list[tuple[TaskId, ...]]:
+    buckets: dict[str, list[TaskId]] = {}
+    for task in tasks:
+        key = _normalize_description(task.description)
+        if key:
+            buckets.setdefault(key, []).append(task.id)
+    return [tuple(ids) for ids in buckets.values() if len(ids) > 1]
+
+
+def _duplicate_findings(groups: list[tuple[TaskId, ...]]) -> list[PlanTrizFinding]:
+    return [
+        PlanTrizFinding(
+            severity="medium",
+            category="duplicate_work",
+            task_ids=group,
+            title="Multiple tasks have the same effective description.",
+            recommendation="Merge duplicate tasks or split their acceptance criteria so each task owns a distinct result.",
+            triz_principle=5,
+        )
+        for group in groups
+    ]
+
+
+def _shared_file_groups(tasks: tuple[Task, ...]) -> list[tuple[TaskId, ...]]:
+    by_file: dict[str, list[TaskId]] = {}
+    for task in tasks:
+        for path in task.key_files:
+            normalized = path.strip()
+            if normalized:
+                by_file.setdefault(normalized, []).append(task.id)
+    groups: list[tuple[TaskId, ...]] = []
+    seen: set[tuple[TaskId, ...]] = set()
+    for ids in by_file.values():
+        group = tuple(sorted(set(ids)))
+        if len(group) > 1 and group not in seen:
+            groups.append(group)
+            seen.add(group)
+    return groups
+
+
+def _shared_file_findings(groups: list[tuple[TaskId, ...]]) -> list[PlanTrizFinding]:
+    return [
+        PlanTrizFinding(
+            severity="medium",
+            category="resource_conflict",
+            task_ids=group,
+            title="Several tasks edit the same key file, increasing merge/conflict cost.",
+            recommendation="Sequence the tasks with explicit dependencies or combine them into one file-local task.",
+            triz_principle=5,
+        )
+        for group in groups
+    ]
+
+
+def _over_engineering_findings(tasks: tuple[Task, ...]) -> list[PlanTrizFinding]:
+    findings: list[PlanTrizFinding] = []
+    for task in tasks:
+        desc = task.description.lower()
+        if not any(term in desc for term in _OVER_ENGINEERING_TERMS):
+            continue
+        if task.acceptance_criteria and task.test_steps:
+            continue
+        findings.append(
+            PlanTrizFinding(
+                severity="low",
+                category="over_engineering_risk",
+                task_ids=(task.id,),
+                title="Task asks for a broad abstraction without enough proof of immediate value.",
+                recommendation="Invert the approach: implement the narrow user-visible behavior first, then generalize.",
+                triz_principle=13,
+            )
+        )
+    return findings
+
+
+def _normalize_description(description: str) -> str:
+    lowered = description.strip().lower()
+    return _NORMALIZE_RE.sub(" ", lowered).strip()
+
+
+def _plan_triz_verdict(findings: list[PlanTrizFinding]) -> PlanTrizVerdict:
+    severities = {finding.severity for finding in findings}
+    if "critical" in severities:
+        return "reject"
+    if severities & {"high", "medium"}:
+        return "revise"
+    return "approve"
+
+
+def _ideality_score(task_count: int, findings: list[PlanTrizFinding]) -> float:
+    if task_count <= 0:
+        return 1.0
+    weights = {"critical": 4.0, "high": 2.0, "medium": 1.0, "low": 0.5}
+    penalty = sum(weights[finding.severity] for finding in findings)
+    score = 1.0 - (penalty / max(1.0, task_count * 3.0))
+    return round(max(0.0, min(1.0, score)), 2)
+
+
+def _plan_triz_summary(verdict: PlanTrizVerdict, findings: list[PlanTrizFinding]) -> str:
+    if not findings:
+        return "Plan has no structural TRIZ findings."
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.severity] = counts.get(finding.severity, 0) + 1
+    parts = ", ".join(f"{severity}={counts[severity]}" for severity in sorted(counts))
+    if verdict == "reject":
+        return f"Blocking contradictions found ({parts}). Fix before dispatch."
+    if verdict == "revise":
+        return f"Plan is runnable but should be tightened ({parts})."
+    return f"Only low-risk improvements found ({parts})."
 
 
 # Master prompt for the per-task TRIZ analyzer. Kept short and

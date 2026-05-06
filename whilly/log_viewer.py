@@ -162,9 +162,18 @@ def _apply_event(s: TaskSummary, entry: dict) -> None:
         s.status = "done"
         s.duration_s = float(entry.get("duration_s", 0) or 0)
         s.cost_usd = float(entry.get("cost_usd", 0) or 0)
+    elif event in ("COMPLETE", "llm.run_finished"):
+        s.status = "done"
+        usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
+        s.duration_s = float(usage.get("duration_ms", 0) or 0) / 1000
+        s.cost_usd = float(usage.get("cost_usd", 0) or 0)
+    elif event in ("FAIL", "llm.run_failed"):
+        s.status = "failed"
+    elif event == "llm.run_cancelled":
+        s.status = "cancelled"
     elif event == "task_skipped":
         s.status = "skipped"
-    elif event in ("task_start", "batch_start"):
+    elif event in ("task_start", "batch_start", "START", "llm.run_started"):
         if s.status == "unknown":
             s.status = "started"
 
@@ -210,7 +219,7 @@ def cmd_list(log_dir: Path) -> int:
                     text = c(text, GR)
                 elif value == "skipped":
                     text = c(text, YL)
-                elif value in ("failed", "unknown"):
+                elif value in ("failed", "cancelled", "unknown"):
                     text = c(text, RD)
             cells.append(text)
         return "  ".join(cells)

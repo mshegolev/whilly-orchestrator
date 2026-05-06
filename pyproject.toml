@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whilly-orchestrator"
-version = "4.6.1"
+version = "4.6.2"
 description = "Whilly v4.0 — distributed orchestrator with Postgres-backed task queue, FastAPI control plane, and remote workers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -59,6 +59,15 @@ server = [
     "jinja2>=3.1",
     "prometheus-fastapi-instrumentator>=7.1.0",
     "prometheus-client>=0.20",
+]
+# Optional LLM Ops export stack. The core Whilly trace files + Postgres
+# events work without these packages; install this extra when exporting
+# spans to Langfuse, Phoenix, or a generic OTLP/HTTP collector.
+llmops = [
+    "opentelemetry-api>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+    "traceloop-sdk>=0.41",
 ]
 # Convenience: install both deployment shapes in one go (e.g. for an
 # all-in-one demo or for CI that drives both the server and a remote

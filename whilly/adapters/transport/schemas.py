@@ -380,6 +380,26 @@ class CompleteResponse(_FrozenModel):
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic task events
+# ---------------------------------------------------------------------------
+
+
+class TaskEventRequest(_FrozenModel):
+    """``POST /tasks/{task_id}/events`` request body for diagnostic events."""
+
+    worker_id: NonEmptyShortStr
+    event_type: NonEmptyShortStr
+    payload: dict[str, Any] = Field(default_factory=dict)
+    detail: dict[str, Any] | None = None
+
+
+class TaskEventResponse(_FrozenModel):
+    """Acknowledgement for a diagnostic event append."""
+
+    ok: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Fail
 # ---------------------------------------------------------------------------
 
@@ -537,4 +557,6 @@ __all__ = [
     "ReleaseRequest",
     "ReleaseResponse",
     "TaskPayload",
+    "TaskEventRequest",
+    "TaskEventResponse",
 ]
