@@ -165,6 +165,7 @@ def wrap_description_in_envelope(description: str, *, task_id: str, plan_id: str
         )
     )
 
+
 PR_REVIEW_COMMENT_SCOPE = "pr_review_comment"
 PR_DIFF_SCOPE = "pr_diff"
 
