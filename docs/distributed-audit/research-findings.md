@@ -555,7 +555,7 @@ Concrete dashboard recipe (mixed): **poll for the table outline every 5s; SSE fo
   <tbody hx-get="/dashboard/workers/fragment"
          hx-trigger="every 5s"
          hx-swap="innerHTML">
-    {% raw %}{% include "_worker_rows.html" %}{% endraw %}
+    {% include "_worker_rows.html" %}
   </tbody>
 </table>
 ```
