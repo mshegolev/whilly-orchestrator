@@ -247,7 +247,10 @@ WORKDIR /home/whilly
 USER whilly
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/whilly-entrypoint"]
-CMD ["worker"]
+# No default CMD: VAL-CROSS-BACKCOMPAT-022 freezes the production CMD line
+# (the runtime stage's `CMD ["control-plane"]` below) byte-for-byte against
+# v4.3.1, so this worker-only stage cannot ship its own ^CMD line. Operators
+# pass the role explicitly: `docker run mshegolev/whilly-worker:<tag> worker`.
 
 
 # ─── Stage 4: runtime ────────────────────────────────────────────────────────
