@@ -208,6 +208,13 @@ whilly forge intake mshegolev/whilly-orchestrator/123
 # 4a. All-in-one local mode — control plane embedded in the worker process.
 whilly run --plan "$PLAN_ID"
 
+# 4a-bonus. Optional: post a "run finished" message to Slack on completion.
+#           Token + channel are the only required vars; everything else has
+#           sensible defaults in whilly/config.py. See docs/Whilly-Usage.md
+#           for the full env-var list and message-template override.
+export SLACK_ACCESS_TOKEN=xoxb-...        # or xoxe.xoxp-... (rotated user)
+export WHILLY_SLACK_CHANNEL=C0B1WT58EBE
+
 # 4b. Distributed mode — control plane + remote worker on different hosts.
 #     a) on the control-plane box, mint the cluster bootstrap secret:
 export WHILLY_WORKER_BOOTSTRAP_TOKEN=$(openssl rand -hex 32)

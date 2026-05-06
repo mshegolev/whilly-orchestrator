@@ -72,16 +72,21 @@ import logging
 import os
 import socket
 import sys
+import time
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
 from whilly.adapters.db import TaskRepository, close_pool, create_pool
+from whilly.adapters.notifications import make_notifier
 from whilly.adapters.runner import run_task
 from whilly.audit import JsonlEventSink
 from whilly.cli.plan import _select_plan_with_tasks
+from whilly.config import WhillyConfig
 from whilly.core.models import WorkerId
+from whilly.core.notifications import NotificationPort, RunCompletedEvent
 from whilly.sinks.post_complete_pr_hook import (
     is_auto_open_pr_enabled,
     make_post_complete_hook,
@@ -186,6 +191,7 @@ def run_run_command(
     argv: Sequence[str],
     *,
     runner: RunnerCallable | None = None,
+    notifier: NotificationPort | None = None,
     install_signal_handlers: bool = True,
 ) -> int:
     """Entry point for ``whilly run ...``; returns the process exit code.
@@ -195,6 +201,12 @@ def run_run_command(
     :func:`whilly.adapters.runner.run_task` is used. Unit tests pass a stub
     coroutine so the CLI plumbing — argparse, pool lifecycle, registration,
     plan load — is exercised end-to-end without spawning ``claude``.
+
+    ``notifier`` is the symmetric seam for the post-run Slack notification
+    port (:class:`whilly.core.notifications.NotificationPort`). Production
+    callers leave it ``None`` so :func:`whilly.adapters.notifications.make_notifier`
+    resolves the configured adapter from :class:`WhillyConfig` (Slack when
+    fully configured, no-op otherwise). Tests inject a recording stub.
 
     ``install_signal_handlers`` mirrors :func:`whilly.worker.main.run_worker`'s
     parameter of the same name. Production CLI invocations always run in
@@ -223,6 +235,9 @@ def run_run_command(
 
     worker_id = _resolve_worker_id(args.worker_id)
     effective_runner = runner if runner is not None else run_task
+    cfg = WhillyConfig.from_env()
+    effective_notifier = notifier if notifier is not None else make_notifier(cfg, logger)
+    start = time.monotonic()
 
     try:
         stats = asyncio.run(
@@ -238,6 +253,7 @@ def run_run_command(
             )
         )
     except _PlanNotFoundError as exc:
+        # Misconfig, not "work complete" — no notification.
         print(
             f"whilly run: plan {exc.plan_id!r} not found — check the id matches the "
             "'plan_id' you used at import time, or run `whilly plan import` first.",
@@ -254,6 +270,24 @@ def run_run_command(
         ),
         file=sys.stderr,
     )
+
+    event = RunCompletedEvent(
+        plan_id=args.plan_id,
+        worker_id=worker_id,
+        hostname=socket.gethostname(),
+        iterations=stats.iterations,
+        completed=stats.completed,
+        failed=stats.failed,
+        idle_polls=stats.idle_polls,
+        released_on_shutdown=stats.released_on_shutdown,
+        duration_s=time.monotonic() - start,
+        completed_at=datetime.now(tz=timezone.utc),
+    )
+    try:
+        effective_notifier.notify_run_completed(event)
+    except Exception:  # belt-and-braces; the adapter already swallows
+        logger.exception("whilly run: notifier raised")
+
     return EXIT_OK
 
 

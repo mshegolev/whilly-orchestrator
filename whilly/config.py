@@ -127,6 +127,21 @@ class WhillyConfig:
     PR_FEEDBACK_POLL_INTERVAL: int = 60  # WHILLY_PR_FEEDBACK_POLL_INTERVAL — seconds between polls in long-running mode
     MAX_REVIEW_ITERATIONS: int = 3  # WHILLY_MAX_REVIEW_ITERATIONS — cap on follow-up rev tasks per originating task
 
+    # Slack run-completed notification (whilly.adapters.notifications.slack).
+    # Token also accepts bare ``SLACK_ACCESS_TOKEN`` env var so the operator-
+    # facing setup matches the Slack docs / SDK examples without WHILLY_ prefix.
+    SLACK_ACCESS_TOKEN: str = ""
+    SLACK_CHANNEL: str = ""  # Channel id, e.g. "C0B1WT58EBE"
+    SLACK_ENABLED: bool = True  # explicit kill switch; gated also by token+channel
+    SLACK_API_BASE_URL: str = "https://slack.com/api"
+    SLACK_TIMEOUT_S: float = 5.0
+    SLACK_MESSAGE_TEMPLATE: str = (
+        ":white_check_mark: whilly run finished — "
+        "plan={plan_id} completed={completed} failed={failed} "
+        "iterations={iterations} duration={duration_s:.1f}s "
+        "worker={worker_id}@{hostname}"
+    )
+
     @classmethod
     def from_env(cls) -> WhillyConfig:
         """Load config using the full layered pipeline.
@@ -135,7 +150,14 @@ class WhillyConfig:
         :func:`load_layered`, so TOML support is picked up automatically by
         every existing call site (cli, resource monitor, dashboard, agents).
         """
-        return load_layered()
+        cfg = load_layered()
+        # Bare ``SLACK_ACCESS_TOKEN`` (no WHILLY_ prefix) — accepted as a
+        # convenience so the operator's env matches Slack's own docs. Falls
+        # back only when the prefixed form wasn't already resolved by the
+        # layered loader.
+        if not cfg.SLACK_ACCESS_TOKEN:
+            cfg.SLACK_ACCESS_TOKEN = os.environ.get("SLACK_ACCESS_TOKEN", "")
+        return cfg
 
     @classmethod
     def from_env_only(cls) -> WhillyConfig:
