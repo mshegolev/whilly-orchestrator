@@ -72,6 +72,8 @@ from whilly.adapters.transport.schemas import (
     HeartbeatResponse,
     RegisterRequest,
     RegisterResponse,
+    TaskEventRequest,
+    TaskEventResponse,
     TaskPayload,
 )
 
@@ -181,6 +183,8 @@ __all__ = [
     "HeartbeatResponse",
     "RegisterRequest",
     "RegisterResponse",
+    "TaskEventRequest",
+    "TaskEventResponse",
     "RemoteWorkerClient",
     "ServerError",
     "TaskPayload",

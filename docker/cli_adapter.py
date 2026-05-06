@@ -58,10 +58,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 # llm_resource_picker — рядом, добавляем в sys.path для импорта.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -72,6 +74,14 @@ except ImportError:
 
 
 _COMPLETE_MARKER = "<promise>COMPLETE</promise>"
+_RAW_LOG_PATH_ENV = "WHILLY_LLM_RAW_LOG_PATH"
+_SESSION_ID_ENV = "WHILLY_LLM_SESSION_ID"
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{16,}"),
+    re.compile(r"AIza[0-9A-Za-z_-]{20,}"),
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -148,6 +158,82 @@ def _emit_envelope(
     return 0
 
 
+def _redact_text(text: str) -> str:
+    redacted = text
+    for pattern in _SECRET_PATTERNS:
+        redacted = pattern.sub(lambda m: (m.group(1) if m.groups() else "") + "<redacted>", redacted)
+    return redacted
+
+
+def _scrub_cmd(cmd: list[str], prompt: str) -> list[str]:
+    scrubbed: list[str] = []
+    skip_next_prompt = False
+    for arg in cmd:
+        if skip_next_prompt:
+            scrubbed.append("<prompt>")
+            skip_next_prompt = False
+            continue
+        if arg == "-p":
+            scrubbed.append(arg)
+            skip_next_prompt = True
+            continue
+        if arg == prompt:
+            scrubbed.append("<prompt>")
+        elif "\n" in arg or len(arg) > 160:
+            scrubbed.append("<redacted-long-arg>")
+        else:
+            scrubbed.append(_redact_text(arg))
+    return scrubbed
+
+
+def _append_raw_cli_log(
+    *,
+    cli_name: str,
+    cmd: list[str],
+    prompt: str,
+    result: object,
+    duration_ms: int,
+) -> None:
+    """Write native CLI stdout/stderr to the per-attempt raw artifact."""
+
+    raw_path = os.environ.get(_RAW_LOG_PATH_ENV, "").strip()
+    if not raw_path:
+        return
+    try:
+        path = Path(raw_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stdout = _redact_text(str(getattr(result, "stdout", "") or ""))
+        stderr = _redact_text(str(getattr(result, "stderr", "") or ""))
+        returncode = int(getattr(result, "returncode", 0) or 0)
+        with path.open("a", encoding="utf-8") as fh:
+            header = {
+                "ts": time.time(),
+                "type": "cli_run",
+                "session_id": os.environ.get(_SESSION_ID_ENV, ""),
+                "cli": cli_name,
+                "cmd": _scrub_cmd(cmd, prompt),
+                "returncode": returncode,
+                "duration_ms": duration_ms,
+            }
+            fh.write(json.dumps(header, ensure_ascii=False, sort_keys=True) + "\n")
+            for stream_name, text in (("stdout", stdout), ("stderr", stderr)):
+                for line in text.splitlines():
+                    entry = {
+                        "ts": time.time(),
+                        "type": f"cli_{stream_name}",
+                        "line": line,
+                    }
+                    try:
+                        parsed = json.loads(line)
+                    except json.JSONDecodeError:
+                        parsed = None
+                    if isinstance(parsed, dict):
+                        entry["event_type"] = parsed.get("type") or parsed.get("event")
+                    fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        print("cli_adapter: failed to append raw LLM log", file=sys.stderr)
+
+
 def _resolve_model(provider: str, cli_model: str | None) -> str | None:
     """Какую модель попросить у CLI.
 
@@ -191,12 +277,15 @@ def run_claude_code(prompt: str, model: str | None) -> int:
     if model:
         cmd += ["--model", model]
     cmd += ["-p", prompt]
+    t0 = time.time()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     except subprocess.TimeoutExpired:
         return _emit_error("claude-code: timeout after 600s", 1)
     except FileNotFoundError:
         return _emit_error("claude-code: 'claude' binary not found in PATH", 2)
+    duration_ms = int((time.time() - t0) * 1000)
+    _append_raw_cli_log(cli_name="claude-code", cmd=cmd, prompt=prompt, result=result, duration_ms=duration_ms)
 
     sys.stderr.write(result.stderr)
     sys.stdout.write(result.stdout)
@@ -209,7 +298,10 @@ def run_claude_code(prompt: str, model: str | None) -> int:
 def run_opencode(prompt: str, model: str | None) -> int:
     """OpenCode — JSONL stream → собираем финальный result event.
 
-    OpenCode ``run --format json`` пишет stream событий:
+    OpenCode ``run --format json`` пишет stream событий. Старые версии
+    использовали ``event=result`` / ``event=message``; новые версии
+    (1.14.x) отдают ``type=text`` с полезной нагрузкой в ``part.text`` и
+    ``type=step_finish`` с usage/cost в ``part.tokens`` / ``part.cost``:
         {"event":"init", ...}
         {"event":"message", ...}
         {"event":"tool_use", ...}
@@ -231,6 +323,7 @@ def run_opencode(prompt: str, model: str | None) -> int:
     except FileNotFoundError:
         return _emit_error("opencode: 'opencode' binary not found in PATH", 2)
     duration_ms = int((time.time() - t0) * 1000)
+    _append_raw_cli_log(cli_name="opencode", cmd=cmd, prompt=prompt, result=result, duration_ms=duration_ms)
 
     sys.stderr.write(result.stderr)
 
@@ -266,6 +359,22 @@ def run_opencode(prompt: str, model: str | None) -> int:
             content = event.get("content")
             if isinstance(content, str):
                 message_buffer += content
+        elif event.get("type") == "text":
+            # OpenCode 1.14.x shape:
+            # {"type":"text", "part":{"type":"text", "text":"..."}}
+            part = event.get("part") or {}
+            content = part.get("text") if isinstance(part, dict) else None
+            if isinstance(content, str):
+                message_buffer += content
+        elif event.get("type") in ("step_finish", "step-finish"):
+            # OpenCode 1.14.x puts usage on the terminal step event.
+            part = event.get("part") or {}
+            if isinstance(part, dict):
+                tokens = part.get("tokens") or {}
+                if isinstance(tokens, dict):
+                    input_tokens = tokens.get("input", tokens.get("input_tokens", input_tokens)) or input_tokens
+                    output_tokens = tokens.get("output", tokens.get("output_tokens", output_tokens)) or output_tokens
+                total_cost = float(part.get("cost", total_cost) or total_cost)
 
     if not final_text:
         final_text = message_buffer
@@ -299,6 +408,7 @@ def run_gemini(prompt: str, model: str | None) -> int:
     except FileNotFoundError:
         return _emit_error("gemini: 'gemini' binary not found in PATH", 2)
     duration_ms = int((time.time() - t0) * 1000)
+    _append_raw_cli_log(cli_name="gemini", cmd=cmd, prompt=prompt, result=result, duration_ms=duration_ms)
 
     sys.stderr.write(result.stderr)
 
@@ -393,6 +503,7 @@ def run_codex(prompt: str, model: str | None) -> int:
         except FileNotFoundError:
             return _emit_error("codex: 'codex' binary not found in PATH", 2)
         duration_ms = int((time.time() - t0) * 1000)
+        _append_raw_cli_log(cli_name="codex", cmd=cmd, prompt=prompt, result=result, duration_ms=duration_ms)
 
         sys.stderr.write(result.stderr)
 

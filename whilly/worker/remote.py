@@ -118,6 +118,18 @@ from whilly.adapters.transport.client import HTTPClientError, RemoteWorkerClient
 from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON, scan_task_command_surface
 from whilly.core.models import Plan, Task, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON, PromptInjectionBlocked, build_task_prompt
+from whilly.llm_ops import (
+    LLM_RUN_CANCELLED_EVENT_TYPE,
+    LLM_RUN_FAILED_EVENT_TYPE,
+    LLM_RUN_FINISHED_EVENT_TYPE,
+    LLM_RUN_STARTED_EVENT_TYPE,
+    LLMOpsSession,
+    finish_llm_session,
+    session_event_detail,
+    session_event_payload,
+    start_llm_session,
+)
+from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
 log = logging.getLogger(__name__)
 
@@ -227,6 +239,35 @@ def _build_fail_reason(result: AgentResult) -> str:
     if snippet:
         return f"exit_code={result.exit_code}: {snippet}"
     return f"exit_code={result.exit_code}"
+
+
+async def _record_llm_event(
+    client: RemoteWorkerClient,
+    session: LLMOpsSession,
+    event_type: str,
+    payload: dict[str, object],
+    detail: dict[str, object] | None = None,
+) -> None:
+    """Best-effort remote diagnostic event append."""
+
+    recorder = getattr(client, "record_event", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(
+            session.task_id,
+            session.worker_id,
+            event_type,
+            payload=payload,
+            detail=detail,
+        )
+    except Exception:  # noqa: BLE001 - observability must not fail task execution
+        log.warning(
+            "remote llm ops event append failed: task=%s event_type=%s",
+            session.task_id,
+            event_type,
+            exc_info=True,
+        )
 
 
 async def _await_runner_or_stop(
@@ -450,18 +491,58 @@ async def run_remote_worker(
             )
             continue
 
+        llm_session: LLMOpsSession | None = None
+        try:
+            llm_session = start_llm_session(claimed, plan, worker_id, prompt, attempt=claimed.version)
+            await _record_llm_event(
+                client,
+                llm_session,
+                LLM_RUN_STARTED_EVENT_TYPE,
+                session_event_payload(llm_session, "started"),
+                session_event_detail(llm_session, "started"),
+            )
+            notify_slack_task_started(llm_session)
+        except Exception:  # noqa: BLE001 - keep task execution independent from observability
+            log.warning("remote llm ops session start failed: task=%s", claimed.id, exc_info=True)
+            llm_session = None
+
         # Race the runner against ``stop`` so SIGTERM mid-runner doesn't
         # have to wait for an arbitrarily long agent call before we can
         # release the task. When ``stop`` is None (legacy callers, the
         # 022b1 contract before signals were wired) we just await the
         # runner directly — the original codepath, untouched.
-        if stop is None:
-            result: AgentResult | None = await runner(claimed, prompt)
-            shutdown_during_run = False
+        if llm_session is None:
+            if stop is None:
+                result: AgentResult | None = await runner(claimed, prompt)
+                shutdown_during_run = False
+            else:
+                result, shutdown_during_run = await _await_runner_or_stop(runner(claimed, prompt), stop)
         else:
-            result, shutdown_during_run = await _await_runner_or_stop(runner(claimed, prompt), stop)
+            with llm_session.runner_environment():
+                if stop is None:
+                    result = await runner(claimed, prompt)
+                    shutdown_during_run = False
+                else:
+                    result, shutdown_during_run = await _await_runner_or_stop(runner(claimed, prompt), stop)
 
         if shutdown_during_run:
+            if llm_session is not None:
+                try:
+                    detail = finish_llm_session(
+                        llm_session,
+                        None,
+                        "cancelled",
+                        error=SHUTDOWN_RELEASE_REASON,
+                    )
+                    await _record_llm_event(
+                        client,
+                        llm_session,
+                        LLM_RUN_CANCELLED_EVENT_TYPE,
+                        session_event_payload(llm_session, "cancelled", error=SHUTDOWN_RELEASE_REASON),
+                        detail,
+                    )
+                except Exception:  # noqa: BLE001 - shutdown release is the priority
+                    log.warning("remote llm ops cancellation record failed: task=%s", claimed.id, exc_info=True)
             log.info(
                 "remote worker=%s task=%s: shutdown mid-runner, releasing claim",
                 worker_id,
@@ -515,6 +596,20 @@ async def run_remote_worker(
 
         # ``shutdown_during_run`` was False, so ``result`` is set.
         assert result is not None  # for mypy; helper contract guarantees this
+        if llm_session is not None:
+            llm_status = "success" if result.is_complete and result.exit_code == 0 else "failed"
+            llm_event_type = LLM_RUN_FINISHED_EVENT_TYPE if llm_status == "success" else LLM_RUN_FAILED_EVENT_TYPE
+            try:
+                detail = finish_llm_session(llm_session, result, llm_status)
+                await _record_llm_event(
+                    client,
+                    llm_session,
+                    llm_event_type,
+                    session_event_payload(llm_session, llm_status, result),
+                    detail,
+                )
+            except Exception:  # noqa: BLE001 - task completion/failure still owns the state transition
+                log.warning("remote llm ops finish record failed: task=%s", claimed.id, exc_info=True)
 
         if result.is_complete and result.exit_code == 0:
             try:
@@ -544,6 +639,8 @@ async def run_remote_worker(
                     exc.actual_status.value if exc.actual_status else None,
                 )
                 continue
+            if llm_session is not None:
+                notify_slack_task_terminal(llm_session, "DONE", result)
             completed += 1
             log.info("remote worker=%s task=%s → DONE", worker_id, claimed.id)
         else:
@@ -563,6 +660,8 @@ async def run_remote_worker(
                     exc.actual_status.value if exc.actual_status else None,
                 )
                 continue
+            if llm_session is not None:
+                notify_slack_task_terminal(llm_session, "FAILED", result, reason=reason)
             failed += 1
             log.info("remote worker=%s task=%s → FAILED (%s)", worker_id, claimed.id, reason)
 

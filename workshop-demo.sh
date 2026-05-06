@@ -65,6 +65,16 @@
 #                        WHILLY_IMAGE_TAG_REF. Unset → прежнее поведение
 #                        (`docker build` + локальный `whilly-demo:latest`).
 #                        Пример: `WHILLY_IMAGE_TAG=4.4.1 bash workshop-demo.sh --cli stub`.
+#   WHILLY_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+#                        Опционально: слать demo task notifications в Slack
+#                        (STARTED/DONE/FAILED с ссылкой на /llm-ops).
+#   SLACK_ACCESS_TOKEN=xoxb-...
+#                        Альтернатива webhook: bot token через Slack API.
+#                        Default channel: C0B1WT58EBE
+#   WHILLY_SLACK_NOTIFY_EVENTS=terminal|started|all|none
+#                        Какие task events слать в Slack. Default: terminal.
+#   WHILLY_PUBLIC_BASE_URL=http://127.0.0.1:8000
+#                        Base URL для Slack-ссылок на встроенный LLM Ops UI.
 
 set -euo pipefail
 
@@ -133,8 +143,8 @@ configure_cli_backend() {
       export LLM_PROVIDER="${LLM_PROVIDER:-claude}"  # для picker'а в entrypoint
       ;;
     opencode)
-      # opencode умеет любых providers. По умолчанию — OpenRouter free
-      # tier (DeepSeek, Llama-3.3-70b бесплатно).
+      # opencode умеет любых providers. Zero-key path: opencode/big-pickle
+      # на OpenCode Zen, без API keys и без `opencode auth login`.
       if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
         export OPENROUTER_API_KEY
         export OPENCODE_DEFAULT_PROVIDER="openrouter"
@@ -146,8 +156,7 @@ configure_cli_backend() {
         export GROQ_API_KEY
         export LLM_PROVIDER="${LLM_PROVIDER:-groq}"
       else
-        err "--cli opencode нужен один из: OPENROUTER_API_KEY (рекомендуется, free), ANTHROPIC_API_KEY, GROQ_API_KEY"
-        exit 1
+        export WHILLY_MODEL="${WHILLY_MODEL:-opencode/big-pickle}"
       fi
       export CLAUDE_BIN="/opt/whilly/docker/cli_adapter.py"
       export WHILLY_CLI="opencode"
@@ -313,6 +322,46 @@ require_bin() {
   command -v "$1" >/dev/null 2>&1 || { err "missing required binary: $1"; exit 1; }
 }
 
+trim_spaces() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+load_repo_dotenv() {
+  local dotenv="$REPO_ROOT/.env"
+  [[ -f "$dotenv" ]] || return 0
+
+  local count=0 line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(trim_spaces "$line")"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="$(trim_spaces "${line#export}")"
+    fi
+    [[ "$line" == *"="* ]] || continue
+
+    key="$(trim_spaces "${line%%=*}")"
+    value="$(trim_spaces "${line#*=}")"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ -z "${!key+x}" ]] || continue
+
+    if [[ ${#value} -ge 2 ]]; then
+      if [[ "${value:0:1}" == "\"" && "${value: -1}" == "\"" ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+    fi
+
+    export "$key=$value"
+    count=$((count + 1))
+  done < "$dotenv"
+
+  dim "loaded .env ($count var(s), existing shell env wins)"
+}
+
 # NOTE: The first line MUST be `local rc=$?` and the last line MUST be
 # `return $rc`. EXIT-trap functions inherit the script's exit status via $?,
 # but any subsequent command inside this body (warn/dim/compose down/...)
@@ -345,6 +394,7 @@ trap cleanup_on_exit EXIT
 
 # ─── 0. Pre-flight ───────────────────────────────────────────────────────────
 step "pre-flight"
+load_repo_dotenv
 require_bin docker
 detect_compose
 ok "compose CLI: ${COMPOSE[*]}"
@@ -376,6 +426,15 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 ok "docker daemon отвечает"
+
+if [[ -n "${WHILLY_SLACK_WEBHOOK_URL:-}${SLACK_WEBHOOK_URL:-}" ]]; then
+  ok "Slack task notifications включены через webhook (${WHILLY_SLACK_NOTIFY_EVENTS:-terminal})"
+elif [[ -n "${WHILLY_SLACK_ACCESS_TOKEN:-}${SLACK_ACCESS_TOKEN:-}" ]]; then
+  SLACK_TARGET_CHANNEL="${WHILLY_SLACK_CHANNEL:-${SLACK_CHANNEL:-C0B1WT58EBE}}"
+  ok "Slack task notifications включены через bot token → channel ${SLACK_TARGET_CHANNEL} (${WHILLY_SLACK_NOTIFY_EVENTS:-terminal})"
+else
+  dim "Slack task notifications выключены: задайте WHILLY_SLACK_WEBHOOK_URL или SLACK_ACCESS_TOKEN"
+fi
 
 [[ -f "$COMPOSE_FILE" ]] || { err "не найден $COMPOSE_FILE"; exit 1; }
 [[ -f "$DOCKERFILE" ]]   || { err "не найден $DOCKERFILE"; exit 1; }
@@ -490,11 +549,11 @@ while :; do
     ok "поймано: $active активных задач у $uniq разных воркеров — параллель!"
     break
   fi
-  # Если все уже DONE — параллель пролетела слишком быстро (stub Claude
-  # отрабатывает за ~50ms). Покажем итоговый расклад.
+  # Если все уже DONE — параллель пролетела слишком быстро или выбран
+  # один worker. Покажем итоговый расклад.
   done_count="$(compose_psql -c "SELECT COUNT(*) FROM tasks WHERE plan_id='$PLAN_ID' AND status='DONE';" 2>/dev/null | tr -d '[:space:]')"
   if [[ "${done_count:-0}" -ge 2 ]]; then
-    warn "параллель пролетела слишком быстро (stub Claude молниеносный) — показываю итоговое распределение"
+    warn "параллель не поймана в активном окне — показываю итоговое распределение"
     break
   fi
   if (( $(date +%s) >= deadline )); then
@@ -600,8 +659,8 @@ ok "демо завершено"
 if (( caught_parallel )); then
   echo "${C_GREEN}Параллельность подтверждена:${C_RESET} обе задачи были у разных воркеров одновременно."
 else
-  echo "${C_YELLOW}Параллельность не зафиксирована «вживую»${C_RESET} — задачи короткие, stub-Claude отдаёт ответ за ~50ms."
-  echo "Сделайте паузу в fake_claude.sh (sleep 3) или используйте реальный Claude, чтобы поймать middle frame на сцене."
+  echo "${C_YELLOW}Параллельность не зафиксирована «вживую»${C_RESET} — активное окно было слишком коротким или запущен один worker."
+  echo "Запустите с --workers 2 и более длинными задачами, чтобы поймать middle frame на сцене."
 fi
 
 if (( KEEP_RUNNING )); then
