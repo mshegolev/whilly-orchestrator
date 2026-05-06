@@ -74,7 +74,7 @@ generated ``__init__`` / ``__eq__``.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -397,6 +397,7 @@ class FailRequest(_FrozenModel):
     worker_id: NonEmptyShortStr
     version: NonNegativeVersion
     reason: NonEmptyReason
+    detail: dict[str, Any] | None = None
 
 
 class FailResponse(_FrozenModel):
