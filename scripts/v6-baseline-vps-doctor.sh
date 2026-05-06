@@ -26,20 +26,42 @@
 #   5. Probe `<lhr_url>/health` 3 times within 15 seconds; declare
 #      ready only if all 3 return HTTP 200 (tightened stability
 #      window vs. the v5.0 free-tier single-shot probe).
-#   6. Probe `<lhr_url>/metrics` with the WHILLY_METRICS_TOKEN bearer
+#   6. Capture funnel diagnostic evidence on every invocation:
+#        * `docker logs --tail 5000 whilly-cp-funnel` →
+#          $EVIDENCE_DIR/<timestamp>/funnel-logs.txt
+#        * `docker exec whilly-cp-funnel ps -o pid,etime,cmd -ax` →
+#          $EVIDENCE_DIR/<timestamp>/funnel-ps.txt
+#      The inner-SSH child process etime is parsed and surfaced as
+#      `funnel_ssh_etime_seconds` in state.json so future user-testing
+#      rounds have ground-truth flap data.
+#   7. Tunnel-stability gate (introduced for v6-baseline-r4): issue
+#      20 probes × 1.5s alternating between operator host (curl) and
+#      VPS (ssh + curl) against `https://${LHR_HOSTNAME}/health`
+#      within a 30-second window. Pass requires ≥ 95% (≥19/20) of
+#      probes to return HTTP 200 AND ≥ 95% of TLS handshakes to
+#      verify against a publicly-trusted CA chain (issuer-agnostic;
+#      cert SHA256 is captured but the gate decision is
+#      issuer-string-agnostic per the existing reframe). Fails-CLOSED
+#      with reason `tunnel-flapping` on insufficient streak. Without
+#      `--require-stable`, instability is a single-line warning to
+#      stderr (back-compat with existing callers); with
+#      `--require-stable`, the doctor exits non-zero on instability.
+#   8. Probe `<lhr_url>/metrics` with the WHILLY_METRICS_TOKEN bearer
 #      discovered from the running whilly-cp-control-plane container
 #      env. Verifies auth still gates correctly:
 #        * if token configured: with-bearer → 200, without-bearer → 401
 #        * if token absent:     without-bearer → 401 (fail-closed)
-#   7. Inspect the off-limits openclaw-gateway container (read-only —
+#   9. Inspect the off-limits openclaw-gateway container (read-only —
 #      the doctor MUST NOT touch it). Status is recorded as
 #      running|stopped|absent.
-#   8. Write evidence to
+#  10. Write evidence to
 #      $EVIDENCE_DIR/<timestamp>/state.json with fields:
 #        ssh_ok, stack_state, lhr_url, lhr_url_age_seconds,
 #        health_ok, health_response, metrics_ok,
-#        control_plane_image_tag, openclaw_gateway_status
-#   9. Exit 0 if every _ok field is true; non-zero with a single-line
+#        control_plane_image_tag, openclaw_gateway_status,
+#        tunnel_stability_ok, tunnel_probes_passed,
+#        tunnel_handshake_verifies_passed, funnel_ssh_etime_seconds
+#  11. Exit 0 if every _ok field is true; non-zero with a single-line
 #      stderr message per failed check.
 #
 # Idempotent: re-running over an already-healthy stack short-circuits
@@ -61,11 +83,21 @@
 #   --no-bringup                skip step 3; exit non-zero if stack is
 #                               down/partial.
 #   --evidence-dir <path>       override the evidence directory root.
+#   --require-stable            elevate the tunnel-stability gate
+#                               (step 7) from warning to hard failure;
+#                               doctor exits non-zero with
+#                               'doctor: tunnel-flapping (N/20 probes
+#                               passed, M/20 verifies passed)' on
+#                               insufficient streak. Without this
+#                               flag, instability is logged to stderr
+#                               but does not fail the doctor
+#                               (back-compat with existing callers).
 #   --help, -h                  print this docblock and exit 0.
 #
 # Exit codes:
 #   0 — every check green.
-#   1 — operator-level failure (ssh / health / metrics / lhr URL).
+#   1 — operator-level failure (ssh / health / metrics / lhr URL /
+#       tunnel-flapping when --require-stable is set).
 #   2 — environment misuse (missing tool, unknown flag, unwritable
 #       evidence dir).
 #   3 — stack down and --no-bringup set.
@@ -81,13 +113,19 @@ LHR_HOSTNAME="${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-out/v6-baseline-vps-doctor}"
 JSON_MODE=0
 NO_BRINGUP=0
+REQUIRE_STABLE=0
 HEALTH_PROBE_COUNT=3
 HEALTH_PROBE_WINDOW_SECONDS=15
+TUNNEL_PROBE_COUNT=20
+TUNNEL_PROBE_INTERVAL_MS=1500
+TUNNEL_PROBE_PASS_THRESHOLD=19
+TUNNEL_PROBE_TIMEOUT_SECONDS=1.4
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) JSON_MODE=1; shift ;;
         --no-bringup) NO_BRINGUP=1; shift ;;
+        --require-stable) REQUIRE_STABLE=1; shift ;;
         --evidence-dir)
             if [[ $# -lt 2 ]]; then
                 echo "v6-baseline-vps-doctor.sh: --evidence-dir requires a value" >&2
@@ -143,6 +181,10 @@ health_response=""
 metrics_ok=false
 control_plane_image_tag=""
 openclaw_gateway_status="unknown"
+tunnel_stability_ok=false
+tunnel_probes_passed=0
+tunnel_handshake_verifies_passed=0
+funnel_ssh_etime_seconds=-1
 FAILURES=()
 
 record_failure() {
@@ -157,22 +199,33 @@ write_state() {
         "$ssh_ok" "$stack_state" "$lhr_url" "$lhr_url_age_seconds" \
         "$health_ok" "$health_response" "$metrics_ok" \
         "$control_plane_image_tag" "$openclaw_gateway_status" \
+        "$tunnel_stability_ok" "$tunnel_probes_passed" \
+        "$tunnel_handshake_verifies_passed" "$funnel_ssh_etime_seconds" \
         "$JSON_MODE" <<'PY'
 import json, sys
 (path, ssh_ok, stack_state, lhr_url, lhr_age, health_ok, health_response,
- metrics_ok, image_tag, openclaw_status, json_mode) = sys.argv[1:]
+ metrics_ok, image_tag, openclaw_status,
+ tunnel_stability_ok, tunnel_probes_passed,
+ tunnel_handshake_verifies_passed, funnel_ssh_etime_seconds,
+ json_mode) = sys.argv[1:]
 def b(v):
     return v == "true"
+def i(v):
+    return int(v) if v.lstrip("-").isdigit() else -1
 state = {
     "ssh_ok": b(ssh_ok),
     "stack_state": stack_state,
     "lhr_url": lhr_url,
-    "lhr_url_age_seconds": int(lhr_age) if lhr_age.lstrip("-").isdigit() else -1,
+    "lhr_url_age_seconds": i(lhr_age),
     "health_ok": b(health_ok),
     "health_response": health_response,
     "metrics_ok": b(metrics_ok),
     "control_plane_image_tag": image_tag,
     "openclaw_gateway_status": openclaw_status,
+    "tunnel_stability_ok": b(tunnel_stability_ok),
+    "tunnel_probes_passed": i(tunnel_probes_passed),
+    "tunnel_handshake_verifies_passed": i(tunnel_handshake_verifies_passed),
+    "funnel_ssh_etime_seconds": i(funnel_ssh_etime_seconds),
 }
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(state, fh, indent=2, sort_keys=True)
@@ -185,7 +238,7 @@ PY
 trap 'write_state || true' EXIT
 
 # ── 1: SSH reach ────────────────────────────────────────────────────────
-log "[1/8] verifying SSH reach to $VPS_HOST:$VPS_PORT"
+log "[1/10] verifying SSH reach to $VPS_HOST:$VPS_PORT"
 if ssh_run 'true' >/dev/null 2>>"$LOG_FILE"; then
     ssh_ok=true
 else
@@ -195,7 +248,7 @@ else
 fi
 
 # ── 2: detect stack state ───────────────────────────────────────────────
-log "[2/8] detecting v6-baseline stack state"
+log "[2/10] detecting v6-baseline stack state"
 PG_STATUS=$(ssh_run "docker inspect --format '{{.State.Health.Status}}' whilly-cp-postgres 2>/dev/null" 2>>"$LOG_FILE" || echo "missing")
 CP_STATUS=$(ssh_run "docker inspect --format '{{.State.Health.Status}}' whilly-cp-control-plane 2>/dev/null" 2>>"$LOG_FILE" || echo "missing")
 FUNNEL_RUNNING=$(ssh_run "docker inspect --format '{{.State.Running}}' whilly-cp-funnel 2>/dev/null" 2>>"$LOG_FILE" || echo "false")
@@ -220,7 +273,7 @@ if [[ "$stack_state" != "running" ]]; then
         write_state
         exit 3
     fi
-    log "[3/8] invoking $UP_SCRIPT --skip-smoke --skip-sync"
+    log "[3/10] invoking $UP_SCRIPT --skip-smoke --skip-sync"
     if [[ ! -x "$UP_SCRIPT" ]]; then
         record_failure "ERR bringup: $UP_SCRIPT missing or not executable"
         write_state
@@ -237,11 +290,11 @@ if [[ "$stack_state" != "running" ]]; then
         exit 1
     fi
 else
-    log "[3/8] skipping bringup (stack already running — idempotent no-op)"
+    log "[3/10] skipping bringup (stack already running — idempotent no-op)"
 fi
 
 # ── 4: stable public URL (env-pinned; postgres last-reconnect age) ─────
-log "[4/8] resolving stable public URL from LHR_HOSTNAME (paid-plan pinning)"
+log "[4/10] resolving stable public URL from LHR_HOSTNAME (paid-plan pinning)"
 lhr_url="https://${LHR_HOSTNAME}"
 URL_ROW=$(ssh_run "docker exec whilly-cp-postgres psql -U whilly -d whilly -tAF '|' -c \"SELECT url, EXTRACT(EPOCH FROM (NOW() - updated_at))::int FROM funnel_url WHERE id = 1\" 2>/dev/null" 2>>"$LOG_FILE" || true)
 URL_ROW="$(printf '%s' "$URL_ROW" | tr -d '\r' | head -n1)"
@@ -260,7 +313,7 @@ fi
 log "  lhr_url=$lhr_url last_reconnect_age=${lhr_url_age_seconds}s (semantics: time-since-last-reconnect; URL is constant)"
 
 # ── 5: /health stability window (3 probes within 15s) ─────────────────
-log "[5/8] probing $lhr_url/health — require ${HEALTH_PROBE_COUNT} successes within ${HEALTH_PROBE_WINDOW_SECONDS}s"
+log "[5/10] probing $lhr_url/health — require ${HEALTH_PROBE_COUNT} successes within ${HEALTH_PROBE_WINDOW_SECONDS}s"
 HEALTH_BODY_FILE="$RUN_DIR/health-body.json"
 HEALTH_PROBE_INTERVAL=$(( HEALTH_PROBE_WINDOW_SECONDS / HEALTH_PROBE_COUNT ))
 if [[ $HEALTH_PROBE_INTERVAL -lt 1 ]]; then
@@ -287,8 +340,138 @@ else
     health_response="HTTP $HEALTH_LAST_CODE (${HEALTH_SUCCESSES}/${HEALTH_PROBE_COUNT})"
 fi
 
-# ── 6: /metrics probe (auth gating) ─────────────────────────────────────
-log "[6/8] probing $lhr_url/metrics with bearer (auth-gating verification)"
+# ── 6: capture funnel diagnostic evidence (every invocation) ────────────
+log "[6/10] capturing funnel diagnostic evidence"
+FUNNEL_LOGS_FILE="$RUN_DIR/funnel-logs.txt"
+FUNNEL_PS_FILE="$RUN_DIR/funnel-ps.txt"
+: >"$FUNNEL_LOGS_FILE"
+: >"$FUNNEL_PS_FILE"
+if ssh_run "docker logs --tail 5000 whilly-cp-funnel" >"$FUNNEL_LOGS_FILE" 2>>"$LOG_FILE"; then
+    log "  funnel-logs.txt captured ($(wc -l <"$FUNNEL_LOGS_FILE" | tr -d '[:space:]') lines)"
+else
+    log "  warn: docker logs whilly-cp-funnel failed (container missing or down?)"
+fi
+if ssh_run "docker exec whilly-cp-funnel ps -o pid,etime,cmd -ax" >"$FUNNEL_PS_FILE" 2>>"$LOG_FILE"; then
+    log "  funnel-ps.txt captured"
+    funnel_ssh_etime_seconds=$(python3 - "$FUNNEL_PS_FILE" <<'PY'
+import re, sys
+path = sys.argv[1]
+def to_seconds(etime: str) -> int:
+    if "-" in etime:
+        days_part, rest = etime.split("-", 1)
+        try:
+            days = int(days_part)
+        except ValueError:
+            return -1
+    else:
+        days = 0
+        rest = etime
+    parts = rest.split(":")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return -1
+    if len(nums) == 3:
+        h, m, s = nums
+    elif len(nums) == 2:
+        h = 0
+        m, s = nums
+    else:
+        return -1
+    return days * 86400 + h * 3600 + m * 60 + s
+best = -1
+try:
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.lower().startswith(("pid ", "pid\t")):
+                continue
+            m = re.match(r"^\s*(\d+)\s+(\S+)\s+(.*)$", line)
+            if not m:
+                continue
+            etime, cmd = m.group(2), m.group(3)
+            if "ssh" not in cmd.split():
+                if not re.search(r"(^|/|\s)ssh(\s|$)", cmd):
+                    continue
+            secs = to_seconds(etime)
+            if secs > best:
+                best = secs
+except FileNotFoundError:
+    pass
+print(best)
+PY
+)
+    funnel_ssh_etime_seconds="$(printf '%s' "$funnel_ssh_etime_seconds" | tr -d '[:space:]')"
+    if [[ -z "$funnel_ssh_etime_seconds" || ! "$funnel_ssh_etime_seconds" =~ ^-?[0-9]+$ ]]; then
+        funnel_ssh_etime_seconds=-1
+    fi
+    log "  funnel_ssh_etime_seconds=$funnel_ssh_etime_seconds"
+else
+    log "  warn: docker exec whilly-cp-funnel ps failed (container missing or down?)"
+fi
+
+# ── 7: tunnel-stability gate (20 probes × 1.5s, ops + vps interleaved) ──
+log "[7/10] tunnel-stability gate: ${TUNNEL_PROBE_COUNT} probes alternating ops/vps every ${TUNNEL_PROBE_INTERVAL_MS}ms"
+LOCAL_PROBE_LOG="$RUN_DIR/tunnel-probes-local.txt"
+REMOTE_PROBE_LOG="$RUN_DIR/tunnel-probes-vps.txt"
+: >"$LOCAL_PROBE_LOG"
+: >"$REMOTE_PROBE_LOG"
+HALF=$(( TUNNEL_PROBE_COUNT / 2 ))
+TUNNEL_PROBE_INTERVAL_S="$(awk -v ms="$TUNNEL_PROBE_INTERVAL_MS" 'BEGIN { printf "%.3f", ms/1000.0 }')"
+
+(
+    for probe in $(seq 1 "$HALF"); do
+        out=$(curl -sS -o /dev/null \
+            -w '%{http_code}|%{ssl_verify_result}|%{time_total}\n' \
+            --max-time "$TUNNEL_PROBE_TIMEOUT_SECONDS" \
+            "$lhr_url/health" 2>/dev/null || echo "000|99|0")
+        printf 'local %d %s\n' "$probe" "$out" >>"$LOCAL_PROBE_LOG"
+        if [[ "$probe" -lt "$HALF" ]]; then
+            sleep "$TUNNEL_PROBE_INTERVAL_S"
+        fi
+    done
+) &
+LOCAL_PID=$!
+
+REMOTE_CMD="for i in \$(seq 1 ${HALF}); do curl -sS -o /dev/null -w '%{http_code}|%{ssl_verify_result}|%{time_total}\n' --max-time ${TUNNEL_PROBE_TIMEOUT_SECONDS} '${lhr_url}/health' 2>/dev/null || echo '000|99|0'; if [ \$i -lt ${HALF} ]; then sleep ${TUNNEL_PROBE_INTERVAL_S}; fi; done"
+ssh_run "$REMOTE_CMD" >"$REMOTE_PROBE_LOG" 2>>"$LOG_FILE" || true
+wait "$LOCAL_PID" 2>/dev/null || true
+
+tunnel_probes_passed=0
+tunnel_handshake_verifies_passed=0
+while IFS=' ' read -r _src _idx data; do
+    [[ -z "${data:-}" ]] && continue
+    code="${data%%|*}"
+    rest="${data#*|}"
+    verify="${rest%%|*}"
+    if [[ "$code" == "200" ]]; then
+        tunnel_probes_passed=$(( tunnel_probes_passed + 1 ))
+    fi
+    if [[ "$verify" == "0" ]]; then
+        tunnel_handshake_verifies_passed=$(( tunnel_handshake_verifies_passed + 1 ))
+    fi
+done <"$LOCAL_PROBE_LOG"
+
+while IFS='|' read -r code verify _time; do
+    [[ -z "${code:-}" ]] && continue
+    if [[ "$code" == "200" ]]; then
+        tunnel_probes_passed=$(( tunnel_probes_passed + 1 ))
+    fi
+    if [[ "$verify" == "0" ]]; then
+        tunnel_handshake_verifies_passed=$(( tunnel_handshake_verifies_passed + 1 ))
+    fi
+done <"$REMOTE_PROBE_LOG"
+
+log "  tunnel_probes_passed=${tunnel_probes_passed}/${TUNNEL_PROBE_COUNT} verifies_passed=${tunnel_handshake_verifies_passed}/${TUNNEL_PROBE_COUNT}"
+if [[ "$tunnel_probes_passed" -ge "$TUNNEL_PROBE_PASS_THRESHOLD" \
+   && "$tunnel_handshake_verifies_passed" -ge "$TUNNEL_PROBE_PASS_THRESHOLD" ]]; then
+    tunnel_stability_ok=true
+else
+    tunnel_stability_ok=false
+fi
+
+# ── 8: /metrics probe (auth gating) ─────────────────────────────────────
+log "[8/10] probing $lhr_url/metrics with bearer (auth-gating verification)"
 METRICS_TOKEN=$(ssh_run "docker exec whilly-cp-control-plane sh -c 'printf %s \"\${WHILLY_METRICS_TOKEN:-}\"'" 2>>"$LOG_FILE" || true)
 METRICS_TOKEN="${METRICS_TOKEN//$'\r'/}"
 METRICS_TOKEN="${METRICS_TOKEN//$'\n'/}"
@@ -312,16 +495,16 @@ else
     fi
 fi
 
-# ── 7: control-plane image tag ──────────────────────────────────────────
-log "[7/8] reading control-plane image tag"
+# ── 9: control-plane image tag ──────────────────────────────────────────
+log "[9/10] reading control-plane image tag"
 control_plane_image_tag=$(ssh_run "docker inspect --format '{{index .Config.Image}}' whilly-cp-control-plane 2>/dev/null" 2>>"$LOG_FILE" || true)
 control_plane_image_tag="$(printf '%s' "$control_plane_image_tag" | tr -d '[:space:]')"
 if [[ -z "$control_plane_image_tag" ]]; then
     record_failure "ERR image_tag: could not read control-plane image tag"
 fi
 
-# ── 8: openclaw-gateway invariant (read-only) ───────────────────────────
-log "[8/8] checking openclaw-gateway container (read-only — MUST NOT be touched)"
+# ── 10: openclaw-gateway invariant (read-only) ──────────────────────────
+log "[10/10] checking openclaw-gateway container (read-only — MUST NOT be touched)"
 OPENCLAW_RAW=$(ssh_run "docker inspect --format '{{.State.Running}}' openclaw-gateway 2>/dev/null" 2>>"$LOG_FILE" || true)
 OPENCLAW_RAW="$(printf '%s' "$OPENCLAW_RAW" | tr -d '[:space:]')"
 if [[ -z "$OPENCLAW_RAW" ]]; then
@@ -332,6 +515,16 @@ else
     openclaw_gateway_status="stopped"
 fi
 log "  openclaw_gateway_status=$openclaw_gateway_status"
+
+if [[ "$tunnel_stability_ok" != "true" ]]; then
+    STABILITY_MSG="doctor: tunnel-flapping (${tunnel_probes_passed}/${TUNNEL_PROBE_COUNT} probes passed, ${tunnel_handshake_verifies_passed}/${TUNNEL_PROBE_COUNT} verifies passed)"
+    if [[ "$REQUIRE_STABLE" -eq 1 ]]; then
+        record_failure "$STABILITY_MSG"
+    else
+        echo "$STABILITY_MSG" >&2
+        log "WARN $STABILITY_MSG (--require-stable not set; treated as warning)"
+    fi
+fi
 
 write_state
 trap - EXIT
