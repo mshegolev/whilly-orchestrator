@@ -116,9 +116,10 @@ Commands:
 
 Run `whilly <command> --help` for command-specific options.
 
-Legacy v3 flag forms (`whilly --tasks PATH`, `whilly --init …`,
-`whilly --prd-wizard`, `whilly --resume`, `whilly --reset PLAN`,
-`whilly --all`, `--workspace`/`--worktree` opt-ins, and the
+Legacy v3 flag forms (`whilly --tasks PATH`, `whilly --init …` with
+optional `--plan` / `--go` follow-ons, `whilly --prd-wizard`,
+`whilly --resume`, `whilly --reset PLAN`, `whilly --all`,
+`whilly --headless`, `--workspace`/`--worktree` opt-ins, and the
 `--no-workspace`/`--no-worktree` no-ops) are accepted for backwards
 compatibility and routed to the v4 subcommand surface above.
 """
