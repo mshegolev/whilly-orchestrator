@@ -104,7 +104,7 @@ include = ["whilly", "whilly.*"]
 exclude = ["tests*", "whilly_worker*"]
 
 [tool.setuptools.package-data]
-whilly = ["py.typed", "api/templates/*.html"]
+whilly = ["py.typed", "api/templates/*.html", "api/templates/*.j2"]
 
 [tool.ruff]
 line-length = 120

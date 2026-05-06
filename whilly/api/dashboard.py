@@ -1,6 +1,6 @@
 """HTMX dashboard surface for the M3 ``GET /`` endpoint.
 
-Renders ``whilly/api/templates/dashboard.html`` (full page) and the two
+Renders ``whilly/api/templates/index.html.j2`` (full page) and the two
 partials (``_workers_table.html`` / ``_tasks_table.html``) used by the
 ``?fragment=workers|tasks`` polling fallback. Jinja2 autoescape stays
 on (the default for ``.html`` files in starlette's
@@ -9,11 +9,10 @@ projections (``hostname``, ``owner_email``, ``claimed_by``, ``id``)
 cannot break out of HTML.
 
 Live updates flow over the existing ``GET /events/stream`` SSE channel
-(htmx-ext-sse@2.2.4): the body element carries
-``hx-ext="sse" sse-connect="/events/stream"`` and the two tables fire
-``hx-get`` against ``/?fragment=...`` on the relevant SSE event names
-(``task.claim``, ``task.complete``, ``worker.heartbeat`` etc.). When
-the EventSource is unavailable (proxy strips, browser blocks),
+(htmx-ext-sse@2.2.4): the body element carries ``hx-ext="sse"`` plus
+a short-lived dashboard token on ``sse-connect``. The two tables fire
+``hx-get`` against ``/?fragment=...`` on the relevant SSE event names.
+When the EventSource is unavailable (proxy strips, browser blocks),
 ``hx-trigger="every 5s"`` keeps the tables fresh.
 """
 
@@ -36,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
 
-DASHBOARD_TEMPLATE: Final[str] = "dashboard.html"
+DASHBOARD_TEMPLATE: Final[str] = "index.html.j2"
 WORKERS_FRAGMENT_TEMPLATE: Final[str] = "_workers_table.html"
 TASKS_FRAGMENT_TEMPLATE: Final[str] = "_tasks_table.html"
 
@@ -181,6 +180,7 @@ async def render_dashboard(
     request: Request,
     pool: asyncpg.Pool,
     fragment: str | None = None,
+    events_token: str | None = None,
 ) -> HTMLResponse:
     """Render the dashboard (full page or one of its two partials).
 
@@ -211,6 +211,7 @@ async def render_dashboard(
         "version": WHILLY_VERSION,
         "rendered_at_iso": rendered_at.isoformat(),
         "rendered_at_human": rendered_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "events_token": events_token,
     }
 
     if fragment_name == "workers":

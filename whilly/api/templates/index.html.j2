@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {% if events_token %}<meta name="whilly-events-token" content="{{ events_token }}">{% endif %}
   <title>Whilly Control Plane</title>
   <link rel="stylesheet"
         href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
@@ -71,7 +72,7 @@
     }
   </style>
 </head>
-<body hx-ext="sse" sse-connect="/events/stream">
+<body hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
   <main class="container">
     <header>
       <hgroup>
