@@ -690,6 +690,10 @@ no-overwrite policy) for users who pin by digest, but **users on tag
 > continue to work identically and pass `bash workshop-demo.sh --cli claude`
 > byte-for-byte.
 
+### Breaking changes
+
+No breaking changes — additive only.
+
 ### Added
 
 - **`docker-compose.control-plane.yml`** — postgres + control-plane only,
@@ -821,6 +825,10 @@ no-overwrite policy) for users who pin by digest, but **users on tag
 > либо ставить агента наружу и пробрасывать как volume, либо собирать
 > custom image — теперь pull-and-go.
 
+### Breaking changes
+
+No breaking changes — additive only.
+
 ### Added
 
 - **Agentic CLI mode (`--cli claude-code|opencode|gemini`).**
@@ -929,6 +937,10 @@ no-overwrite policy) for users who pin by digest, but **users on tag
 > with SBOM + provenance attestations. No Python source changes — this is
 > infrastructure-only.
 
+### Breaking changes
+
+No breaking changes — additive only.
+
 ### Added
 
 - **Production Docker image.** `Dockerfile` builds a lean multi-stage image
@@ -970,6 +982,10 @@ no-overwrite policy) for users who pin by digest, but **users on tag
 > Forge intake, the `whilly init` PRD pipeline port, and Claude HTTPS_PROXY
 > support. The v3.x legacy CLI (`whilly/cli_legacy.py`) is removed and the
 > `WHILLY_WORKTREE` / `WHILLY_USE_WORKSPACE` env vars are now silent no-ops.
+
+### Breaking changes
+
+No breaking changes — additive only.
 
 ### Added
 
@@ -1144,7 +1160,7 @@ no-overwrite policy) for users who pin by digest, but **users on tag
 - **Operator-facing demo**: `docs/demo-remote-worker.sh` reproduces SC-3
   on a single host (control plane + remote worker over loopback HTTP).
 
-### Changed (BREAKING)
+### Breaking changes
 
 - **`requires-python = ">=3.12"`** (was `>=3.10`). v4 uses
   `asyncio.TaskGroup` and `@override` from `typing` which need 3.12+.
