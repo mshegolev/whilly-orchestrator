@@ -88,10 +88,11 @@ release-ready state. Headline changes (full detail in [`CHANGELOG.md`](CHANGELOG
 - **Pure decision gate** (`whilly/core/gates.py`) + `whilly plan apply --strict` —
   REJECT verdicts are skipped via `repo.skip_task` and emit `task.skipped` events
   scoped to the current `plan_id` only (cross-plan collisions are refused).
-- **Per-task TRIZ analyzer** (`whilly/core/triz.py`) — replaces the v3 plan-level
-  analyzer. Subprocess to `claude` with a hard 25 s timeout (under the 30 s claim
-  visibility window), fail-open on missing CLI / timeout / malformed JSON, and an
-  `events.detail` jsonb column for findings. Opt in with `WHILLY_TRIZ_ENABLED=1`.
+- **TRIZ analyzer** (`whilly/core/triz.py`) — `whilly plan triz <plan_id>` restores
+  the useful v3 plan-level challenge as a deterministic v4 preflight over the
+  imported DAG. The per-task fail-open hook still subprocesses `claude` on
+  `repo.fail_task(...)` with a hard 25 s timeout and stores findings in
+  `events.detail`. Opt in with `WHILLY_TRIZ_ENABLED=1`.
 - **Per-worker bearer auth** (migration `004_per_worker_bearer`) — `workers.token_hash`
   is now nullable with a partial UNIQUE on non-null values. The `whilly worker register`
   CLI mints plaintext bearers. Bearer identity is bound to the request `worker_id`
@@ -198,6 +199,7 @@ whilly init "build a CLI tool for monitoring API endpoints" --slug api-monitor
 whilly plan import "$PLAN_FILE"
 whilly plan apply "$PLAN_FILE" --strict
 whilly plan show "$PLAN_ID"           # ASCII DAG of the imported plan
+whilly plan triz "$PLAN_ID"           # deterministic TRIZ/challenge preflight
 
 # 3c. Cap spend up-front (per-plan budget guard).
 whilly plan create --id my-plan --name "My plan" --budget 5.00
@@ -305,6 +307,7 @@ block.
 | `whilly plan create --id <id> --name <name> [--budget USD]` | Mint an empty plan with an optional spend cap. |
 | `whilly plan export <plan_id>` | Round-trip canonical JSON to stdout. |
 | `whilly plan show <plan_id>` | ASCII dependency-graph render with status badges. |
+| `whilly plan triz <plan_id> [--json] [--strict]` | Deterministic v4 TRIZ/challenge preflight for imported plans. |
 | `whilly plan reset <plan_id>` | Reset task statuses to `pending` (soft) or wipe rows (`--hard`). |
 | `whilly init "<idea>" --slug <slug>` | PRD wizard → plan import in one step. |
 | `whilly run --plan <id>` | All-in-one local worker (asyncpg-direct). |

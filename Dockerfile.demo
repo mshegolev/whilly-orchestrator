@@ -163,7 +163,8 @@ RUN chmod +x /usr/local/bin/whilly-entrypoint \
     /opt/whilly/docker/llm_shim.py \
     /opt/whilly/docker/llm_resource_picker.py \
     /opt/whilly/docker/cli_adapter.py \
-    && chown -R whilly:whilly /opt/whilly /home/whilly
+    && mkdir -p /logs \
+    && chown -R whilly:whilly /opt/whilly /home/whilly /logs
 
 USER whilly
 

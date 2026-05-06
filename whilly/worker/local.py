@@ -93,6 +93,18 @@ from whilly.core.prompts import (
     PromptInjectionBlocked,
     build_task_prompt,
 )
+from whilly.llm_ops import (
+    LLM_RUN_CANCELLED_EVENT_TYPE,
+    LLM_RUN_FAILED_EVENT_TYPE,
+    LLM_RUN_FINISHED_EVENT_TYPE,
+    LLM_RUN_STARTED_EVENT_TYPE,
+    LLMOpsSession,
+    finish_llm_session,
+    session_event_detail,
+    session_event_payload,
+    start_llm_session,
+)
+from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +189,29 @@ def _build_fail_reason(result: AgentResult) -> str:
     if snippet:
         return f"exit_code={result.exit_code}: {snippet}"
     return f"exit_code={result.exit_code}"
+
+
+async def _record_llm_event(
+    repo: TaskRepository,
+    session: LLMOpsSession,
+    event_type: str,
+    payload: dict[str, object],
+    detail: dict[str, object] | None = None,
+) -> None:
+    """Best-effort Postgres event append for LLM Ops metadata."""
+
+    recorder = getattr(repo, "record_task_event", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(session.task_id, event_type, payload, detail=detail)
+    except Exception:  # noqa: BLE001 - observability must not fail task execution
+        log.warning(
+            "llm ops event append failed: task=%s event_type=%s",
+            session.task_id,
+            event_type,
+            exc_info=True,
+        )
 
 
 # Reason string written into the RELEASE event payload when the worker
@@ -426,18 +461,58 @@ async def run_local_worker(
             )
             continue
 
+        llm_session: LLMOpsSession | None = None
+        try:
+            llm_session = start_llm_session(running, plan, worker_id, prompt, attempt=running.version)
+            await _record_llm_event(
+                repo,
+                llm_session,
+                LLM_RUN_STARTED_EVENT_TYPE,
+                session_event_payload(llm_session, "started"),
+                session_event_detail(llm_session, "started"),
+            )
+            notify_slack_task_started(llm_session)
+        except Exception:  # noqa: BLE001 - keep task execution independent from observability
+            log.warning("llm ops session start failed: task=%s", running.id, exc_info=True)
+            llm_session = None
+
         # Race the runner against ``stop`` so SIGTERM mid-runner doesn't
         # have to wait for an arbitrarily long agent call before we can
         # release the task. When ``stop`` is None (legacy callers, unit
         # tests for 019a/019b1) we just await the runner directly — the
         # original codepath, untouched.
-        if stop is None:
-            result: AgentResult | None = await runner(running, prompt)
-            shutdown_during_run = False
+        if llm_session is None:
+            if stop is None:
+                result: AgentResult | None = await runner(running, prompt)
+                shutdown_during_run = False
+            else:
+                result, shutdown_during_run = await _await_runner_or_stop(runner(running, prompt), stop)
         else:
-            result, shutdown_during_run = await _await_runner_or_stop(runner(running, prompt), stop)
+            with llm_session.runner_environment():
+                if stop is None:
+                    result = await runner(running, prompt)
+                    shutdown_during_run = False
+                else:
+                    result, shutdown_during_run = await _await_runner_or_stop(runner(running, prompt), stop)
 
         if shutdown_during_run:
+            if llm_session is not None:
+                try:
+                    detail = finish_llm_session(
+                        llm_session,
+                        None,
+                        "cancelled",
+                        error=SHUTDOWN_RELEASE_REASON,
+                    )
+                    await _record_llm_event(
+                        repo,
+                        llm_session,
+                        LLM_RUN_CANCELLED_EVENT_TYPE,
+                        session_event_payload(llm_session, "cancelled", error=SHUTDOWN_RELEASE_REASON),
+                        detail,
+                    )
+                except Exception:  # noqa: BLE001 - shutdown release is the priority
+                    log.warning("llm ops cancellation record failed: task=%s", running.id, exc_info=True)
             log.info(
                 "worker=%s task=%s: shutdown mid-runner, releasing claim",
                 worker_id,
@@ -460,6 +535,21 @@ async def run_local_worker(
 
         # ``shutdown_during_run`` was False, so ``result`` is set.
         assert result is not None  # for mypy; the helper's contract guarantees this
+        if llm_session is not None:
+            llm_status = "success" if result.is_complete and result.exit_code == 0 else "failed"
+            llm_event_type = LLM_RUN_FINISHED_EVENT_TYPE if llm_status == "success" else LLM_RUN_FAILED_EVENT_TYPE
+            try:
+                detail = finish_llm_session(llm_session, result, llm_status)
+                await _record_llm_event(
+                    repo,
+                    llm_session,
+                    llm_event_type,
+                    session_event_payload(llm_session, llm_status, result),
+                    detail,
+                )
+            except Exception:  # noqa: BLE001 - task completion/failure still owns the state transition
+                log.warning("llm ops finish record failed: task=%s", running.id, exc_info=True)
+
         if result.is_complete and result.exit_code == 0:
             try:
                 # ``cost_usd`` flows from the agent runner's parsed usage
@@ -480,6 +570,8 @@ async def run_local_worker(
                     exc.actual_version,
                 )
                 continue
+            if llm_session is not None:
+                notify_slack_task_terminal(llm_session, "DONE", result)
             completed += 1
             log.info("worker=%s task=%s → DONE", worker_id, running.id)
             if post_complete_hook is not None:
@@ -504,6 +596,8 @@ async def run_local_worker(
                     exc.actual_version,
                 )
                 continue
+            if llm_session is not None:
+                notify_slack_task_terminal(llm_session, "FAILED", result, reason=reason)
             failed += 1
             log.info("worker=%s task=%s → FAILED (%s)", worker_id, running.id, reason)
 

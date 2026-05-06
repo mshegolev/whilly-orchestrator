@@ -281,11 +281,14 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 | `WHILLY_ORCHESTRATOR`             | `file`                 | `file` (key-files collisions) or `llm` (LLM batching) |
 | `WHILLY_VOICE`                    | `1`                    | macOS voice notifications |
 | `SLACK_ACCESS_TOKEN`              | *(unset)*              | Slack bot/user token; `whilly run` posts a summary to `WHILLY_SLACK_CHANNEL` when set (also accepts `WHILLY_SLACK_ACCESS_TOKEN`) |
-| `WHILLY_SLACK_CHANNEL`            | *(unset)*              | Target channel id, e.g. `C0B1WT58EBE` — must be a channel the token's app/user is a member of |
+| `WHILLY_SLACK_CHANNEL`            | *(unset)* / demo default `C0B1WT58EBE` | Target channel id, e.g. `C0B1WT58EBE` — must be a channel the token's app/user is a member of |
 | `WHILLY_SLACK_ENABLED`            | `1`                    | Kill switch; setting to `0` skips Slack even when token + channel are set |
 | `WHILLY_SLACK_API_BASE_URL`       | `https://slack.com/api` | Override the API root (test stubs / on-prem proxies) |
 | `WHILLY_SLACK_TIMEOUT_S`          | `5.0`                  | HTTP timeout for `chat.postMessage` |
 | `WHILLY_SLACK_MESSAGE_TEMPLATE`   | *(see `whilly/config.py`)* | `str.format`-style template; placeholders match `RunCompletedEvent` fields plus `completed_at_iso` |
+| `WHILLY_SLACK_WEBHOOK_URL`        | *(unset)*              | Optional Incoming Webhook for per-task demo messages from workers; otherwise demo workers can use `SLACK_ACCESS_TOKEN` |
+| `WHILLY_SLACK_NOTIFY_EVENTS`      | `terminal`             | Demo webhook events: `terminal`, `started`, `all`, or `none` |
+| `WHILLY_PUBLIC_BASE_URL`          | `http://127.0.0.1:8000` | Base URL used in Slack links to `/llm-ops` |
 | `WHILLY_HEADLESS`                 | `0`                    | JSON stdout, no TUI (auto when stdout is not a TTY) |
 | `WHILLY_DECOMPOSE_EVERY`          | `5`                    | Re-plan oversized pending tasks every N iterations |
 | `WHILLY_AUTO_MERGE`               | `ask`                  | `ask` / `yes` / `claude` / `no` on plan completion |
@@ -320,6 +323,24 @@ The feature stays off when `SLACK_ACCESS_TOKEN` is empty
 no-op `NullNotifier`). Slack outages and `chat.postMessage`
 `{"ok": false}` responses are logged at WARNING but never change the
 CLI exit code.
+
+### Slack per-task demo notifications
+
+Distributed demo workers can also post task-level messages. This path is
+intended for `workshop-demo.sh` and supports either an Incoming Webhook or
+a bot token:
+
+```bash
+export WHILLY_SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
+export WHILLY_SLACK_NOTIFY_EVENTS=all
+export WHILLY_PUBLIC_BASE_URL=http://127.0.0.1:8000
+bash workshop-demo.sh --cli opencode --workers 2 --keep-running
+```
+
+Each message includes task id, plan id, worker id, model, terminal status,
+and a `/llm-ops?task_id=...` link. Webhook failures are logged and ignored.
+Bot-token mode defaults to channel `C0B1WT58EBE`; override with
+`WHILLY_SLACK_CHANNEL` when needed.
 
 The summary text is a `str.format` template; override
 `WHILLY_SLACK_MESSAGE_TEMPLATE` to customise the message without

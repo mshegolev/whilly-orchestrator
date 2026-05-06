@@ -10,7 +10,7 @@ exercise every JSON edge case without spawning a single process.
 What we parse
 -------------
 Claude CLI in non-interactive mode (``claude -p "<prompt>" --output-format
-json``) prints a single JSON object whose shape is, abridged::
+json``) usually prints a single JSON object whose shape is, abridged::
 
     {
       "result": "<final assistant message text>",
@@ -24,6 +24,11 @@ json``) prints a single JSON object whose shape is, abridged::
          "cache_creation_input_tokens": 0
       }
     }
+
+Newer Claude Code builds can instead print a JSON array of stream events,
+ending with a ``{"type": "result", ...}`` object that carries the same
+``result`` / ``usage`` / ``total_cost_usd`` fields. We normalise that array
+to the final result event so token and cost accounting still works.
 
 The completion handshake (PRD FR-1.6) is the literal string
 ``<promise>COMPLETE</promise>`` — emitted by the agent inside ``result``
@@ -157,6 +162,22 @@ def _parse_usage(payload: Any) -> AgentUsage:
     )
 
 
+def _normalise_payload(payload: Any) -> dict[str, Any] | None:
+    """Return the Claude result envelope from object or stream-event array output."""
+
+    if isinstance(payload, dict):
+        return payload
+    if not isinstance(payload, list):
+        return None
+
+    for event in reversed(payload):
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result" or isinstance(event.get("result"), str):
+            return event
+    return None
+
+
 def parse_output(stdout: str, exit_code: int = 0) -> AgentResult:
     """Parse Claude CLI stdout into an immutable :class:`AgentResult`.
 
@@ -198,16 +219,18 @@ def parse_output(stdout: str, exit_code: int = 0) -> AgentResult:
             is_complete=COMPLETION_MARKER in stdout,
         )
 
-    if not isinstance(payload, dict):
+    envelope = _normalise_payload(payload)
+    if envelope is None:
         # Top-level JSON wasn't an object (e.g. ``null``, an array, a bare
-        # number). Nothing to do beyond surface-level fallback.
+        # number), and no Claude result event was found. Nothing to do beyond
+        # surface-level fallback.
         return AgentResult(
             output=stdout,
             exit_code=exit_code,
             is_complete=COMPLETION_MARKER in stdout,
         )
 
-    result_field = payload.get("result")
+    result_field = envelope.get("result")
     output = result_field if isinstance(result_field, str) else ""
     if not output:
         # The envelope parsed but ``result`` was missing/non-string. Fall
@@ -216,7 +239,7 @@ def parse_output(stdout: str, exit_code: int = 0) -> AgentResult:
 
     return AgentResult(
         output=output,
-        usage=_parse_usage(payload),
+        usage=_parse_usage(envelope),
         exit_code=exit_code,
         is_complete=COMPLETION_MARKER in output,
     )

@@ -54,6 +54,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Operators relying on the old default for unattended write/edit work
   must explicitly opt into `WHILLY_AGENT_ALLOW_SHELL=1`.
 
+## [4.6.2] - 2026-05-06
+
+> **Patch release — demo observability, GitHub issue compatibility, and
+> token accounting hardening.** This release keeps the v4.6.x wire
+> protocol and database schema unchanged.
+
+### Added
+
+- **LLM Ops trace artifacts and UI support** for task-level prompt/output
+  debugging, including per-task session metadata and optional OTLP export
+  hooks for Langfuse/OpenLLMetry-style collectors.
+- **Slack task notifications for the demo worker path**, configurable via
+  webhook or Slack API token/channel environment variables.
+- **`whilly plan triz <plan_id>`** as a deterministic v4 preflight over
+  imported task DAGs, restoring the useful v3 TRIZ/challenge workflow.
+- **`whilly.github_pr` compatibility shim** for GitHub issue
+  [#153](https://github.com/mshegolev/whilly-orchestrator/issues/153),
+  re-exporting the public PR sink API from `whilly.sinks.github_pr`.
+
+### Fixed
+
+- **Claude Code JSON-array result parsing** now reads the final
+  `type=result` event for usage/cost accounting, preserving billing and
+  token totals from newer Claude CLI output.
+
+### Verification
+
+- `whilly plan apply out/github-153-reexport-shim-plan.json`
+- `whilly run --plan github-153-reexport-shim --worker-id local-data-15923`
+- `pytest -q tests/test_github_pr_sink.py`
+- `ruff check whilly/github_pr.py tests/test_github_pr_sink.py`
+
 ## [4.6.1] - 2026-05-04
 
 > **Patch release — bundles five M3 user-facing fixes that landed

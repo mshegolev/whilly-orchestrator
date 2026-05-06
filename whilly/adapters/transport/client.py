@@ -121,6 +121,8 @@ from whilly.adapters.transport.schemas import (
     RegisterResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskEventRequest,
+    TaskEventResponse,
 )
 from whilly.core.models import Task, TaskId, TaskStatus
 
@@ -138,6 +140,7 @@ __all__ = [
     "fail_path",
     "heartbeat_path",
     "release_path",
+    "task_event_path",
 ]
 
 #: Path of the cluster-join RPC on the control plane. Mirrors
@@ -216,6 +219,12 @@ def release_path(task_id: str) -> str:
     shutdown release.
     """
     return f"/tasks/{task_id}/release"
+
+
+def task_event_path(task_id: str) -> str:
+    """Return the diagnostic-event endpoint path for ``task_id``."""
+
+    return f"/tasks/{task_id}/events"
 
 
 # ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
@@ -1054,6 +1063,30 @@ class RemoteWorkerClient:
             json=request.model_dump(mode="json"),
         )
         return await self._parse_response(response, CompleteResponse)
+
+    async def record_event(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        event_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> TaskEventResponse:
+        """Append a diagnostic task event (``POST /tasks/{task_id}/events``)."""
+
+        request = TaskEventRequest(
+            worker_id=worker_id,
+            event_type=event_type,
+            payload=payload or {},
+            detail=detail,
+        )
+        response = await self._request(
+            "POST",
+            task_event_path(task_id),
+            json=request.model_dump(exclude_none=True),
+        )
+        return await self._parse_response(response, TaskEventResponse)
 
     async def fail(
         self,

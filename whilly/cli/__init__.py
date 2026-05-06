@@ -9,6 +9,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly dashboard ...`` → :mod:`whilly.cli.dashboard`
 * ``whilly init ...``      → :mod:`whilly.cli.init`
 * ``whilly worker ...``    → :mod:`whilly.cli.worker`
+* ``whilly logs ...``      → :mod:`whilly.log_viewer`
 * ``whilly forge ...``     → :mod:`whilly.forge`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
@@ -110,6 +111,7 @@ Commands:
               `whilly worker register` mints a per-worker bearer token.
   admin       Operator CLI (`admin bootstrap mint|revoke|list`,
               `admin worker revoke`).
+  logs        Show per-task prompts, LLM events, and raw model output.
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
   pr-feedback Poll open PRs for a plan and emit review events
               (`pr-feedback poll --plan <id>`).
@@ -381,6 +383,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.admin import run_admin_command
 
         return run_admin_command(rest)
+    if cmd == "logs":
+        from whilly.log_viewer import resolve_log_dir, run_logs_command
+
+        return run_logs_command(rest, resolve_log_dir())
     if cmd == "forge":
         # Lazy import keeps ``whilly --help`` fast — the forge package
         # transitively imports asyncpg + the PRD generator stack.
