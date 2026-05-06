@@ -186,6 +186,16 @@ from whilly.api.sse import (
     event_notify_listener_loop,
 )
 from whilly.api.dashboard import render_dashboard as render_dashboard_view
+from whilly.api.dashboard_token import (
+    DEFAULT_DASHBOARD_SCOPES,
+    DEFAULT_TTL_SECONDS as DASHBOARD_TOKEN_DEFAULT_TTL,
+    EVENTS_STREAM_SCOPE,
+    TASKS_READ_SCOPE,
+    DashboardTokenError,
+    generate_dashboard_secret,
+    mint_dashboard_token,
+    verify_dashboard_token,
+)
 from whilly.api.metrics import (
     METRICS_PATH,
     METRICS_REFRESH_TASK_NAME,
@@ -803,6 +813,89 @@ def create_app(
     # but requires ``is_admin=true`` on the bootstrap-token row. 401
     # on missing/invalid bearer, 403 on known non-admin operator.
     admin_dep: IdentityBindingAuthDependency = make_admin_auth(repo, legacy_token=legacy_bootstrap_token)
+
+    dashboard_token_secret: bytes = generate_dashboard_secret()
+    dashboard_token_ttl_raw = (os.environ.get("WHILLY_DASHBOARD_TOKEN_TTL_SECONDS") or "").strip()
+    if dashboard_token_ttl_raw:
+        try:
+            dashboard_token_ttl = int(dashboard_token_ttl_raw)
+        except ValueError:
+            raise RuntimeError(
+                f"create_app: WHILLY_DASHBOARD_TOKEN_TTL_SECONDS must be an integer, got {dashboard_token_ttl_raw!r}"
+            ) from None
+    else:
+        dashboard_token_ttl = DASHBOARD_TOKEN_DEFAULT_TTL
+
+    def _dashboard_token_from_request(request: Request) -> str | None:
+        query_token = (request.query_params.get("token") or "").strip()
+        if query_token:
+            return query_token
+        authorization = request.headers.get("authorization")
+        if authorization is None:
+            return None
+        prefix = "bearer "
+        if not authorization[: len(prefix)].lower() == prefix:
+            return None
+        token = authorization[len(prefix) :].strip()
+        # Dashboard tokens are JWT-shaped. Do not reinterpret ordinary worker
+        # bearer misses as dashboard-token attempts; that would change legacy
+        # 401/403 behavior on existing worker-auth routes.
+        if token.count(".") != 2:
+            return None
+        return token
+
+    async def _authenticate_dashboard_token(request: Request, *, expected_scope: str) -> bool:
+        token = _dashboard_token_from_request(request)
+        if token is None:
+            return False
+        try:
+            verify_dashboard_token(token, dashboard_token_secret, expected_scope=expected_scope)
+        except DashboardTokenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"invalid dashboard token: {exc}",
+            ) from None
+        return True
+
+    async def _authenticate_tasks_read_request(request: Request) -> None:
+        authorization = request.headers.get("authorization")
+        auth_exc: HTTPException | None = None
+        if authorization is not None:
+            try:
+                await bearer_dep(request, authorization)
+                return
+            except HTTPException as exc:
+                auth_exc = exc
+        if await _authenticate_dashboard_token(request, expected_scope=TASKS_READ_SCOPE):
+            return
+        if auth_exc is not None:
+            raise auth_exc
+        await bearer_dep(request, None)
+
+    async def _authenticate_events_stream_request(request: Request) -> None:
+        authorization = request.headers.get("authorization")
+        auth_exc: HTTPException | None = None
+        if authorization is not None:
+            try:
+                await _authenticate_stream_request(
+                    repo=repo,
+                    authorization=authorization,
+                    legacy_worker_token=legacy_worker_token,
+                    legacy_bootstrap_token=legacy_bootstrap_token,
+                )
+                return
+            except HTTPException as exc:
+                auth_exc = exc
+        if await _authenticate_dashboard_token(request, expected_scope=EVENTS_STREAM_SCOPE):
+            return
+        if auth_exc is not None:
+            raise auth_exc
+        await _authenticate_stream_request(
+            repo=repo,
+            authorization=None,
+            legacy_worker_token=legacy_worker_token,
+            legacy_bootstrap_token=legacy_bootstrap_token,
+        )
 
     # Event flusher (TASK-106). Construction is cheap and non-async — it
     # just allocates an :class:`asyncio.Queue` and stashes config. The
@@ -1637,11 +1730,10 @@ def create_app(
         "/api/v1/tasks",
         # Tags + summary surface in /docs (VAL-M3-TASKS-API-001) so the
         # operator can discover the endpoint alongside /api/v1/plans.
-        # Bearer auth uses the same ``bearer_dep`` as the steady-state
-        # RPC surface — any registered worker (or a legacy
-        # ``WHILLY_WORKER_TOKEN`` holder) can read; a dashboard origin
-        # without a worker bearer must mint one via /workers/register.
-        dependencies=[Depends(bearer_dep)],
+        # Worker bearer auth uses the same gate as the steady-state RPC
+        # surface. The anonymous dashboard can also use its short-lived,
+        # read-only dashboard token so HTMX fragments do not need worker
+        # credentials in the browser.
         tags=["tasks"],
         summary="List tasks for a plan with pagination + status filter",
     )
@@ -1652,6 +1744,8 @@ def create_app(
         limit: int = Query(default=TASKS_API_DEFAULT_LIMIT, gt=0, le=TASKS_API_MAX_LIMIT),
         cursor: str | None = Query(default=None, max_length=2048),
     ) -> JSONResponse:
+        await _authenticate_tasks_read_request(request)
+
         status_filter: TaskStatus | None
         if status is None:
             status_filter = None
@@ -1696,7 +1790,14 @@ def create_app(
         include_in_schema=False,
     )
     async def dashboard_index(request: Request, fragment: str | None = None) -> Response:
-        return await render_dashboard_view(request=request, pool=pool, fragment=fragment)
+        events_token = None
+        if fragment is None:
+            events_token = mint_dashboard_token(
+                dashboard_token_secret,
+                ttl_seconds=dashboard_token_ttl,
+                scope=DEFAULT_DASHBOARD_SCOPES,
+            )
+        return await render_dashboard_view(request=request, pool=pool, fragment=fragment, events_token=events_token)
 
     @app.get(
         "/events/stream",
@@ -1706,13 +1807,7 @@ def create_app(
         from sse_starlette.event import ServerSentEvent
         from sse_starlette.sse import EventSourceResponse
 
-        authorization = request.headers.get("authorization")
-        await _authenticate_stream_request(
-            repo=repo,
-            authorization=authorization,
-            legacy_worker_token=legacy_worker_token,
-            legacy_bootstrap_token=legacy_bootstrap_token,
-        )
+        await _authenticate_events_stream_request(request)
 
         last_event_id_header = request.headers.get("last-event-id")
         last_event_id = _parse_last_event_id(last_event_id_header)
