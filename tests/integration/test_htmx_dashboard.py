@@ -152,7 +152,8 @@ async def test_dashboard_wires_sse_connect_to_events_stream(client: AsyncClient)
     response = await client.get("/")
     body = response.text
     assert 'hx-ext="sse"' in body
-    assert 'sse-connect="/events/stream"' in body
+    assert re.search(r'sse-connect="/events/stream(?:\?token=[^"]+)?"', body)
+    assert 'name="whilly-events-token"' in body
 
 
 async def test_dashboard_polling_fallback_every_5s(client: AsyncClient) -> None:
@@ -329,8 +330,8 @@ def test_dashboard_template_file_exists() -> None:
     from pathlib import Path
 
     project_root = Path(__file__).resolve().parents[2]
-    template_path = project_root / "whilly" / "api" / "templates" / "dashboard.html"
-    assert template_path.is_file(), f"dashboard.html missing at {template_path}"
+    template_path = project_root / "whilly" / "api" / "templates" / "index.html.j2"
+    assert template_path.is_file(), f"index.html.j2 missing at {template_path}"
     workers_partial = project_root / "whilly" / "api" / "templates" / "_workers_table.html"
     tasks_partial = project_root / "whilly" / "api" / "templates" / "_tasks_table.html"
     assert workers_partial.is_file()
