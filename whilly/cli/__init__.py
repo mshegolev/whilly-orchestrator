@@ -7,6 +7,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly plan ...``      → :mod:`whilly.cli.plan`
 * ``whilly run ...``       → :mod:`whilly.cli.run`
 * ``whilly dashboard ...`` → :mod:`whilly.cli.dashboard`
+* ``whilly server ...``    → :mod:`whilly.cli.server`
 * ``whilly init ...``      → :mod:`whilly.cli.init`
 * ``whilly worker ...``    → :mod:`whilly.cli.worker`
 * ``whilly logs ...``      → :mod:`whilly.log_viewer`
@@ -110,6 +111,7 @@ Commands:
   plan        Manage plans (import, export, show, reset, apply).
   run         Run a local worker that claims tasks from a plan.
   dashboard   Live TUI dashboard for an in-flight plan.
+  server      FastAPI control plane and web dashboard.
   init        Interactive PRD wizard → plan import.
   worker      Run a remote worker against a control-plane URL.
               `whilly worker register` mints a per-worker bearer token.
@@ -380,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.dashboard import run_dashboard_command
 
         return run_dashboard_command(rest)
+    if cmd == "server":
+        from whilly.cli.server import run_server_command
+
+        return run_server_command(rest)
     if cmd == "init":
         from whilly.cli.init import run_init_command
 
