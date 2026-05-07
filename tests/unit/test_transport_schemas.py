@@ -20,6 +20,7 @@ here. These tests cover the AC for TASK-021a1:
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -34,9 +35,12 @@ from whilly.adapters.transport.schemas import (
     FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    HumanReviewDecisionRequest,
+    ListTaskEventsResponse,
     PlanPayload,
     RegisterRequest,
     RegisterResponse,
+    TaskEventItem,
     TaskEventRequest,
     TaskEventResponse,
     TaskPayload,
@@ -182,6 +186,47 @@ def test_task_event_request_response_happy_path() -> None:
     assert req.payload["status"] == "success"
     assert req.detail == {"artifact_ref": "whilly_logs/tasks/T-1/attempt-1"}
     assert TaskEventResponse().ok is True
+
+
+def test_list_task_events_response_carries_ordered_event_items() -> None:
+    event = TaskEventItem(
+        id=10,
+        task_id="T-1",
+        plan_id="PLAN-1",
+        event_type="human_review.approved",
+        created_at=datetime(2026, 5, 7, 9, 30, tzinfo=UTC),
+        payload={"task_id": "T-1", "decision": "approved"},
+        detail={"review_url": "https://example.test/review/1"},
+    )
+    response = ListTaskEventsResponse(events=[event])
+
+    assert response.events == [event]
+    assert response.events[0].payload["decision"] == "approved"
+    with pytest.raises(ValidationError):
+        TaskEventItem(
+            id=10,
+            task_id="T-1",
+            plan_id="PLAN-1",
+            event_type="human_review.approved",
+            created_at=event.created_at,
+            payload={},
+            unexpected=True,
+        )
+
+
+def test_human_review_decision_request_pins_admin_payload_shape() -> None:
+    request = HumanReviewDecisionRequest(
+        decision="approved",
+        reviewer="lead@example.com",
+        stage_id="release_review",
+        comment="Evidence reviewed.",
+        evidence={"review_url": "https://example.test/review/1"},
+    )
+
+    assert request.decision == "approved"
+    assert request.reviewer == "lead@example.com"
+    with pytest.raises(ValidationError):
+        HumanReviewDecisionRequest(decision="maybe", reviewer="lead@example.com")
 
 
 def test_error_response_carries_version_conflict_fields() -> None:

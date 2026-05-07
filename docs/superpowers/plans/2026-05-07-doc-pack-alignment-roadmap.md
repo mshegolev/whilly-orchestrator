@@ -159,12 +159,12 @@ Validation:
 - [x] Surface tasks/checkpoints needing human input in the API, dashboard, and browserless TUI.
 - [x] Add plan-show checkpoint markers from task/event evidence.
 - [x] Keep approval as auditable data, not a new terminal task state for MVP.
-- [ ] Block configured risky sinks/stages until approval evidence exists.
+- [x] Block configured risky sinks/stages until approval evidence exists.
 
 Validation:
 
 ```bash
-.venv/bin/python -m pytest -q tests/unit/test_human_review_checkpoint.py tests/integration/test_transport_tasks.py::test_record_task_event_accepts_pipeline_verification_and_human_review_events
+.venv/bin/python -m pytest -q tests/unit/test_human_review_checkpoint.py tests/unit/test_local_worker.py::test_configured_pipeline_task_records_stage_and_human_review_events tests/unit/test_local_worker.py::test_configured_pipeline_task_completes_after_human_review_approval tests/unit/test_remote_worker.py::test_configured_remote_pipeline_task_records_stage_and_human_review_events tests/unit/test_remote_worker.py::test_configured_remote_pipeline_task_completes_after_human_review_approval tests/unit/test_remote_client.py::test_list_task_events_gets_filtered_events tests/integration/test_transport_tasks.py::test_record_task_event_accepts_pipeline_verification_and_human_review_events tests/integration/test_transport_tasks.py::test_human_review_release_holds_task_until_admin_approval tests/integration/test_per_worker_auth.py::test_cross_worker_bearer_on_task_events_returns_403
 ```
 
 ### Phase 6: Configured Sinks And PR Policy

@@ -102,7 +102,7 @@ async def _seed_plan_with_one_task(pool: asyncpg.Pool, plan_id: str, task_id: st
         )
 
 
-async def _fake_runner_complete(task: Task, prompt: str) -> AgentResult:
+async def _fake_runner_complete(task: Task, prompt: str, **_kwargs: object) -> AgentResult:
     """A fake agent runner that always reports a successful completion.
 
     ``is_complete=True`` + ``exit_code=0`` is the contract for

@@ -14,6 +14,7 @@ from whilly.pipeline.human_review import (
     make_human_review_rejected_event,
     make_human_review_required_event,
     requires_human_review,
+    is_human_review_approved,
 )
 from whilly.project_config.models import HumanLoopConfig, PipelineStepConfig
 
@@ -92,6 +93,51 @@ def test_decision_events_store_approval_evidence_without_task_status_change() ->
     assert changes.event_type == HUMAN_REVIEW_CHANGES_REQUESTED
     assert changes.payload["decision"] == "changes_requested"
     assert changes.payload["requested_changes"] == ["Attach regression run"]
+
+
+def test_approval_predicate_uses_payload_identity_and_latest_decision() -> None:
+    checkpoint = HumanReviewCheckpoint(task_id="task-123", plan_id="plan-abc", stage_id="release-decision")
+
+    assert is_human_review_approved(
+        checkpoint,
+        [
+            {
+                "event_type": HUMAN_REVIEW_APPROVED,
+                "payload": {
+                    "task_id": "task-123",
+                    "plan_id": "plan-abc",
+                    "stage_id": "release-decision",
+                    "decision": "approved",
+                    "reviewer": "qa@example.com",
+                },
+                "detail": {"stage_id": "diagnostic-stage"},
+            }
+        ],
+    )
+
+    assert not is_human_review_approved(
+        checkpoint,
+        [
+            {
+                "event_type": HUMAN_REVIEW_APPROVED,
+                "payload": {"task_id": "task-123", "stage_id": "release-decision"},
+            },
+            {
+                "event_type": HUMAN_REVIEW_CHANGES_REQUESTED,
+                "payload": {"task_id": "task-123", "stage_id": "release-decision"},
+            },
+        ],
+    )
+
+    assert not is_human_review_approved(
+        checkpoint,
+        [
+            {
+                "event_type": HUMAN_REVIEW_APPROVED,
+                "payload": {"task_id": "task-123", "stage_id": "release-decision"},
+            }
+        ],
+    )
 
 
 def test_predicate_requires_review_from_configured_stage_gate_or_required_steps() -> None:
