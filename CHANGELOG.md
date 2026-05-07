@@ -54,6 +54,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Operators relying on the old default for unattended write/edit work
   must explicitly opt into `WHILLY_AGENT_ALLOW_SHELL=1`.
 
+## [4.6.3] - 2026-05-07
+
+> **Patch release — release automation verification.** No runtime
+> behavior or database schema changes.
+
+### Changed
+
+- Bumped the release train to `4.6.3` so the `whilly-worker` package can
+  be published by PyPI Trusted Publishing after adding the
+  `pypi-worker` GitHub environment publisher on PyPI.
+- Updated distributed compose defaults and worker environment examples to
+  `mshegolev/whilly:4.6.3`.
+
+### Verification
+
+- `pytest -q tests/unit/test_version_consistency.py tests/integration/test_compose_default_image_tag.py`
+- `python -m build`
+- `cd whilly_worker && python -m build`
+
 ## [4.6.2] - 2026-05-06
 
 > **Patch release — demo observability, GitHub issue compatibility, and
