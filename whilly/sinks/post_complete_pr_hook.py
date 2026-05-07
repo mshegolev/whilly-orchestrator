@@ -5,7 +5,8 @@ worker's main loop. Fired once per task that transitions to ``DONE``,
 gated by:
 
 1. ``WHILLY_AUTO_OPEN_PR=1`` in the environment, AND
-2. The plan's ``github_issue_ref`` column is non-NULL.
+2. The plan has a legacy ``github_issue_ref`` or the completed task carries
+   a structured ``repo_target_id``.
 
 On success the helper persists one row in the ``pull_requests`` table
 and emits a ``pr.opened`` audit event to both Postgres and the JSONL
@@ -63,7 +64,7 @@ async def run_post_complete_pr_hook(
     """Maybe open a PR for ``task`` after a successful COMPLETE.
 
     Returns ``None`` when the hook is gated off (env unset, or the
-    plan has no ``github_issue_ref``); otherwise returns the
+    task/plan has no PR-routable GitHub context); otherwise returns the
     :class:`PRResult` produced by ``opener`` so callers can log /
     introspect.
 
@@ -75,9 +76,10 @@ async def run_post_complete_pr_hook(
         return None
 
     issue_ref = await repo.get_plan_github_issue_ref(plan_id)
-    if not issue_ref:
+    task_repo_target_id = getattr(task, "repo_target_id", "") or ""
+    if not issue_ref and not task_repo_target_id:
         logger.debug(
-            "post_complete_pr_hook: plan=%s has no github_issue_ref; skipping (task=%s)",
+            "post_complete_pr_hook: plan=%s has no github_issue_ref or task repo target; skipping (task=%s)",
             plan_id,
             getattr(task, "id", "<unknown>"),
         )
@@ -121,11 +123,13 @@ async def _record_success(
     result: PRResult,
 ) -> None:
     task_id = getattr(task, "id", "<unknown>")
+    repo_target_id = getattr(task, "repo_target_id", "") or None
     pr_number = result.pr_number if result.pr_number is not None else 0
     try:
         await repo.insert_pull_request(
             plan_id=plan_id,
             task_id=task_id,
+            repo_target_id=repo_target_id,
             pr_number=pr_number,
             pr_url=result.pr_url,
             branch=result.branch,
@@ -155,6 +159,8 @@ async def _record_success(
         "head_sha": result.head_sha,
         "task_id": task_id,
     }
+    if repo_target_id is not None:
+        detail["repo_target_id"] = repo_target_id
     try:
         await repo.emit_pr_event(
             PR_OPENED_EVENT_TYPE,

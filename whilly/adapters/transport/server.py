@@ -1830,7 +1830,7 @@ def create_app(
         # slots in here without touching the response shape.
     )
     async def get_plan(plan_id: str) -> JSONResponse:
-        """Return ``{id, name, github_issue_ref, prd_file}`` for a single plan (VAL-FORGE-012).
+        """Return plan metadata for a single plan (VAL-FORGE-012).
 
         404 if the plan does not exist. The ``github_issue_ref`` field
         is ``null`` for plans created via ``whilly init`` (no GitHub
@@ -1852,17 +1852,64 @@ def create_app(
                 "SELECT id, name, github_issue_ref, prd_file FROM plans WHERE id = $1",
                 plan_id,
             )
+            origin_row = await conn.fetchrow(
+                """
+                SELECT
+                    wi.origin_system,
+                    wi.origin_ref,
+                    wi.external_url,
+                    wi.title,
+                    wi.content_hash,
+                    po.prd_file,
+                    po.decomposition_mode
+                FROM plan_origins po
+                JOIN work_intents wi ON wi.id = po.work_intent_id
+                WHERE po.plan_id = $1
+                ORDER BY po.created_at ASC
+                LIMIT 1
+                """,
+                plan_id,
+            )
+            repo_target_rows = await conn.fetch(
+                """
+                SELECT
+                    rt.id,
+                    rt.provider,
+                    rt.repo_full_name,
+                    rt.clone_url,
+                    rt.default_branch,
+                    rt.credential_policy
+                FROM plan_repo_targets prt
+                JOIN repo_targets rt ON rt.id = prt.repo_target_id
+                WHERE prt.plan_id = $1
+                ORDER BY prt.is_default DESC, rt.id ASC
+                """,
+                plan_id,
+            )
         if row is None:
             return JSONResponse(
                 {"error": "not_found", "detail": f"plan {plan_id!r} not found"},
                 status_code=status.HTTP_404_NOT_FOUND,
             )
+        origin = None
+        if origin_row is not None:
+            origin = {
+                "system": origin_row["origin_system"],
+                "ref": origin_row["origin_ref"],
+                "url": origin_row["external_url"],
+                "title": origin_row["title"],
+                "content_hash": origin_row["content_hash"],
+                "prd_file": origin_row["prd_file"],
+                "decomposition_mode": origin_row["decomposition_mode"],
+            }
         return JSONResponse(
             {
                 "id": row["id"],
                 "name": row["name"],
                 "github_issue_ref": row["github_issue_ref"],
                 "prd_file": row["prd_file"],
+                "origin": origin,
+                "repo_targets": [dict(repo_target) for repo_target in repo_target_rows],
             }
         )
 

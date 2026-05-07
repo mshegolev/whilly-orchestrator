@@ -27,6 +27,7 @@ they take milliseconds, not 135 seconds.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -87,7 +88,7 @@ def _patch_spawn(
     calls: list[tuple[str, str]] = []
     iterator = iter(results)
 
-    async def fake_spawn(prompt: str, model: str) -> AgentResult:
+    async def fake_spawn(prompt: str, model: str, *, cwd: object | None = None) -> AgentResult:
         calls.append((prompt, model))
         try:
             return next(iterator)
@@ -240,6 +241,28 @@ async def test_run_task_explicit_model_arg_wins_over_env(
     _patch_sleep(monkeypatch)
     await run_task(_make_task(), "prompt", model="claude-from-arg")
     assert calls == [("prompt", "claude-from-arg")]
+
+
+async def test_run_task_forwards_cwd_to_spawn(
+    clean_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Repo-target workers pass a prepared checkout to the subprocess layer."""
+    seen: dict[str, object | None] = {}
+
+    async def fake_spawn(prompt: str, model: str, *, cwd: object | None = None) -> AgentResult:
+        seen["prompt"] = prompt
+        seen["model"] = model
+        seen["cwd"] = cwd
+        return AgentResult(output="ok", is_complete=True)
+
+    monkeypatch.setattr(claude_cli, "_spawn_and_collect", fake_spawn)
+    _patch_sleep(monkeypatch)
+
+    await run_task(_make_task(), "prompt", cwd=tmp_path)
+
+    assert seen == {"prompt": "prompt", "model": DEFAULT_MODEL, "cwd": tmp_path}
 
 
 # --------------------------------------------------------------------------- #
@@ -553,6 +576,25 @@ async def test_spawn_and_collect_parses_real_stdout(
     assert result.is_complete is True
     assert result.usage.cost_usd == pytest.approx(0.01)
     assert result.usage.input_tokens == 10
+
+
+async def test_spawn_and_collect_passes_cwd_to_subprocess(
+    clean_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object | None] = {}
+
+    async def fake_create(*args: Any, **kwargs: Any) -> _FakeProc:
+        captured["cwd"] = kwargs.get("cwd")
+        return _FakeProc(b'{"result": "ok"}', b"", 0)
+
+    monkeypatch.setattr(claude_cli.asyncio, "create_subprocess_exec", fake_create)
+
+    result = await claude_cli._spawn_and_collect("prompt", "m", cwd=tmp_path)
+
+    assert result.exit_code == 0
+    assert captured["cwd"] == str(tmp_path)
 
 
 async def test_spawn_and_collect_falls_back_to_stderr_when_stdout_empty(

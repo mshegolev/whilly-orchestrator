@@ -2,14 +2,14 @@
 title: Home
 layout: default
 nav_order: 1
-description: "Whilly Orchestrator — task orchestrator that runs Claude CLI agents on a JSON plan."
+description: "Whilly Orchestrator — control plane for observable AI-assisted engineering workflows."
 permalink: /
 ---
 
 # Whilly Orchestrator
 {: .fs-9 }
 
-Task orchestrator that runs coding-agent CLIs on a JSON plan — loopable, resumable, budget-capped, and happy to hand tasks back to a human when it hits a wall.
+Control plane for safe, observable AI-assisted engineering workflows.
 {: .fs-5 .fw-300 }
 
 [Getting Started]({{ site.baseurl }}/Getting-Started){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
@@ -17,13 +17,33 @@ Task orchestrator that runs coding-agent CLIs on a JSON plan — loopable, resum
 
 ---
 
-## What whilly does
+## What Whilly Does
 
-- **Pulls tasks** from a GitHub repo (`--from-github`, `--from-issue`), a Projects v2 board (`--from-project`), or a Jira project (`--from-jira`).
-- **Runs agents** — Claude CLI by default, OpenCode, or `claude_handoff` (file-based RPC to you).
-- **Tracks lifecycle** on your Projects v2 board *and* your Jira ticket in real time: `Todo → In Progress → In Review → Done`, plus `On Hold` and `Human Loop` for anything that needs a human.
-- **Stays safe** — hard budget cap, wall-clock timeout, automatic task resume, idempotent plan files.
-- **Works everywhere** — pure Python 3.10+, stdlib-only for Jira, tested on Linux / macOS / Windows.
+Whilly turns structured engineering work into a deterministic, auditable task
+execution pipeline. It accepts tasks from JSON plans, GitHub Issues, GitHub
+Projects, Jira, and PRD/Forge intake, normalizes them into one task model, and
+stores execution state in Postgres.
+
+The orchestrator owns task selection and state transitions. Agents receive a
+prepared prompt through a runner or handoff backend; they do not pick arbitrary
+tasks or take over the whole project plan.
+
+Whilly tracks dependencies, priorities, budgets, decision gates, worker claims,
+events, errors, health, metrics, and human review points. It is built for
+issue-driven coding work: bug fixes, features, refactoring, test generation,
+and documentation updates.
+
+## Boundaries
+
+Whilly orchestrates agents; it does not guarantee that every agent output is
+correct. The value is controlled acceleration: limiting the work scope,
+validating inputs, managing the queue, recording state, making execution
+observable, and keeping humans in control at critical points.
+
+The current core should not be described as full autonomous multi-repo
+execution, automatic PR-review feedback handling, mandatory CI/lint
+verification, full sandbox or VM isolation, semantic long-term memory, reliable
+git rollback, or autonomous production release.
 
 ## One-liner demo
 
@@ -33,7 +53,9 @@ whilly --config path            # where to drop your config
 whilly --from-issue you/repo/42 --go
 ```
 
-That fetches issue 42, generates a one-task plan, spawns an agent, and exits `0` when the agent reports complete.
+That fetches issue 42, generates a one-task plan, imports it into the
+orchestration flow, runs a worker, and exits `0` only when the runner reports a
+successful completion.
 
 ## Read next
 
@@ -48,11 +70,12 @@ That fetches issue 42, generates a one-task plan, spawns an agent, and exits `0`
 ## Under the hood
 
 ```
-CLI  ──▶  TaskManager  ──▶  AgentBackend  ──▶  Claude / OpenCode / claude_handoff
-                ↓
-   on_status_change hook  ──▶  Projects v2 (GraphQL)  +  Jira (REST)
-                ↓
-         Dashboard, Reporter, Budget + Resource guards
+Sources ──▶ Plan/task model ──▶ Postgres queue ──▶ Worker claim ──▶ Runner/backend
+                         │              │                 │
+                         ▼              ▼                 ▼
+                 Decision gates    Audit events      Human review
+                         │              │                 │
+                         └──── Dashboard / SSE / metrics / health
 ```
 
 Full module map lives in [`Whilly-Interfaces-and-Tasks`]({{ site.baseurl }}/Whilly-Interfaces-and-Tasks).

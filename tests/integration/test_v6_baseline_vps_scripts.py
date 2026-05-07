@@ -195,7 +195,7 @@ def test_services_yaml_exposes_both_scripts() -> None:
     services_yaml = Path(
         os.environ.get(
             "WHILLY_MISSION_SERVICES_YAML",
-            "/Users/m.v.shchegolev/.factory/missions/75d95174-16a0-4392-a6c8-c5508a381918/services.yaml",
+            "/path/to/factory/mission/services.yaml",
         )
     )
     if not services_yaml.is_file():

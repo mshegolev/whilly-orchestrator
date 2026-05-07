@@ -1,16 +1,38 @@
 # Whilly Orchestrator
 
-> 🚀 **v4.6.1 — Live observability + multi-host demo (M3 of Whilly Distributed v5.0).**
-> Whilly is a distributed orchestrator for AI coding agents: Postgres-backed task queue,
-> FastAPI control plane, remote workers over HTTP, and an append-only `events` audit
-> log. Live operator surface: HTMX dashboard at `GET /`, SSE event stream at
-> `GET /events/stream`, JSON tasks listing at `GET /api/v1/tasks`, bearer-gated
-> Prometheus `/metrics`, extended `/health` + `/health/live` + `/health/ready`
-> triplet, and the `localhost.run` funnel sidecar for free public-internet exposure
-> (rotating `https://<random>.lhr.life` URL — no Tailscale or Caddy needed). The
-> legacy v3.x single-process loop lives at tag
+Whilly Orchestrator is a control plane for AI-assisted engineering workflows.
+
+It turns structured engineering work from JSON plans, GitHub Issues, GitHub
+Projects, Jira, and PRD/Forge intake into a deterministic, observable, and
+auditable task execution pipeline.
+
+Whilly does not position AI agents as fully autonomous developers. Instead, it
+wraps agent execution in a controlled orchestration layer: task validation,
+dependency checks, decision gates, Postgres-backed queueing, worker claiming,
+guarded prompt construction, runner execution, state transitions, audit events,
+metrics, dashboards, and human review points.
+
+The system is optimized for issue-driven coding tasks such as bug fixes,
+features, refactoring, tests, and documentation updates. It provides the
+foundation for safely scaling AI-assisted development from local
+single-repository workflows toward configurable multi-domain engineering
+pipelines.
+
+The long-term goal is to make Whilly a configurable project-aware orchestrator
+where each project type can define its own sources, pipeline stages, quality
+gates, verification steps, runners, sinks, and human-in-the-loop checkpoints.
+
+Whilly's core value is not unrestricted autonomy, but controlled acceleration:
+enabling AI agents to perform useful engineering work while preserving
+traceability, reviewability, safety, and operational control.
+
+> **v4.6.1 baseline.** Whilly currently ships a Postgres-backed task queue,
+> FastAPI control plane, remote workers over HTTP, append-only `events` audit
+> log, dashboard, SSE stream, Prometheus metrics, health endpoints, worker
+> heartbeat, and local/remote worker execution. The legacy v3.x single-process
+> loop lives at tag
 > [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final);
-> there is **no backwards compatibility** with v3.x runtime state — see
+> there is **no backwards compatibility** with v3.x runtime state. See
 > [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md).
 
 [![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
@@ -20,6 +42,43 @@
 🇷🇺 [Краткое описание на русском](README-RU.md)
 
 > "I'm helping — and I've read TRIZ." — Whilly Wiggum
+
+## What Whilly Does
+
+- Accepts work from JSON plans, GitHub Issues, GitHub Projects, Jira, and
+  Forge/PRD intake.
+- Normalizes each task into one model: description, dependencies, priority,
+  acceptance criteria, test steps, key files, budget, and `plan_id`.
+- Validates tasks before execution: vague work can be rejected or skipped,
+  dependency cycles are refused, and decision gates can run in strict mode.
+- Orchestrates execution from a Postgres queue using dependency readiness,
+  priority, budget checks, row locking, worker claiming, and a deterministic
+  state machine.
+- Hands prepared prompts to runners/backends without letting agents freely pick
+  tasks or rewrite the project plan.
+- Records outcomes through task states, append-only events, JSONL mirrors,
+  dashboard views, SSE, Prometheus metrics, health checks, and worker heartbeat.
+- Supports human-in-the-loop through PR review, handoff backends, dashboards,
+  issue/Jira comments, and explicit blocked/human-loop task states.
+
+## Current Scope And Boundaries
+
+Whilly orchestrates agents; it does not magically make agent output correct.
+
+Current Whilly is best described as an issue-driven AI task orchestrator for one
+working repository or workspace, with a Postgres-backed queue, deterministic
+state transitions, worker execution, runner abstraction, audit events, and
+baseline safety gates.
+
+It already fits bug fixes, feature tasks, refactoring, test generation,
+documentation updates, structured task plans, and controlled local/remote worker
+execution.
+
+The core worker loop does **not** claim all of the following as complete product
+guarantees: full multi-repo execution, automatic PR review feedback loops,
+mandatory CI/lint verification, full sandbox or VM isolation, semantic
+long-term memory, reliable git rollback, or autonomous production release
+without human review.
 
 ## What's new in v4.6.1 (M3 of Whilly Distributed v5.0)
 

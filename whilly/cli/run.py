@@ -81,16 +81,17 @@ from typing import Final
 
 from whilly.adapters.db import TaskRepository, close_pool, create_pool
 from whilly.adapters.notifications import make_notifier
-from whilly.adapters.runner import run_task
+from whilly.adapters.runner import AgentResult, run_task
 from whilly.audit import JsonlEventSink
 from whilly.cli.plan import _select_plan_with_tasks
 from whilly.config import WhillyConfig
-from whilly.core.models import WorkerId
+from whilly.core.models import Task, WorkerId
 from whilly.core.notifications import NotificationPort, RunCompletedEvent
 from whilly.sinks.post_complete_pr_hook import (
     is_auto_open_pr_enabled,
-    make_post_complete_hook,
+    run_post_complete_pr_hook,
 )
+from whilly.workspaces import RepoTargetWorkspaceResolver, WORKSPACE_FAILED_EXIT_CODE
 from whilly.worker import (
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_IDLE_WAIT,
@@ -380,25 +381,62 @@ async def _async_run(
         # are logged but never raised, so the orchestrator stays
         # functional on read-only filesystems / disk-full hosts.
         repo = TaskRepository(pool, jsonl_sink=JsonlEventSink())
+        workspace_resolver = RepoTargetWorkspaceResolver(repo)
+        task_workspaces: dict[str, Path] = {}
+
+        async def workspace_runner(task: Task, prompt: str) -> AgentResult:
+            try:
+                workspace = await workspace_resolver.prepare(task, plan)
+            except Exception as exc:  # noqa: BLE001 - return as task failure, do not crash worker
+                logger.warning(
+                    "whilly run: workspace preparation failed task=%s target=%s: %s",
+                    task.id,
+                    task.repo_target_id,
+                    exc,
+                )
+                try:
+                    await repo.record_task_event(
+                        task.id,
+                        "workspace.prepare_failed",
+                        {
+                            "repo_target_id": task.repo_target_id,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                except Exception:  # noqa: BLE001 - failure result owns state transition
+                    logger.warning("whilly run: failed to record workspace.prepare_failed", exc_info=True)
+                return AgentResult(
+                    output=f"workspace preparation failed: {type(exc).__name__}: {exc}",
+                    exit_code=WORKSPACE_FAILED_EXIT_CODE,
+                    is_complete=False,
+                )
+
+            task_workspaces[task.id] = workspace.path
+            if runner is run_task:
+                return await run_task(task, prompt, cwd=workspace.path)
+            return await runner(task, prompt)
 
         # Post-COMPLETE PR opener hook (M2, VAL-PR-005..008 +
         # VAL-PR-022 / VAL-PR-023). Only built when
         # ``WHILLY_AUTO_OPEN_PR=1`` is set; otherwise the worker stays
         # bit-for-bit equivalent to the v4.4 baseline. The hook itself
-        # additionally short-circuits when ``plan.github_issue_ref`` is
-        # NULL — the env-var gate is the cheap pre-check; the
-        # github_issue_ref guard is the per-plan one.
+        # additionally short-circuits when neither the legacy
+        # ``plan.github_issue_ref`` nor a task-level ``repo_target_id``
+        # provides PR-routable GitHub context.
         post_complete_hook = None
         if is_auto_open_pr_enabled():
-            post_complete_hook = make_post_complete_hook(
-                repo,
-                plan_id=plan.id,
-                worktree_path=Path.cwd(),
-            )
+
+            async def post_complete_hook(task: Task) -> None:
+                await run_post_complete_pr_hook(
+                    repo,
+                    plan_id=plan.id,
+                    task=task,
+                    worktree_path=task_workspaces.get(task.id, Path.cwd()),
+                )
 
         return await run_worker(
             repo,
-            runner,
+            workspace_runner,
             plan,
             worker_id,
             idle_wait=idle_wait if idle_wait is not None else DEFAULT_IDLE_WAIT,

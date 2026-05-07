@@ -22,6 +22,8 @@ from typing import Any
 type TaskId = str
 type PlanId = str
 type WorkerId = str
+type WorkIntentId = str
+type RepoTargetId = str
 
 
 class TaskStatus(str, Enum):
@@ -50,6 +52,38 @@ class Priority(str, Enum):
 
 
 @dataclass(frozen=True)
+class PlanOrigin:
+    """External or manual source that produced a plan.
+
+    ``system`` and ``ref`` form the durable idempotency key across source
+    adapters (for example ``github_issue`` + ``owner/repo/123`` or
+    ``manual_prd`` + ``my-slug``). The remaining fields are provenance and
+    diagnostics; they intentionally default to empty strings so older plans
+    can keep using the compact v4 shape.
+    """
+
+    system: str
+    ref: str
+    url: str = ""
+    title: str = ""
+    content_hash: str = ""
+    prd_file: str = ""
+    decomposition_mode: str = ""
+
+
+@dataclass(frozen=True)
+class RepoTarget:
+    """Repository that a plan or task may execute against."""
+
+    id: RepoTargetId
+    provider: str
+    repo_full_name: str
+    clone_url: str = ""
+    default_branch: str = ""
+    credential_policy: str = ""
+
+
+@dataclass(frozen=True)
 class Task:
     """A single unit of work in a plan.
 
@@ -72,6 +106,7 @@ class Task:
     test_steps: tuple[str, ...] = ()
     prd_requirement: str = ""
     version: int = 0
+    repo_target_id: RepoTargetId = ""
 
 
 @dataclass(frozen=True)
@@ -81,6 +116,8 @@ class Plan:
     id: PlanId
     name: str
     tasks: tuple[Task, ...] = ()
+    origin: PlanOrigin | None = None
+    repo_targets: tuple[RepoTarget, ...] = ()
 
 
 @dataclass(frozen=True)

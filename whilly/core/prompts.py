@@ -269,10 +269,11 @@ def build_pr_fix_prompt(
     lines.append(f"План: **{plan.name}** (id={plan.id})")
     lines.append(f"Задача: **{task.id}** (PR fix iteration)")
     lines.append(f"Приоритет: {task.priority.value}")
-    if task.prd_requirement:
-        lines.append("PR URL: " + sanitize_external_text(task.prd_requirement, scope="task_prd_requirement"))
     lines.append("")
     lines.append(GUARD_SENTENCE)
+    lines.append("")
+    if task.prd_requirement:
+        lines.append("PR URL: " + sanitize_external_text(task.prd_requirement, scope="task_prd_requirement"))
     lines.append("")
 
     lines.append("## Комментарии ревьюера")

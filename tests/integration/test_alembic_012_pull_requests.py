@@ -50,6 +50,7 @@ pytestmark = DOCKER_REQUIRED
 
 
 _MIGRATION_012_PATH: Path = MIGRATIONS_DIR / "versions" / "012_pull_requests_and_pr_events.py"
+_MIGRATION_012_REVISION: str = "012_pull_requests_and_pr_events"
 _PULL_REQUESTS_TABLE: str = "pull_requests"
 _PLAN_PR_UNIQUE_INDEX: str = "ix_pull_requests_plan_id_pr_number_unique"
 
@@ -134,11 +135,11 @@ async def _execute(dsn: str, sql: str, *args: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_012_is_head_revision() -> None:
-    """The alembic script directory reports ``012_pull_requests_and_pr_events`` as head."""
+def test_012_revision_exists() -> None:
+    """Migration 012 remains in the alembic script directory."""
     cfg = _build_cfg("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
-    assert script.get_current_head() == "012_pull_requests_and_pr_events"
+    assert script.get_revision("012_pull_requests_and_pr_events") is not None
 
 
 def test_012_depends_on_011() -> None:
@@ -157,7 +158,10 @@ def test_012_depends_on_011() -> None:
 
 def test_upgrade_creates_table_with_required_columns(base_011_dsn: str) -> None:
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (011→head)")
+    _retry_colima_flake(
+        lambda: command.upgrade(cfg, _MIGRATION_012_REVISION),
+        op="upgrade 012 (011→012)",
+    )
 
     rows = asyncio.run(
         _fetch(
@@ -246,7 +250,7 @@ def test_upgrade_creates_table_with_required_columns(base_011_dsn: str) -> None:
 def test_upgrade_creates_primary_key_on_id(base_011_dsn: str) -> None:
     """``id`` is the PRIMARY KEY (single-column)."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     pk_columns = asyncio.run(
         _fetch(
@@ -267,7 +271,7 @@ def test_upgrade_creates_primary_key_on_id(base_011_dsn: str) -> None:
 def test_upgrade_creates_state_check_constraint(base_011_dsn: str) -> None:
     """The ``state`` CHECK enumerates ('open','merged','closed','failed')."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     async def _seed_plan() -> None:
         await _execute(
@@ -299,7 +303,7 @@ def test_upgrade_creates_state_check_constraint(base_011_dsn: str) -> None:
 def test_upgrade_creates_review_decision_check_constraint(base_011_dsn: str) -> None:
     """``review_decision`` CHECK enumerates the three GitHub literals + NULL."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     async def _seed_plan() -> None:
         await _execute(
@@ -354,7 +358,7 @@ def test_upgrade_creates_review_decision_check_constraint(base_011_dsn: str) -> 
 def test_foreign_key_to_plans_id_enforced(base_011_dsn: str) -> None:
     """Inserting a pull_requests row whose plan_id is unknown raises FK violation 23503."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     async def _attempt_dangling_fk() -> None:
         with pytest.raises(asyncpg.exceptions.ForeignKeyViolationError) as excinfo:
@@ -379,7 +383,7 @@ def test_foreign_key_to_plans_id_enforced(base_011_dsn: str) -> None:
 def test_foreign_key_cascade_on_plan_delete(base_011_dsn: str) -> None:
     """Deleting a plan cascades to its pull_requests rows."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     async def _scenario() -> None:
         await _execute(
@@ -421,7 +425,7 @@ def test_foreign_key_cascade_on_plan_delete(base_011_dsn: str) -> None:
 def test_unique_index_on_plan_id_pr_number(base_011_dsn: str) -> None:
     """Two rows with the same (plan_id, pr_number) raise unique-violation 23505."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     indexdef = asyncio.run(
         _fetchval(
@@ -472,7 +476,7 @@ def test_unique_index_on_plan_id_pr_number(base_011_dsn: str) -> None:
 def test_same_pr_number_against_different_plan_succeeds(base_011_dsn: str) -> None:
     """Same pr_number against a different plan_id is permitted (composite, not single-column)."""
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
 
     async def _scenario() -> None:
         await _execute(
@@ -520,7 +524,7 @@ def test_same_pr_number_against_different_plan_succeeds(base_011_dsn: str) -> No
 
 def test_downgrade_removes_table_and_index(base_011_dsn: str) -> None:
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012")
     _retry_colima_flake(lambda: command.downgrade(cfg, "-1"), op="downgrade -1")
 
     async def _inspect() -> tuple[int, int, str | None]:
@@ -576,7 +580,7 @@ def _normalise_schema_dump(text: str) -> str:
 
 
 def test_round_trip_upgrade_downgrade_upgrade_is_deterministic(base_011_dsn: str) -> None:
-    """``upgrade head`` → ``pg_dump`` → ``downgrade base`` → ``upgrade head`` → ``pg_dump`` byte-equal.
+    """``upgrade 012`` → ``pg_dump`` → ``downgrade base`` → ``upgrade 012`` → ``pg_dump`` byte-equal.
 
     Pins VAL-PR-028: the migration is reversible and idempotent so a
     re-run after a clean wipe lands on a schema fingerprint identical
@@ -584,7 +588,7 @@ def test_round_trip_upgrade_downgrade_upgrade_is_deterministic(base_011_dsn: str
     M2/M3 alembic test on this repo.
     """
     cfg = _build_cfg(base_011_dsn)
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (rt-1)")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012 (rt-1)")
     asyncpg_dsn = _to_asyncpg_dsn(base_011_dsn)
 
     def _dump() -> str:
@@ -601,8 +605,10 @@ def test_round_trip_upgrade_downgrade_upgrade_is_deterministic(base_011_dsn: str
             ],
             capture_output=True,
             text=True,
-            check=True,
         )
+        if result.returncode != 0 and "server version" in result.stderr and "pg_dump version" in result.stderr:
+            pytest.skip(f"pg_dump client/server version mismatch: {result.stderr.strip()}")
+        result.check_returncode()
         return _normalise_schema_dump(result.stdout)
 
     if subprocess.run(["which", "pg_dump"], capture_output=True).returncode != 0:
@@ -610,7 +616,7 @@ def test_round_trip_upgrade_downgrade_upgrade_is_deterministic(base_011_dsn: str
 
     fingerprint_first = _dump()
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (rt)")
-    _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (rt-2)")
+    _retry_colima_flake(lambda: command.upgrade(cfg, _MIGRATION_012_REVISION), op="upgrade 012 (rt-2)")
     fingerprint_second = _dump()
 
     assert fingerprint_first == fingerprint_second, (
@@ -650,8 +656,13 @@ def test_schema_sql_mentions_pull_requests_table_and_index() -> None:
         "updated_at",
     ):
         assert required_column in text, f"schema.sql must declare pull_requests.{required_column}"
-    assert _PLAN_PR_UNIQUE_INDEX in text, (
-        f"schema.sql must declare the composite unique index {_PLAN_PR_UNIQUE_INDEX!r}"
+    current_pr_unique_indexes = (
+        _PLAN_PR_UNIQUE_INDEX,
+        "ix_pull_requests_plan_pr_null_repo_unique",
+        "ix_pull_requests_plan_repo_pr_unique",
+    )
+    assert any(index_name in text for index_name in current_pr_unique_indexes), (
+        "schema.sql must declare the current pull_requests uniqueness indexes"
     )
     assert "REFERENCES plans (id) ON DELETE CASCADE" in text, (
         "schema.sql must declare the FK from pull_requests.plan_id → plans.id ON DELETE CASCADE"

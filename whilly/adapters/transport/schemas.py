@@ -172,6 +172,7 @@ class TaskPayload(_FrozenModel):
     test_steps: list[str] = Field(default_factory=list)
     prd_requirement: str = ""
     version: NonNegativeVersion = 0
+    repo_target_id: str = ""
 
     @classmethod
     def from_task(cls, task: Task) -> TaskPayload:
@@ -192,6 +193,7 @@ class TaskPayload(_FrozenModel):
             test_steps=list(task.test_steps),
             prd_requirement=task.prd_requirement,
             version=task.version,
+            repo_target_id=task.repo_target_id,
         )
 
     def to_task(self) -> Task:
@@ -213,6 +215,7 @@ class TaskPayload(_FrozenModel):
             test_steps=tuple(self.test_steps),
             prd_requirement=self.prd_requirement,
             version=self.version,
+            repo_target_id=self.repo_target_id,
         )
 
 

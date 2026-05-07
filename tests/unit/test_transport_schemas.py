@@ -66,6 +66,7 @@ def _sample_task() -> Task:
         test_steps=("python3 -m mypy --strict ...",),
         prd_requirement="FR-1.2, TC-6",
         version=7,
+        repo_target_id="github:owner/repo",
     )
 
 
@@ -85,6 +86,7 @@ def test_task_payload_dependencies_become_lists_on_the_wire() -> None:
     payload = TaskPayload.from_task(_sample_task())
     assert payload.dependencies == ["TASK-009d", "TASK-021a0"]
     assert payload.key_files == ["whilly/adapters/transport/schemas.py"]
+    assert payload.repo_target_id == "github:owner/repo"
 
 
 def test_task_payload_json_round_trip() -> None:
