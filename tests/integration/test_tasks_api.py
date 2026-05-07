@@ -23,7 +23,9 @@ Coverage map vs. the validation contract (m3-tasks-api):
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import asyncpg
 import pytest
@@ -111,6 +113,30 @@ async def _seed_task(
             _json.dumps(acceptance_criteria or []),
             _json.dumps(test_steps or []),
             _json.dumps(key_files or []),
+        )
+
+
+async def _seed_event(
+    pool: asyncpg.Pool,
+    *,
+    task_id: str,
+    plan_id: str,
+    event_type: str,
+    payload: dict[str, object],
+    detail: dict[str, object] | None = None,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO events (task_id, plan_id, event_type, payload, detail, created_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+            """,
+            task_id,
+            plan_id,
+            event_type,
+            json.dumps(payload),
+            json.dumps(detail) if detail is not None else None,
+            datetime.now(tz=UTC),
         )
 
 
@@ -205,6 +231,55 @@ async def test_returns_tasks_array_for_plan(
     assert task["description"] == "alpha"
     assert task["acceptance_criteria"] == ["AC1"]
     assert task["test_steps"] == ["step1"]
+
+
+async def test_task_payload_exposes_open_human_review_checkpoint(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = "plan-tasks-api-human-review"
+    task_id = "t-human-review"
+    await _seed_plan(db_pool, plan_id)
+    await _seed_task(
+        db_pool,
+        task_id=task_id,
+        plan_id=plan_id,
+        priority="critical",
+        acceptance_criteria=["release evidence attached"],
+        test_steps=["pytest -q"],
+    )
+    await _seed_event(
+        db_pool,
+        task_id=task_id,
+        plan_id=plan_id,
+        event_type="human_review.required",
+        payload={
+            "task_id": task_id,
+            "plan_id": plan_id,
+            "stage_id": "release_review",
+            "reason": "stage_human_gate",
+        },
+        detail={
+            "stage_id": "diagnostic_stage",
+            "reason": "diagnostic_reason",
+        },
+    )
+    _, token = await _register(client)
+
+    response = await client.get(
+        f"{TASKS_PATH}?plan_id={plan_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    task = response.json()["tasks"][0]
+    assert task["human_review"] == {
+        "required": True,
+        "decision": None,
+        "stage_id": "release_review",
+        "reason": "stage_human_gate",
+        "reviewer": None,
+    }
 
 
 # ─── VAL-M3-TASKS-API-007: status filter ─────────────────────────────

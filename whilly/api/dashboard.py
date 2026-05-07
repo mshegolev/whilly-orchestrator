@@ -110,7 +110,7 @@ class _SnapshotConnection:
         decoded: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            for key in ("acceptance_criteria", "test_steps", "detail"):
+            for key in ("acceptance_criteria", "test_steps", "payload", "detail"):
                 if key in item:
                     item[key] = _decode_jsonb_value(item[key])
             decoded.append(item)

@@ -48,7 +48,18 @@ pytestmark = DOCKER_REQUIRED
 
 _BOOTSTRAP_TOKEN = "bootstrap-dashboard-sse-event-names"
 
-_BROKER_TASK_EVENT_NAMES: tuple[str, ...] = ("CLAIM", "START", "COMPLETE", "FAIL", "RELEASE", "SKIP")
+_BROKER_TASK_EVENT_NAMES: tuple[str, ...] = (
+    "CLAIM",
+    "START",
+    "COMPLETE",
+    "FAIL",
+    "RELEASE",
+    "SKIP",
+    "human_review.required",
+    "human_review.approved",
+    "human_review.rejected",
+    "human_review.changes_requested",
+)
 
 _TEMPLATES_DIR: Path = Path(__file__).resolve().parents[2] / "whilly" / "api" / "templates"
 _TASKS_TEMPLATE: Path = _TEMPLATES_DIR / "_tasks_table.html"

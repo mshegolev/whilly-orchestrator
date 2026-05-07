@@ -63,6 +63,7 @@ adding signal.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 
 import asyncpg
@@ -618,6 +619,16 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
         ("pipeline.stage.started", {"task_id": task_id, "plan_id": plan_id, "stage_id": "tests"}),
         ("verification.failed", {"task_id": task_id, "name": "unit", "required": True}),
         ("human_review.required", {"task_id": task_id, "reason": "task_review_text"}),
+        (
+            "human_review.approved",
+            {
+                "task_id": task_id,
+                "plan_id": plan_id,
+                "stage_id": "release_review",
+                "decision": "approved",
+                "reviewer": "lead@example.com",
+            },
+        ),
     ]
     for event_type, payload in accepted_events:
         response = await http_client.post(
@@ -646,13 +657,18 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT event_type, detail FROM events WHERE task_id = $1 ORDER BY id",
+            "SELECT event_type, payload, detail FROM events WHERE task_id = $1 ORDER BY id",
             task_id,
         )
     event_types = [row["event_type"] for row in rows]
     assert "pipeline.stage.started" in event_types
     assert "verification.failed" in event_types
     assert "human_review.required" in event_types
+    approved = next(row for row in rows if row["event_type"] == "human_review.approved")
+    approved_payload = json.loads(approved["payload"]) if isinstance(approved["payload"], str) else approved["payload"]
+    assert approved_payload["decision"] == "approved"
+    assert approved_payload["reviewer"] == "lead@example.com"
+    assert approved_payload["stage_id"] == "release_review"
 
 
 # ---------------------------------------------------------------------------
