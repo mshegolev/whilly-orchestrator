@@ -58,7 +58,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskStatus
 from whilly.core.task_id import validate_task_id
 
 __all__ = ["PlanParseError", "parse_plan", "parse_plan_dict", "serialize_plan"]
@@ -193,11 +193,16 @@ def serialize_plan(plan: Plan, tasks: Iterable[Task]) -> dict[str, Any]:
     encoder. ``tasks`` is consumed lazily — pass any iterable, including
     ``plan.tasks`` directly.
     """
-    return {
+    out: dict[str, Any] = {
         "plan_id": plan.id,
         "project": plan.name,
         "tasks": [_task_to_dict(task) for task in tasks],
     }
+    if plan.origin is not None:
+        out["origin"] = _origin_to_dict(plan.origin)
+    if plan.repo_targets:
+        out["repo_targets"] = [_repo_target_to_dict(target) for target in plan.repo_targets]
+    return out
 
 
 def _plan_from_dict(data: dict[str, Any], *, source: str) -> tuple[Plan, list[Task]]:
@@ -233,8 +238,111 @@ def _plan_from_dict(data: dict[str, Any], *, source: str) -> tuple[Plan, list[Ta
         seen_ids.add(task.id)
         tasks.append(task)
 
-    plan = Plan(id=plan_id_raw, name=project, tasks=tuple(tasks))
+    origin = _origin_from_dict(data.get("origin"), source=source)
+    repo_targets = _repo_targets_from_dict(data.get("repo_targets", ()), source=source)
+    repo_target_ids = {target.id for target in repo_targets}
+    for task in tasks:
+        if task.repo_target_id and task.repo_target_id not in repo_target_ids:
+            raise PlanParseError(
+                f"{source}: task {task.id!r}: repo_target_id {task.repo_target_id!r} "
+                "is not declared in top-level 'repo_targets'",
+            )
+
+    plan = Plan(
+        id=plan_id_raw,
+        name=project,
+        tasks=tuple(tasks),
+        origin=origin,
+        repo_targets=repo_targets,
+    )
     return plan, tasks
+
+
+def _origin_from_dict(raw: Any, *, source: str) -> PlanOrigin | None:
+    """Parse optional top-level ``origin`` provenance metadata."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise PlanParseError(f"{source}: 'origin' must be a JSON object when provided")
+
+    system = raw.get("system", raw.get("origin_system", raw.get("type", "")))
+    ref = raw.get("ref", raw.get("origin_ref", raw.get("external_ref", "")))
+    if not isinstance(system, str) or not system:
+        raise PlanParseError(f"{source}: 'origin.system' must be a non-empty string")
+    if not isinstance(ref, str) or not ref:
+        raise PlanParseError(f"{source}: 'origin.ref' must be a non-empty string")
+
+    return PlanOrigin(
+        system=system,
+        ref=ref,
+        url=_optional_string(raw.get("url", raw.get("external_url", "")), source=source, field="origin.url"),
+        title=_optional_string(raw.get("title", ""), source=source, field="origin.title"),
+        content_hash=_optional_string(raw.get("content_hash", ""), source=source, field="origin.content_hash"),
+        prd_file=_optional_string(raw.get("prd_file", ""), source=source, field="origin.prd_file"),
+        decomposition_mode=_optional_string(
+            raw.get("decomposition_mode", ""),
+            source=source,
+            field="origin.decomposition_mode",
+        ),
+    )
+
+
+def _repo_targets_from_dict(raw: Any, *, source: str) -> tuple[RepoTarget, ...]:
+    """Parse optional top-level ``repo_targets`` routing metadata."""
+    if raw in (None, ()):
+        return ()
+    if not isinstance(raw, list):
+        raise PlanParseError(f"{source}: 'repo_targets' must be a JSON array when provided")
+
+    targets: list[RepoTarget] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise PlanParseError(f"{source}: repo_targets[{index}] must be a JSON object")
+        target_id = item.get("id")
+        provider = item.get("provider")
+        repo_full_name = item.get("repo_full_name", item.get("repo", ""))
+        if not isinstance(target_id, str) or not target_id:
+            raise PlanParseError(f"{source}: repo_targets[{index}].id must be a non-empty string")
+        if target_id in seen:
+            raise PlanParseError(f"{source}: duplicate repo target id {target_id!r}")
+        if not isinstance(provider, str) or not provider:
+            raise PlanParseError(f"{source}: repo_targets[{index}].provider must be a non-empty string")
+        if not isinstance(repo_full_name, str) or not repo_full_name:
+            raise PlanParseError(f"{source}: repo_targets[{index}].repo_full_name must be a non-empty string")
+        targets.append(
+            RepoTarget(
+                id=target_id,
+                provider=provider,
+                repo_full_name=repo_full_name,
+                clone_url=_optional_string(
+                    item.get("clone_url", ""),
+                    source=source,
+                    field=f"repo_targets[{index}].clone_url",
+                ),
+                default_branch=_optional_string(
+                    item.get("default_branch", ""),
+                    source=source,
+                    field=f"repo_targets[{index}].default_branch",
+                ),
+                credential_policy=_optional_string(
+                    item.get("credential_policy", ""),
+                    source=source,
+                    field=f"repo_targets[{index}].credential_policy",
+                ),
+            )
+        )
+        seen.add(target_id)
+    return tuple(targets)
+
+
+def _optional_string(value: Any, *, source: str, field: str) -> str:
+    """Validate optional string metadata fields."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise PlanParseError(f"{source}: {field!r} must be a string when provided")
+    return value
 
 
 def _task_from_dict(raw: Any, *, index: int, source: str) -> Task:
@@ -308,6 +416,10 @@ def _task_from_dict(raw: Any, *, index: int, source: str) -> Task:
     if isinstance(raw_version, bool) or not isinstance(raw_version, int) or raw_version < 0:
         raise PlanParseError(f"{source}: task {raw_id!r}: 'version' must be a non-negative integer")
 
+    repo_target_id = raw.get("repo_target_id", "")
+    if not isinstance(repo_target_id, str):
+        raise PlanParseError(f"{source}: task {raw_id!r}: 'repo_target_id' must be a string when provided")
+
     return Task(
         id=raw_id,
         status=status,
@@ -319,6 +431,7 @@ def _task_from_dict(raw: Any, *, index: int, source: str) -> Task:
         test_steps=test_steps,
         prd_requirement=raw_prd,
         version=raw_version,
+        repo_target_id=repo_target_id,
     )
 
 
@@ -345,6 +458,39 @@ def _coerce_string_tuple(value: Any, *, task_id: str, field: str, source: str) -
     return tuple(items)
 
 
+def _origin_to_dict(origin: PlanOrigin) -> dict[str, Any]:
+    out = {
+        "system": origin.system,
+        "ref": origin.ref,
+    }
+    if origin.url:
+        out["url"] = origin.url
+    if origin.title:
+        out["title"] = origin.title
+    if origin.content_hash:
+        out["content_hash"] = origin.content_hash
+    if origin.prd_file:
+        out["prd_file"] = origin.prd_file
+    if origin.decomposition_mode:
+        out["decomposition_mode"] = origin.decomposition_mode
+    return out
+
+
+def _repo_target_to_dict(target: RepoTarget) -> dict[str, Any]:
+    out = {
+        "id": target.id,
+        "provider": target.provider,
+        "repo_full_name": target.repo_full_name,
+    }
+    if target.clone_url:
+        out["clone_url"] = target.clone_url
+    if target.default_branch:
+        out["default_branch"] = target.default_branch
+    if target.credential_policy:
+        out["credential_policy"] = target.credential_policy
+    return out
+
+
 def _task_to_dict(task: Task) -> dict[str, Any]:
     """Render one :class:`Task` as a JSON-serialisable dict.
 
@@ -354,7 +500,7 @@ def _task_to_dict(task: Task) -> dict[str, Any]:
     every field present even when empty so two consecutive serialisations
     of the same plan produce byte-identical JSON.
     """
-    return {
+    out = {
         "id": task.id,
         "status": task.status.value,
         "dependencies": list(task.dependencies),
@@ -366,3 +512,6 @@ def _task_to_dict(task: Task) -> dict[str, Any]:
         "prd_requirement": task.prd_requirement,
         "version": task.version,
     }
+    if task.repo_target_id:
+        out["repo_target_id"] = task.repo_target_id
+    return out

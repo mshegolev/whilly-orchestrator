@@ -209,7 +209,7 @@ def test_services_yaml_exposes_doctor() -> None:
     services_yaml = Path(
         os.environ.get(
             "WHILLY_MISSION_SERVICES_YAML",
-            "/Users/mshegolev/.factory/missions/75d95174-16a0-4392-a6c8-c5508a381918/services.yaml",
+            "/path/to/factory/mission/services.yaml",
         )
     )
     if not services_yaml.is_file():
@@ -223,7 +223,7 @@ def test_agents_md_instructs_validator_to_invoke_doctor_first() -> None:
     agents_md = Path(
         os.environ.get(
             "WHILLY_MISSION_AGENTS_MD",
-            "/Users/mshegolev/.factory/missions/75d95174-16a0-4392-a6c8-c5508a381918/AGENTS.md",
+            "/path/to/factory/mission/AGENTS.md",
         )
     )
     if not agents_md.is_file():
@@ -398,7 +398,7 @@ def test_agents_md_directs_validator_to_require_stable() -> None:
     agents_md = Path(
         os.environ.get(
             "WHILLY_MISSION_AGENTS_MD",
-            "/Users/mshegolev/.factory/missions/75d95174-16a0-4392-a6c8-c5508a381918/AGENTS.md",
+            "/path/to/factory/mission/AGENTS.md",
         )
     )
     if not agents_md.is_file():

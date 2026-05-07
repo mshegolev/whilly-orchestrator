@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, parse_plan_dict, serialize_plan
-from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskStatus
 
 
 def _write_json(tmp_path: Path, payload: dict[str, Any]) -> Path:
@@ -233,6 +233,63 @@ def test_serialize_plan_emits_plan_id_even_when_equal_to_project() -> None:
 
     assert out["plan_id"] == "Workshop A"
     assert out["project"] == "Workshop A"
+
+
+def test_plan_origin_and_repo_targets_round_trip(tmp_path: Path) -> None:
+    payload = _minimal_plan_dict(
+        origin={
+            "system": "github_issue",
+            "ref": "owner/repo/42",
+            "url": "https://github.com/owner/repo/issues/42",
+            "title": "Add feature",
+            "prd_file": "docs/PRD-issue.md",
+            "decomposition_mode": "forge_intake",
+        },
+        repo_targets=[
+            {
+                "id": "github:owner/repo",
+                "provider": "github",
+                "repo_full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            }
+        ],
+        tasks=[_minimal_task_dict(repo_target_id="github:owner/repo")],
+    )
+    target = _write_json(tmp_path, payload)
+
+    plan, tasks = parse_plan(target)
+
+    assert plan.origin == PlanOrigin(
+        system="github_issue",
+        ref="owner/repo/42",
+        url="https://github.com/owner/repo/issues/42",
+        title="Add feature",
+        prd_file="docs/PRD-issue.md",
+        decomposition_mode="forge_intake",
+    )
+    assert plan.repo_targets == (
+        RepoTarget(
+            id="github:owner/repo",
+            provider="github",
+            repo_full_name="owner/repo",
+            clone_url="https://github.com/owner/repo.git",
+            default_branch="main",
+        ),
+    )
+    assert tasks[0].repo_target_id == "github:owner/repo"
+
+    encoded = serialize_plan(plan, tasks)
+    assert encoded["origin"]["system"] == "github_issue"
+    assert encoded["repo_targets"][0]["repo_full_name"] == "owner/repo"
+    assert encoded["tasks"][0]["repo_target_id"] == "github:owner/repo"
+
+
+def test_task_repo_target_must_be_declared(tmp_path: Path) -> None:
+    target = _write_json(tmp_path, _minimal_plan_dict(tasks=[_minimal_task_dict(repo_target_id="missing")]))
+
+    with pytest.raises(PlanParseError, match="is not declared"):
+        parse_plan(target)
 
 
 def test_serialize_then_parse_round_trips(tmp_path: Path) -> None:

@@ -104,7 +104,7 @@ from whilly.adapters.db import close_pool, create_pool
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
 from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
-from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
 from whilly.core.triz import analyze_plan_triz, format_plan_triz_report, plan_triz_report_to_dict
 
@@ -132,6 +132,83 @@ _INSERT_PLAN_SQL: str = """
 INSERT INTO plans (id, name)
 VALUES ($1, $2)
 ON CONFLICT (id) DO NOTHING
+"""
+
+
+_UPSERT_WORK_INTENT_SQL: str = """
+INSERT INTO work_intents (
+    id,
+    origin_system,
+    origin_ref,
+    external_url,
+    title,
+    content_hash
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (origin_system, origin_ref) DO UPDATE
+SET external_url = EXCLUDED.external_url,
+    title = EXCLUDED.title,
+    content_hash = EXCLUDED.content_hash,
+    updated_at = NOW()
+RETURNING id
+"""
+
+
+_UPSERT_PLAN_ORIGIN_SQL: str = """
+INSERT INTO plan_origins (
+    plan_id,
+    work_intent_id,
+    prd_file,
+    decomposition_mode
+)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (plan_id, work_intent_id) DO UPDATE
+SET prd_file = EXCLUDED.prd_file,
+    decomposition_mode = EXCLUDED.decomposition_mode
+"""
+
+
+_UPSERT_REPO_TARGET_SQL: str = """
+INSERT INTO repo_targets (
+    id,
+    provider,
+    repo_full_name,
+    clone_url,
+    default_branch,
+    credential_policy
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE
+SET provider = EXCLUDED.provider,
+    repo_full_name = EXCLUDED.repo_full_name,
+    clone_url = EXCLUDED.clone_url,
+    default_branch = EXCLUDED.default_branch,
+    credential_policy = EXCLUDED.credential_policy
+"""
+
+
+_UPSERT_PLAN_REPO_TARGET_SQL: str = """
+INSERT INTO plan_repo_targets (
+    plan_id,
+    repo_target_id,
+    is_default
+)
+VALUES ($1, $2, $3)
+ON CONFLICT (plan_id, repo_target_id) DO UPDATE
+SET is_default = EXCLUDED.is_default
+"""
+
+
+_UPSERT_TASK_REPO_TARGET_SQL: str = """
+INSERT INTO task_repo_targets (
+    task_id,
+    repo_target_id,
+    base_ref
+)
+SELECT $1, $2, ''
+WHERE EXISTS (SELECT 1 FROM tasks WHERE id = $1 AND plan_id = $3)
+ON CONFLICT (task_id) DO UPDATE
+SET repo_target_id = EXCLUDED.repo_target_id
 """
 
 
@@ -207,6 +284,38 @@ WHERE id = $1
 """
 
 
+_SELECT_PLAN_ORIGIN_SQL: str = """
+SELECT
+    wi.origin_system,
+    wi.origin_ref,
+    wi.external_url,
+    wi.title,
+    wi.content_hash,
+    po.prd_file,
+    po.decomposition_mode
+FROM plan_origins po
+JOIN work_intents wi ON wi.id = po.work_intent_id
+WHERE po.plan_id = $1
+ORDER BY po.created_at ASC
+LIMIT 1
+"""
+
+
+_SELECT_PLAN_REPO_TARGETS_SQL: str = """
+SELECT
+    rt.id,
+    rt.provider,
+    rt.repo_full_name,
+    rt.clone_url,
+    rt.default_branch,
+    rt.credential_policy
+FROM plan_repo_targets prt
+JOIN repo_targets rt ON rt.id = prt.repo_target_id
+WHERE prt.plan_id = $1
+ORDER BY prt.is_default DESC, rt.id ASC
+"""
+
+
 # Stable order: ``id`` ASC. The export must be deterministic so the
 # round-trip ``import → export → import`` test in test_plan_io.py compares
 # ``Plan == Plan`` without sort-order noise. The schema does not record
@@ -225,8 +334,10 @@ SELECT
     acceptance_criteria,
     test_steps,
     prd_requirement,
-    version
+    version,
+    trt.repo_target_id
 FROM tasks
+LEFT JOIN task_repo_targets trt ON trt.task_id = tasks.id
 WHERE plan_id = $1
 ORDER BY id
 """
@@ -671,6 +782,7 @@ async def _insert_plan_and_tasks(
     text without complaint.
     """
     await conn.execute(_INSERT_PLAN_SQL, plan.id, plan.name)
+    await _upsert_plan_metadata(conn, plan)
     inserted = 0
     for task in tasks:
         # Use ``fetchval`` on the RETURNING-augmented task INSERT so a
@@ -694,6 +806,8 @@ async def _insert_plan_and_tasks(
             task.prd_requirement,
             task.version,
         )
+        if task.repo_target_id:
+            await conn.execute(_UPSERT_TASK_REPO_TARGET_SQL, task.id, task.repo_target_id, plan.id)
         if new_id is None:
             # ON CONFLICT (id) DO NOTHING — pre-existing row owned by
             # this plan (idempotent re-run) or by a different plan
@@ -724,6 +838,50 @@ async def _insert_plan_and_tasks(
         )
         inserted += 1
     logger.info("plan import: inserted plan %s with %d task(s)", plan.id, inserted)
+
+
+async def _upsert_plan_metadata(conn: asyncpg.Connection, plan: Plan) -> None:
+    """Persist optional origin and repo-target metadata for ``plan``."""
+    if plan.origin is not None:
+        work_intent_id = _work_intent_id(plan.origin)
+        stored_id = await conn.fetchval(
+            _UPSERT_WORK_INTENT_SQL,
+            work_intent_id,
+            plan.origin.system,
+            plan.origin.ref,
+            plan.origin.url,
+            plan.origin.title,
+            plan.origin.content_hash,
+        )
+        await conn.execute(
+            _UPSERT_PLAN_ORIGIN_SQL,
+            plan.id,
+            stored_id,
+            plan.origin.prd_file,
+            plan.origin.decomposition_mode,
+        )
+
+    for index, target in enumerate(plan.repo_targets):
+        await conn.execute(
+            _UPSERT_REPO_TARGET_SQL,
+            target.id,
+            target.provider,
+            target.repo_full_name,
+            target.clone_url,
+            target.default_branch,
+            target.credential_policy,
+        )
+        await conn.execute(
+            _UPSERT_PLAN_REPO_TARGET_SQL,
+            plan.id,
+            target.id,
+            index == 0,
+        )
+
+
+def _work_intent_id(origin: PlanOrigin) -> str:
+    """Return stable internal id for a source origin."""
+    return f"{origin.system}:{origin.ref}"
 
 
 def _run_export(plan_id: str) -> int:
@@ -838,8 +996,18 @@ async def _select_plan_with_tasks(
         return None
 
     task_rows = await conn.fetch(_SELECT_TASKS_SQL, plan_id)
+    origin_row = await conn.fetchrow(_SELECT_PLAN_ORIGIN_SQL, plan_id)
+    repo_target_rows = await conn.fetch(_SELECT_PLAN_REPO_TARGETS_SQL, plan_id)
     tasks = [_row_to_task(row) for row in task_rows]
-    plan = Plan(id=plan_row["id"], name=plan_row["name"], tasks=tuple(tasks))
+    origin = _row_to_origin(origin_row) if origin_row is not None else None
+    repo_targets = tuple(_row_to_repo_target(row) for row in repo_target_rows)
+    plan = Plan(
+        id=plan_row["id"],
+        name=plan_row["name"],
+        tasks=tuple(tasks),
+        origin=origin,
+        repo_targets=repo_targets,
+    )
     logger.info("plan export: fetched plan %s with %d task(s)", plan.id, len(tasks))
     return plan, tasks
 
@@ -898,7 +1066,42 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         test_steps=tuple(_decode_jsonb(row["test_steps"])),
         prd_requirement=row["prd_requirement"],
         version=row["version"],
+        repo_target_id=_optional_record_value(row, "repo_target_id"),
     )
+
+
+def _row_to_origin(row: asyncpg.Record) -> PlanOrigin:
+    """Map plan-origin SELECT row to :class:`PlanOrigin`."""
+    return PlanOrigin(
+        system=row["origin_system"],
+        ref=row["origin_ref"],
+        url=row["external_url"],
+        title=row["title"],
+        content_hash=row["content_hash"],
+        prd_file=row["prd_file"],
+        decomposition_mode=row["decomposition_mode"],
+    )
+
+
+def _row_to_repo_target(row: asyncpg.Record) -> RepoTarget:
+    """Map repo-target SELECT row to :class:`RepoTarget`."""
+    return RepoTarget(
+        id=row["id"],
+        provider=row["provider"],
+        repo_full_name=row["repo_full_name"],
+        clone_url=row["clone_url"],
+        default_branch=row["default_branch"],
+        credential_policy=row["credential_policy"],
+    )
+
+
+def _optional_record_value(row: asyncpg.Record, key: str) -> str:
+    """Return optional SELECT column from an asyncpg record."""
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 # ── plan show ────────────────────────────────────────────────────────────

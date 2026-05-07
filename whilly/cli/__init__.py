@@ -11,6 +11,8 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly worker ...``    → :mod:`whilly.cli.worker`
 * ``whilly logs ...``      → :mod:`whilly.log_viewer`
 * ``whilly forge ...``     → :mod:`whilly.forge`
+* ``whilly qa-release ...`` → :mod:`whilly.cli.qa_release`
+* ``whilly project-config ...`` → :mod:`whilly.cli.project_config`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
@@ -113,6 +115,8 @@ Commands:
               `admin worker revoke`).
   logs        Show per-task prompts, LLM events, and raw model output.
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
+  qa-release  Collect Jira release verification context and linked artifacts.
+  project-config Validate domain configs and generate adaptive plans.
   pr-feedback Poll open PRs for a plan and emit review events
               (`pr-feedback poll --plan <id>`).
 
@@ -393,6 +397,14 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.forge.intake import run_forge_command
 
         return run_forge_command(rest)
+    if cmd == "qa-release":
+        from whilly.cli.qa_release import run_qa_release_command
+
+        return run_qa_release_command(rest)
+    if cmd == "project-config":
+        from whilly.cli.project_config import run_project_config_command
+
+        return run_project_config_command(rest)
     if cmd == "pr-feedback":
         # Lazy import keeps ``whilly --help`` fast — the pr_feedback
         # module transitively imports asyncpg via TaskRepository.

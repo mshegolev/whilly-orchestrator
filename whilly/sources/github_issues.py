@@ -278,6 +278,29 @@ def _build_source_block(source: GitHubIssuesSource) -> dict:
     }
 
 
+def _repo_target_id(source: GitHubIssuesSource) -> str:
+    return f"github:{source.repo_full}"
+
+
+def _build_origin_block(source: GitHubIssuesSource) -> dict:
+    return {
+        "system": "github_issues",
+        "ref": f"{source.repo_full}:{source.label}",
+        "url": f"https://github.com/{source.repo_full}/issues",
+        "title": f"GitHub issues {source.repo_full} label={source.label}",
+        "decomposition_mode": "source_adapter",
+    }
+
+
+def _build_repo_target_block(source: GitHubIssuesSource) -> dict:
+    return {
+        "id": _repo_target_id(source),
+        "provider": "github",
+        "repo_full_name": source.repo_full,
+        "clone_url": f"https://github.com/{source.repo_full}.git",
+    }
+
+
 def _load_existing(plan_path: Path) -> dict:
     if not plan_path.exists():
         return {"project": "", "tasks": []}
@@ -329,8 +352,10 @@ def merge_into_plan(
     existing_by_id = {t.get("id"): t for t in existing_tasks}
 
     fetched_ids: set[str] = set()
+    repo_target_id = _repo_target_id(source)
     for raw in issues:
         task, secret_hits = issue_to_task(raw)
+        task.repo_target_id = repo_target_id
         fetched_ids.add(task.id)
         if secret_hits:
             stats.secret_warnings.append(f"{task.id}: matched patterns {secret_hits}")
@@ -348,6 +373,7 @@ def merge_into_plan(
                 "dependencies",
             ):
                 cur[field_name] = getattr(task, field_name)
+            cur["repo_target_id"] = repo_target_id
             stats.updated += 1
         else:
             existing_tasks.append(task.to_dict())
@@ -367,6 +393,10 @@ def merge_into_plan(
     if not existing.get("project"):
         existing["project"] = source.project_name
     existing["source"] = _build_source_block(source)
+    existing["origin"] = _build_origin_block(source)
+    repo_targets = [target for target in existing.get("repo_targets", []) if target.get("id") != repo_target_id]
+    repo_targets.insert(0, _build_repo_target_block(source))
+    existing["repo_targets"] = repo_targets
     existing["tasks"] = existing_tasks
 
     _atomic_write_json(plan_path, existing)

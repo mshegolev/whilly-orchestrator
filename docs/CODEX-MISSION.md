@@ -1,7 +1,7 @@
 # Codex Mission Migration: Whilly v6.0 Hardening
 
 Source Factory mission:
-`/Users/mshegolev/.factory/missions/75d95174-16a0-4392-a6c8-c5508a381918`
+`/path/to/factory/mission`
 
 State at migration: paused, working directory `/opt/develop/whilly-orchestrator`,
 Factory id `mis_b0836c2a`, last updated `2026-05-06T07:44:23.977Z`.

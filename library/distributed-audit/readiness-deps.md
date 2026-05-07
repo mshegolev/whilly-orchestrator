@@ -10,7 +10,7 @@ All hard dependencies resolved on both hosts; **VPS has only ~221 MB RAM availab
 
 | Item | Result | Detail |
 |---|---|---|
-| Python 3.12+ | ✓ | `Python 3.12.1` at `/Users/mshegolev/.pyenv/shims/python3` |
+| Python 3.12+ | ✓ | `Python 3.12.1` at `/path/to/python3` |
 | Project venv (`.venv/`) | ✓ | `Python 3.12.1`, editable install of `whilly-orchestrator 4.0.0` (pyproject says 4.3.1; editable not re-synced — see Constraints) |
 | Project deps in venv | ✓ | `alembic 1.18.4`, `asyncpg 0.31.0`, `fastapi 0.136.1`, `httpx 0.28.1`, `keyring 25.7.0`, `pydantic 2.13.3`, `testcontainers 4.14.2`. **Jinja2 3.1.6** also already present in the system pip (not necessarily venv). No `prometheus*` / `sse-starlette` yet — will be added by mission. |
 | Docker | ✓ | client `24.0.7` (colima context), server `27.4.0`, daemon up, 1 stopped container, 19 images, `overlay2` storage driver |
