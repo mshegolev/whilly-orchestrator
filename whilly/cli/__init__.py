@@ -13,6 +13,8 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly forge ...``     → :mod:`whilly.forge`
 * ``whilly qa-release ...`` → :mod:`whilly.cli.qa_release`
 * ``whilly project-config ...`` → :mod:`whilly.cli.project_config`
+* ``whilly compliance ...`` → :mod:`whilly.cli.compliance`
+* ``whilly tui ...`` → :mod:`whilly.cli.tui`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
@@ -117,6 +119,8 @@ Commands:
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
   qa-release  Collect Jira release verification context and linked artifacts.
   project-config Validate domain configs and generate adaptive plans.
+  compliance Generate target-doc compliance reports.
+  tui         Browserless operator console mirroring the web dashboard.
   pr-feedback Poll open PRs for a plan and emit review events
               (`pr-feedback poll --plan <id>`).
 
@@ -405,6 +409,14 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.project_config import run_project_config_command
 
         return run_project_config_command(rest)
+    if cmd == "compliance":
+        from whilly.cli.compliance import run_compliance_command
+
+        return run_compliance_command(rest)
+    if cmd == "tui":
+        from whilly.cli.tui import run_tui_command
+
+        return run_tui_command(rest)
     if cmd == "pr-feedback":
         # Lazy import keeps ``whilly --help`` fast — the pr_feedback
         # module transitively imports asyncpg via TaskRepository.

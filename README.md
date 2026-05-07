@@ -26,14 +26,14 @@ Whilly's core value is not unrestricted autonomy, but controlled acceleration:
 enabling AI agents to perform useful engineering work while preserving
 traceability, reviewability, safety, and operational control.
 
-> **v4.6.1 baseline.** Whilly currently ships a Postgres-backed task queue,
-> FastAPI control plane, remote workers over HTTP, append-only `events` audit
-> log, dashboard, SSE stream, Prometheus metrics, health endpoints, worker
-> heartbeat, and local/remote worker execution. The legacy v3.x single-process
-> loop lives at tag
-> [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final);
-> there is **no backwards compatibility** with v3.x runtime state. See
-> [`docs/Whilly-v4-Migration-from-v3.md`](docs/Whilly-v4-Migration-from-v3.md).
+> **Current baseline.** Whilly ships a Postgres-backed task queue, FastAPI
+> control plane, local and remote workers over HTTP, append-only `events` audit
+> log, web dashboard, browserless operator surfaces, SSE stream, Prometheus
+> metrics, health endpoints, worker heartbeat, repo-target metadata, and project
+> config plan generation. Runtime verification, human-review checkpoints, and
+> configured sinks are being aligned with the target documentation in
+> [`docs/target/`](docs/target/). Legacy v3.x remains historical at tag
+> [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final).
 
 [![PyPI version](https://img.shields.io/pypi/v/whilly-orchestrator.svg)](https://pypi.org/project/whilly-orchestrator/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -59,7 +59,8 @@ traceability, reviewability, safety, and operational control.
 - Records outcomes through task states, append-only events, JSONL mirrors,
   dashboard views, SSE, Prometheus metrics, health checks, and worker heartbeat.
 - Supports human-in-the-loop through PR review, handoff backends, dashboards,
-  issue/Jira comments, and explicit blocked/human-loop task states.
+  issue/Jira comments, and explicit checkpoint evidence. `BLOCKED` and
+  `HUMAN_LOOP` are target checkpoint concepts, not current core task statuses.
 
 ## Current Scope And Boundaries
 
@@ -206,18 +207,24 @@ hexagonal layout, the `core` / `adapters` split, scheduling, and lock semantics.
 
 ## Migration chain
 
+Current schema head is `013_work_intents_repo_targets`. The active Alembic
+chain is:
+
 ```
 001_initial_schema
- └→ 002_workers_status
-     └→ 003_events_detail        (events.detail jsonb NULL — TASK-104b)
-         └→ 004_per_worker_bearer   (workers.token_hash nullable + partial UNIQUE — TASK-101)
-             └→ 005_plan_budget       (plans.budget_usd / spent_usd; events.plan_id NOT NULL — TASK-102)
-                 └→ 006_plan_github_ref   (plans.github_issue_ref + partial UNIQUE — TASK-108a)
-                     └→ 007_plan_prd_file     (plans.prd_file — TASK-108a)
+002_workers_status
+003_events_detail
+004_per_worker_bearer
+005_plan_budget
+006_plan_github_ref
+007_plan_prd_file
+008_workers_owner_email
+009_bootstrap_tokens
+010_funnel_url
+011_events_notify_trigger
+012_pull_requests_and_pr_events
+013_work_intents_repo_targets
 ```
-
-Every migration is round-trippable via `alembic upgrade head → downgrade base
-→ upgrade head` with byte-equal final schema.
 
 ## Quick start
 

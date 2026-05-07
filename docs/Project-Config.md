@@ -9,8 +9,8 @@ permalink: /Project-Config
 # Universal Project Configuration
 
 Whilly can generate a domain-adaptive v4 plan from a project config. Use this
-when one orchestrator installation must run different workflows for ETL QA,
-GraphQL API tests, generic feature development, or a custom pipeline.
+when one orchestrator installation must run different workflows for Python
+backend work, ETL QA, GraphQL API tests, documentation, or a custom pipeline.
 
 This is the first step toward Whilly's target state: a configurable
 project-aware orchestrator where each project type can define its own sources,
@@ -34,14 +34,19 @@ canonical Whilly JSON that can be imported or run by the normal v4 worker flow.
 
 ## Project Types
 
-- `etl`: QA/STLC release verification from Jira and linked artifacts; includes
+- `python_backend`: decomposes a feature, implements code, generates tests,
+  runs quality gates, and waits for review/release approval.
+- `etl_pipeline`: QA/STLC release verification from Jira and linked artifacts; includes
   release context, test planning, autotest generation, STAGE deploy gate,
   functional/regression execution, audit, and release decision.
 - `graphql_api`: collects API requirements, inspects schema/operations, creates
   contract/integration autotests, runs API tests, and gates human review.
-- `feature_development`: decomposes a feature, implements code, generates tests,
-  runs quality gates, and waits for review/release approval.
+- `documentation`: takes PRD/manual input, drafts or updates docs, runs
+  consistency checks, and waits for review approval.
 - `generic`: minimal intake, execute, verify flow.
+
+Compatibility aliases remain accepted: `etl` maps to `etl_pipeline`, and
+`feature_development` maps to `python_backend`.
 
 These presets are intentionally conservative. They describe orchestration
 stages and review points; they do not imply full sandbox isolation, automatic

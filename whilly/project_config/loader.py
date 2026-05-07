@@ -13,13 +13,36 @@ from whilly.project_config.models import (
     PipelineStepConfig,
     ProjectConfig,
     RepositoryConfig,
+    SinkConfig,
     TaskSourceConfig,
+    VerificationCommandConfig,
 )
-from whilly.project_config.presets import SUPPORTED_PROJECT_TYPES, preset_pipeline
+from whilly.project_config.presets import (
+    PUBLIC_PROJECT_TYPES,
+    SUPPORTED_PROJECT_TYPES,
+    normalize_project_type,
+    preset_pipeline,
+)
+from whilly.core.agent_runner import scan_command
 
 
 class ProjectConfigError(ValueError):
     """Raised when a project configuration is invalid."""
+
+
+SUPPORTED_TASK_SOURCE_KINDS = frozenset(
+    {
+        "json_plan",
+        "github",
+        "github_issues",
+        "github_projects",
+        "jira",
+        "forge",
+        "manual_prd",
+    }
+)
+SUPPORTED_SINK_TYPES = frozenset({"github_pr", "github_issue_comment", "jira_comment", "jsonl", "dashboard"})
+SUPPORTED_RUNNERS = frozenset({"claude_cli", "opencode", "handoff"})
 
 
 def load_project_config(path: str | Path) -> ProjectConfig:
@@ -45,22 +68,36 @@ def load_project_config(path: str | Path) -> ProjectConfig:
 def project_config_from_dict(data: dict[str, Any], *, source: str = "<dict>") -> ProjectConfig:
     """Parse and validate an in-memory project configuration."""
 
-    name = _required_string(data, "name", source)
-    project_type = _required_string(data, "project_type", source).lower()
-    if project_type not in SUPPORTED_PROJECT_TYPES:
+    project_data = data.get("project") if isinstance(data.get("project"), dict) else {}
+    name = _project_string(data, project_data, "name", source)
+    raw_project_type = _project_string(data, project_data, "project_type", source, aliases=("type",))
+    project_type = normalize_project_type(raw_project_type)
+    if raw_project_type.strip().lower() not in SUPPORTED_PROJECT_TYPES:
         raise ProjectConfigError(
-            f"{source}: unsupported project_type {project_type!r}; expected one of {sorted(SUPPORTED_PROJECT_TYPES)}"
+            f"{source}: unsupported project_type {project_type!r}; expected one of {sorted(PUBLIC_PROJECT_TYPES)}"
+        )
+    default_runner = _optional_string(data.get("default_runner", project_data.get("default_runner", ""))).lower()
+    if default_runner and default_runner not in SUPPORTED_RUNNERS:
+        raise ProjectConfigError(
+            f"{source}: unsupported default_runner {default_runner!r}; expected one of {sorted(SUPPORTED_RUNNERS)}"
         )
 
     task_sources = tuple(
-        _task_source(item, source=source, index=index) for index, item in enumerate(data.get("task_sources") or ())
+        _task_source(item, source=source, index=index)
+        for index, item in enumerate(data.get("task_sources", data.get("sources")) or ())
     )
     repositories = tuple(
         _repository(item, source=source, index=index) for index, item in enumerate(data.get("repositories") or ())
     )
+    verification_commands = tuple(
+        _verification_command(item, source=source, index=index)
+        for index, item in enumerate(_verification_items(data, source=source))
+    )
+    sinks = tuple(_sink(item, source=source, index=index) for index, item in enumerate(data.get("sinks") or ()))
 
-    raw_pipeline = data.get("pipeline") or ()
+    raw_pipeline = _pipeline_items(data, source=source)
     pipeline = tuple(_pipeline_step(item, source=source, index=index) for index, item in enumerate(raw_pipeline))
+    has_explicit_pipeline = bool(pipeline)
     if not pipeline:
         pipeline = preset_pipeline(project_type)
 
@@ -73,30 +110,38 @@ def project_config_from_dict(data: dict[str, Any], *, source: str = "<dict>") ->
         name=name,
         project_type=project_type,
         description=_optional_string(data.get("description", "")),
+        default_runner=default_runner,
         task_sources=task_sources,
         repositories=repositories,
         pipeline=pipeline,
+        verification_commands=verification_commands,
+        sinks=sinks,
         human_loop=human_loop,
         environment=_optional_string(data.get("environment", "")),
         release_policy=_string_dict(data.get("release_policy") or {}, source=source, field="release_policy"),
         outputs=_string_dict(data.get("outputs") or {}, source=source, field="outputs"),
     )
-    _validate_config(cfg, source=source)
+    _validate_config(cfg, source=source, validate_repo_roles=has_explicit_pipeline)
     return cfg
 
 
-def _validate_config(config: ProjectConfig, *, source: str) -> None:
+def _validate_config(config: ProjectConfig, *, source: str, validate_repo_roles: bool) -> None:
     step_ids: set[str] = set()
     for step in config.pipeline:
         if step.id in step_ids:
             raise ProjectConfigError(f"{source}: duplicate pipeline step id {step.id!r}")
         step_ids.add(step.id)
+    if not config.human_loop.enabled and config.human_loop.required_steps:
+        raise ProjectConfigError(f"{source}: human_loop.enabled is false but required_steps are configured")
+    for required_step in config.human_loop.required_steps:
+        if required_step not in step_ids:
+            raise ProjectConfigError(f"{source}: required human_loop step {required_step!r} is not in pipeline")
     repo_roles = {repo.role for repo in config.repositories}
     for step in config.pipeline:
         missing = [dep for dep in step.depends_on if dep not in step_ids]
         if missing:
             raise ProjectConfigError(f"{source}: step {step.id!r} depends on unknown step(s): {', '.join(missing)}")
-        if step.repo_role and step.repo_role not in repo_roles:
+        if validate_repo_roles and step.repo_role and step.repo_role not in repo_roles:
             raise ProjectConfigError(f"{source}: step {step.id!r} references unknown repo_role {step.repo_role!r}")
 
 
@@ -111,15 +156,96 @@ def _optional_string(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _project_string(
+    data: dict[str, Any],
+    project_data: dict[str, Any],
+    field: str,
+    source: str,
+    *,
+    aliases: tuple[str, ...] = (),
+) -> str:
+    if field in data:
+        return _required_string(data, field, source)
+    if field in project_data:
+        return _required_string(project_data, field, f"{source}: project")
+    for alias in aliases:
+        if alias in data:
+            return _required_string(data, alias, source)
+        if alias in project_data:
+            return _required_string(project_data, alias, f"{source}: project")
+    return _required_string(data, field, source)
+
+
 def _task_source(data: Any, *, source: str, index: int) -> TaskSourceConfig:
     item = _object(data, source=source, field=f"task_sources[{index}]")
-    kind = _required_string(item, "kind", f"{source}: task_sources[{index}]")
+    kind = _required_string(item, "kind" if "kind" in item else "type", f"{source}: task_sources[{index}]").lower()
+    if kind not in SUPPORTED_TASK_SOURCE_KINDS:
+        raise ProjectConfigError(
+            f"{source}: unsupported task source kind {kind!r}; expected one of {sorted(SUPPORTED_TASK_SOURCE_KINDS)}"
+        )
     return TaskSourceConfig(
-        kind=kind.lower(),
+        kind=kind,
         ref=_optional_string(item.get("ref", "")),
         query=_optional_string(item.get("query", "")),
         url=_optional_string(item.get("url", "")),
         filters=_string_dict(item.get("filters") or {}, source=source, field=f"task_sources[{index}].filters"),
+    )
+
+
+def _pipeline_items(data: dict[str, Any], *, source: str) -> tuple[Any, ...]:
+    raw = data.get("pipeline") or ()
+    if isinstance(raw, dict):
+        stages = raw.get("stages") or ()
+        if not isinstance(stages, (list, tuple)):
+            raise ProjectConfigError(f"{source}: pipeline.stages must be a list of objects")
+        return tuple(stages)
+    if not isinstance(raw, (list, tuple)):
+        raise ProjectConfigError(f"{source}: pipeline must be a list of objects or an object with stages")
+    return tuple(raw)
+
+
+def _sink(data: Any, *, source: str, index: int) -> SinkConfig:
+    item = _object(data, source=source, field=f"sinks[{index}]")
+    sink_type = _required_string(item, "type", f"{source}: sinks[{index}]").lower()
+    if sink_type not in SUPPORTED_SINK_TYPES:
+        raise ProjectConfigError(
+            f"{source}: unsupported sink type {sink_type!r}; expected one of {sorted(SUPPORTED_SINK_TYPES)}"
+        )
+    return SinkConfig(
+        type=sink_type,
+        config=_string_dict(item.get("config") or {}, source=source, field=f"sinks[{index}].config"),
+    )
+
+
+def _verification_items(data: dict[str, Any], *, source: str) -> tuple[Any, ...]:
+    raw = data.get("verification_commands")
+    if raw is not None:
+        if not isinstance(raw, (list, tuple)):
+            raise ProjectConfigError(f"{source}: verification_commands must be a list of objects")
+        return tuple(raw)
+    verification = data.get("verification") or {}
+    if not isinstance(verification, dict):
+        raise ProjectConfigError(f"{source}: verification must be an object/table")
+    raw_commands = verification.get("commands") or ()
+    if not isinstance(raw_commands, (list, tuple)):
+        raise ProjectConfigError(f"{source}: verification.commands must be a list of objects")
+    return tuple(raw_commands)
+
+
+def _verification_command(data: Any, *, source: str, index: int) -> VerificationCommandConfig:
+    item = _object(data, source=source, field=f"verification.commands[{index}]")
+    command_source = f"{source}: verification.commands[{index}]"
+    name = _required_string(item, "name", command_source)
+    command = _required_string(item, "command", command_source)
+    scan = scan_command(command)
+    if scan.blocked:
+        raise ProjectConfigError(
+            f"{source}: unsafe verification command {name!r} blocked by {scan.pattern_matched or 'shell policy'}"
+        )
+    return VerificationCommandConfig(
+        name=name,
+        command=command,
+        required=bool(item.get("required", True)),
     )
 
 
@@ -143,9 +269,10 @@ def _repository(data: Any, *, source: str, index: int) -> RepositoryConfig:
 def _pipeline_step(data: Any, *, source: str, index: int) -> PipelineStepConfig:
     item = _object(data, source=source, field=f"pipeline[{index}]")
     step_source = f"{source}: pipeline[{index}]"
+    kind_field = "kind" if "kind" in item else "type"
     return PipelineStepConfig(
         id=_required_string(item, "id", step_source),
-        kind=_required_string(item, "kind", step_source),
+        kind=_required_string(item, kind_field, step_source),
         title=_required_string(item, "title", step_source),
         description=_optional_string(item.get("description", "")),
         depends_on=_string_tuple(item.get("depends_on") or (), source=source, field=f"pipeline[{index}].depends_on"),

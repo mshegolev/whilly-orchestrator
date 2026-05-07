@@ -23,6 +23,31 @@ class TaskSourceConfig:
 
 
 @dataclass(frozen=True)
+class SinkConfig:
+    """Configured result sink for project/profile output."""
+
+    type: str
+    config: dict[str, str] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["config"] = dict(self.config or {})
+        return out
+
+
+@dataclass(frozen=True)
+class VerificationCommandConfig:
+    """Post-execution verification command configured by a project/profile."""
+
+    name: str
+    command: str
+    required: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class RepositoryConfig:
     """Repository or local checkout used by a configured pipeline."""
 
@@ -100,9 +125,12 @@ class ProjectConfig:
     name: str
     project_type: str
     description: str = ""
+    default_runner: str = ""
     task_sources: tuple[TaskSourceConfig, ...] = ()
     repositories: tuple[RepositoryConfig, ...] = ()
     pipeline: tuple[PipelineStepConfig, ...] = ()
+    verification_commands: tuple[VerificationCommandConfig, ...] = ()
+    sinks: tuple[SinkConfig, ...] = ()
     human_loop: HumanLoopConfig = HumanLoopConfig()
     environment: str = ""
     release_policy: dict[str, str] | None = None
@@ -113,9 +141,12 @@ class ProjectConfig:
             "name": self.name,
             "project_type": self.project_type,
             "description": self.description,
+            "default_runner": self.default_runner,
             "task_sources": [source.to_dict() for source in self.task_sources],
             "repositories": [repo.to_dict() for repo in self.repositories],
             "pipeline": [step.to_dict() for step in self.pipeline],
+            "verification_commands": [command.to_dict() for command in self.verification_commands],
+            "sinks": [sink.to_dict() for sink in self.sinks],
             "human_loop": self.human_loop.to_dict(),
             "environment": self.environment,
             "release_policy": dict(self.release_policy or {}),

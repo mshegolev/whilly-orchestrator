@@ -18,6 +18,7 @@ When the EventSource is unavailable (proxy strips, browser blocks),
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,6 +30,12 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from whilly import __version__ as WHILLY_VERSION
+from whilly.operator_views import (
+    ComplianceSummary,
+    OperatorSnapshot,
+    OperatorSurface,
+    fetch_operator_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,38 +49,13 @@ TASKS_FRAGMENT_TEMPLATE: Final[str] = "_tasks_table.html"
 TASKS_LIMIT: Final[int] = 200
 WORKERS_LIMIT: Final[int] = 200
 
-_TASKS_SQL: Final[str] = """
-SELECT id, plan_id, status, priority, claimed_by, claimed_at, updated_at
-FROM tasks
-ORDER BY
-    CASE status
-        WHEN 'IN_PROGRESS' THEN 0
-        WHEN 'CLAIMED' THEN 1
-        WHEN 'PENDING' THEN 2
-        WHEN 'FAILED' THEN 3
-        WHEN 'DONE' THEN 4
-        WHEN 'SKIPPED' THEN 5
-        ELSE 6
-    END,
-    updated_at DESC
-LIMIT $1
-"""
-
-_WORKERS_SQL: Final[str] = """
-SELECT worker_id, hostname, owner_email, status, last_heartbeat, registered_at
-FROM workers
-ORDER BY status ASC, last_heartbeat DESC
-LIMIT $1
-"""
-
-_SUMMARY_SQL: Final[str] = """
-SELECT
-    (SELECT COUNT(*) FROM workers WHERE status = 'online') AS workers_online,
-    (SELECT COUNT(*) FROM tasks WHERE status = 'PENDING') AS tasks_pending,
-    (SELECT COUNT(*) FROM tasks WHERE status IN ('CLAIMED', 'IN_PROGRESS')) AS tasks_in_progress,
-    (SELECT COUNT(*) FROM tasks WHERE status = 'DONE') AS tasks_done,
-    (SELECT COUNT(*) FROM tasks WHERE status = 'FAILED') AS tasks_failed
-"""
+_SURFACE_LABELS: Final[dict[OperatorSurface, str]] = {
+    OperatorSurface.OVERVIEW: "Overview",
+    OperatorSurface.COMPLIANCE: "Compliance",
+    OperatorSurface.PLANS_TASKS: "Plans/Tasks",
+    OperatorSurface.WORKERS: "Workers",
+    OperatorSurface.EVENTS: "Events",
+}
 
 
 _templates: Jinja2Templates | None = None
@@ -110,60 +92,69 @@ def _format_human(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def _row_to_worker(row: asyncpg.Record | dict[str, Any]) -> dict[str, Any]:
-    last_heartbeat = row["last_heartbeat"]
-    return {
-        "worker_id": row["worker_id"],
-        "hostname": row["hostname"],
-        "owner_email": row["owner_email"],
-        "status": row["status"],
-        "last_heartbeat_iso": _format_iso(last_heartbeat),
-        "last_heartbeat_human": _format_human(last_heartbeat),
-    }
+def _decode_jsonb_value(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
 
 
-def _row_to_task(row: asyncpg.Record | dict[str, Any]) -> dict[str, Any]:
-    updated_at = row["updated_at"]
-    return {
-        "id": row["id"],
-        "plan_id": row["plan_id"],
-        "status": row["status"],
-        "priority": row["priority"],
-        "claimed_by": row["claimed_by"],
-        "updated_at_iso": _format_iso(updated_at),
-        "updated_at_human": _format_human(updated_at),
-    }
+class _SnapshotConnection:
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        rows = await self._conn.fetch(query, *args)
+        decoded: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            for key in ("acceptance_criteria", "test_steps", "detail"):
+                if key in item:
+                    item[key] = _decode_jsonb_value(item[key])
+            decoded.append(item)
+        return decoded
 
 
-_EMPTY_SUMMARY: Final[dict[str, int]] = {
-    "workers_online": 0,
-    "tasks_pending": 0,
-    "tasks_in_progress": 0,
-    "tasks_done": 0,
-    "tasks_failed": 0,
-}
+class _SnapshotAcquire:
+    def __init__(self, acquire_context: Any) -> None:
+        self._acquire_context = acquire_context
+
+    async def __aenter__(self) -> _SnapshotConnection:
+        conn = await self._acquire_context.__aenter__()
+        return _SnapshotConnection(conn)
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> Any:
+        return await self._acquire_context.__aexit__(exc_type, exc, tb)
 
 
-async def _fetch_dashboard_data(
-    pool: asyncpg.Pool,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    async with pool.acquire() as conn:
-        worker_rows = await conn.fetch(_WORKERS_SQL, WORKERS_LIMIT)
-        task_rows = await conn.fetch(_TASKS_SQL, TASKS_LIMIT)
-        summary_row = await conn.fetchrow(_SUMMARY_SQL)
-    workers = [_row_to_worker(r) for r in worker_rows]
-    tasks = [_row_to_task(r) for r in task_rows]
-    if summary_row is None:
-        summary = dict(_EMPTY_SUMMARY)
-    else:
-        summary = {
-            "workers_online": int(summary_row["workers_online"] or 0),
-            "tasks_pending": int(summary_row["tasks_pending"] or 0),
-            "tasks_in_progress": int(summary_row["tasks_in_progress"] or 0),
-            "tasks_done": int(summary_row["tasks_done"] or 0),
-            "tasks_failed": int(summary_row["tasks_failed"] or 0),
-        }
-    return workers, tasks, summary
+class _SnapshotPool:
+    """Pool adapter that decodes JSONB fields before building operator rows."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+
+    def acquire(self) -> _SnapshotAcquire:
+        return _SnapshotAcquire(self._pool.acquire())
+
+
+def _empty_snapshot(rendered_at: datetime) -> OperatorSnapshot:
+    return OperatorSnapshot(
+        rendered_at=rendered_at,
+        summary=ComplianceSummary(
+            total_tasks=0,
+            tasks_by_status={},
+            workers_online=0,
+            workers_total=0,
+            failed_tasks=0,
+            open_review_gaps=0,
+        ),
+        tasks=(),
+        workers=(),
+        events=(),
+        review_gaps=(),
+    )
 
 
 def _normalise_fragment(raw: str | None) -> str | None:
@@ -192,26 +183,30 @@ async def render_dashboard(
     fragment_name = _normalise_fragment(fragment)
     templates = get_templates()
     error: str | None = None
-    workers: list[dict[str, Any]] = []
-    tasks: list[dict[str, Any]] = []
-    summary: dict[str, int] = dict(_EMPTY_SUMMARY)
+    rendered_at = datetime.now(tz=UTC)
+    snapshot = _empty_snapshot(rendered_at)
     try:
-        workers, tasks, summary = await _fetch_dashboard_data(pool)
+        snapshot = await fetch_operator_snapshot(_SnapshotPool(pool), rendered_at=rendered_at)
     except Exception as exc:
         logger.warning("dashboard fetch failed: %s", exc)
         error = f"{type(exc).__name__}: {exc}"
 
-    rendered_at = datetime.now(tz=UTC)
     context: dict[str, Any] = {
         "request": request,
-        "workers": workers,
-        "tasks": tasks,
-        "summary": summary,
+        "snapshot": snapshot,
+        "workers": snapshot.workers,
+        "tasks": snapshot.tasks,
+        "events": snapshot.events,
+        "review_gaps": snapshot.review_gaps,
+        "summary": snapshot.summary,
+        "surfaces": [(surface.value, _SURFACE_LABELS[surface]) for surface in OperatorSurface],
         "error": error,
         "version": WHILLY_VERSION,
-        "rendered_at_iso": rendered_at.isoformat(),
-        "rendered_at_human": rendered_at.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "rendered_at_iso": _format_iso(snapshot.rendered_at),
+        "rendered_at_human": _format_human(snapshot.rendered_at),
         "events_token": events_token,
+        "format_iso": _format_iso,
+        "format_human": _format_human,
     }
 
     if fragment_name == "workers":
