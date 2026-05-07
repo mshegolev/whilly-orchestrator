@@ -17,6 +17,7 @@ from whilly.cli.tui import (
 from whilly.operator_views import (
     ComplianceSummary,
     EventRow,
+    HumanReviewState,
     OperatorSnapshot,
     OperatorSurface,
     OperatorTaskRow,
@@ -65,6 +66,7 @@ def _snapshot() -> OperatorSnapshot:
                 updated_at=now,
                 acceptance_criteria=(),
                 test_steps=("human approval",),
+                human_review=HumanReviewState(required=True, stage_id="release_review", reason="stage_human_gate"),
             ),
         ),
         workers=(
@@ -86,7 +88,14 @@ def _snapshot() -> OperatorSnapshot:
                 detail={"worker_id": "worker-a"},
             ),
         ),
-        review_gaps=(ReviewGap(task_id="T-human", plan_id="P-1", reason="missing acceptance criteria"),),
+        review_gaps=(
+            ReviewGap(
+                task_id="T-human",
+                plan_id="P-1",
+                reason="awaiting human review",
+                stage_id="release_review",
+            ),
+        ),
     )
 
 
@@ -139,6 +148,15 @@ def test_render_tui_filter_limits_task_rows() -> None:
     assert "T-human" in rendered
     assert "T-alpha" not in rendered
     assert "filter: human" in rendered
+
+
+def test_render_tui_compliance_shows_human_review_stage() -> None:
+    state = TuiState(surface=OperatorSurface.COMPLIANCE)
+
+    rendered = _render_to_text(render_tui(_snapshot(), state))
+
+    assert "awaiting human review" in rendered
+    assert "release_review" in rendered
 
 
 def test_run_tui_command_without_database_url_returns_exit_2(

@@ -137,18 +137,33 @@ async def _seed_event(
     task_id: str | None,
     plan_id: str | None,
     event_type: str,
+    payload: dict[str, object] | None = None,
 ) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO events (task_id, plan_id, event_type, detail, created_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5)
+            INSERT INTO events (task_id, plan_id, event_type, payload, detail, created_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
             """,
             task_id,
             plan_id,
             event_type,
+            json.dumps(payload or {}),
             json.dumps({"source": "test-dashboard"}),
             datetime.now(tz=UTC),
+        )
+
+
+async def _seed_noise_events(pool: asyncpg.Pool, *, plan_id: str, count: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO events (task_id, plan_id, event_type, payload, detail, created_at)
+            SELECT NULL, $1, 'noise.event', '{}'::jsonb, '{}'::jsonb, NOW()
+            FROM generate_series(1, $2)
+            """,
+            plan_id,
+            count,
         )
 
 
@@ -183,6 +198,9 @@ async def test_dashboard_wires_sse_connect_to_events_stream(client: AsyncClient)
     assert 'hx-ext="sse"' in body
     assert re.search(r'sse-connect="/events/stream(?:\?token=[^"]+)?"', body)
     assert 'name="whilly-events-token"' in body
+    for target in ('hx-select="#summary"', 'hx-select="#review-gaps"'):
+        assert target in body
+    assert "sse:human_review.approved" in body
 
 
 async def test_dashboard_polling_fallback_every_5s(client: AsyncClient) -> None:
@@ -241,14 +259,30 @@ async def test_dashboard_renders_compliance_gaps_and_events(
     )
     await _seed_task(db_pool, task_id="t-missing-ac", plan_id=plan_id, status="PENDING")
     await _seed_event(db_pool, task_id="t-human-review", plan_id=plan_id, event_type="START")
+    await _seed_event(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        event_type="human_review.required",
+        payload={
+            "task_id": "t-human-review",
+            "plan_id": plan_id,
+            "stage_id": "release_review",
+            "reason": "stage_human_gate",
+        },
+    )
+    await _seed_noise_events(db_pool, plan_id=plan_id, count=205)
+    await _seed_event(db_pool, task_id="t-human-review", plan_id=plan_id, event_type="START")
 
     response = await client.get("/")
     body = response.text
 
     assert "Compliance - Human review / verification gaps" in body
     assert "awaiting human review" in body
+    assert "release_review" in body
     assert "missing acceptance criteria" in body
     assert "t-human-review" in body
+    assert "human_review.required" in body
     assert "Events" in body
     assert "START" in body
 
