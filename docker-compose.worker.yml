@@ -41,7 +41,7 @@
 services:
   # ─── App: whilly-worker (HTTP-client). No DB, no API — pure pull-loop. ────
   worker:
-    # Default to the published image (matches the current v4.6.2 release
+    # Default to the published image (matches the current v4.6.3 release
     # artifact — must stay in lock-step with docker-compose.control-plane.yml
     # so a worker booted against a fresh control-plane never lags behind on
     # migration-aware client code). The production Dockerfile installs
@@ -49,7 +49,7 @@ services:
     # paths at runtime, so this is the same image used by
     # docker-compose.control-plane.yml. Override with WHILLY_IMAGE=<tag>
     # for dev / local-build workflows.
-    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.6.2}
+    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.6.3}
     # No `container_name:` here — Compose auto-generates names like
     # `whilly-orchestrator-worker-1`, `-worker-2`, ... so operators can run
     # `docker-compose -f docker-compose.worker.yml up -d --scale worker=N`
