@@ -111,7 +111,12 @@ from whilly.pipeline.events import (
     make_stage_succeeded_event,
     stage_context_from_task,
 )
-from whilly.pipeline.human_review import build_human_review_checkpoint, make_human_review_required_event
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_REQUIRED_RELEASE_REASON,
+    build_human_review_checkpoint,
+    is_human_review_approved,
+    make_human_review_required_event,
+)
 from whilly.pipeline.verification import (
     VERIFICATION_FAILED_EVENT,
     VerificationRunOutcome,
@@ -756,6 +761,26 @@ async def run_local_worker(
                         notify_slack_task_terminal(llm_session, "FAILED", result, reason="verification_failed")
                     failed += 1
                     log.info("worker=%s task=%s → FAILED (verification_failed)", worker_id, running.id)
+                    continue
+
+            if checkpoint is not None:
+                review_events = await repo.list_task_events(running.id, event_prefix="human_review.")
+                if not is_human_review_approved(checkpoint, review_events):
+                    try:
+                        await repo.release_task(
+                            running.id,
+                            running.version,
+                            HUMAN_REVIEW_REQUIRED_RELEASE_REASON,
+                        )
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "human-review release lost the race: task=%s expected_version=%d actual=%s",
+                            running.id,
+                            running.version,
+                            exc.actual_version,
+                        )
+                        continue
+                    log.info("worker=%s task=%s → PENDING (human_review_required)", worker_id, running.id)
                     continue
 
             try:

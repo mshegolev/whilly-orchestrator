@@ -73,8 +73,9 @@ generated ``__init__`` / ``__eq__``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -402,6 +403,35 @@ class TaskEventResponse(_FrozenModel):
     ok: bool = True
 
 
+class TaskEventItem(_FrozenModel):
+    """One persisted task event returned by ``GET /tasks/{task_id}/events``."""
+
+    id: int
+    task_id: NonEmptyShortStr
+    plan_id: NonEmptyShortStr | None = None
+    event_type: NonEmptyShortStr
+    created_at: datetime
+    payload: dict[str, Any] = Field(default_factory=dict)
+    detail: dict[str, Any] | None = None
+
+
+class ListTaskEventsResponse(_FrozenModel):
+    """Ordered diagnostic/audit events for a task."""
+
+    events: list[TaskEventItem] = Field(default_factory=list)
+
+
+class HumanReviewDecisionRequest(_FrozenModel):
+    """Admin-only human-review decision for ``POST /api/v1/tasks/{task_id}/human-review``."""
+
+    decision: Literal["approved", "rejected", "changes_requested"]
+    reviewer: NonEmptyShortStr
+    stage_id: NonEmptyShortStr | None = None
+    comment: str = ""
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    requested_changes: list[NonEmptyShortStr] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Fail
 # ---------------------------------------------------------------------------
@@ -554,12 +584,15 @@ __all__ = [
     "FailResponse",
     "HeartbeatRequest",
     "HeartbeatResponse",
+    "HumanReviewDecisionRequest",
+    "ListTaskEventsResponse",
     "PlanPayload",
     "RegisterRequest",
     "RegisterResponse",
     "ReleaseRequest",
     "ReleaseResponse",
     "TaskPayload",
+    "TaskEventItem",
     "TaskEventRequest",
     "TaskEventResponse",
 ]

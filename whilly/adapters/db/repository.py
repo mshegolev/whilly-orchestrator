@@ -290,6 +290,12 @@ _PRIORITY_RANK_SQL: str = (
     "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
 )
 
+_HUMAN_REVIEW_REQUIRED_RELEASE_REASON_SQL = "human_review_required"
+_HUMAN_REVIEW_REQUIRED_EVENT_SQL = "human_review.required"
+_HUMAN_REVIEW_APPROVED_EVENT_SQL = "human_review.approved"
+_HUMAN_REVIEW_REJECTED_EVENT_SQL = "human_review.rejected"
+_HUMAN_REVIEW_CHANGES_REQUESTED_EVENT_SQL = "human_review.changes_requested"
+
 
 # Atomic claim. The CTE locks one PENDING row with SKIP LOCKED so concurrent
 # claimers pick different rows; the outer UPDATE flips the row to CLAIMED in
@@ -316,6 +322,51 @@ WITH picked AS (
       -- ``IS NULL OR ...`` short-circuits in Postgres so the strict
       -- comparison never runs against NULL.
       AND (p.budget_usd IS NULL OR p.spent_usd < p.budget_usd)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM events review_release
+        WHERE review_release.task_id = t.id
+          AND review_release.event_type = '{Transition.RELEASE.value}'
+          AND review_release.payload->>'reason' = '{_HUMAN_REVIEW_REQUIRED_RELEASE_REASON_SQL}'
+          AND COALESCE(
+            (
+                SELECT CASE
+                  WHEN review_decision.event_type = '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+                    AND review_decision.payload->>'decision' = 'approved'
+                    AND btrim(COALESCE(review_decision.payload->>'reviewer', '')) != ''
+                  THEN '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+                  WHEN review_decision.event_type = '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+                  THEN 'human_review.invalid_approval'
+                  ELSE review_decision.event_type
+                END
+                FROM events review_decision
+                WHERE review_decision.task_id = t.id
+                  AND review_decision.event_type IN (
+                    '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}',
+                    '{_HUMAN_REVIEW_REJECTED_EVENT_SQL}',
+                    '{_HUMAN_REVIEW_CHANGES_REQUESTED_EVENT_SQL}'
+                  )
+                  AND (review_decision.created_at, review_decision.id)
+                    > (review_release.created_at, review_release.id)
+                  AND COALESCE(review_decision.payload->>'stage_id', '') = COALESCE(
+                    (
+                      SELECT review_required.payload->>'stage_id'
+                      FROM events review_required
+                      WHERE review_required.task_id = t.id
+                        AND review_required.event_type = '{_HUMAN_REVIEW_REQUIRED_EVENT_SQL}'
+                        AND (review_required.created_at, review_required.id)
+                          < (review_release.created_at, review_release.id)
+                      ORDER BY review_required.created_at DESC, review_required.id DESC
+                      LIMIT 1
+                    ),
+                    ''
+                  )
+                ORDER BY review_decision.created_at DESC, review_decision.id DESC
+                LIMIT 1
+            ),
+            ''
+          ) <> '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+      )
     ORDER BY {_PRIORITY_RANK_SQL}, t.id
     -- ``FOR UPDATE OF t`` locks the *tasks* row only — not the
     -- single ``plans`` row that every concurrent claimer joins
@@ -563,6 +614,22 @@ _SELECT_TASK_PLAN_ID_SQL: str = """
 SELECT plan_id
 FROM tasks
 WHERE id = $1
+"""
+
+
+_SELECT_TASK_CLAIM_OWNER_SQL: str = """
+SELECT claimed_by
+FROM tasks
+WHERE id = $1
+"""
+
+
+_LIST_TASK_EVENTS_SQL: str = """
+SELECT id, task_id, plan_id, event_type, payload, detail, created_at
+FROM events
+WHERE task_id = $1
+  AND ($2::text IS NULL OR event_type LIKE $2 || '%')
+ORDER BY created_at ASC, id ASC
 """
 
 
@@ -1603,6 +1670,42 @@ class TaskRepository:
                     detail_json,
                 )
         self._emit_jsonl(event_type, task_id=task_id, plan_id=plan_id, payload=payload_dict)
+
+    async def list_task_events(
+        self,
+        task_id: TaskId,
+        *,
+        event_prefix: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return persisted events for ``task_id`` in audit-log order."""
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_TASK_PLAN_ID_SQL, task_id)
+            if row is None:
+                raise ValueError(f"list_task_events: unknown task_id={task_id!r}")
+            rows = await conn.fetch(_LIST_TASK_EVENTS_SQL, task_id, event_prefix)
+
+        return tuple(
+            {
+                "id": row["id"],
+                "task_id": row["task_id"],
+                "plan_id": row["plan_id"],
+                "event_type": row["event_type"],
+                "payload": _decode_jsonb(row["payload"]) or {},
+                "detail": _decode_jsonb(row["detail"]) if row["detail"] is not None else None,
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        )
+
+    async def task_claim_owner(self, task_id: TaskId) -> str | None:
+        """Return the current ``claimed_by`` worker for ``task_id``."""
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_TASK_CLAIM_OWNER_SQL, task_id)
+        if row is None:
+            raise ValueError(f"task_claim_owner: unknown task_id={task_id!r}")
+        return row["claimed_by"]
 
     async def complete_task(
         self,

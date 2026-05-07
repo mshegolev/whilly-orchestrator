@@ -1169,6 +1169,50 @@ async def test_record_event_posts_llm_diagnostic_payload() -> None:
     }
 
 
+async def test_list_task_events_gets_filtered_events() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "id": 7,
+                        "task_id": "TASK-022a3",
+                        "plan_id": "PLAN-1",
+                        "event_type": "human_review.approved",
+                        "created_at": "2026-05-07T09:30:00Z",
+                        "payload": {
+                            "task_id": "TASK-022a3",
+                            "stage_id": "release_review",
+                            "decision": "approved",
+                        },
+                        "detail": {"review_url": "https://example.test/review/1"},
+                    }
+                ]
+            },
+        )
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        events = await client.list_task_events("TASK-022a3", event_prefix="human_review.")
+
+    assert len(events) == 1
+    assert events[0].event_type == "human_review.approved"
+    assert events[0].payload["stage_id"] == "release_review"
+    assert events[0].detail == {"review_url": "https://example.test/review/1"}
+    assert captured == {
+        "method": "GET",
+        "path": task_event_path("TASK-022a3"),
+        "params": {"event_prefix": "human_review."},
+        "auth": "Bearer bearer-tok",
+    }
+
+
 async def test_complete_propagates_auth_error_on_403(captured_sleeps: list[float]) -> None:
     """A 403 from the per-worker bearer surfaces as :class:`AuthError`, no retry.
 

@@ -49,7 +49,7 @@ from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON
 from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON
 from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
-from whilly.pipeline.human_review import HUMAN_REVIEW_REQUIRED
+from whilly.pipeline.human_review import HUMAN_REVIEW_APPROVED, HUMAN_REVIEW_REQUIRED
 from whilly.pipeline.verification import (
     VERIFICATION_FAILED_EVENT,
     VERIFICATION_STARTED_EVENT,
@@ -157,6 +157,8 @@ class FakeRemoteClient:
         self.heartbeat_calls: list[str] = []
         self.fail_details: list[dict[str, object] | None] = []
         self.event_calls: list[tuple[TaskId, str, str, dict[str, object], dict[str, object] | None]] = []
+        self.task_event_results: dict[TaskId, list[dict[str, object]]] = {}
+        self.list_task_events_calls: list[tuple[TaskId, str | None]] = []
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
         self.claim_calls.append((worker_id, plan_id))
@@ -232,6 +234,10 @@ class FakeRemoteClient:
     ) -> object:
         self.event_calls.append((task_id, worker_id, event_type, payload or {}, detail))
         return object()
+
+    async def list_task_events(self, task_id: TaskId, event_prefix: str | None = None) -> tuple[dict[str, object], ...]:
+        self.list_task_events_calls.append((task_id, event_prefix))
+        return tuple(self.task_event_results.get(task_id, ()))
 
 
 @pytest.fixture
@@ -390,10 +396,78 @@ async def test_configured_remote_pipeline_task_records_stage_and_human_review_ev
         prd_requirement="Configured documentation pipeline step: release_review",
         acceptance_criteria=("Human review approval is explicitly recorded before completion.",),
     )
+
+    client.claim_results.append(claimed)
+    client.release_results.append(replace(claimed, status=TaskStatus.PENDING, version=5))
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+    )
+
+    assert stats.completed == 0
+    assert client.complete_calls == []
+    assert client.release_calls == [("CFG-R-001", WORKER_ID, 4, "human_review_required")]
+    event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
+    assert PIPELINE_STAGE_STARTED in event_types
+    assert HUMAN_REVIEW_REQUIRED in event_types
+    assert PIPELINE_STAGE_SUCCEEDED not in event_types
+    stage_started = next(
+        payload
+        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
+        if event_type == PIPELINE_STAGE_STARTED
+    )
+    assert stage_started == {
+        "task_id": "CFG-R-001",
+        "plan_id": PLAN_ID,
+        "stage_id": "release_review",
+        "project_type": "documentation",
+        "profile_id": "remote-docs-profile",
+    }
+
+
+async def test_configured_remote_pipeline_task_completes_after_human_review_approval(
+    fake_sleep: list[float],
+) -> None:
+    client = FakeRemoteClient()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Remote Plan",
+        origin=PlanOrigin(
+            system="project_config",
+            ref="remote-docs-profile",
+            decomposition_mode="configured:documentation",
+        ),
+    )
+
+    claimed = replace(
+        _make_task("CFG-R-001", status=TaskStatus.CLAIMED, version=4),
+        prd_requirement="Configured documentation pipeline step: release_review",
+        acceptance_criteria=("Human review approval is explicitly recorded before completion.",),
+    )
     done = replace(claimed, status=TaskStatus.DONE, version=5)
 
     client.claim_results.append(claimed)
     client.complete_results.append(done)
+    client.task_event_results[claimed.id] = [
+        {
+            "event_type": HUMAN_REVIEW_APPROVED,
+            "payload": {
+                "task_id": claimed.id,
+                "plan_id": PLAN_ID,
+                "stage_id": "release_review",
+                "decision": "approved",
+                "reviewer": "lead@example.com",
+            },
+            "detail": {"stage_id": "diagnostic_stage"},
+        }
+    ]
 
     async def runner(task: Task, prompt: str) -> AgentResult:
         return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
@@ -407,22 +481,11 @@ async def test_configured_remote_pipeline_task_records_stage_and_human_review_ev
     )
 
     assert stats.completed == 1
+    assert client.complete_calls == [("CFG-R-001", WORKER_ID, 4, 0.0)]
+    assert client.release_calls == []
+    assert client.list_task_events_calls == [("CFG-R-001", "human_review.")]
     event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
-    assert PIPELINE_STAGE_STARTED in event_types
-    assert HUMAN_REVIEW_REQUIRED in event_types
     assert PIPELINE_STAGE_SUCCEEDED in event_types
-    stage_started = next(
-        payload
-        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
-        if event_type == PIPELINE_STAGE_STARTED
-    )
-    assert stage_started == {
-        "task_id": "CFG-R-001",
-        "plan_id": PLAN_ID,
-        "stage_id": "release_review",
-        "project_type": "documentation",
-        "profile_id": "remote-docs-profile",
-    }
 
 
 async def test_remote_required_verification_failure_blocks_complete_and_records_events(

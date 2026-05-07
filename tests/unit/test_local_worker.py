@@ -45,7 +45,7 @@ from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE, SHELL_COM
 from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE, PROMPT_INJECTION_FAIL_REASON
 from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
-from whilly.pipeline.human_review import HUMAN_REVIEW_REQUIRED
+from whilly.pipeline.human_review import HUMAN_REVIEW_APPROVED, HUMAN_REVIEW_REQUIRED
 from whilly.pipeline.verification import (
     VERIFICATION_FAILED_EVENT,
     VERIFICATION_STARTED_EVENT,
@@ -127,6 +127,8 @@ class FakeRepo:
         self.fail_details: list[dict[str, object] | None] = []
         self.fail_prelude_events: list[tuple[str | None, dict[str, object] | None]] = []
         self.event_calls: list[tuple[TaskId, str, dict[str, object], dict[str, object] | None]] = []
+        self.task_event_results: dict[TaskId, list[dict[str, object]]] = {}
+        self.list_task_events_calls: list[tuple[TaskId, str | None]] = []
 
     async def claim_task(self, worker_id: WorkerId, plan_id: str) -> Task | None:
         self.claim_calls.append((worker_id, plan_id))
@@ -161,6 +163,10 @@ class FakeRepo:
         detail: dict[str, object] | None = None,
     ) -> None:
         self.event_calls.append((task_id, event_type, payload or {}, detail))
+
+    async def list_task_events(self, task_id: TaskId, event_prefix: str | None = None) -> tuple[dict[str, object], ...]:
+        self.list_task_events_calls.append((task_id, event_prefix))
+        return tuple(self.task_event_results.get(task_id, ()))
 
     async def complete_task(
         self,
@@ -280,7 +286,6 @@ async def test_completes_one_task_happy_path(fake_sleep: list[float]) -> None:
     claimed = replace(pending, status=TaskStatus.CLAIMED, version=1)
     running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
     done = replace(running, status=TaskStatus.DONE, version=3)
-
     repo.claim_results.append(claimed)
     repo.start_results.append(running)
     repo.complete_results.append(done)
@@ -360,22 +365,22 @@ async def test_configured_pipeline_task_records_stage_and_human_review_events(fa
         prd_requirement="Configured documentation pipeline step: release_review",
         acceptance_criteria=("Human review approval is explicitly recorded before completion.",),
     )
-    done = replace(running, status=TaskStatus.DONE, version=3)
-
     repo.claim_results.append(claimed)
     repo.start_results.append(running)
-    repo.complete_results.append(done)
+    repo.release_results.append(replace(running, status=TaskStatus.PENDING, version=3))
 
     async def runner(task: Task, prompt: str) -> AgentResult:
         return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
 
     stats = await run_local_worker(repo, runner, plan, WORKER_ID, idle_wait=0, max_iterations=1)  # type: ignore[arg-type]
 
-    assert stats.completed == 1
+    assert stats.completed == 0
+    assert repo.complete_calls == []
+    assert repo.release_calls == [("CFG-001-REVIEW", 2, "human_review_required")]
     event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
     assert PIPELINE_STAGE_STARTED in event_types
     assert HUMAN_REVIEW_REQUIRED in event_types
-    assert PIPELINE_STAGE_SUCCEEDED in event_types
+    assert PIPELINE_STAGE_SUCCEEDED not in event_types
     stage_started = next(
         payload for _task_id, event_type, payload, _detail in repo.event_calls if event_type == PIPELINE_STAGE_STARTED
     )
@@ -391,6 +396,58 @@ async def test_configured_pipeline_task_records_stage_and_human_review_events(fa
     )
     assert review_required["reason"] == "task_review_text"
     assert review_required["source"] == "task_text"
+
+
+async def test_configured_pipeline_task_completes_after_human_review_approval(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Plan",
+        origin=PlanOrigin(
+            system="project_config",
+            ref="docs-profile",
+            decomposition_mode="configured:documentation",
+        ),
+    )
+
+    claimed = _make_task("CFG-001-REVIEW", status=TaskStatus.CLAIMED, version=1)
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        prd_requirement="Configured documentation pipeline step: release_review",
+        acceptance_criteria=("Human review approval is explicitly recorded before completion.",),
+    )
+    done = replace(running, status=TaskStatus.DONE, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.complete_results.append(done)
+    repo.task_event_results[running.id] = [
+        {
+            "event_type": HUMAN_REVIEW_APPROVED,
+            "payload": {
+                "task_id": running.id,
+                "plan_id": PLAN_ID,
+                "stage_id": "release_review",
+                "decision": "approved",
+                "reviewer": "lead@example.com",
+            },
+            "detail": {"stage_id": "diagnostic_stage"},
+        }
+    ]
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_local_worker(repo, runner, plan, WORKER_ID, idle_wait=0, max_iterations=1)  # type: ignore[arg-type]
+
+    assert stats.completed == 1
+    assert repo.complete_calls == [("CFG-001-REVIEW", 2, 0.0)]
+    assert repo.release_calls == []
+    assert repo.list_task_events_calls == [("CFG-001-REVIEW", "human_review.")]
+    event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
+    assert PIPELINE_STAGE_SUCCEEDED in event_types
 
 
 async def test_required_verification_failure_blocks_complete_and_records_events(fake_sleep: list[float]) -> None:

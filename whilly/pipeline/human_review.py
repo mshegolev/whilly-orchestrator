@@ -12,6 +12,7 @@ HUMAN_REVIEW_REQUIRED = "human_review.required"
 HUMAN_REVIEW_APPROVED = "human_review.approved"
 HUMAN_REVIEW_REJECTED = "human_review.rejected"
 HUMAN_REVIEW_CHANGES_REQUESTED = "human_review.changes_requested"
+HUMAN_REVIEW_REQUIRED_RELEASE_REASON = "human_review_required"
 
 _DECISION_APPROVED = "approved"
 _DECISION_REJECTED = "rejected"
@@ -134,6 +135,30 @@ def make_human_review_changes_requested_event(
     )
 
 
+def is_human_review_approved(
+    checkpoint: HumanReviewCheckpoint,
+    events: Iterable[Mapping[str, Any] | Any],
+) -> bool:
+    """Return whether the latest matching human-review decision approves ``checkpoint``."""
+
+    approved = False
+    for event in events:
+        event_type = str(_event_field(event, "event_type", ""))
+        if event_type not in {HUMAN_REVIEW_APPROVED, HUMAN_REVIEW_REJECTED, HUMAN_REVIEW_CHANGES_REQUESTED}:
+            continue
+
+        body = _event_body(event)
+        if not _event_matches_checkpoint(body, checkpoint):
+            continue
+
+        approved = (
+            event_type == HUMAN_REVIEW_APPROVED
+            and str(body.get("decision", "")) == _DECISION_APPROVED
+            and bool(str(body.get("reviewer", "")).strip())
+        )
+    return approved
+
+
 def _make_decision_event(
     event_type: str,
     decision_value: str,
@@ -234,14 +259,46 @@ def _put_if_available(payload: dict[str, Any], key: str, value: str) -> None:
         payload[key] = value
 
 
+def _event_body(event: Mapping[str, Any] | Any) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    detail = _event_field(event, "detail", None)
+    if isinstance(detail, Mapping):
+        body.update(detail)
+    payload = _event_field(event, "payload", None)
+    if isinstance(payload, Mapping):
+        body.update(payload)
+    for key in ("task_id", "plan_id", "stage_id"):
+        value = _event_field(event, key, "")
+        if value and key not in body:
+            body[key] = value
+    return body
+
+
+def _event_matches_checkpoint(body: Mapping[str, Any], checkpoint: HumanReviewCheckpoint) -> bool:
+    if str(body.get("task_id", "")) != checkpoint.task_id:
+        return False
+    if checkpoint.stage_id and str(body.get("stage_id", "")) != checkpoint.stage_id:
+        return False
+    plan_id = str(body.get("plan_id", ""))
+    return not (checkpoint.plan_id and plan_id and plan_id != checkpoint.plan_id)
+
+
+def _event_field(event: Mapping[str, Any] | Any, name: str, default: Any = None) -> Any:
+    if isinstance(event, Mapping):
+        return event.get(name, default)
+    return getattr(event, name, default)
+
+
 __all__ = [
     "HUMAN_REVIEW_APPROVED",
     "HUMAN_REVIEW_CHANGES_REQUESTED",
     "HUMAN_REVIEW_REJECTED",
     "HUMAN_REVIEW_REQUIRED",
+    "HUMAN_REVIEW_REQUIRED_RELEASE_REASON",
     "HumanReviewCheckpoint",
     "HumanReviewDecision",
     "build_human_review_checkpoint",
+    "is_human_review_approved",
     "make_human_review_approved_event",
     "make_human_review_changes_requested_event",
     "make_human_review_rejected_event",

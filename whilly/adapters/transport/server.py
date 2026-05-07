@@ -247,13 +247,22 @@ from whilly.adapters.transport.schemas import (
     FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    HumanReviewDecisionRequest,
+    ListTaskEventsResponse,
     RegisterRequest,
     RegisterResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskEventItem,
     TaskEventRequest,
     TaskEventResponse,
     TaskPayload,
+)
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_APPROVED,
+    HUMAN_REVIEW_CHANGES_REQUESTED,
+    HUMAN_REVIEW_REJECTED,
+    HUMAN_REVIEW_REQUIRED,
 )
 
 __all__ = [
@@ -354,6 +363,12 @@ DIAGNOSTIC_EVENT_PREFIXES: Final[tuple[str, ...]] = (
     "verification.",
     "human_review.",
 )
+WORKER_HUMAN_REVIEW_EVENT_TYPES: Final[frozenset[str]] = frozenset({HUMAN_REVIEW_REQUIRED})
+HUMAN_REVIEW_DECISION_EVENT_TYPES: Final[dict[str, str]] = {
+    "approved": HUMAN_REVIEW_APPROVED,
+    "rejected": HUMAN_REVIEW_REJECTED,
+    "changes_requested": HUMAN_REVIEW_CHANGES_REQUESTED,
+}
 
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
@@ -1612,6 +1627,110 @@ def create_app(
         return CompleteResponse(task=TaskPayload.from_task(updated))
 
     @app.post(
+        "/api/v1/tasks/{task_id}/human-review",
+        response_model=TaskEventResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": TaskEventResponse,
+                "description": "Human-review decision recorded.",
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Task does not exist.",
+            },
+        },
+        dependencies=[Depends(admin_dep)],
+    )
+    async def record_human_review_decision(
+        request: Request,
+        task_id: str,
+        payload: HumanReviewDecisionRequest,
+    ) -> TaskEventResponse | JSONResponse:
+        """Append an admin-authorised human-review decision event."""
+
+        event_type = HUMAN_REVIEW_DECISION_EVENT_TYPES[payload.decision]
+        event_payload: dict[str, Any] = {
+            "task_id": task_id,
+            "decision": payload.decision,
+            "reviewer": payload.reviewer,
+            "source": "admin_api",
+        }
+        _put_if_non_empty(event_payload, "stage_id", payload.stage_id)
+        _put_if_non_empty(event_payload, "comment", payload.comment)
+        operator = getattr(request.state, "bootstrap_owner_email", None)
+        _put_if_non_empty(event_payload, "operator", operator)
+        if payload.evidence:
+            event_payload["evidence"] = payload.evidence
+        if payload.requested_changes:
+            event_payload["requested_changes"] = payload.requested_changes
+        try:
+            await repo.record_task_event(task_id, event_type, event_payload)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        return TaskEventResponse()
+
+    @app.get(
+        "/tasks/{task_id}/events",
+        response_model=ListTaskEventsResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": ListTaskEventsResponse,
+                "description": "Ordered task events.",
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Task does not exist.",
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def list_task_events(
+        request: Request,
+        task_id: str,
+        event_prefix: str | None = Query(default=None, max_length=64),
+    ) -> ListTaskEventsResponse | JSONResponse:
+        """Return persisted diagnostic/audit events for a task."""
+
+        authenticated_worker_id = getattr(request.state, "authenticated_worker_id", None)
+        if authenticated_worker_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="task event reads require an identity-bound worker bearer token",
+            )
+        try:
+            claim_owner = await repo.task_claim_owner(task_id)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        if claim_owner != authenticated_worker_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"worker {authenticated_worker_id!r} cannot read task {task_id!r} events",
+            )
+        try:
+            rows = await repo.list_task_events(task_id, event_prefix=event_prefix)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        return ListTaskEventsResponse(events=[TaskEventItem.model_validate(row) for row in rows])
+
+    @app.post(
         "/tasks/{task_id}/events",
         response_model=TaskEventResponse,
         responses={
@@ -1636,6 +1755,14 @@ def create_app(
         """Append a non-state-changing diagnostic event for a task."""
 
         _require_token_owner(request, payload.worker_id)
+        if payload.event_type.startswith("human_review.") and payload.event_type not in WORKER_HUMAN_REVIEW_EVENT_TYPES:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_event_type",
+                    detail="worker diagnostic endpoint accepts only human_review.required from the human_review.* family",
+                ).model_dump(exclude_none=True),
+            )
         if not payload.event_type.startswith(DIAGNOSTIC_EVENT_PREFIXES):
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2234,6 +2361,14 @@ def _require_token_owner(request: Request, claimed_worker_id: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(f"token owner {authenticated!r} cannot act as worker {claimed_worker_id!r}"),
         )
+
+
+def _put_if_non_empty(payload: dict[str, Any], key: str, value: Any) -> None:
+    if value is None:
+        return
+    text = str(value).strip()
+    if text:
+        payload[key] = text
 
 
 def _conflict_response(exc: VersionConflictError) -> JSONResponse:
