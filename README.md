@@ -308,8 +308,9 @@ whilly dashboard --plan "$PLAN_ID"    # Rich Live TUI over the tasks table
 ```
 
 ```bash
-# Run in a second terminal — long-running:
-uvicorn 'whilly.adapters.transport.server:create_app' --factory --port 8000
+# Run in a second terminal — long-running web dashboard + control plane:
+whilly server --host 127.0.0.1 --port 8000
+# then open http://127.0.0.1:8000/
 ```
 
 A complete reproducible single-host demo (Postgres + control plane + remote
@@ -383,6 +384,7 @@ block.
 | `whilly init "<idea>" --slug <slug>` | PRD wizard → plan import in one step. |
 | `whilly run --plan <id> [--verify-command NAME=COMMAND]` | All-in-one local worker (asyncpg-direct); required verification commands block `DONE` on failure. |
 | `whilly dashboard --plan <id>` | Rich Live TUI over the tasks table. |
+| `whilly server [--host HOST] [--port PORT]` | FastAPI control plane and web dashboard at `GET /`. |
 | `whilly worker register --connect <url> --bootstrap-token <tok>` | Mint a per-worker bearer (TASK-101). |
 | `whilly-worker --connect <url> --token <bearer> --plan <id>` | Standalone remote-worker entry (httpx-only closure). |
 | `whilly forge intake owner/repo/N` | GitHub Issue → Whilly plan + label transition. |
