@@ -30,8 +30,10 @@ traceability, reviewability, safety, and operational control.
 > control plane, local and remote workers over HTTP, append-only `events` audit
 > log, web dashboard, browserless operator surfaces, SSE stream, Prometheus
 > metrics, health endpoints, worker heartbeat, repo-target metadata, and project
-> config plan generation. Runtime verification, human-review checkpoints, and
-> configured sinks are being aligned with the target documentation in
+> config plan generation. Configured verification commands can block `DONE`,
+> project-config tasks emit pipeline stage audit events, and human-review
+> checkpoint event models exist. Approval enforcement and configured sinks are
+> still being aligned with the target documentation in
 > [`docs/target/`](docs/target/). Legacy v3.x remains historical at tag
 > [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final).
 
@@ -77,9 +79,9 @@ execution.
 
 The core worker loop does **not** claim all of the following as complete product
 guarantees: full multi-repo execution, automatic PR review feedback loops,
-mandatory CI/lint verification, full sandbox or VM isolation, semantic
-long-term memory, reliable git rollback, or autonomous production release
-without human review.
+mandatory CI/lint verification unless verification commands are configured,
+full sandbox or VM isolation, semantic long-term memory, reliable git rollback,
+or autonomous production release without human review.
 
 ## What's new in v4.6.1 (M3 of Whilly Distributed v5.0)
 
@@ -376,7 +378,7 @@ block.
 | `whilly plan triz <plan_id> [--json] [--strict]` | Deterministic v4 TRIZ/challenge preflight for imported plans. |
 | `whilly plan reset <plan_id>` | Reset task statuses to `pending` (soft) or wipe rows (`--hard`). |
 | `whilly init "<idea>" --slug <slug>` | PRD wizard → plan import in one step. |
-| `whilly run --plan <id>` | All-in-one local worker (asyncpg-direct). |
+| `whilly run --plan <id> [--verify-command NAME=COMMAND]` | All-in-one local worker (asyncpg-direct); required verification commands block `DONE` on failure. |
 | `whilly dashboard --plan <id>` | Rich Live TUI over the tasks table. |
 | `whilly worker register --connect <url> --bootstrap-token <tok>` | Mint a per-worker bearer (TASK-101). |
 | `whilly-worker --connect <url> --token <bearer> --plan <id>` | Standalone remote-worker entry (httpx-only closure). |

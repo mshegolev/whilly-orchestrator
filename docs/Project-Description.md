@@ -107,7 +107,7 @@ correct. Его ценность не в неограниченной автон
 
 - полноценное multi-repo execution;
 - автоматический PR review feedback loop;
-- обязательный CI/lint verification в core loop;
+- обязательный CI/lint verification без настроенных verification commands;
 - полноценную sandbox/VM isolation;
 - semantic long-term memory;
 - надёжный git rollback;

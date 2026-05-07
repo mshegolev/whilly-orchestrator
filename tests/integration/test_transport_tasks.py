@@ -600,6 +600,62 @@ async def test_complete_validates_request_body(
 
 
 # ---------------------------------------------------------------------------
+# /tasks/{task_id}/events — diagnostic event allowlist
+# ---------------------------------------------------------------------------
+
+
+async def test_record_task_event_accepts_pipeline_verification_and_human_review_events(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Remote diagnostics accept the pipeline runtime event families, not only ``llm.*``."""
+    plan_id = "PLAN-EVENTS"
+    task_id = "T-events"
+    await _seed_task(db_pool, plan_id, task_id)
+    worker_id, _ = await _register(http_client, "host-events")
+
+    accepted_events = [
+        ("pipeline.stage.started", {"task_id": task_id, "plan_id": plan_id, "stage_id": "tests"}),
+        ("verification.failed", {"task_id": task_id, "name": "unit", "required": True}),
+        ("human_review.required", {"task_id": task_id, "reason": "task_review_text"}),
+    ]
+    for event_type, payload in accepted_events:
+        response = await http_client.post(
+            f"/tasks/{task_id}/events",
+            json={
+                "worker_id": worker_id,
+                "event_type": event_type,
+                "payload": payload,
+                "detail": {"stdout": "sample"} if event_type == "verification.failed" else None,
+            },
+            headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+        )
+        assert response.status_code == 200, response.text
+
+    rejected = await http_client.post(
+        f"/tasks/{task_id}/events",
+        json={
+            "worker_id": worker_id,
+            "event_type": "workspace.prepare_failed",
+            "payload": {"task_id": task_id},
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert rejected.status_code == 400
+    assert "diagnostic endpoint accepts only" in rejected.json()["detail"]
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT event_type, detail FROM events WHERE task_id = $1 ORDER BY id",
+            task_id,
+        )
+    event_types = [row["event_type"] for row in rows]
+    assert "pipeline.stage.started" in event_types
+    assert "verification.failed" in event_types
+    assert "human_review.required" in event_types
+
+
+# ---------------------------------------------------------------------------
 # /tasks/{task_id}/fail — happy path (CLAIMED → FAILED, no START hop needed)
 # ---------------------------------------------------------------------------
 

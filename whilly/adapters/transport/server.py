@@ -348,6 +348,12 @@ OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS: Final[float] = 30.0
 
 LLM_OPS_UI_MAX_PREVIEW_CHARS: Final[int] = 80_000
 LLM_OPS_UI_MAX_RAW_LINES: Final[int] = 160
+DIAGNOSTIC_EVENT_PREFIXES: Final[tuple[str, ...]] = (
+    "llm.",
+    "pipeline.stage.",
+    "verification.",
+    "human_review.",
+)
 
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
@@ -1615,7 +1621,7 @@ def create_app(
             },
             status.HTTP_400_BAD_REQUEST: {
                 "model": ErrorResponse,
-                "description": "Only llm.* diagnostic events are accepted on this endpoint.",
+                "description": "Only known diagnostic event families are accepted on this endpoint.",
             },
             status.HTTP_404_NOT_FOUND: {
                 "model": ErrorResponse,
@@ -1630,12 +1636,15 @@ def create_app(
         """Append a non-state-changing diagnostic event for a task."""
 
         _require_token_owner(request, payload.worker_id)
-        if not payload.event_type.startswith("llm."):
+        if not payload.event_type.startswith(DIAGNOSTIC_EVENT_PREFIXES):
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content=ErrorResponse(
                     error="invalid_event_type",
-                    detail="diagnostic endpoint accepts only llm.* event types",
+                    detail=(
+                        "diagnostic endpoint accepts only llm.*, pipeline.stage.*, "
+                        "verification.*, and human_review.* event types"
+                    ),
                 ).model_dump(exclude_none=True),
             )
         try:

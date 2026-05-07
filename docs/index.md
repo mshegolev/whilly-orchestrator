@@ -42,8 +42,9 @@ observable, and keeping humans in control at critical points.
 
 The current core should not be described as full autonomous multi-repo
 execution, automatic PR-review feedback handling, mandatory CI/lint
-verification, full sandbox or VM isolation, semantic long-term memory, reliable
-git rollback, or autonomous production release.
+verification unless verification commands are configured, full sandbox or VM
+isolation, semantic long-term memory, reliable git rollback, or autonomous
+production release.
 
 ## One-liner demo
 

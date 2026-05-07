@@ -93,6 +93,12 @@ def test_build_run_parser_accepts_all_optional_flags() -> None:
             "0.5",
             "--worker-id",
             "test-worker-x",
+            "--verify-command",
+            "unit=pytest -q tests/unit",
+            "--optional-verify-command",
+            "lint=ruff check whilly tests",
+            "--verify-timeout",
+            "12.5",
         ]
     )
     assert args.plan_id == "P-1"
@@ -100,6 +106,9 @@ def test_build_run_parser_accepts_all_optional_flags() -> None:
     assert args.idle_wait == pytest.approx(0.1)
     assert args.heartbeat_interval == pytest.approx(0.5)
     assert args.worker_id == "test-worker-x"
+    assert args.verify_commands == ["unit=pytest -q tests/unit"]
+    assert args.optional_verify_commands == ["lint=ruff check whilly tests"]
+    assert args.verify_timeout == pytest.approx(12.5)
 
 
 # ─── worker-id resolution ────────────────────────────────────────────────
@@ -277,6 +286,36 @@ def test_run_run_command_forwards_injected_runner(monkeypatch: pytest.MonkeyPatc
     code = run_run_command(["--plan", "P-INJ"], runner=_stub_runner)
     assert code == EXIT_OK
     assert seen_runner == [_stub_runner], "runner kwarg did not reach _async_run unchanged"
+
+
+def test_run_run_command_forwards_verification_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verification flags are parsed at the CLI boundary and forwarded to the async composer."""
+    monkeypatch.setenv(DATABASE_URL_ENV, "postgresql://user@127.0.0.1/whilly")
+    seen: dict[str, object] = {}
+
+    async def _fake_async_run(**kwargs: object) -> WorkerStats:
+        seen.update(kwargs)
+        return WorkerStats()
+
+    monkeypatch.setattr(cli_run, "_async_run", _fake_async_run)
+
+    code = run_run_command(
+        [
+            "--plan",
+            "P-VERIFY",
+            "--verify-command",
+            "unit=pytest -q tests/unit",
+            "--optional-verify-command",
+            "lint=ruff check whilly tests",
+            "--verify-timeout",
+            "10",
+        ]
+    )
+
+    assert code == EXIT_OK
+    assert seen["verify_commands"] == ["unit=pytest -q tests/unit"]
+    assert seen["optional_verify_commands"] == ["lint=ruff check whilly tests"]
+    assert seen["verify_timeout"] == pytest.approx(10.0)
 
 
 def test_asyncio_run_is_used_for_async_path(monkeypatch: pytest.MonkeyPatch) -> None:

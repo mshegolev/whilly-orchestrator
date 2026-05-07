@@ -87,6 +87,7 @@ from whilly.cli.plan import _select_plan_with_tasks
 from whilly.config import WhillyConfig
 from whilly.core.models import Task, WorkerId
 from whilly.core.notifications import NotificationPort, RunCompletedEvent
+from whilly.pipeline.verification import VerificationCommandSpec, run_verification_commands
 from whilly.sinks.post_complete_pr_hook import (
     is_auto_open_pr_enabled,
     run_post_complete_pr_hook,
@@ -129,6 +130,8 @@ INSERT INTO workers (worker_id, hostname, token_hash)
 VALUES ($1, $2, $3)
 ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat = NOW()
 """
+
+_VERIFICATION_ENV_ALLOWLIST: Final[tuple[str, ...]] = ("PATH", "HOME", "PYTHONPATH", "VIRTUAL_ENV")
 
 
 def build_run_parser() -> argparse.ArgumentParser:
@@ -185,7 +188,46 @@ def build_run_parser() -> argparse.ArgumentParser:
             "workers on the same host don't collide on the workers PK."
         ),
     )
+    parser.add_argument(
+        "--verify-command",
+        dest="verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run a required verification command after an agent reports completion; "
+            "repeatable. A non-zero exit marks the task FAILED."
+        ),
+    )
+    parser.add_argument(
+        "--optional-verify-command",
+        dest="optional_verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run an optional verification command after completion; repeatable. "
+            "Failures are recorded as warnings and do not block DONE."
+        ),
+    )
+    parser.add_argument(
+        "--verify-timeout",
+        type=float,
+        default=600.0,
+        help="Timeout in seconds for each verification command (default: 600).",
+    )
     return parser
+
+
+def _verification_command_arg(value: str) -> str:
+    """Validate a ``NAME=COMMAND`` verification flag while preserving its string value."""
+
+    name, sep, command = value.partition("=")
+    if not sep or not name.strip() or not command.strip():
+        raise argparse.ArgumentTypeError("expected NAME=COMMAND")
+    return value
 
 
 def run_run_command(
@@ -251,6 +293,9 @@ def run_run_command(
                 idle_wait=args.idle_wait,
                 heartbeat_interval=args.heartbeat_interval,
                 install_signal_handlers=install_signal_handlers,
+                verify_commands=args.verify_commands,
+                optional_verify_commands=args.optional_verify_commands,
+                verify_timeout=args.verify_timeout,
             )
         )
     except _PlanNotFoundError as exc:
@@ -337,6 +382,9 @@ async def _async_run(
     idle_wait: float | None,
     heartbeat_interval: float | None,
     install_signal_handlers: bool = True,
+    verify_commands: Sequence[str] = (),
+    optional_verify_commands: Sequence[str] = (),
+    verify_timeout: float = 600.0,
 ) -> WorkerStats:
     """Open the pool, register the worker, fetch the plan, run the loop.
 
@@ -434,6 +482,21 @@ async def _async_run(
                     worktree_path=task_workspaces.get(task.id, Path.cwd()),
                 )
 
+        verification_specs = _build_verification_specs(
+            required=verify_commands,
+            optional=optional_verify_commands,
+        )
+        verification_runner = None
+        if verification_specs:
+
+            async def verification_runner(task: Task):
+                return await run_verification_commands(
+                    verification_specs,
+                    cwd=task_workspaces.get(task.id, Path.cwd()),
+                    timeout_s=verify_timeout,
+                    env_allowlist=_VERIFICATION_ENV_ALLOWLIST,
+                )
+
         return await run_worker(
             repo,
             workspace_runner,
@@ -444,6 +507,27 @@ async def _async_run(
             max_iterations=max_iterations,
             install_signal_handlers=install_signal_handlers,
             post_complete_hook=post_complete_hook,
+            verification_runner=verification_runner,
         )
     finally:
         await close_pool(pool)
+
+
+def _build_verification_specs(
+    *,
+    required: Sequence[str],
+    optional: Sequence[str],
+) -> tuple[VerificationCommandSpec, ...]:
+    specs: list[VerificationCommandSpec] = []
+    for raw in required:
+        name, command = _split_verification_command(raw)
+        specs.append(VerificationCommandSpec(name=name, command=command, required=True))
+    for raw in optional:
+        name, command = _split_verification_command(raw)
+        specs.append(VerificationCommandSpec(name=name, command=command, required=False))
+    return tuple(specs)
+
+
+def _split_verification_command(raw: str) -> tuple[str, str]:
+    name, _sep, command = raw.partition("=")
+    return name.strip(), command.strip()

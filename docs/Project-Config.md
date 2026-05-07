@@ -32,6 +32,21 @@ python3 -m whilly project-config plan examples/project-config-etl.toml --out out
 roles and dependencies, and checks the generated plan for cycles. `plan` writes
 canonical Whilly JSON that can be imported or run by the normal v4 worker flow.
 
+When a generated task reaches the worker, configured project-step metadata is
+recorded as audit events (`pipeline.stage.started`, `pipeline.stage.succeeded`,
+or `pipeline.stage.failed`) without adding new task statuses. Required
+verification can be enforced for a run with repeatable `whilly run` flags:
+
+```bash
+python3 -m whilly run --plan "$PLAN_ID" \
+  --verify-command "unit=python3 -m pytest -q tests/unit" \
+  --optional-verify-command "lint=ruff check whilly tests"
+```
+
+Required verification failures mark the task `FAILED` with
+`reason=verification_failed`; optional failures record `verification.warning`
+and leave the normal terminal path intact.
+
 ## Project Types
 
 - `python_backend`: decomposes a feature, implements code, generates tests,

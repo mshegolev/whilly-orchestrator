@@ -129,6 +129,20 @@ from whilly.llm_ops import (
     session_event_payload,
     start_llm_session,
 )
+from whilly.pipeline.events import (
+    PipelineTaskEvent,
+    make_stage_failed_event,
+    make_stage_started_event,
+    make_stage_succeeded_event,
+    stage_context_from_task,
+)
+from whilly.pipeline.human_review import build_human_review_checkpoint, make_human_review_required_event
+from whilly.pipeline.verification import (
+    VERIFICATION_FAILED_EVENT,
+    VerificationRunOutcome,
+    make_verification_result_event,
+    make_verification_started_event,
+)
 from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
 log = logging.getLogger(__name__)
@@ -153,6 +167,8 @@ _FAIL_REASON_OUTPUT_CAP: Final[int] = 500
 # accept the same ``(task, prompt) -> AgentResult`` shape, so production
 # callers can pass :func:`whilly.adapters.runner.run_task` to either.
 RemoteRunnerCallable = Callable[[Task, str], Awaitable[AgentResult]]
+
+RemoteVerificationRunnerCallable = Callable[[Task], Awaitable[VerificationRunOutcome]]
 
 # Reason string written into the RELEASE event payload when the worker
 # releases an in-flight task because of SIGTERM / SIGINT (TASK-022b3).
@@ -270,6 +286,53 @@ async def _record_llm_event(
         )
 
 
+async def _record_pipeline_event(
+    client: RemoteWorkerClient,
+    worker_id: WorkerId,
+    event: PipelineTaskEvent | None,
+) -> None:
+    """Best-effort remote diagnostic event append for pipeline runtime metadata."""
+
+    if event is None:
+        return
+    recorder = getattr(client, "record_event", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(
+            event.task_id,
+            worker_id,
+            event.event_type,
+            payload=event.payload,
+            detail=event.detail,
+        )
+    except Exception:  # noqa: BLE001 - observability must not fail task execution
+        log.warning(
+            "remote pipeline event append failed: task=%s event_type=%s",
+            event.task_id,
+            event.event_type,
+            exc_info=True,
+        )
+
+
+def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, object]:
+    """Compact fail detail for required verification failures."""
+
+    failed_results = [
+        {
+            "name": result.name,
+            "command": result.command,
+            "returncode": result.returncode,
+            "timed_out": result.timed_out,
+            "blocked": result.blocked,
+            "pattern_matched": result.pattern_matched,
+        }
+        for result in outcome.results
+        if result.required and not result.succeeded
+    ]
+    return {"reason": "verification_failed", "failed_results": failed_results}
+
+
 async def _await_runner_or_stop(
     runner_coro: Awaitable[AgentResult],
     stop: asyncio.Event,
@@ -322,6 +385,40 @@ async def _await_runner_or_stop(
     return runner_task.result(), False
 
 
+async def _await_verification_or_stop(
+    verification_coro: Awaitable[VerificationRunOutcome],
+    stop: asyncio.Event,
+) -> tuple[VerificationRunOutcome | None, bool]:
+    """Race verification against shutdown, mirroring the runner path."""
+
+    verification_task: asyncio.Task[VerificationRunOutcome] = asyncio.ensure_future(verification_coro)
+    stop_task: asyncio.Task[bool] = asyncio.ensure_future(stop.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {verification_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        verification_task.cancel()
+        stop_task.cancel()
+        raise
+
+    if stop_task in done:
+        verification_task.cancel()
+        try:
+            await verification_task
+        except (asyncio.CancelledError, Exception) as exc:
+            log.debug("remote verification cancelled during shutdown: %r", exc)
+        return None, True
+
+    stop_task.cancel()
+    try:
+        await stop_task
+    except asyncio.CancelledError:
+        pass
+    return verification_task.result(), False
+
+
 async def run_remote_worker(
     client: RemoteWorkerClient,
     runner: RemoteRunnerCallable,
@@ -331,6 +428,7 @@ async def run_remote_worker(
     max_iterations: int | None = None,
     max_processed: int | None = None,
     stop: asyncio.Event | None = None,
+    verification_runner: RemoteVerificationRunnerCallable | None = None,
 ) -> RemoteWorkerStats:
     """Run the remote worker loop against ``plan.id`` for ``worker_id``.
 
@@ -432,10 +530,29 @@ async def run_remote_worker(
             )
             continue
 
+        stage_context = stage_context_from_task(claimed, plan)
+        await _record_pipeline_event(client, worker_id, make_stage_started_event(stage_context))
+        checkpoint = build_human_review_checkpoint(
+            task=claimed,
+            stage={"id": stage_context.stage_id} if stage_context is not None else None,
+            plan_id=plan.id,
+        )
+        if checkpoint is not None:
+            await _record_pipeline_event(client, worker_id, make_human_review_required_event(checkpoint))
+
         try:
             prompt = build_task_prompt(claimed, plan)
         except PromptInjectionBlocked as exc:
             try:
+                await _record_pipeline_event(
+                    client,
+                    worker_id,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=PROMPT_INJECTION_FAIL_REASON,
+                        detail=exc.event_payload,
+                    ),
+                )
                 await client.fail(
                     claimed.id,
                     worker_id,
@@ -464,13 +581,19 @@ async def run_remote_worker(
 
         shell_scan = scan_task_command_surface(claimed)
         if shell_scan.blocked:
+            detail = shell_scan.event_payload(task_id=claimed.id, plan_id=plan.id)
             try:
+                await _record_pipeline_event(
+                    client,
+                    worker_id,
+                    make_stage_failed_event(stage_context, reason=SHELL_COMMAND_FAIL_REASON, detail=detail),
+                )
                 await client.fail(
                     claimed.id,
                     worker_id,
                     claimed.version,
                     SHELL_COMMAND_FAIL_REASON,
-                    detail=shell_scan.event_payload(task_id=claimed.id, plan_id=plan.id),
+                    detail=detail,
                 )
             except VersionConflictError as conflict:
                 log.warning(
@@ -612,6 +735,143 @@ async def run_remote_worker(
                 log.warning("remote llm ops finish record failed: task=%s", claimed.id, exc_info=True)
 
         if result.is_complete and result.exit_code == 0:
+            if verification_runner is not None:
+                try:
+                    await _record_pipeline_event(
+                        client,
+                        worker_id,
+                        make_verification_started_event(claimed.id, plan_id=plan.id),
+                    )
+                    if stop is None:
+                        verification_outcome = await verification_runner(claimed)
+                        shutdown_during_verification = False
+                    else:
+                        verification_outcome, shutdown_during_verification = await _await_verification_or_stop(
+                            verification_runner(claimed),
+                            stop,
+                        )
+                except Exception as exc:  # noqa: BLE001 - verification failure owns task state
+                    detail = {"error": f"{type(exc).__name__}: {exc}"}
+                    await _record_pipeline_event(
+                        client,
+                        worker_id,
+                        PipelineTaskEvent(
+                            task_id=claimed.id,
+                            event_type=VERIFICATION_FAILED_EVENT,
+                            payload={
+                                "task_id": claimed.id,
+                                "plan_id": plan.id,
+                                "reason": "verification_runner_exception",
+                            },
+                            detail=detail,
+                        ),
+                    )
+                    await _record_pipeline_event(
+                        client,
+                        worker_id,
+                        make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
+                    )
+                    try:
+                        await client.fail(claimed.id, worker_id, claimed.version, "verification_failed", detail=detail)
+                    except VersionConflictError as conflict:
+                        log.warning(
+                            "remote verification fail lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+                            claimed.id,
+                            claimed.version,
+                            conflict.actual_version,
+                            conflict.actual_status.value if conflict.actual_status else None,
+                        )
+                        continue
+                    failed += 1
+                    log.info("remote worker=%s task=%s → FAILED (verification_failed)", worker_id, claimed.id)
+                    if max_processed is not None and (completed + failed) >= max_processed:
+                        break
+                    continue
+
+                if shutdown_during_verification:
+                    log.info(
+                        "remote worker=%s task=%s: shutdown mid-verification, releasing claim",
+                        worker_id,
+                        claimed.id,
+                    )
+                    try:
+                        await client.release(
+                            claimed.id,
+                            worker_id,
+                            claimed.version,
+                            SHUTDOWN_RELEASE_REASON,
+                        )
+                        released_on_shutdown += 1
+                    except VersionConflictError as exc:
+                        if exc.actual_status == TaskStatus.PENDING:
+                            log.warning(
+                                "remote release lost the race: task=%s expected_version=%d actual_version=%s — already PENDING",
+                                claimed.id,
+                                claimed.version,
+                                exc.actual_version,
+                            )
+                        else:
+                            log.warning(
+                                "remote release lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+                                claimed.id,
+                                claimed.version,
+                                exc.actual_version,
+                                exc.actual_status.value if exc.actual_status else None,
+                            )
+                    except HTTPClientError as exc:
+                        log.warning(
+                            "remote release HTTP error during verification shutdown: task=%s worker=%s exc=%s",
+                            claimed.id,
+                            worker_id,
+                            exc,
+                        )
+                    break
+
+                assert verification_outcome is not None
+                for verification_result in verification_outcome.results:
+                    await _record_pipeline_event(
+                        client,
+                        worker_id,
+                        make_verification_result_event(claimed.id, verification_result, plan_id=plan.id),
+                    )
+                if verification_outcome.required_failed:
+                    detail = _verification_failure_detail(verification_outcome)
+                    try:
+                        await _record_pipeline_event(
+                            client,
+                            worker_id,
+                            make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
+                        )
+                        await client.fail(
+                            claimed.id,
+                            worker_id,
+                            claimed.version,
+                            "verification_failed",
+                            detail=detail,
+                        )
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "remote verification fail lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+                            claimed.id,
+                            claimed.version,
+                            exc.actual_version,
+                            exc.actual_status.value if exc.actual_status else None,
+                        )
+                        continue
+                    if llm_session is not None:
+                        notify_slack_task_terminal(llm_session, "FAILED", result, reason="verification_failed")
+                    failed += 1
+                    log.info("remote worker=%s task=%s → FAILED (verification_failed)", worker_id, claimed.id)
+                    if max_processed is not None and (completed + failed) >= max_processed:
+                        log.info(
+                            "remote worker=%s plan=%s: reached max_processed=%d, exiting loop cleanly",
+                            worker_id,
+                            plan.id,
+                            max_processed,
+                        )
+                        break
+                    continue
+
             try:
                 # Forward the agent's parsed ``cost_usd`` so the server-
                 # side ``complete_task`` can update ``plans.spent_usd``
@@ -639,6 +899,7 @@ async def run_remote_worker(
                     exc.actual_status.value if exc.actual_status else None,
                 )
                 continue
+            await _record_pipeline_event(client, worker_id, make_stage_succeeded_event(stage_context))
             if llm_session is not None:
                 notify_slack_task_terminal(llm_session, "DONE", result)
             completed += 1
@@ -646,6 +907,11 @@ async def run_remote_worker(
         else:
             reason = _build_fail_reason(result)
             try:
+                await _record_pipeline_event(
+                    client,
+                    worker_id,
+                    make_stage_failed_event(stage_context, reason=reason),
+                )
                 await client.fail(claimed.id, worker_id, claimed.version, reason)
             except VersionConflictError as exc:
                 # 409 on fail mirrors the complete branch — server SQL
@@ -919,6 +1185,7 @@ async def run_remote_worker_with_heartbeat(
     max_processed: int | None = None,
     install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
+    verification_runner: RemoteVerificationRunnerCallable | None = None,
 ) -> RemoteWorkerStats:
     """Run :func:`run_remote_worker` paired with :func:`run_remote_heartbeat_loop`.
 
@@ -1042,6 +1309,7 @@ async def run_remote_worker_with_heartbeat(
                 max_iterations=max_iterations,
                 max_processed=max_processed,
                 stop=stop,
+                verification_runner=verification_runner,
             )
         finally:
             stop.set()
@@ -1158,6 +1426,7 @@ async def run_remote_worker_with_url_rotation(
     max_processed: int | None = None,
     install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
+    verification_runner: RemoteVerificationRunnerCallable | None = None,
 ) -> RotationStats:
     """Run :func:`run_remote_worker_with_heartbeat` across funnel-URL rotations.
 
@@ -1218,6 +1487,7 @@ async def run_remote_worker_with_url_rotation(
                         max_processed=max_processed,
                         install_signal_handlers=install_signal_handlers,
                         stop=inner_stop,
+                        verification_runner=verification_runner,
                     )
             finally:
                 inner_stop.set()
@@ -1303,6 +1573,7 @@ __all__ = [
     "WORKER_RECONNECT_URL_REASON",
     "RemoteClientFactory",
     "RemoteRunnerCallable",
+    "RemoteVerificationRunnerCallable",
     "RemoteWorkerStats",
     "RotationStats",
     "run_remote_heartbeat_loop",

@@ -33,6 +33,7 @@ actually slept.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from dataclasses import replace
 
@@ -41,8 +42,17 @@ import pytest
 from whilly.adapters.db.repository import VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE, SHELL_COMMAND_FAIL_REASON
-from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus, WorkerId
+from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE, PROMPT_INJECTION_FAIL_REASON
+from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
+from whilly.pipeline.human_review import HUMAN_REVIEW_REQUIRED
+from whilly.pipeline.verification import (
+    VERIFICATION_FAILED_EVENT,
+    VERIFICATION_STARTED_EVENT,
+    VERIFICATION_WARNING_EVENT,
+    VerificationCommandResult,
+    VerificationRunOutcome,
+)
 from whilly.worker import local as worker_local
 from whilly.worker.local import (
     DEFAULT_IDLE_WAIT,
@@ -105,6 +115,7 @@ class FakeRepo:
         self.start_results: list[Task | VersionConflictError] = []
         self.complete_results: list[Task | VersionConflictError] = []
         self.fail_results: list[Task | VersionConflictError] = []
+        self.release_results: list[Task | VersionConflictError] = []
 
         # Recorded calls for assertion. Each entry captures the exact
         # arguments passed so tests can verify version threading.
@@ -112,8 +123,10 @@ class FakeRepo:
         self.start_calls: list[tuple[TaskId, int]] = []
         self.complete_calls: list[tuple[TaskId, int, object]] = []
         self.fail_calls: list[tuple[TaskId, int, str]] = []
+        self.release_calls: list[tuple[TaskId, int, str]] = []
         self.fail_details: list[dict[str, object] | None] = []
         self.fail_prelude_events: list[tuple[str | None, dict[str, object] | None]] = []
+        self.event_calls: list[tuple[TaskId, str, dict[str, object], dict[str, object] | None]] = []
 
     async def claim_task(self, worker_id: WorkerId, plan_id: str) -> Task | None:
         self.claim_calls.append((worker_id, plan_id))
@@ -129,6 +142,25 @@ class FakeRepo:
         if isinstance(result, VersionConflictError):
             raise result
         return result
+
+    async def release_task(self, task_id: TaskId, version: int, reason: str) -> Task:
+        self.release_calls.append((task_id, version, reason))
+        if not self.release_results:
+            raise AssertionError("FakeRepo.release_task called more times than scripted")
+        result = self.release_results.pop(0)
+        if isinstance(result, VersionConflictError):
+            raise result
+        return result
+
+    async def record_task_event(
+        self,
+        task_id: TaskId,
+        event_type: str,
+        payload: dict[str, object] | None = None,
+        *,
+        detail: dict[str, object] | None = None,
+    ) -> None:
+        self.event_calls.append((task_id, event_type, payload or {}, detail))
 
     async def complete_task(
         self,
@@ -306,6 +338,235 @@ async def test_versions_thread_through_state_transitions(fake_sleep: list[float]
     # start receives the post-claim version (7); complete receives the post-start version (8).
     assert repo.start_calls == [("T-9", 7)]
     assert repo.complete_calls == [("T-9", 8, 0.0)]
+
+
+async def test_configured_pipeline_task_records_stage_and_human_review_events(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Plan",
+        origin=PlanOrigin(
+            system="project_config",
+            ref="docs-profile",
+            decomposition_mode="configured:documentation",
+        ),
+    )
+
+    claimed = _make_task("CFG-001-REVIEW", status=TaskStatus.CLAIMED, version=1)
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        prd_requirement="Configured documentation pipeline step: release_review",
+        acceptance_criteria=("Human review approval is explicitly recorded before completion.",),
+    )
+    done = replace(running, status=TaskStatus.DONE, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.complete_results.append(done)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_local_worker(repo, runner, plan, WORKER_ID, idle_wait=0, max_iterations=1)  # type: ignore[arg-type]
+
+    assert stats.completed == 1
+    event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
+    assert PIPELINE_STAGE_STARTED in event_types
+    assert HUMAN_REVIEW_REQUIRED in event_types
+    assert PIPELINE_STAGE_SUCCEEDED in event_types
+    stage_started = next(
+        payload for _task_id, event_type, payload, _detail in repo.event_calls if event_type == PIPELINE_STAGE_STARTED
+    )
+    assert stage_started == {
+        "task_id": "CFG-001-REVIEW",
+        "plan_id": PLAN_ID,
+        "stage_id": "release_review",
+        "project_type": "documentation",
+        "profile_id": "docs-profile",
+    }
+    review_required = next(
+        payload for _task_id, event_type, payload, _detail in repo.event_calls if event_type == HUMAN_REVIEW_REQUIRED
+    )
+    assert review_required["reason"] == "task_review_text"
+    assert review_required["source"] == "task_text"
+
+
+async def test_required_verification_failure_blocks_complete_and_records_events(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Plan",
+        origin=PlanOrigin(system="project_config", ref="qa-profile", decomposition_mode="configured:qa"),
+    )
+
+    claimed = _make_task("CFG-002-VERIFY", status=TaskStatus.CLAIMED, version=1)
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        prd_requirement="Configured qa pipeline step: tests",
+    )
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "CFG-002-VERIFY"
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="unit",
+                    command="pytest -q tests/unit",
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=1,
+                    stdout="one failed",
+                    stderr="",
+                    duration_s=0.2,
+                ),
+            )
+        )
+
+    stats = await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert repo.complete_calls == []
+    assert repo.fail_calls == [("CFG-002-VERIFY", 2, "verification_failed")]
+    event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
+    assert VERIFICATION_STARTED_EVENT in event_types
+    assert VERIFICATION_FAILED_EVENT in event_types
+    assert PIPELINE_STAGE_FAILED in event_types
+    verification_failed = next(
+        (payload, detail)
+        for _task_id, event_type, payload, detail in repo.event_calls
+        if event_type == VERIFICATION_FAILED_EVENT
+    )
+    assert verification_failed[0]["name"] == "unit"
+    assert verification_failed[0]["required"] is True
+    assert verification_failed[1] == {"stdout": "one failed", "stderr": ""}
+
+
+async def test_optional_verification_warning_does_not_block_completion(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-optional-verify", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    done = replace(running, status=TaskStatus.DONE, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.complete_results.append(done)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="lint",
+                    command="ruff check whilly tests",
+                    required=False,
+                    succeeded=False,
+                    warning=True,
+                    event_name=VERIFICATION_WARNING_EVENT,
+                    returncode=1,
+                    stdout="",
+                    stderr="lint warning",
+                    duration_s=0.1,
+                ),
+            )
+        )
+
+    stats = await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert stats.completed == 1
+    assert stats.failed == 0
+    assert repo.complete_calls == [("T-optional-verify", 2, 0.0)]
+    assert repo.fail_calls == []
+    event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
+    assert VERIFICATION_STARTED_EVENT in event_types
+    assert VERIFICATION_WARNING_EVENT in event_types
+
+
+async def test_shutdown_during_verification_releases_task(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+    stop = asyncio.Event()
+    verification_started = asyncio.Event()
+    verification_cancelled = asyncio.Event()
+
+    claimed = _make_task("T-verify-shutdown", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    released = replace(running, status=TaskStatus.PENDING, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.release_results.append(released)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        verification_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            verification_cancelled.set()
+            raise
+        raise AssertionError("verification should be cancelled by shutdown")
+
+    worker_task = asyncio.create_task(
+        run_local_worker(  # type: ignore[arg-type]
+            repo,
+            runner,
+            plan,
+            WORKER_ID,
+            idle_wait=0,
+            max_iterations=1,
+            stop=stop,
+            verification_runner=verification_runner,
+        )
+    )
+    await verification_started.wait()
+    stop.set()
+
+    stats = await asyncio.wait_for(worker_task, timeout=1.0)
+
+    assert verification_cancelled.is_set()
+    assert stats.completed == 0
+    assert stats.failed == 0
+    assert stats.released_on_shutdown == 1
+    assert repo.complete_calls == []
+    assert repo.fail_calls == []
+    assert repo.release_calls == [("T-verify-shutdown", 2, "shutdown")]
 
 
 # --------------------------------------------------------------------------- #
