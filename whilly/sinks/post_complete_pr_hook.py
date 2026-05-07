@@ -6,7 +6,9 @@ gated by:
 
 1. ``WHILLY_AUTO_OPEN_PR=1`` in the environment, AND
 2. The plan has a legacy ``github_issue_ref`` or the completed task carries
-   a structured ``repo_target_id``.
+   a structured ``repo_target_id``. Project-config plans are stricter: they
+   must complete an explicit configured ``github_pr`` sink task with a repo
+   target plus human-review or profile-approval evidence.
 
 On success the helper persists one row in the ``pull_requests`` table
 and emits a ``pr.opened`` audit event to both Postgres and the JSONL
@@ -33,6 +35,7 @@ from whilly.adapters.db.repository import (
     PR_OPENED_EVENT_TYPE,
     TaskRepository,
 )
+from whilly.pipeline.sinks import PlanPRContext, should_open_pr_for_completed_task
 from whilly.sinks.github_pr import PRResult, open_pr_for_task
 
 logger = logging.getLogger(__name__)
@@ -75,13 +78,14 @@ async def run_post_complete_pr_hook(
     if not is_auto_open_pr_enabled(env):
         return None
 
-    issue_ref = await repo.get_plan_github_issue_ref(plan_id)
-    task_repo_target_id = getattr(task, "repo_target_id", "") or ""
-    if not issue_ref and not task_repo_target_id:
+    context = await _get_plan_pr_context(repo, plan_id)
+    decision = should_open_pr_for_completed_task(context, task)
+    if not decision.allowed:
         logger.debug(
-            "post_complete_pr_hook: plan=%s has no github_issue_ref or task repo target; skipping (task=%s)",
+            "post_complete_pr_hook: skipping plan=%s task=%s reason=%s",
             plan_id,
             getattr(task, "id", "<unknown>"),
+            decision.reason,
         )
         return None
 
@@ -113,6 +117,14 @@ async def run_post_complete_pr_hook(
 
     await _record_failure(repo, plan_id=plan_id, task_id=task_id, result=result)
     return result
+
+
+async def _get_plan_pr_context(repo: TaskRepository, plan_id: str) -> PlanPRContext:
+    getter = getattr(repo, "get_plan_pr_context", None)
+    if getter is not None:
+        return await getter(plan_id)
+    issue_ref = await repo.get_plan_github_issue_ref(plan_id)
+    return PlanPRContext(github_issue_ref=issue_ref)
 
 
 async def _record_success(

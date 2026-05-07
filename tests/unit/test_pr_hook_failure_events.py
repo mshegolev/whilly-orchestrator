@@ -33,7 +33,9 @@ from whilly.adapters.db.repository import (
     PR_OPEN_FAILED_EVENT_TYPE,
     PR_OPENED_EVENT_TYPE,
 )
+from whilly.pipeline.sinks import CONFIGURED_GITHUB_PR_SINK_REQUIREMENT_PREFIX, PROFILE_APPROVED_PR_SINK_MARKER
 from whilly.sinks import github_pr as gp
+from whilly.sinks.github_pr import PRResult
 from whilly.sinks.github_pr import open_pr_for_task
 from whilly.sinks.post_complete_pr_hook import run_post_complete_pr_hook
 from whilly.task_manager import Task
@@ -47,11 +49,24 @@ class _FakeRepo:
     """In-memory stand-in for ``TaskRepository`` covering the hook's surface."""
 
     github_issue_ref: str | None = ISSUE_REF
+    origin_system: str = ""
+    origin_ref: str = ""
+    decomposition_mode: str = ""
     pull_requests: list[dict[str, Any]] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
 
     async def get_plan_github_issue_ref(self, plan_id: str) -> str | None:  # noqa: ARG002
         return self.github_issue_ref
+
+    async def get_plan_pr_context(self, plan_id: str):  # noqa: ANN201, ARG002
+        from whilly.pipeline.sinks import PlanPRContext
+
+        return PlanPRContext(
+            github_issue_ref=self.github_issue_ref,
+            origin_system=self.origin_system,
+            origin_ref=self.origin_ref,
+            decomposition_mode=self.decomposition_mode,
+        )
 
     async def insert_pull_request(self, **kwargs: Any) -> int:
         self.pull_requests.append(dict(kwargs))
@@ -76,20 +91,41 @@ class _FakeRepo:
         return len(self.events)
 
 
-def _make_task(*, repo_target_id: str = "") -> Task:
+def _make_task(
+    *,
+    repo_target_id: str = "",
+    prd_requirement: str = "https://github.com/foo/bar/issues/42",
+    acceptance_criteria: list[str] | None = None,
+    test_steps: list[str] | None = None,
+    description: str = "Add /health endpoint returning ok",
+) -> Task:
     return Task(
         id="T-PR-HOOK-FAIL-1",
         phase="GH-Issues",
         category="github-issue",
         priority="medium",
-        description="Add /health endpoint returning ok",
+        description=description,
         status="done",
         dependencies=[],
         key_files=[],
-        acceptance_criteria=["GET /health returns 200"],
-        test_steps=[],
-        prd_requirement="https://github.com/foo/bar/issues/42",
+        acceptance_criteria=acceptance_criteria or ["GET /health returns 200"],
+        test_steps=test_steps or [],
+        prd_requirement=prd_requirement,
         repo_target_id=repo_target_id,
+    )
+
+
+def _make_configured_pr_sink_task(
+    *,
+    repo_target_id: str = "github:foo/bar",
+    acceptance_criteria: list[str] | None = None,
+) -> Task:
+    return _make_task(
+        repo_target_id=repo_target_id,
+        prd_requirement=f"{CONFIGURED_GITHUB_PR_SINK_REQUIREMENT_PREFIX} publish-pr",
+        acceptance_criteria=acceptance_criteria or ["Human approval is recorded before opening the pull request."],
+        test_steps=["Verify PR review feedback is handled by manual one-shot polling."],
+        description="Configured sink: github_pr",
     )
 
 
@@ -332,6 +368,128 @@ def test_hook_uses_task_repo_target_when_plan_has_no_issue_ref(
     assert repo.pull_requests[0]["repo_target_id"] == "github:foo/bar"
     success_events = [e for e in repo.events if e["event_type"] == PR_OPENED_EVENT_TYPE]
     assert success_events[0]["payload"]["repo_target_id"] == "github:foo/bar"
+
+
+# ---------------------------------------------------------------------------
+# Project-config plans → only explicit configured PR sink tasks may open PRs
+# ---------------------------------------------------------------------------
+
+
+def test_project_config_regular_task_does_not_open_pr_even_with_repo_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHILLY_AUTO_OPEN_PR", "1")
+    repo = _FakeRepo(github_issue_ref="foo/bar/42", origin_system="project_config")
+    calls: list[dict[str, Any]] = []
+
+    def opener(**kwargs: Any) -> PRResult:
+        calls.append(dict(kwargs))
+        return PRResult(ok=True, pr_url="https://github.com/foo/bar/pull/77", branch="whilly/T-PR-HOOK-FAIL-1")
+
+    result = asyncio.run(
+        run_post_complete_pr_hook(
+            repo,
+            plan_id=PLAN_ID,
+            task=_make_task(
+                repo_target_id="github:foo/bar",
+                prd_requirement="Configured python_backend pipeline step: implement",
+            ),
+            worktree_path=tmp_path,
+            opener=opener,
+        )
+    )
+
+    assert result is None
+    assert calls == []
+    assert repo.events == []
+    assert repo.pull_requests == []
+
+
+def test_project_config_github_pr_sink_opens_with_repo_target_and_review_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHILLY_AUTO_OPEN_PR", "1")
+    repo = _FakeRepo(github_issue_ref=None, origin_system="project_config")
+    calls: list[dict[str, Any]] = []
+
+    def opener(**kwargs: Any) -> PRResult:
+        calls.append(dict(kwargs))
+        return PRResult(ok=True, pr_url="https://github.com/foo/bar/pull/77", branch="whilly/T-PR-HOOK-FAIL-1")
+
+    result = asyncio.run(
+        run_post_complete_pr_hook(
+            repo,
+            plan_id=PLAN_ID,
+            task=_make_configured_pr_sink_task(),
+            worktree_path=tmp_path,
+            opener=opener,
+        )
+    )
+
+    assert result is not None and result.ok
+    assert calls and calls[0]["task"].id == "T-PR-HOOK-FAIL-1"
+    assert repo.pull_requests[0]["repo_target_id"] == "github:foo/bar"
+    success_events = [e for e in repo.events if e["event_type"] == PR_OPENED_EVENT_TYPE]
+    assert success_events[0]["payload"]["repo_target_id"] == "github:foo/bar"
+
+
+def test_project_config_github_pr_sink_skips_without_repo_target_even_with_issue_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHILLY_AUTO_OPEN_PR", "1")
+    repo = _FakeRepo(github_issue_ref="foo/bar/42", origin_system="project_config")
+    calls: list[dict[str, Any]] = []
+
+    def opener(**kwargs: Any) -> PRResult:
+        calls.append(dict(kwargs))
+        return PRResult(ok=True, pr_url="https://github.com/foo/bar/pull/77", branch="whilly/T-PR-HOOK-FAIL-1")
+
+    result = asyncio.run(
+        run_post_complete_pr_hook(
+            repo,
+            plan_id=PLAN_ID,
+            task=_make_configured_pr_sink_task(repo_target_id=""),
+            worktree_path=tmp_path,
+            opener=opener,
+        )
+    )
+
+    assert result is None
+    assert calls == []
+    assert repo.events == []
+    assert repo.pull_requests == []
+
+
+def test_project_config_profile_approved_github_pr_sink_opens_without_human_cue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHILLY_AUTO_OPEN_PR", "1")
+    repo = _FakeRepo(github_issue_ref=None, origin_system="project_config")
+
+    def opener(**_kwargs: Any) -> PRResult:
+        return PRResult(
+            ok=True,
+            pr_url="https://github.com/foo/bar/pull/88",
+            branch="whilly/T-PR-HOOK-FAIL-1",
+            pr_number=88,
+        )
+
+    result = asyncio.run(
+        run_post_complete_pr_hook(
+            repo,
+            plan_id=PLAN_ID,
+            task=_make_configured_pr_sink_task(acceptance_criteria=[PROFILE_APPROVED_PR_SINK_MARKER]),
+            worktree_path=tmp_path,
+            opener=opener,
+        )
+    )
+
+    assert result is not None and result.ok
+    assert repo.pull_requests[0]["pr_number"] == 88
 
 
 # ---------------------------------------------------------------------------

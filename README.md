@@ -32,8 +32,10 @@ traceability, reviewability, safety, and operational control.
 > metrics, health endpoints, worker heartbeat, repo-target metadata, and project
 > config plan generation. Configured verification commands can block `DONE`,
 > project-config tasks emit pipeline stage audit events, and human-review
-> checkpoint event models exist. Approval enforcement and configured sinks are
-> still being aligned with the target documentation in
+> checkpoint event models exist. GitHub PR sinks can be represented as explicit
+> project-config sink stages, but still require `WHILLY_AUTO_OPEN_PR=1` plus a
+> human-review or profile-approval guard. Remaining configured sinks are still
+> being aligned with the target documentation in
 > [`docs/target/`](docs/target/). Legacy v3.x remains historical at tag
 > [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final).
 
