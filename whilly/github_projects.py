@@ -82,10 +82,11 @@ class GitHubProjectsConverter:
     Supports both batch conversion and incremental status-oriented workflows.
     """
 
-    def __init__(self, config: WhillyConfig = None, sync_config: SyncConfig = None):
+    def __init__(self, config: WhillyConfig = None, sync_config: SyncConfig = None, check_gh_cli: bool = True):
         self.config = config or WhillyConfig.from_env()
         self.sync_config = sync_config or SyncConfig()
-        self._check_gh_cli()
+        if check_gh_cli:
+            self._check_gh_cli()
         self._project_info: Optional[Dict[str, Any]] = None
         self._sync_state: Dict[str, Any] = self._load_sync_state()
 
@@ -500,8 +501,15 @@ class GitHubProjectsConverter:
             True if sync was successful
         """
         if not self._project_info:
-            print("❌ No project info available. Run sync_todo_items first.")
-            return False
+            project_url = self._sync_state.get("project_url")
+            if not project_url:
+                print("❌ No project info available. Run sync_todo_items first.")
+                return False
+            try:
+                self._project_info = self.parse_project_url(project_url)
+            except ValueError as e:
+                print(f"❌ Invalid project URL in sync state: {e}")
+                return False
 
         # Find the project item ID for this issue
         project_item_id = None
@@ -523,11 +531,137 @@ class GitHubProjectsConverter:
 
     def _update_project_item_status(self, item_id: str, new_status: str) -> bool:
         """Update project item status using GraphQL mutation."""
-        # This would require the field ID for the Status field
-        # For now, we'll implement this as a placeholder
-        print(f"🔄 Would update project item {item_id} to status: {new_status}")
-        print("⚠️  Project item status updates not yet implemented (requires field IDs)")
+        if not self._project_info:
+            raise RuntimeError("Project info is not loaded. Run sync_todo_items first.")
+
+        project_id, status_field_id, options = self._fetch_status_field_metadata(self._project_info)
+        option_id = options.get(new_status)
+        if option_id is None:
+            for name, candidate_id in options.items():
+                if name.casefold() == new_status.casefold():
+                    option_id = candidate_id
+                    break
+        if option_id is None:
+            available = ", ".join(sorted(options)) or "<none>"
+            raise RuntimeError(f"Project Status option {new_status!r} not found. Available: {available}")
+
+        mutation = """
+        mutation(
+          $projectId: ID!,
+          $itemId: ID!,
+          $fieldId: ID!,
+          $optionId: String!
+        ) {
+          updateProjectV2ItemFieldValue(input: {
+            projectId: $projectId,
+            itemId: $itemId,
+            fieldId: $fieldId,
+            value: { singleSelectOptionId: $optionId }
+          }) {
+            projectV2Item {
+              id
+            }
+          }
+        }
+        """
+
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={mutation}",
+            "-F",
+            f"projectId={project_id}",
+            "-F",
+            f"itemId={item_id}",
+            "-F",
+            f"fieldId={status_field_id}",
+            "-F",
+            f"optionId={option_id}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=_gh_env())
+        try:
+            data = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON response from GitHub status update: {exc}") from exc
+        if data.get("errors"):
+            raise RuntimeError(f"GitHub status update failed: {data['errors']}")
+
+        print(f"✅ Updated project item {item_id} to status: {new_status}")
         return True
+
+    def _fetch_status_field_metadata(self, project_info: Dict[str, Any]) -> tuple[str, str, Dict[str, str]]:
+        """Fetch Project v2 id, Status field id, and Status option ids."""
+        owner_root = self._project_owner_root(project_info)
+        query = f"""
+        query($owner: String!, $number: Int!) {{
+          {owner_root}(login: $owner) {{
+            projectV2(number: $number) {{
+              id
+              fields(first: 50) {{
+                nodes {{
+                  ... on ProjectV2SingleSelectField {{
+                    id
+                    name
+                    options {{
+                      id
+                      name
+                    }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}
+        """
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"query={query}",
+            "-F",
+            f"owner={project_info['owner']}",
+            "-F",
+            f"number={project_info['project_number']}",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True, env=_gh_env())
+        try:
+            data = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON response from GitHub Project fields: {exc}") from exc
+        if data.get("errors"):
+            raise RuntimeError(f"GitHub Project fields query failed: {data['errors']}")
+
+        project = data.get("data", {}).get(owner_root, {}).get("projectV2")
+        if not project:
+            raise RuntimeError(f"GitHub Project {project_info['owner']}/{project_info['project_number']} was not found")
+        project_id = project.get("id")
+        if not project_id:
+            raise RuntimeError("GitHub Project response did not include project id")
+
+        for field_data in project.get("fields", {}).get("nodes", []):
+            if (field_data or {}).get("name") != "Status":
+                continue
+            field_id = field_data.get("id")
+            options = {
+                option["name"]: option["id"]
+                for option in field_data.get("options", [])
+                if option.get("name") and option.get("id")
+            }
+            if not field_id:
+                raise RuntimeError("GitHub Project Status field response did not include field id")
+            return project_id, field_id, options
+
+        raise RuntimeError("GitHub Project does not have a single-select Status field")
+
+    @staticmethod
+    def _project_owner_root(project_info: Dict[str, Any]) -> str:
+        """Return the GraphQL owner field for a parsed Project URL."""
+        if project_info.get("type") == "org":
+            return "organization"
+        return "user"
 
     def watch_project(
         self, project_url: str, repo_owner: str, repo_name: str, output_file: str = "tasks-from-project.json"
@@ -566,11 +700,13 @@ class GitHubProjectsConverter:
         """Get current sync status and statistics."""
         state = self._sync_state
         synced_items = state.get("synced_items", {})
+        repo_owner = state.get("repo_owner") or ""
+        repo_name = state.get("repo_name") or ""
 
         return {
             "last_sync": state.get("last_sync"),
             "project_url": state.get("project_url"),
-            "repo": f"{state.get('repo_owner', '')}/{state.get('repo_name', '')}".strip("/"),
+            "repo": f"{repo_owner}/{repo_name}".strip("/"),
             "total_synced_items": len(synced_items),
             "sync_state_file": self.sync_config.sync_state_file,
             "target_statuses": list(self.sync_config.target_statuses),
