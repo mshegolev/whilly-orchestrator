@@ -104,6 +104,20 @@ from whilly.llm_ops import (
     session_event_payload,
     start_llm_session,
 )
+from whilly.pipeline.events import (
+    PipelineTaskEvent,
+    make_stage_failed_event,
+    make_stage_started_event,
+    make_stage_succeeded_event,
+    stage_context_from_task,
+)
+from whilly.pipeline.human_review import build_human_review_checkpoint, make_human_review_required_event
+from whilly.pipeline.verification import (
+    VERIFICATION_FAILED_EVENT,
+    VerificationRunOutcome,
+    make_verification_result_event,
+    make_verification_started_event,
+)
 from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
 log = logging.getLogger(__name__)
@@ -125,6 +139,8 @@ _FAIL_REASON_OUTPUT_CAP: Final[int] = 500
 # backoff_schedule fall back to defaults — passing ``run_task`` directly
 # satisfies the alias without an adapter wrapper.
 RunnerCallable = Callable[[Task, str], Awaitable[AgentResult]]
+
+VerificationRunnerCallable = Callable[[Task], Awaitable[VerificationRunOutcome]]
 
 
 @dataclass(frozen=True)
@@ -214,6 +230,43 @@ async def _record_llm_event(
         )
 
 
+async def _record_pipeline_event(repo: TaskRepository, event: PipelineTaskEvent | None) -> None:
+    """Best-effort Postgres event append for pipeline runtime metadata."""
+
+    if event is None:
+        return
+    recorder = getattr(repo, "record_task_event", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(*event.record_task_event_args(), **event.record_task_event_kwargs())
+    except Exception:  # noqa: BLE001 - observability must not fail task execution
+        log.warning(
+            "pipeline event append failed: task=%s event_type=%s",
+            event.task_id,
+            event.event_type,
+            exc_info=True,
+        )
+
+
+def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, object]:
+    """Compact FAIL detail for required verification failures."""
+
+    failed_results = [
+        {
+            "name": result.name,
+            "command": result.command,
+            "returncode": result.returncode,
+            "timed_out": result.timed_out,
+            "blocked": result.blocked,
+            "pattern_matched": result.pattern_matched,
+        }
+        for result in outcome.results
+        if result.required and not result.succeeded
+    ]
+    return {"reason": "verification_failed", "failed_results": failed_results}
+
+
 # Reason string written into the RELEASE event payload when the worker
 # releases an in-flight task because of SIGTERM / SIGINT (TASK-019b2). Distinct
 # from ``"visibility_timeout"`` (the sweep) so dashboards / post-mortems can
@@ -291,6 +344,40 @@ async def _await_runner_or_stop(
     return runner_task.result(), False
 
 
+async def _await_verification_or_stop(
+    verification_coro: Awaitable[VerificationRunOutcome],
+    stop: asyncio.Event,
+) -> tuple[VerificationRunOutcome | None, bool]:
+    """Race verification against shutdown, mirroring the runner path."""
+
+    verification_task: asyncio.Task[VerificationRunOutcome] = asyncio.ensure_future(verification_coro)
+    stop_task: asyncio.Task[bool] = asyncio.ensure_future(stop.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {verification_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        verification_task.cancel()
+        stop_task.cancel()
+        raise
+
+    if stop_task in done:
+        verification_task.cancel()
+        try:
+            await verification_task
+        except (asyncio.CancelledError, Exception) as exc:
+            log.debug("verification cancelled during shutdown: %r", exc)
+        return None, True
+
+    stop_task.cancel()
+    try:
+        await stop_task
+    except asyncio.CancelledError:
+        pass
+    return verification_task.result(), False
+
+
 async def run_local_worker(
     repo: TaskRepository,
     runner: RunnerCallable,
@@ -301,6 +388,7 @@ async def run_local_worker(
     max_iterations: int | None = None,
     stop: asyncio.Event | None = None,
     post_complete_hook: Callable[[Task], Awaitable[None]] | None = None,
+    verification_runner: VerificationRunnerCallable | None = None,
 ) -> WorkerStats:
     """Run the local worker loop against ``plan.id`` for ``worker_id``.
 
@@ -401,10 +489,28 @@ async def run_local_worker(
             )
             continue
 
+        stage_context = stage_context_from_task(running, plan)
+        await _record_pipeline_event(repo, make_stage_started_event(stage_context))
+        checkpoint = build_human_review_checkpoint(
+            task=running,
+            stage={"id": stage_context.stage_id} if stage_context is not None else None,
+            plan_id=plan.id,
+        )
+        if checkpoint is not None:
+            await _record_pipeline_event(repo, make_human_review_required_event(checkpoint))
+
         try:
             prompt = build_task_prompt(running, plan)
         except PromptInjectionBlocked as exc:
             try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=PROMPT_INJECTION_FAIL_REASON,
+                        detail=exc.event_payload,
+                    ),
+                )
                 await repo.fail_task(
                     running.id,
                     running.version,
@@ -435,6 +541,14 @@ async def run_local_worker(
         if shell_scan.blocked:
             payload = shell_scan.event_payload(task_id=running.id, plan_id=plan.id)
             try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=SHELL_COMMAND_FAIL_REASON,
+                        detail=payload,
+                    ),
+                )
                 await repo.fail_task(
                     running.id,
                     running.version,
@@ -551,6 +665,99 @@ async def run_local_worker(
                 log.warning("llm ops finish record failed: task=%s", running.id, exc_info=True)
 
         if result.is_complete and result.exit_code == 0:
+            if verification_runner is not None:
+                try:
+                    await _record_pipeline_event(
+                        repo,
+                        make_verification_started_event(running.id, plan_id=plan.id),
+                    )
+                    if stop is None:
+                        verification_outcome = await verification_runner(running)
+                        shutdown_during_verification = False
+                    else:
+                        verification_outcome, shutdown_during_verification = await _await_verification_or_stop(
+                            verification_runner(running),
+                            stop,
+                        )
+                except Exception as exc:  # noqa: BLE001 - verification failure owns task state
+                    detail = {"error": f"{type(exc).__name__}: {exc}"}
+                    await _record_pipeline_event(
+                        repo,
+                        PipelineTaskEvent(
+                            task_id=running.id,
+                            event_type=VERIFICATION_FAILED_EVENT,
+                            payload={
+                                "task_id": running.id,
+                                "plan_id": plan.id,
+                                "reason": "verification_runner_exception",
+                            },
+                            detail=detail,
+                        ),
+                    )
+                    await _record_pipeline_event(
+                        repo,
+                        make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
+                    )
+                    try:
+                        await repo.fail_task(running.id, running.version, "verification_failed", detail=detail)
+                    except VersionConflictError as conflict:
+                        log.warning(
+                            "verification fail_task lost the race: task=%s expected_version=%d actual=%s",
+                            running.id,
+                            running.version,
+                            conflict.actual_version,
+                        )
+                        continue
+                    failed += 1
+                    log.info("worker=%s task=%s → FAILED (verification_failed)", worker_id, running.id)
+                    continue
+
+                if shutdown_during_verification:
+                    log.info(
+                        "worker=%s task=%s: shutdown mid-verification, releasing claim",
+                        worker_id,
+                        running.id,
+                    )
+                    try:
+                        await repo.release_task(running.id, running.version, SHUTDOWN_RELEASE_REASON)
+                        released_on_shutdown += 1
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "release_task lost the race: task=%s expected_version=%d actual=%s — already released",
+                            running.id,
+                            running.version,
+                            exc.actual_version,
+                        )
+                    break
+
+                assert verification_outcome is not None
+                for verification_result in verification_outcome.results:
+                    await _record_pipeline_event(
+                        repo,
+                        make_verification_result_event(running.id, verification_result, plan_id=plan.id),
+                    )
+                if verification_outcome.required_failed:
+                    detail = _verification_failure_detail(verification_outcome)
+                    try:
+                        await _record_pipeline_event(
+                            repo,
+                            make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
+                        )
+                        await repo.fail_task(running.id, running.version, "verification_failed", detail=detail)
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "verification fail_task lost the race: task=%s expected_version=%d actual=%s",
+                            running.id,
+                            running.version,
+                            exc.actual_version,
+                        )
+                        continue
+                    if llm_session is not None:
+                        notify_slack_task_terminal(llm_session, "FAILED", result, reason="verification_failed")
+                    failed += 1
+                    log.info("worker=%s task=%s → FAILED (verification_failed)", worker_id, running.id)
+                    continue
+
             try:
                 # ``cost_usd`` flows from the agent runner's parsed usage
                 # envelope into the per-plan spend accumulator (TASK-102,
@@ -570,6 +777,7 @@ async def run_local_worker(
                     exc.actual_version,
                 )
                 continue
+            await _record_pipeline_event(repo, make_stage_succeeded_event(stage_context))
             if llm_session is not None:
                 notify_slack_task_terminal(llm_session, "DONE", result)
             completed += 1
@@ -587,6 +795,10 @@ async def run_local_worker(
         else:
             reason = _build_fail_reason(result)
             try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(stage_context, reason=reason),
+                )
                 await repo.fail_task(running.id, running.version, reason)
             except VersionConflictError as exc:
                 log.warning(
@@ -614,6 +826,7 @@ __all__ = [
     "DEFAULT_IDLE_WAIT",
     "SHUTDOWN_RELEASE_REASON",
     "RunnerCallable",
+    "VerificationRunnerCallable",
     "WorkerStats",
     "run_local_worker",
 ]

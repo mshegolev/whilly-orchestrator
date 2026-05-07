@@ -194,9 +194,9 @@ def build_compliance_report(
         _cap(
             "Required verification before DONE",
             _verification_status(files),
-            "whilly/verifier.py helper exists, but worker/local.py completes tasks directly from AgentResult.is_complete.",
-            "helper exists but not wired into the main DONE transition path.",
-            "Wire verification into the worker completion path or model verification state before treating DONE as verified.",
+            _verification_evidence(files),
+            _verification_gap(files),
+            "Keep verification commands configured for runs that need DONE to mean verified work.",
         ),
         _cap(
             "Project profiles",
@@ -211,21 +211,17 @@ def build_compliance_report(
         ),
         _cap(
             "Configurable pipeline stages",
-            CapabilityStatus.PARTIAL
-            if files.contains("whilly/project_config/models.py", "class PipelineStepConfig")
-            else CapabilityStatus.FAIL,
-            "PipelineStepConfig and presets generate plan tasks from configured stages.",
-            "Pipeline configuration generates tasks, but runtime worker execution still follows the generic task loop.",
-            "Add explicit runtime audit events for configured pipeline stage boundaries.",
+            _pipeline_stage_status(files),
+            _pipeline_stage_evidence(files),
+            _pipeline_stage_gap(files),
+            "Keep stage events as the MVP runtime contract until a dedicated profile executor is added.",
         ),
         _cap(
             "Human review checkpoint model",
-            CapabilityStatus.PARTIAL
-            if files.contains("whilly/project_config/models.py", "class HumanLoopConfig")
-            else CapabilityStatus.FAIL,
-            "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements.",
-            "Review gates are represented in generated tasks, not enforced as a separate runtime approval state.",
-            "Emit and enforce auditable approval checkpoints for configured high-risk stages.",
+            _human_review_status(files),
+            _human_review_evidence(files),
+            _human_review_gap(files),
+            "Add dashboard/API approval workflow and enforcement for configured high-risk stages.",
         ),
         _cap(
             "Automatic PR creation after DONE",
@@ -294,13 +290,13 @@ def build_compliance_report(
     gaps = tuple(item.gap for item in matrix if item.gap)
     security_risks = (
         "No per-task VM/container sandbox isolation; command guards reduce but do not eliminate agent execution risk.",
-        "DONE can still mean agent marker success without mandatory post-task verification in the main worker path.",
+        "DONE can still mean agent marker success when no required verification commands are configured for the run.",
         "Opt-in PR opening depends on local git/gh credentials and should remain explicitly configured.",
     )
     implementation_tasks = (
-        "Wire verifier results into the DONE transition or add explicit verification state/events.",
+        "Configure required verification commands for runs where DONE must mean verified code.",
         "Enforce human approval checkpoints for configured high-risk pipeline stages.",
-        "Emit runtime audit events that name configured pipeline stages.",
+        "Project profile verification commands should feed the worker verification runner directly.",
         "Keep PR creation and PR-feedback documentation aligned with opt-in/polling behavior.",
     )
     acceptance_criteria = (
@@ -381,7 +377,78 @@ def _verification_status(files: _RepoFiles) -> CapabilityStatus:
     if not files.exists("whilly/verifier.py"):
         return CapabilityStatus.FAIL
     worker_text = files.read("whilly/worker/local.py")
-    return CapabilityStatus.PASS if "verify_task" in worker_text else CapabilityStatus.PARTIAL
+    cli_text = files.read("whilly/cli/run.py")
+    if "verification_runner" in worker_text and "run_verification_commands" in cli_text:
+        return CapabilityStatus.PASS
+    return CapabilityStatus.PARTIAL
+
+
+def _verification_evidence(files: _RepoFiles) -> str:
+    if _verification_status(files) is CapabilityStatus.PASS:
+        return (
+            "whilly/pipeline/verification.py provides command execution/events; "
+            "worker/local.py blocks completion with verification_failed; "
+            "cli/run.py exposes required/optional verification commands."
+        )
+    return "whilly/verifier.py helper exists, but verification is not fully wired into worker completion."
+
+
+def _verification_gap(files: _RepoFiles) -> str:
+    if _verification_status(files) is CapabilityStatus.PASS:
+        return "Verification is enforced when commands are configured; profile-native verification command wiring remains future work."
+    return "helper exists but not wired into the main DONE transition path."
+
+
+def _pipeline_stage_status(files: _RepoFiles) -> CapabilityStatus:
+    if not files.contains("whilly/project_config/models.py", "class PipelineStepConfig"):
+        return CapabilityStatus.FAIL
+    if files.contains("whilly/pipeline/events.py", "stage_context_from_task") and files.contains(
+        "whilly/worker/local.py", "make_stage_started_event"
+    ):
+        return CapabilityStatus.PASS
+    return CapabilityStatus.PARTIAL
+
+
+def _pipeline_stage_evidence(files: _RepoFiles) -> str:
+    if _pipeline_stage_status(files) is CapabilityStatus.PASS:
+        return (
+            "PipelineStepConfig generates configured tasks; whilly/pipeline/events.py infers stage context; "
+            "local and remote workers emit pipeline.stage.* audit events."
+        )
+    return "PipelineStepConfig and presets generate plan tasks from configured stages."
+
+
+def _pipeline_stage_gap(files: _RepoFiles) -> str:
+    if _pipeline_stage_status(files) is CapabilityStatus.PASS:
+        return (
+            "Dedicated profile executor/stage scheduler remains future work; MVP stage lifecycle is audit-event based."
+        )
+    return "Pipeline configuration generates tasks, but runtime worker execution still follows the generic task loop."
+
+
+def _human_review_status(files: _RepoFiles) -> CapabilityStatus:
+    if not files.contains("whilly/project_config/models.py", "class HumanLoopConfig"):
+        return CapabilityStatus.FAIL
+    if files.exists("whilly/pipeline/human_review.py") and files.contains(
+        "whilly/adapters/transport/server.py", "human_review."
+    ):
+        return CapabilityStatus.PARTIAL
+    return CapabilityStatus.PARTIAL
+
+
+def _human_review_evidence(files: _RepoFiles) -> str:
+    if files.exists("whilly/pipeline/human_review.py"):
+        return (
+            "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements; "
+            "whilly/pipeline/human_review.py defines checkpoint events and workers emit human_review.required."
+        )
+    return "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements."
+
+
+def _human_review_gap(files: _RepoFiles) -> str:
+    if files.exists("whilly/pipeline/human_review.py"):
+        return "Checkpoint events exist, but approval capture/enforcement is not yet a full dashboard/API workflow."
+    return "Review gates are represented in generated tasks, not enforced as a separate runtime approval state."
 
 
 def _automatic_pr_status(files: _RepoFiles) -> CapabilityStatus:

@@ -39,20 +39,30 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import VersionConflictError
 from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON
-from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus, WorkerId
+from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON
+from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
+from whilly.pipeline.human_review import HUMAN_REVIEW_REQUIRED
+from whilly.pipeline.verification import (
+    VERIFICATION_FAILED_EVENT,
+    VERIFICATION_STARTED_EVENT,
+    VerificationCommandResult,
+    VerificationRunOutcome,
+)
 from whilly.worker import remote as worker_remote
 from whilly.worker.remote import (
     RemoteWorkerStats,
     _build_fail_reason,
     _truncate_output,
     run_remote_worker,
+    run_remote_worker_with_heartbeat,
 )
 
 # --------------------------------------------------------------------------- #
@@ -138,11 +148,15 @@ class FakeRemoteClient:
         # :class:`VersionConflictError` to script the 409 path.
         self.complete_results: list[Task | VersionConflictError] = []
         self.fail_results: list[Task | VersionConflictError] = []
+        self.release_results: list[Task | VersionConflictError] = []
 
         self.claim_calls: list[tuple[str, str]] = []
         self.complete_calls: list[tuple[TaskId, str, int, object]] = []
         self.fail_calls: list[tuple[TaskId, str, int, str]] = []
+        self.release_calls: list[tuple[TaskId, str, int, str]] = []
+        self.heartbeat_calls: list[str] = []
         self.fail_details: list[dict[str, object] | None] = []
+        self.event_calls: list[tuple[TaskId, str, str, dict[str, object], dict[str, object] | None]] = []
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
         self.claim_calls.append((worker_id, plan_id))
@@ -187,6 +201,37 @@ class FakeRemoteClient:
         if isinstance(result, VersionConflictError):
             raise result
         return result
+
+    async def release(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        reason: str,
+    ) -> object:
+        self.release_calls.append((task_id, worker_id, version, reason))
+        if not self.release_results:
+            raise AssertionError("FakeRemoteClient.release called more times than scripted")
+        result = self.release_results.pop(0)
+        if isinstance(result, VersionConflictError):
+            raise result
+        return result
+
+    async def heartbeat(self, worker_id: str) -> object:
+        self.heartbeat_calls.append(worker_id)
+        return SimpleNamespace(ok=True)
+
+    async def record_event(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        event_type: str,
+        payload: dict[str, object] | None = None,
+        *,
+        detail: dict[str, object] | None = None,
+    ) -> object:
+        self.event_calls.append((task_id, worker_id, event_type, payload or {}, detail))
+        return object()
 
 
 @pytest.fixture
@@ -324,6 +369,225 @@ async def test_versions_thread_through_to_complete(fake_sleep: list[float]) -> N
     )
 
     assert client.complete_calls == [("T-9", WORKER_ID, 7, 0.0)]
+
+
+async def test_configured_remote_pipeline_task_records_stage_and_human_review_events(
+    fake_sleep: list[float],
+) -> None:
+    client = FakeRemoteClient()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Remote Plan",
+        origin=PlanOrigin(
+            system="project_config",
+            ref="remote-docs-profile",
+            decomposition_mode="configured:documentation",
+        ),
+    )
+
+    claimed = replace(
+        _make_task("CFG-R-001", status=TaskStatus.CLAIMED, version=4),
+        prd_requirement="Configured documentation pipeline step: release_review",
+        acceptance_criteria=("Human review approval is explicitly recorded before completion.",),
+    )
+    done = replace(claimed, status=TaskStatus.DONE, version=5)
+
+    client.claim_results.append(claimed)
+    client.complete_results.append(done)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", is_complete=True)
+
+    stats = await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+    )
+
+    assert stats.completed == 1
+    event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
+    assert PIPELINE_STAGE_STARTED in event_types
+    assert HUMAN_REVIEW_REQUIRED in event_types
+    assert PIPELINE_STAGE_SUCCEEDED in event_types
+    stage_started = next(
+        payload
+        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
+        if event_type == PIPELINE_STAGE_STARTED
+    )
+    assert stage_started == {
+        "task_id": "CFG-R-001",
+        "plan_id": PLAN_ID,
+        "stage_id": "release_review",
+        "project_type": "documentation",
+        "profile_id": "remote-docs-profile",
+    }
+
+
+async def test_remote_required_verification_failure_blocks_complete_and_records_events(
+    fake_sleep: list[float],
+) -> None:
+    client = FakeRemoteClient()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Remote Plan",
+        origin=PlanOrigin(system="project_config", ref="remote-qa-profile", decomposition_mode="configured:qa"),
+    )
+
+    claimed = replace(
+        _make_task("CFG-R-VERIFY", status=TaskStatus.CLAIMED, version=4),
+        prd_requirement="Configured qa pipeline step: tests",
+    )
+    failed = replace(claimed, status=TaskStatus.FAILED, version=5)
+
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "CFG-R-VERIFY"
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="smoke",
+                    command="pytest -q tests/smoke",
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=1,
+                    stdout="failed",
+                    stderr="trace",
+                    duration_s=0.4,
+                ),
+            )
+        )
+
+    stats = await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert client.complete_calls == []
+    assert client.fail_calls == [("CFG-R-VERIFY", WORKER_ID, 4, "verification_failed")]
+    event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
+    assert VERIFICATION_STARTED_EVENT in event_types
+    assert VERIFICATION_FAILED_EVENT in event_types
+    assert PIPELINE_STAGE_FAILED in event_types
+    verification_failed = next(
+        (payload, detail)
+        for _task_id, _worker_id, event_type, payload, detail in client.event_calls
+        if event_type == VERIFICATION_FAILED_EVENT
+    )
+    assert verification_failed[0]["name"] == "smoke"
+    assert verification_failed[1] == {"stdout": "failed", "stderr": "trace"}
+
+
+async def test_remote_heartbeat_composition_forwards_verification_runner(
+    fake_sleep: list[float],
+) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+
+    claimed = _make_task("T-heartbeat-verify", status=TaskStatus.CLAIMED, version=3)
+    failed = replace(claimed, status=TaskStatus.FAILED, version=4)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="smoke",
+                    command="pytest -q tests/smoke",
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=1,
+                    stdout="",
+                    stderr="failed",
+                    duration_s=0.1,
+                ),
+            )
+        )
+
+    stats = await run_remote_worker_with_heartbeat(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        heartbeat_interval=10,
+        max_iterations=1,
+        install_signal_handlers=False,
+        verification_runner=verification_runner,
+    )
+
+    assert stats.failed == 1
+    assert stats.completed == 0
+    assert client.complete_calls == []
+    assert client.fail_calls == [("T-heartbeat-verify", WORKER_ID, 3, "verification_failed")]
+
+
+async def test_remote_shutdown_during_verification_releases_task(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    stop = asyncio.Event()
+    verification_started = asyncio.Event()
+    verification_cancelled = asyncio.Event()
+
+    claimed = _make_task("T-remote-verify-shutdown", status=TaskStatus.CLAIMED, version=3)
+    released = replace(claimed, status=TaskStatus.PENDING, version=4)
+    client.claim_results.append(claimed)
+    client.release_results.append(released)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        verification_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            verification_cancelled.set()
+            raise
+        raise AssertionError("verification should be cancelled by shutdown")
+
+    worker_task = asyncio.create_task(
+        run_remote_worker(  # type: ignore[arg-type]
+            client,
+            runner,
+            plan,
+            WORKER_ID,
+            max_iterations=1,
+            stop=stop,
+            verification_runner=verification_runner,
+        )
+    )
+    await verification_started.wait()
+    stop.set()
+
+    stats = await asyncio.wait_for(worker_task, timeout=1.0)
+
+    assert verification_cancelled.is_set()
+    assert stats.completed == 0
+    assert stats.failed == 0
+    assert stats.released_on_shutdown == 1
+    assert client.complete_calls == []
+    assert client.fail_calls == []
+    assert client.release_calls == [("T-remote-verify-shutdown", WORKER_ID, 3, "shutdown")]
 
 
 # --------------------------------------------------------------------------- #

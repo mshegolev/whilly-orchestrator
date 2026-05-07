@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 from whilly.worker.remote import (
     DEFAULT_HEARTBEAT_INTERVAL,
     RemoteRunnerCallable,
+    RemoteVerificationRunnerCallable,
     RemoteWorkerStats,
     run_remote_heartbeat_loop,
     run_remote_worker,
@@ -124,6 +125,7 @@ __all__ = [
     "DEFAULT_HEARTBEAT_INTERVAL",
     "DEFAULT_IDLE_WAIT",
     "RemoteRunnerCallable",
+    "RemoteVerificationRunnerCallable",
     "RemoteWorkerStats",
     "RunnerCallable",
     "WorkerStats",

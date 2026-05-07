@@ -95,6 +95,7 @@ from whilly.core.models import Plan, Task, WorkerId
 from whilly.worker.local import (
     DEFAULT_IDLE_WAIT,
     RunnerCallable,
+    VerificationRunnerCallable,
     WorkerStats,
     run_local_worker,
 )
@@ -263,6 +264,7 @@ async def run_worker(
     install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
     post_complete_hook: Callable[[Task], Awaitable[None]] | None = None,
+    verification_runner: VerificationRunnerCallable | None = None,
 ) -> WorkerStats:
     """Run :func:`run_local_worker` paired with heartbeat + signal handlers.
 
@@ -329,6 +331,7 @@ async def run_worker(
                 max_iterations=max_iterations,
                 stop=stop,
                 post_complete_hook=post_complete_hook,
+                verification_runner=verification_runner,
             )
         finally:
             stop.set()

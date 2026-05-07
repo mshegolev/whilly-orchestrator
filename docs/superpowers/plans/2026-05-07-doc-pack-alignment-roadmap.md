@@ -22,10 +22,10 @@ Overall status: **PARTIAL**.
 Whilly is correctly positioned as an AI-assisted orchestration control plane,
 not a fully autonomous developer. Core queueing, state transitions, sources,
 workers, guards, events, metrics, dashboard, PR helper paths, and repo-target
-metadata exist. The main gaps are that project configuration is currently a
-plan-generation helper, not a runtime pipeline contract; required verification
-does not block `DONE`; human review is mostly represented as task text/events,
-not a first-class checkpoint model; and compliance reporting is missing.
+metadata exist. Project-config tasks now have an audit-event runtime overlay,
+and configured verification commands can block `DONE`. The main remaining gaps
+are profile-native verification wiring, human review approval/enforcement,
+configured sinks, bounded repair, and governance policy.
 
 ## Capability Matrix
 
@@ -40,9 +40,9 @@ not a first-class checkpoint model; and compliance reporting is missing.
 | Project profiles | Partial | `whilly/project_config/*`, `whilly/cli/project_config.py` | Current shape differs from PRD: dataclasses, TOML/JSON, missing `python_backend` and `documentation`, not wired into worker runtime. |
 | Built-in profiles | Partial | `presets.py` supports `etl`, `graphql_api`, `feature_development`, `generic` | PRD expects `python_backend`, `graphql_api`, `etl_pipeline`, `documentation`, `generic`. |
 | Profile validation | Partial | Loader checks duplicate steps, unknown dependencies/repo roles | Missing runner/source/sink validation, required stage ids, unsafe command policy, contradictory human-review checks. |
-| Configurable pipeline stages | Partial | Project config generates normal Whilly tasks | Worker does not resolve stage lifecycle from profile or emit stage start/success/failure/skipped events. |
-| Required verification before DONE | Missing | `run_local_worker` calls `complete_task` immediately after runner success | Need verification state/events before final success reporting. |
-| Human review checkpoints | Partial | Project config can add `HUMAN-IN-THE-LOOP CHECKPOINT` text | No first-class checkpoint events/API/dashboard queue. |
+| Configurable pipeline stages | Implemented MVP | `whilly/pipeline/events.py`, local/remote workers | Stage lifecycle is audit-event based; no dedicated profile executor yet. |
+| Required verification before DONE | Implemented when configured | `whilly/pipeline/verification.py`, `whilly run --verify-command` | Profile-native verification command wiring remains future work. |
+| Human review checkpoints | Partial | `whilly/pipeline/human_review.py`, event endpoint allowlist | Checkpoint events exist; no full approval capture/enforcement/dashboard queue yet. |
 | PR creation as configured sink | Partial | `WHILLY_AUTO_OPEN_PR=1` post-complete hook | Env-gated hook, not project-profile sink/stage. |
 | PR review feedback loop | Partial/future | `whilly pr-feedback poll` one-shot poller | Not automatic repair loop; keep documented as future. |
 | Multi-repo execution | Partial/future | `repo_targets`, `task_repo_targets`, `whilly/workspaces.py` | Per-task repo workspace exists, but full multi-repo orchestration is not current product guarantee. |
@@ -118,15 +118,15 @@ Validation:
 - Modify: `whilly/adapters/db/repository.py`, `whilly/worker/local.py`, `whilly/worker/remote.py`
 - Test: `tests/unit/test_pipeline_events.py`, `tests/integration/test_pipeline_runtime_events.py`
 
-- [ ] Represent stage lifecycle as audit events first: `pipeline.stage.started`, `pipeline.stage.succeeded`, `pipeline.stage.failed`, `pipeline.stage.skipped`.
-- [ ] Store profile/stage snapshot in event payloads rather than changing `TaskStatus`.
-- [ ] Wire stage start/success/failure around local and remote worker execution.
-- [ ] Keep legacy plans profile-free and emit no stage events unless a profile is attached.
+- [x] Represent stage lifecycle as audit events first: `pipeline.stage.started`, `pipeline.stage.succeeded`, `pipeline.stage.failed`, `pipeline.stage.skipped`.
+- [x] Store profile/stage snapshot in event payloads rather than changing `TaskStatus`.
+- [x] Wire stage start/success/failure around local and remote worker execution.
+- [x] Keep legacy plans profile-free and emit no stage events unless a profile is attached.
 
 Validation:
 
 ```bash
-.venv/bin/python -m pytest -q tests/unit/test_pipeline_events.py tests/integration/test_pipeline_runtime_events.py
+.venv/bin/python -m pytest -q tests/unit/test_pipeline_events.py tests/unit/test_local_worker.py tests/unit/test_remote_worker.py
 ```
 
 ### Phase 4: Verification Before Full Success
@@ -136,16 +136,16 @@ Validation:
 - Modify: `whilly/worker/local.py`, `whilly/worker/remote.py`, `whilly/cli/run.py`
 - Test: `tests/unit/test_verification_runner.py`, `tests/integration/test_worker_verification.py`
 
-- [ ] Add a verification command runner with cwd, timeout, env allowlist, output capture, and shell-command policy scanning.
-- [ ] Emit `verification.started`, `verification.succeeded`, `verification.failed`, and `verification.warning`.
-- [ ] Required verification failure must prevent the task from being reported as fully successful; MVP can mark task `FAILED` with reason `verification_failed` or complete plus emit `VERIFICATION_FAILED` only if the reporting layer distinguishes it.
-- [ ] Optional verification failure should keep the task terminal path but emit warning evidence.
-- [ ] Add one test where runner success plus required verification failure does not become normal `DONE`.
+- [x] Add a verification command runner with cwd, timeout, env allowlist, output capture, and shell-command policy scanning.
+- [x] Emit `verification.started`, `verification.succeeded`, `verification.failed`, and `verification.warning`.
+- [x] Required verification failure must prevent the task from being reported as fully successful; MVP can mark task `FAILED` with reason `verification_failed` or complete plus emit `VERIFICATION_FAILED` only if the reporting layer distinguishes it.
+- [x] Optional verification failure should keep the task terminal path but emit warning evidence.
+- [x] Add one test where runner success plus required verification failure does not become normal `DONE`.
 
 Validation:
 
 ```bash
-.venv/bin/python -m pytest -q tests/unit/test_verification_runner.py tests/integration/test_worker_verification.py
+.venv/bin/python -m pytest -q tests/unit/test_verification_runner.py tests/unit/test_local_worker.py tests/unit/test_remote_worker.py
 ```
 
 ### Phase 5: Human Review Checkpoint Model
@@ -155,15 +155,15 @@ Validation:
 - Modify: `whilly/adapters/transport/server.py`, `whilly/api/templates/index.html.j2`, `whilly/cli/plan.py`
 - Test: `tests/unit/test_human_review_checkpoint.py`, `tests/integration/test_dashboard_human_review.py`
 
-- [ ] Add checkpoint events: `human_review.required`, `human_review.approved`, `human_review.rejected`, `human_review.changes_requested`.
+- [x] Add checkpoint events: `human_review.required`, `human_review.approved`, `human_review.rejected`, `human_review.changes_requested`.
 - [ ] Surface tasks/checkpoints needing human input in plan show, API, and dashboard.
-- [ ] Keep approval as auditable data, not a new terminal task state for MVP.
+- [x] Keep approval as auditable data, not a new terminal task state for MVP.
 - [ ] Block configured risky sinks/stages until approval evidence exists.
 
 Validation:
 
 ```bash
-.venv/bin/python -m pytest -q tests/unit/test_human_review_checkpoint.py tests/integration/test_dashboard_human_review.py
+.venv/bin/python -m pytest -q tests/unit/test_human_review_checkpoint.py tests/integration/test_transport_tasks.py::test_record_task_event_accepts_pipeline_verification_and_human_review_events
 ```
 
 ### Phase 6: Configured Sinks And PR Policy
@@ -205,7 +205,6 @@ Validation:
 
 ## Recommended First Cut
 
-Implement Phases 0-2 first. That turns the archive into a testable target and
-closes the largest schema/documentation mismatch without changing worker
-semantics. Then implement Phases 3-5 as the actual “Verified Task Executor”
-milestone from the archive.
+Phases 0-5 now have an MVP path in the repository. The next cut should finish
+the remaining Phase 5 workflow surface (approval capture, dashboard/API queue,
+and blocking policy) before moving PR sinks and bounded repair into Phases 6-7.

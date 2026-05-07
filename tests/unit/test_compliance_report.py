@@ -22,9 +22,9 @@ def test_report_model_classifies_capabilities_and_partial_helper_evidence() -> N
     assert "not enabled by default" in automatic_pr.gap.lower()
 
     required_verification = report.capability("Required verification before DONE")
-    assert required_verification.status is CapabilityStatus.PARTIAL
-    assert "helper exists" in required_verification.evidence.lower()
-    assert "not wired" in required_verification.gap.lower()
+    assert required_verification.status is CapabilityStatus.PASS
+    assert "verification_failed" in required_verification.evidence
+    assert "when commands are configured" in required_verification.gap.lower()
 
     payload = report.to_dict()
     assert set(payload) >= {
