@@ -319,12 +319,12 @@ def test_m1_bearer_survives_m2_schema_migration(m1_007_dsn: str) -> None:
     )
 
     # Run the M1→M2 migration suite. After this call ``alembic_version``
-    # holds ``012_pull_requests_and_pr_events`` once the M2 PR-feedback
+    # holds the current head once the M2 PR-feedback and provenance
     # mission lands; the M2-era M1 bearer continuity contract still
     # holds across the head bump.
     cfg = _build_alembic_config(m1_007_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (M1 → M2)")
-    assert _fetchval_sync(m1_007_dsn, "SELECT version_num FROM alembic_version") == "012_pull_requests_and_pr_events"
+    assert _fetchval_sync(m1_007_dsn, "SELECT version_num FROM alembic_version") == "013_work_intents_repo_targets"
 
     # Pre-existing M1 worker's owner_email must be NULL post-migration —
     # 008 adds the column nullable with no server default and does not
@@ -465,7 +465,7 @@ def test_m1_bearer_cannot_impersonate_m2_worker_post_upgrade(m1_007_dsn: str) ->
         lambda: command.upgrade(cfg, "head"),
         op="upgrade head (M1 → M2 bearer-isolation)",
     )
-    assert _fetchval_sync(m1_007_dsn, "SELECT version_num FROM alembic_version") == "012_pull_requests_and_pr_events"
+    assert _fetchval_sync(m1_007_dsn, "SELECT version_num FROM alembic_version") == "013_work_intents_repo_targets"
 
     plan_id = "PLAN-CROSS-AUTH-002"
     task_id = "T-cross-auth-002"

@@ -2,92 +2,154 @@
 title: О проекте
 layout: default
 nav_order: 2
-description: "Whilly Orchestrator — раздаёт задачи LLM-агентам, перехватывает работу за упавшим воркером, не теряет план. По-человечески."
+description: "Whilly Orchestrator — control plane для наблюдаемого запуска AI-агентов на инженерных задачах."
 permalink: /project-description
 ---
 
 # Whilly Orchestrator
 
-📎 [GitHub](https://github.com/mshegolev/whilly-orchestrator) · 📦 PyPI: [whilly-orchestrator](https://pypi.org/project/whilly-orchestrator/) · 🏷 [v4.0.0](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v4.0.0)
+📎 [GitHub](https://github.com/mshegolev/whilly-orchestrator) · 📦 PyPI: [whilly-orchestrator](https://pypi.org/project/whilly-orchestrator/)
 
-> Эта страница про **v4** — распределённую версию. Если ищешь **v3** (single-process loop с TRIZ-анализатором, PRD-визардом, tmux-параллелизмом) — она [тут]({{ site.baseurl }}/project-description-v3).
+> Эта страница про **v4+** — Postgres-backed orchestration/control-plane версию.
+> Legacy **v3.x** доступна на теге [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final)
+> и описана отдельно: [v3 legacy]({{ site.baseurl }}/project-description-v3).
 
-## Зачем это нужно
+## Миссия
 
-Представь, что у тебя есть список из 30 задач для AI-агента — например, «исправить эти 30 багов в репозитории» или «написать unit-тесты для каждого модуля». Запускать их по одной в Claude вручную — скучно, забываешь где остановился, никакого учёта токенов, и если на 17-й задаче процесс упал — поздравляю, начинай сначала.
+Whilly Orchestrator — это control plane для AI-assisted software delivery.
 
-Whilly — про то, чтобы это перестало быть твоей проблемой. Ты пишешь план в JSON-файле, говоришь Whilly «работай», и идёшь спать. Утром просыпаешься: задачи сделаны, что не вышло — помечено и обоснованно скипнуто, всё в логе.
+Он соединяет task intake, deterministic planning, guarded execution, worker
+orchestration, auditability и human review в единый workflow. Цель системы —
+сделать выполнение AI-assisted engineering work воспроизводимым, контролируемым
+и масштабируемым.
 
-Изначально это был один Python-процесс на ноутбуке (v3 — *Ralph Wiggum loop*: «pick task → try → repeat → I'm helping!»). Работало, пока задач было мало и ноутбук не закрывали. Когда захотелось гонять Whilly на сервере с несколькими параллельными воркерами и переживать рестарты процесса — пришлось переписать целиком. Это и есть **v4**.
+Whilly не пытается заменить инженерную команду. Он помогает безопасно запускать
+AI-агентов на coding tasks, уменьшая ручную координацию, сохраняя контроль над
+состоянием задач и оставляя инженеру прозрачный audit trail.
 
-## Что внутри простыми словами
+## Что Делает Whilly
+
+Whilly принимает задачи из разных источников:
+
+- JSON plans;
+- GitHub Issues;
+- GitHub Projects;
+- Jira;
+- Forge/PRD intake.
+
+После intake задачи приводятся к единой модели: описание, зависимости,
+приоритет, acceptance criteria, test steps, key files, budget и `plan_id`.
+
+Перед запуском Whilly проверяет качество задачи: расплывчатые задачи можно
+отклонять или переводить в `SKIPPED`, acceptance criteria и test steps
+валидируются, dependency cycles не принимаются, decision gates могут работать в
+strict-режиме.
+
+## Как Идёт Выполнение
+
+Задачи хранятся в Postgres. Control plane выбирает следующую `PENDING` задачу
+из очереди с учётом dependencies, priority и budget. Claim защищён row locking,
+поэтому два воркера не должны выполнять одну задачу одновременно.
+
+Worker запускается локально или удалённо. Он получает не весь проектный план, а
+конкретную подготовленную задачу через runner или handoff backend. Агент не
+выбирает задачу произвольно и не получает полный контроль над планированием
+проекта.
+
+Результат фиксируется через state machine. `DONE` означает, что runner завершился
+успешно и был найден completion marker. Иначе задача становится `FAILED`; при
+shutdown или visibility timeout она может вернуться в `PENDING`.
+
+## Наблюдаемость
+
+Whilly проектируется как auditable system. Он пишет append-only events,
+сохраняет audit trail в Postgres, может зеркалировать события в JSONL, отдаёт
+dashboard, SSE stream, Prometheus metrics, health endpoints и worker heartbeat.
+
+По этим данным оператор может восстановить, что происходило с задачей: кто её
+claim'нул, какой runner запускался, чем завершилось выполнение, где возникла
+ошибка и какие переходы состояния были сделаны.
+
+## Human-In-The-Loop
+
+Whilly сохраняет контроль за человеком на критических этапах. Human review может
+проходить через PR review, handoff backend, dashboard, issue/Jira comments или
+явные состояния `BLOCKED` / `HUMAN_LOOP` в сценариях handoff.
+
+Это важно: Whilly orchestrates agents; it does not magically make agent output
+correct. Его ценность не в неограниченной автономности, а в управляемом
+ускорении.
+
+## Что Работает Сейчас
+
+Текущая версия лучше всего описывается так:
+
+> Issue-driven AI task orchestrator для одного рабочего репозитория или
+> workspace, с Postgres-backed task queue, deterministic state machine, worker
+> execution, runner abstraction, audit events и базовыми safety gates.
+
+Она уже подходит для:
+
+- bugfix tasks;
+- feature tasks;
+- refactoring;
+- test generation;
+- documentation updates;
+- structured task plans;
+- controlled local/remote worker execution;
+- observability of task lifecycle.
+
+## Чего Не Нужно Обещать
+
+Документация и демо не должны обещать то, что core worker loop пока не
+гарантирует:
+
+- полноценное multi-repo execution;
+- автоматический PR review feedback loop;
+- обязательный CI/lint verification в core loop;
+- полноценную sandbox/VM isolation;
+- semantic long-term memory;
+- надёжный git rollback;
+- автономный production release без человека.
+
+Эти направления могут развиваться поверх текущей архитектуры, но их нельзя
+подавать как уже решённые гарантии.
+
+## Целевое Состояние
+
+Целевое состояние Whilly — configurable orchestration layer для разных типов
+инженерных проектов. Project config должен задавать sources, pipeline stages,
+quality gates, verification steps, runners, sinks и human approval points.
+
+Примеры целевых доменов:
+
+- Python backend: issue intake, dependency analysis, implementation, unit tests,
+  lint, PR creation, human review.
+- GraphQL API: schema diff, resolver impact analysis, generated API tests,
+  contract tests, backward compatibility checks.
+- ETL/data pipelines: source/target validation, data quality checks, STLC/QA
+  workflow, sample run, regression validation.
+- Documentation-heavy projects: PRD intake, doc generation, consistency checks,
+  human approval.
+
+## Архитектура Коротко
 
 ```
-┌──────────────┐         ┌──────────────────┐         ┌────────────────┐
-│  Postgres    │ ◄────── │  Control plane   │ ◄────── │  Worker(ы)     │
-│ "тут лежат   │         │ "раздаёт задачи  │         │ "берут задачу, │
-│  задачи"     │         │  и аудитит"      │         │  делают, шлют  │
-└──────────────┘         └──────────────────┘         │  результат"    │
-                                                       └────────────────┘
+Sources -> Plan/task model -> Postgres queue -> Worker claim -> Runner/backend
+                         |              |                 |
+                         v              v                 v
+                 Decision gates    Audit events      Human review
+                         |              |                 |
+                         +---- Dashboard / SSE / metrics / health
 ```
 
-- **Postgres** хранит план задач и пишет историю всего, что происходит. Если control plane перезагрузится — он восстановит весь контекст из БД, ничего не потеряется.
-- **Control plane** — небольшой HTTP-сервер ([FastAPI]({{ site.baseurl }}/Whilly-v4-Architecture)), который раздаёт задачи воркерам, отслеживает кто живой, и подбирает задачи за упавшими.
-- **Воркер** — это процесс, который подключается к control plane по HTTP, берёт одну задачу, запускает на ней Claude CLI как сабпроцесс, и репортит результат обратно. Воркеров может быть много, на разных машинах. Они не знают друг про друга.
+Postgres — source of truth для plans, tasks, workers и events. Control plane
+формирует транзакционные переходы состояния. Workers — stateless pollers,
+которые claim'ят задачи, запускают runner/backend и репортят результат.
 
-Установить воркер на отдельную VM — буквально одна команда: `pip install whilly-worker`. Никакого Postgres или FastAPI ставить не нужно — воркеру это не требуется, [он умеет только httpx](https://pypi.org/project/whilly-worker/).
+## Читать Дальше
 
-## Что делает Whilly особенным
-
-**Переживает падения.** Воркер можно убить `kill -9` посреди задачи — ничего не сломается. Через 30 секунд другой воркер заметит, что эта задача висит без хозяина, и перехватит её. Это не «авось как-нибудь восстановится» — это [реально оттестированный сценарий]({{ site.baseurl }}/Whilly-v4-Architecture#concurrency-primitives), и его проверяет [специальный тест]({{ site.baseurl }}/v4.0-release-checklist), который запускает реальный воркер, убивает его, и убеждается что задача вернулась в очередь.
-
-**Не врёт в дашборде.** Когда смотришь живой статус через `whilly dashboard` — то, что ты видишь, ровно то, что в БД. Никакого кэша, никакого «ну сейчас обновится через 5 секунд». Worker A claim'нул задачу — на дашборде сразу `CLAIMED`. Worker A умер — sweep вернул задачу в `PENDING` — на дашборде сразу `PENDING`. Worker B завершил — `DONE`. Каждое изменение пишется в одной транзакции с аудит-логом.
-
-**Невозможные импорты.** Самая нудная часть архитектуры — но если её не сделать сразу, потом не починишь. У нас [есть слой]({{ site.baseurl }}/Whilly-v4-Architecture) (`whilly/core/`), в котором живёт чистая логика — машина состояний задач, scheduler по графу зависимостей. Этот слой *запрещено* импортировать что-либо с диском или сетью. Не «нежелательно» — буквально CI ломается, если кто-то попробует. Это даёт две приятные штуки: ядро тестируется без поднятия БД (быстро, понятно), и при следующем рефакторинге заменить Postgres на что-то другое — это правка одного адаптера, а не всей системы.
-
-Вот как это выглядит в коде:
-
-![Whilly v4 Hexagonal Architecture]({{ site.baseurl }}/assets/hexagonal-architecture.svg)
-
-В центре — `whilly.core` (жёлтым обведён). Это ядро не знает ни про Postgres, ни про FastAPI, ни про Claude CLI. Вокруг него четыре адаптера (синие): `db` говорит с Postgres, `transport` крутит HTTP (FastAPI на стороне control plane, httpx на стороне воркера), `runner` запускает Claude CLI как сабпроцесс, `filesystem` импортирует/экспортирует JSON-планы. По краям — `cli` и `worker` (зелёные): они «собирают» приложение из адаптеров под конкретный сценарий (запустить локального воркера? удалённого? показать план?). **Жёлтые стрелки = импорты**, и все они направлены внутрь, к ядру. **Серые пунктирные стрелки = «обращения к внешнему миру»** — туда уходят все I/O.
-
-**Простой install по ролям.** На сервере с control plane'ом ставишь полный комплект: `pip install whilly-orchestrator[server]`. На воркер-машинку только то, что воркеру нужно: `pip install whilly-worker`. Никаких 50 МБ ненужных зависимостей в Docker-образе воркера.
-
-## Что работает прямо сейчас
-
-- Можно импортировать план из JSON-файла, гонять его — локально на одной машине или распределённо на нескольких.
-- Дашборд в терминале с живым обновлением (Rich Live TUI).
-- Полный аудит: видно кто что делал, в каком порядке, что упало и почему.
-- Сценарий «убить воркер посреди работы» проверен реальным тестом и работает.
-- v3.x всё ещё доступна как [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final) на тэге — если тебе не нужна распределёнка и хватает одного процесса на ноутбуке, бери её, она проще.
-
-## Что ещё не сделано
-
-Честно: v4 — это решение по сути одной проблемы (распределённость + надёжность). Куча уютных штук из v3 ещё не доехали обратно:
-
-- **Бюджеты.** В v3 можно было сказать «потрать на этот план не больше 5 долларов» — Whilly останавливался когда счётчик упирался. На v4 пока не реализовано.
-- **PRD wizard, TRIZ analyzer, Decision Gate.** В v3 это был интерактивный поток: «опиши идею → Claude задаст уточняющие вопросы → получится PRD → из PRD вытащим задачи → погнали». На v4 пока работает только последний этап (запуск задач). Остальное надо переносить.
-- **Команда `--reset`.** Если хочешь начать план с нуля — пока что приходится делать `DELETE FROM tasks WHERE plan_id = ...` руками через psql. Стыдно, починим.
-- **Forge: Issue → PR.** Идея, которую частично делали в v3 — взять GitHub Issue, спланировать, написать код, открыть PR, ждать ревью. Это огромный кусок работы, выделим в отдельный модуль `whilly/forge/`.
-- **README весь ещё про v3.** Половина страницы рассказывает про tmux-runner и worktree-параллелизм, которых на v4 нет. Перепишем когда руки дойдут.
-
-## Что было сложно (честная ретроспектива)
-
-**Большой переписать всё** — это всегда страшнее на словах, чем на практике. Шесть дней работы, 63 задачи, [план был структурированный](https://github.com/mshegolev/whilly-orchestrator/blob/main/.planning/refactoring-1_tasks.json), но всё равно ловишь себя на «ну я думал это будет проще». Гексагональная архитектура — там где её следишь — даёт чувство контроля; там где забыл — потом две задачи на починку.
-
-**Воркер, который умер посреди задачи** — это сценарий, который кажется тривиальным («ну там просто timeout и retry, делов-то»), пока не начнёшь писать. Реально нужны три согласованных движущихся части: visibility-timeout sweep на стороне сервера, heartbeat'ы от воркера, и проекция дашборда, которая не врёт ни в одной точке. Закрыли через `tests/integration/test_phase6_resilience.py` — он прогоняет ровно такой сценарий end-to-end.
-
-**State machine для удалённого воркера.** В какой-то момент остановились на том, что remote worker делает `claim → run → complete`, и каждое `complete` падает с 409 Conflict. Оказалось — забыли в HTTP-протоколе ручку `/start`, а БД фильтровала переходы только из `IN_PROGRESS`. Решение получилось элегантнее, чем добавлять `/start`: разрешили переход `(COMPLETE, CLAIMED) → DONE` прямо в [машине состояний](https://github.com/mshegolev/whilly-orchestrator/blob/main/whilly/core/state_machine.py). Local worker всё ещё ходит через `IN_PROGRESS` (его раннеру это нужно для аудит-времени), remote — нет.
-
-**Авто-релиз шот в ногу.** Push'нул `git tag v4.0.0`, не проверив `.github/workflows/release.yml`. У него `on: push: tags: ["v*"]` с настроенным trusted publisher — пакет ушёл в PyPI без явного подтверждения. PyPI релизы immutable, откатить нельзя. Записал [в memory правило](https://github.com/anthropics/claude-code) перед любым `git push origin v*` грепать `tags:` в воркфлоу. Жизненный урок про то, как «удобный auto-action» становится «irrevocable shared-state action».
-
-**Plan-level worktree** в v3 был включён по умолчанию — каждому плану создавался отдельный git worktree, чтобы агенты не дрались за `package.json`. Звучит разумно. На практике это сожгло часов больше, чем сэкономило: сабпроцессы с абсолютными путями в `.venv`, неожиданные `git status`, страшные cwd-сюрпризы. С v3.3.0 выключили по умолчанию. Урок: фичу, которая меняет cwd сабпроцессов, нельзя дефолтить — даже если она на бумаге безобидная.
-
----
-
-Если хочется поглубже:
-- Как это всё вместе устроено: [Архитектура]({{ site.baseurl }}/Whilly-v4-Architecture)
-- Если у тебя стоит v3 и думаешь обновляться: [Миграция с v3]({{ site.baseurl }}/Whilly-v4-Migration-from-v3)
-- Если пишешь свой воркер не на Python: [Worker HTTP Protocol]({{ site.baseurl }}/Whilly-v4-Worker-Protocol)
-- Чек-лист релиза: [SC-1..SC-6]({{ site.baseurl }}/v4.0-release-checklist)
-- Оригинальный PRD рефакторинга: [PRD-refactoring-1]({{ site.baseurl }}/PRD-refactoring-1)
+- [Архитектура v4]({{ site.baseurl }}/Whilly-v4-Architecture)
+- [Worker HTTP Protocol]({{ site.baseurl }}/Whilly-v4-Worker-Protocol)
+- [Миграция с v3]({{ site.baseurl }}/Whilly-v4-Migration-from-v3)
+- [Project config]({{ site.baseurl }}/Project-Config)

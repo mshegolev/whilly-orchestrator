@@ -54,11 +54,13 @@ import asyncpg
 import pytest
 
 from tests.conftest import DOCKER_REQUIRED
+from whilly.adapters.db.repository import TaskRepository
 from whilly.adapters.filesystem.plan_io import parse_plan
 from whilly.cli.plan import (
     DATABASE_URL_ENV,
     EXIT_ENVIRONMENT_ERROR,
     EXIT_OK,
+    _insert_plan_and_tasks,
     run_plan_command,
 )
 
@@ -212,6 +214,112 @@ def test_export_prints_canonical_json_to_stdout(
     # columns (``created_at``, ``claimed_by``, ...) and no surface
     # leftovers from the input (``prd_file``, ``agent_instructions``).
     assert set(payload.keys()) == {"plan_id", "project", "tasks"}
+
+
+def test_import_export_preserves_origin_and_repo_targets(
+    db_pool: asyncpg.Pool,  # noqa: ARG001
+    database_url: str,  # noqa: ARG001
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Structured provenance/routing metadata survives Postgres round-trip."""
+    plan_file = tmp_path / "repo-target-plan.json"
+    plan_file.write_text(
+        json.dumps(
+            {
+                "plan_id": "plan-origin-repo-001",
+                "project": "Origin Repo Roundtrip",
+                "origin": {
+                    "system": "github_issue",
+                    "ref": "owner/repo/42",
+                    "url": "https://github.com/owner/repo/issues/42",
+                    "title": "Issue 42",
+                    "prd_file": "docs/PRD-issue-42.md",
+                    "decomposition_mode": "forge_intake",
+                },
+                "repo_targets": [
+                    {
+                        "id": "github:owner/repo",
+                        "provider": "github",
+                        "repo_full_name": "owner/repo",
+                        "clone_url": "https://github.com/owner/repo.git",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "id": "T-RT-001",
+                        "status": "PENDING",
+                        "priority": "high",
+                        "description": "Do repo-routed work.",
+                        "repo_target_id": "github:owner/repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert run_plan_command(["import", str(plan_file)]) == EXIT_OK
+    capsys.readouterr()
+
+    assert run_plan_command(["export", "plan-origin-repo-001"]) == EXIT_OK
+    exported = json.loads(capsys.readouterr().out)
+
+    assert exported["origin"]["system"] == "github_issue"
+    assert exported["origin"]["ref"] == "owner/repo/42"
+    assert exported["repo_targets"][0]["id"] == "github:owner/repo"
+    assert exported["tasks"][0]["repo_target_id"] == "github:owner/repo"
+
+
+@pytest.mark.asyncio
+async def test_claim_and_start_preserve_repo_target_id(
+    db_pool: asyncpg.Pool,
+    tmp_path: Path,
+) -> None:
+    plan_file = tmp_path / "claim-target-plan.json"
+    plan_file.write_text(
+        json.dumps(
+            {
+                "plan_id": "plan-claim-target-001",
+                "project": "Claim Target",
+                "repo_targets": [
+                    {
+                        "id": "github:owner/repo",
+                        "provider": "github",
+                        "repo_full_name": "owner/repo",
+                    }
+                ],
+                "tasks": [
+                    {
+                        "id": "T-CLAIM-001",
+                        "status": "PENDING",
+                        "priority": "high",
+                        "description": "Claim me.",
+                        "repo_target_id": "github:owner/repo",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    plan, tasks = parse_plan(plan_file)
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            await _insert_plan_and_tasks(conn, plan, tasks)
+            await conn.execute(
+                """
+                INSERT INTO workers (worker_id, hostname, token_hash)
+                VALUES ('w-repo-target', 'localhost', 'hash')
+                ON CONFLICT (worker_id) DO NOTHING
+                """
+            )
+
+    repo = TaskRepository(db_pool)
+    claimed = await repo.claim_task("w-repo-target", "plan-claim-target-001")
+    assert claimed is not None
+    assert claimed.repo_target_id == "github:owner/repo"
+    started = await repo.start_task(claimed.id, claimed.version)
+    assert started.repo_target_id == "github:owner/repo"
 
 
 def test_round_trip_import_export_import_is_idempotent(

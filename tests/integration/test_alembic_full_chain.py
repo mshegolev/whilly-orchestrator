@@ -54,6 +54,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "010_funnel_url",
     "011_events_notify_trigger",
     "012_pull_requests_and_pr_events",
+    "013_work_intents_repo_targets",
 )
 
 
@@ -139,7 +140,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "012_pull_requests_and_pr_events"
+    assert head_version == "013_work_intents_repo_targets"
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -283,12 +284,36 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens', 'funnel_url')
+                  AND table_name IN (
+                    'workers',
+                    'plans',
+                    'tasks',
+                    'events',
+                    'bootstrap_tokens',
+                    'funnel_url',
+                    'work_intents',
+                    'plan_origins',
+                    'repo_targets',
+                    'plan_repo_targets',
+                    'task_repo_targets'
+                  )
                 """,
             )
         )
     }
-    assert tables == {"workers", "plans", "tasks", "events", "bootstrap_tokens", "funnel_url"}
+    assert tables == {
+        "workers",
+        "plans",
+        "tasks",
+        "events",
+        "bootstrap_tokens",
+        "funnel_url",
+        "work_intents",
+        "plan_origins",
+        "repo_targets",
+        "plan_repo_targets",
+        "task_repo_targets",
+    }
 
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
@@ -326,8 +351,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "012_pull_requests_and_pr_events"
+    assert first_version == "013_work_intents_repo_targets"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "012_pull_requests_and_pr_events"
+    assert second_version == "013_work_intents_repo_targets"

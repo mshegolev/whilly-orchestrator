@@ -73,7 +73,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import asyncpg
 
-from whilly.core.models import PlanId, Priority, Task, TaskId, TaskStatus, WorkerId
+from whilly.core.models import PlanId, Priority, RepoTarget, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import to avoid import cycles.
@@ -351,6 +351,11 @@ RETURNING
     tasks.test_steps,
     tasks.prd_requirement,
     tasks.version,
+    (
+        SELECT trt.repo_target_id
+        FROM task_repo_targets trt
+        WHERE trt.task_id = tasks.id
+    ) AS repo_target_id,
     -- ``claimed_at`` is added to RETURNING (M1 fix
     -- VAL-CROSS-BACKCOMPAT-909) so the CLAIM event payload can
     -- carry the post-update timestamp without an extra SELECT
@@ -417,7 +422,12 @@ RETURNING
     tasks.acceptance_criteria,
     tasks.test_steps,
     tasks.prd_requirement,
-    tasks.version
+    tasks.version,
+    (
+        SELECT trt.repo_target_id
+        FROM task_repo_targets trt
+        WHERE trt.task_id = tasks.id
+    ) AS repo_target_id
 """
 
 
@@ -552,6 +562,19 @@ VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
 _SELECT_TASK_PLAN_ID_SQL: str = """
 SELECT plan_id
 FROM tasks
+WHERE id = $1
+"""
+
+
+_SELECT_REPO_TARGET_SQL: str = """
+SELECT
+    id,
+    provider,
+    repo_full_name,
+    clone_url,
+    default_branch,
+    credential_policy
+FROM repo_targets
 WHERE id = $1
 """
 
@@ -1253,7 +1276,17 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         test_steps=tuple(test_steps),
         prd_requirement=row["prd_requirement"],
         version=row["version"],
+        repo_target_id=_optional_record_string(row, "repo_target_id"),
     )
+
+
+def _optional_record_string(row: asyncpg.Record, key: str) -> str:
+    """Return optional string column from an asyncpg record."""
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 class TaskRepository:
@@ -3023,6 +3056,21 @@ class TaskRepository:
         ref = row["github_issue_ref"]
         return None if ref is None else str(ref)
 
+    async def get_repo_target(self, repo_target_id: str) -> RepoTarget | None:
+        """Return the repository target identified by ``repo_target_id``."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_REPO_TARGET_SQL, repo_target_id)
+        if row is None:
+            return None
+        return RepoTarget(
+            id=row["id"],
+            provider=row["provider"],
+            repo_full_name=row["repo_full_name"],
+            clone_url=row["clone_url"],
+            default_branch=row["default_branch"],
+            credential_policy=row["credential_policy"],
+        )
+
     async def insert_pull_request(
         self,
         *,
@@ -3033,27 +3081,29 @@ class TaskRepository:
         branch: str,
         head_sha: str | None,
         state: str = "open",
+        repo_target_id: str | None = None,
     ) -> int:
         """Insert one ``pull_requests`` row and return the new ``id``.
 
         Used by the post-COMPLETE PR opener hook (VAL-PR-005). The row's
         ``state`` defaults to ``"open"``; failure paths that opt to
         record a row instead of skipping it pass ``state="failed"``.
-        Composite UNIQUE on ``(plan_id, pr_number)`` rejects accidental
-        duplicates from a retry loop with a SQL ``UniqueViolationError``
-        — callers are expected to log and continue rather than
-        re-raising.
+        Repo-aware deployments pass ``repo_target_id`` so two target
+        repositories under the same plan can both have PR ``#1`` without
+        colliding. Legacy callers leave it ``None`` and retain the old
+        plan+number uniqueness.
         """
         async with self._pool.acquire() as conn:
             new_id = await conn.fetchval(
                 """
                 INSERT INTO pull_requests
-                    (plan_id, task_id, pr_number, pr_url, branch, head_sha, state)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (plan_id, task_id, repo_target_id, pr_number, pr_url, branch, head_sha, state)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id
                 """,
                 plan_id,
                 task_id,
+                repo_target_id,
                 pr_number,
                 pr_url,
                 branch,
@@ -3061,9 +3111,10 @@ class TaskRepository:
                 state,
             )
         logger.info(
-            "insert_pull_request: plan=%s task=%s pr_number=%s state=%s id=%s",
+            "insert_pull_request: plan=%s task=%s repo_target=%s pr_number=%s state=%s id=%s",
             plan_id,
             task_id,
+            repo_target_id,
             pr_number,
             state,
             new_id,
@@ -3085,7 +3136,7 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, plan_id, task_id, pr_number, pr_url, branch, head_sha,
+                SELECT id, plan_id, task_id, repo_target_id, pr_number, pr_url, branch, head_sha,
                        state, review_decision, last_seen_review_id,
                        last_seen_check_run_id, last_synced_at
                 FROM pull_requests

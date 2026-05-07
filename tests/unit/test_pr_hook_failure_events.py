@@ -76,7 +76,7 @@ class _FakeRepo:
         return len(self.events)
 
 
-def _make_task() -> Task:
+def _make_task(*, repo_target_id: str = "") -> Task:
     return Task(
         id="T-PR-HOOK-FAIL-1",
         phase="GH-Issues",
@@ -89,6 +89,7 @@ def _make_task() -> Task:
         acceptance_criteria=["GET /health returns 200"],
         test_steps=[],
         prd_requirement="https://github.com/foo/bar/issues/42",
+        repo_target_id=repo_target_id,
     )
 
 
@@ -302,6 +303,35 @@ def test_hook_skipped_when_plan_has_no_issue_ref(
     assert captured == []
     assert repo.events == [], f"warning event leaked when github_issue_ref is NULL: {repo.events!r}"
     assert repo.pull_requests == []
+
+
+def test_hook_uses_task_repo_target_when_plan_has_no_issue_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHILLY_AUTO_OPEN_PR", "1")
+    repo = _FakeRepo(github_issue_ref=None)
+    push = _Proc(0)
+    pr = _Proc(0, "https://github.com/foo/bar/pull/77\n")
+
+    def fake_run(cmd, cwd, timeout=60):  # noqa: ARG001
+        return push if cmd[0] == "git" else pr
+
+    with patch.object(gp, "_run", side_effect=fake_run):
+        result = asyncio.run(
+            run_post_complete_pr_hook(
+                repo,
+                plan_id=PLAN_ID,
+                task=_make_task(repo_target_id="github:foo/bar"),
+                worktree_path=tmp_path,
+                opener=open_pr_for_task,
+            )
+        )
+
+    assert result is not None and result.ok
+    assert repo.pull_requests[0]["repo_target_id"] == "github:foo/bar"
+    success_events = [e for e in repo.events if e["event_type"] == PR_OPENED_EVENT_TYPE]
+    assert success_events[0]["payload"]["repo_target_id"] == "github:foo/bar"
 
 
 # ---------------------------------------------------------------------------
