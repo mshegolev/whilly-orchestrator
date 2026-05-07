@@ -15,12 +15,13 @@
   <tbody>
     {% if workers %}
       {% for w in workers %}
-        <tr id="worker-{{ w.worker_id }}">
+        <tr id="worker-{{ w.worker_id }}"
+            data-filter-text="{{ w.worker_id }} {{ w.hostname }} {{ w.owner_email or '' }} {{ w.status }}">
           <td><code>{{ w.worker_id }}</code></td>
           <td>{{ w.owner_email if w.owner_email else "—" }}</td>
           <td>{{ w.hostname }}</td>
           <td><span class="status status-{{ w.status }}">{{ w.status }}</span></td>
-          <td><time datetime="{{ w.last_heartbeat_iso }}">{{ w.last_heartbeat_human }}</time></td>
+          <td><time datetime="{{ format_iso(w.last_heartbeat) }}">{{ format_human(w.last_heartbeat) }}</time></td>
         </tr>
       {% endfor %}
     {% else %}

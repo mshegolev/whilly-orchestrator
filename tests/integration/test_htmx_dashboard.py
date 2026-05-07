@@ -25,6 +25,7 @@ Covers the m3-htmx-dashboard feature:
 from __future__ import annotations
 
 import re
+import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -81,13 +82,18 @@ async def _seed_task(
     status: str = "PENDING",
     priority: str = "medium",
     claimed_by: str | None = None,
+    acceptance_criteria: list[str] | None = None,
+    test_steps: list[str] | None = None,
 ) -> None:
     claimed_at = datetime.now(tz=UTC) if claimed_by is not None else None
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO tasks (id, plan_id, status, priority, claimed_by, claimed_at, description)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO tasks (
+                id, plan_id, status, priority, claimed_by, claimed_at, description,
+                acceptance_criteria, test_steps
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
             """,
             task_id,
             plan_id,
@@ -96,6 +102,8 @@ async def _seed_task(
             claimed_by,
             claimed_at,
             f"task {task_id}",
+            json.dumps(acceptance_criteria or []),
+            json.dumps(test_steps or []),
         )
 
 
@@ -120,6 +128,27 @@ async def _seed_worker(
             datetime.now(tz=UTC) - timedelta(seconds=5),
             datetime.now(tz=UTC),
             f"hash-{worker_id}",
+        )
+
+
+async def _seed_event(
+    pool: asyncpg.Pool,
+    *,
+    task_id: str | None,
+    plan_id: str | None,
+    event_type: str,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO events (task_id, plan_id, event_type, detail, created_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5)
+            """,
+            task_id,
+            plan_id,
+            event_type,
+            json.dumps({"source": "test-dashboard"}),
+            datetime.now(tz=UTC),
         )
 
 
@@ -173,6 +202,55 @@ async def test_dashboard_mobile_responsive_block(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
     assert "@media (max-width: 480px)" in body, "mobile-responsive media query missing"
+
+
+async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClient) -> None:
+    response = await client.get("/")
+    body = response.text
+
+    for label in ("Overview", "Compliance", "Plans/Tasks", "Workers", "Events"):
+        assert label in body
+    assert 'id="dashboard-filter"' in body
+    assert 'data-surface="overview"' in body
+    assert 'data-surface="compliance"' in body
+    assert 'data-surface="plans_tasks"' in body
+    assert 'data-surface="workers"' in body
+    assert 'data-surface="events"' in body
+    assert "r=refresh" in body
+    assert "1-5=switch" in body
+    assert "/=filter" in body
+    assert "p=pause" in body
+    assert "isEditableTarget" in body, "hotkeys must not hijack typing in inputs"
+
+
+async def test_dashboard_renders_compliance_gaps_and_events(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = await _seed_plan(db_pool, "plan-review")
+    await _seed_worker(db_pool, worker_id="worker-review", hostname="review.local")
+    await _seed_task(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        status="IN_PROGRESS",
+        priority="critical",
+        claimed_by="worker-review",
+        acceptance_criteria=["manual approval is captured"],
+        test_steps=["human review required"],
+    )
+    await _seed_task(db_pool, task_id="t-missing-ac", plan_id=plan_id, status="PENDING")
+    await _seed_event(db_pool, task_id="t-human-review", plan_id=plan_id, event_type="START")
+
+    response = await client.get("/")
+    body = response.text
+
+    assert "Compliance - Human review / verification gaps" in body
+    assert "awaiting human review" in body
+    assert "missing acceptance criteria" in body
+    assert "t-human-review" in body
+    assert "Events" in body
+    assert "START" in body
 
 
 # ─── Initial render: rows for ready / in_progress / done tasks ─────────

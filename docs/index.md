@@ -64,6 +64,7 @@ successful completion.
 | **[Getting Started]({{ site.baseurl }}/Getting-Started)** | First time here — eight practical walkthroughs |
 | **[Full Usage Reference]({{ site.baseurl }}/Whilly-Usage)** | Every CLI flag, env var, and config field |
 | **[GitHub Integration Guide]({{ site.baseurl }}/GitHub-Integration-Guide)** | Setting up Projects v2 + board sync |
+| **[Current vs Target]({{ site.baseurl }}/Current-vs-Target)** | Alignment status against the target documentation pack |
 | **[Interfaces & Tasks]({{ site.baseurl }}/Whilly-Interfaces-and-Tasks)** | Module contracts + the JSON plan schema |
 | **[Architecture Decisions]({{ site.baseurl }}/workshop/adr/)** | Why things are the way they are (if published) |
 
@@ -82,6 +83,8 @@ Full module map lives in [`Whilly-Interfaces-and-Tasks`]({{ site.baseurl }}/Whil
 
 ## Current status
 
-- **643 tests**, cross-OS CI (Linux / macOS / Windows) on every PR.
+- Focused pytest suites, Ruff formatting/linting, and import-boundary checks.
 - Layered config — `whilly.toml` + OS keyring, migrates from legacy `.env` with one command.
+- Target documentation imported under [`docs/target/`]({{ site.baseurl }}/target/)
+  with current-vs-target status tracked separately.
 - [Latest release](https://github.com/mshegolev/whilly-orchestrator/releases/latest) · [Open issues](https://github.com/mshegolev/whilly-orchestrator/issues) · [Changelog](https://github.com/mshegolev/whilly-orchestrator/commits/main)

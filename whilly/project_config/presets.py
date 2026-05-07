@@ -4,22 +4,36 @@ from __future__ import annotations
 
 from whilly.project_config.models import PipelineStepConfig
 
-SUPPORTED_PROJECT_TYPES = frozenset({"etl", "graphql_api", "feature_development", "generic"})
+PUBLIC_PROJECT_TYPES = frozenset({"python_backend", "etl_pipeline", "documentation", "graphql_api", "generic"})
+PROJECT_TYPE_ALIASES = {
+    "etl": "etl_pipeline",
+    "feature_development": "python_backend",
+}
+SUPPORTED_PROJECT_TYPES = frozenset((*PUBLIC_PROJECT_TYPES, *PROJECT_TYPE_ALIASES))
+
+
+def normalize_project_type(project_type: str) -> str:
+    """Return the canonical public project type for ``project_type``."""
+
+    kind = project_type.strip().lower()
+    return PROJECT_TYPE_ALIASES.get(kind, kind)
 
 
 def preset_pipeline(project_type: str) -> tuple[PipelineStepConfig, ...]:
     """Return a default pipeline for ``project_type``."""
 
-    kind = project_type.strip().lower()
-    if kind == "etl":
+    kind = normalize_project_type(project_type)
+    if kind == "etl_pipeline":
         return _etl_pipeline()
     if kind == "graphql_api":
         return _graphql_pipeline()
-    if kind == "feature_development":
-        return _feature_pipeline()
+    if kind == "python_backend":
+        return _python_backend_pipeline()
+    if kind == "documentation":
+        return _documentation_pipeline()
     if kind == "generic":
         return _generic_pipeline()
-    raise ValueError(f"unsupported project_type {project_type!r}; expected one of {sorted(SUPPORTED_PROJECT_TYPES)}")
+    raise ValueError(f"unsupported project_type {project_type!r}; expected one of {sorted(PUBLIC_PROJECT_TYPES)}")
 
 
 def _etl_pipeline() -> tuple[PipelineStepConfig, ...]:
@@ -149,7 +163,7 @@ def _graphql_pipeline() -> tuple[PipelineStepConfig, ...]:
     )
 
 
-def _feature_pipeline() -> tuple[PipelineStepConfig, ...]:
+def _python_backend_pipeline() -> tuple[PipelineStepConfig, ...]:
     return (
         PipelineStepConfig(
             id="decompose-feature",
@@ -193,6 +207,45 @@ def _feature_pipeline() -> tuple[PipelineStepConfig, ...]:
             depends_on=("run-quality-gates",),
             human_gate=True,
             acceptance_criteria=("Human approval is recorded before final release or PR transition.",),
+        ),
+    )
+
+
+def _documentation_pipeline() -> tuple[PipelineStepConfig, ...]:
+    return (
+        PipelineStepConfig(
+            id="collect-doc-context",
+            kind="intake",
+            title="Collect documentation context",
+            description="Read the requested documentation scope, source references, and audience requirements.",
+            acceptance_criteria=("Documentation scope, source material, and target audience are explicit.",),
+        ),
+        PipelineStepConfig(
+            id="draft-docs",
+            kind="development",
+            title="Draft documentation changes",
+            description="Create or update documentation according to the accepted scope.",
+            depends_on=("collect-doc-context",),
+            repo_role="docs",
+            acceptance_criteria=("Draft documentation addresses the requested scope with accurate source references.",),
+        ),
+        PipelineStepConfig(
+            id="verify-docs",
+            kind="quality_gate",
+            title="Verify documentation quality",
+            description="Run configured documentation lint, link, or extractability checks.",
+            depends_on=("draft-docs",),
+            repo_role="docs",
+            acceptance_criteria=("Documentation checks pass or failures are documented with follow-up actions.",),
+        ),
+        PipelineStepConfig(
+            id="human-doc-review",
+            kind="human_gate",
+            title="Human review of documentation",
+            description="Reviewer confirms the documentation is accurate before publication or PR completion.",
+            depends_on=("verify-docs",),
+            human_gate=True,
+            acceptance_criteria=("Human approval or requested changes are recorded.",),
         ),
     )
 

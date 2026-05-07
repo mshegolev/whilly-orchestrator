@@ -130,6 +130,114 @@ def test_feature_development_config_supports_decomposition_to_implementation() -
     assert any(task["id"].endswith("GENERATE-TESTS") for task in payload["tasks"])
 
 
+@pytest.mark.parametrize(
+    "project_type",
+    ["python_backend", "etl_pipeline", "documentation", "graphql_api", "generic"],
+)
+def test_public_target_project_types_are_supported(project_type: str) -> None:
+    config = project_config_from_dict({"name": f"{project_type} profile", "project_type": project_type})
+
+    assert config.project_type == project_type
+    assert config.pipeline
+
+
+@pytest.mark.parametrize(
+    ("alias", "canonical"),
+    [("etl", "etl_pipeline"), ("feature_development", "python_backend")],
+)
+def test_legacy_project_type_aliases_are_canonicalized(alias: str, canonical: str) -> None:
+    config = project_config_from_dict({"name": "Legacy profile", "project_type": alias})
+
+    assert config.project_type == canonical
+    assert build_plan_payload(config)["origin"]["decomposition_mode"] == f"configured:{canonical}"
+
+
+@pytest.mark.parametrize(
+    ("field", "payload", "message"),
+    [
+        ("task_sources", {"task_sources": [{"kind": "spreadsheet"}]}, "unsupported task source kind"),
+        ("sinks", {"sinks": [{"type": "email"}]}, "unsupported sink type"),
+        ("default_runner", {"default_runner": "unknown_runner"}, "unsupported default_runner"),
+    ],
+)
+def test_project_config_rejects_unknown_source_sink_and_runner_names(
+    field: str,
+    payload: dict,
+    message: str,
+) -> None:
+    data = {"name": f"Bad {field}", "project_type": "generic", **payload}
+
+    with pytest.raises(ProjectConfigError, match=message):
+        project_config_from_dict(data)
+
+
+def test_project_config_rejects_required_human_review_stage_that_is_not_in_pipeline() -> None:
+    with pytest.raises(ProjectConfigError, match="required human_loop step .* is not in pipeline"):
+        project_config_from_dict(
+            {
+                "name": "Missing required stage",
+                "project_type": "generic",
+                "human_loop": {"required_steps": ["publish"]},
+            }
+        )
+
+
+def test_project_config_rejects_disabled_human_loop_with_required_steps() -> None:
+    with pytest.raises(ProjectConfigError, match="human_loop.enabled is false"):
+        project_config_from_dict(
+            {
+                "name": "Contradictory review",
+                "project_type": "generic",
+                "human_loop": {"enabled": False, "required_steps": ["verify"]},
+            }
+        )
+
+
+def test_project_config_rejects_unsafe_verification_commands() -> None:
+    with pytest.raises(ProjectConfigError, match="unsafe verification command"):
+        project_config_from_dict(
+            {
+                "name": "Unsafe verification",
+                "project_type": "generic",
+                "verification": {
+                    "commands": [
+                        {"name": "cleanup", "command": "rm -rf /", "required": True},
+                    ]
+                },
+            }
+        )
+
+
+def test_project_config_accepts_target_profile_shape() -> None:
+    config = project_config_from_dict(
+        {
+            "project": {
+                "name": "Target profile",
+                "type": "python_backend",
+                "default_runner": "opencode",
+            },
+            "sources": [{"type": "github_issues", "ref": "owner/repo#1"}],
+            "pipeline": {
+                "stages": [
+                    {"id": "intake", "type": "intake", "title": "Intake"},
+                    {"id": "execute", "type": "execute", "title": "Execute", "depends_on": ["intake"]},
+                    {"id": "verify", "type": "verify", "title": "Verify", "depends_on": ["execute"]},
+                ]
+            },
+            "verification": {"commands": [{"name": "unit", "command": "pytest -q tests/unit", "required": True}]},
+            "sinks": [{"type": "jsonl", "config": {"path": "out/events.jsonl"}}],
+            "human_loop": {"required_steps": ["verify"]},
+        }
+    )
+
+    assert config.name == "Target profile"
+    assert config.default_runner == "opencode"
+    assert config.task_sources[0].kind == "github_issues"
+    assert config.pipeline[2].human_gate is True
+    assert config.verification_commands[0].command == "pytest -q tests/unit"
+    assert config.sinks[0].type == "jsonl"
+
+
 def test_explicit_pipeline_overrides_preset_and_validates_repo_roles() -> None:
     with pytest.raises(ProjectConfigError, match="unknown repo_role"):
         project_config_from_dict(

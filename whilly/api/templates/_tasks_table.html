@@ -16,13 +16,14 @@
   <tbody>
     {% if tasks %}
       {% for t in tasks %}
-        <tr id="task-{{ t.id }}">
-          <td><code>{{ t.id }}</code></td>
+        <tr id="task-{{ t.task_id }}"
+            data-filter-text="{{ t.task_id }} {{ t.plan_id }} {{ t.status }} {{ t.priority }} {{ t.claimed_by or '' }}">
+          <td><code>{{ t.task_id }}</code></td>
           <td>{{ t.plan_id }}</td>
           <td><span class="status status-{{ t.status|lower }}">{{ t.status }}</span></td>
           <td><span class="priority priority-{{ t.priority }}">{{ t.priority }}</span></td>
           <td>{{ t.claimed_by if t.claimed_by else "—" }}</td>
-          <td><time datetime="{{ t.updated_at_iso }}">{{ t.updated_at_human }}</time></td>
+          <td><time datetime="{{ format_iso(t.updated_at) }}">{{ format_human(t.updated_at) }}</time></td>
         </tr>
       {% endfor %}
     {% else %}
