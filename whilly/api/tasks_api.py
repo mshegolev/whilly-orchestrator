@@ -32,11 +32,13 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections.abc import Mapping
 from typing import Any, Final
 
 import asyncpg
 
 from whilly.core.models import TaskStatus
+from whilly.operator_views import EventRow, HumanReviewState, human_review_states_from_events
 
 PRIORITY_ORDER_SQL: Final[str] = (
     "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
@@ -71,6 +73,14 @@ ORDER BY priority_rank ASC, id ASC
 LIMIT $5
 """
 
+_LIST_HUMAN_REVIEW_EVENTS_SQL: Final[str] = """
+SELECT id, task_id, plan_id, event_type, created_at, payload, detail
+FROM events
+WHERE task_id = ANY($1::text[])
+  AND event_type LIKE 'human_review.%'
+ORDER BY created_at ASC, id ASC
+"""
+
 
 class CursorDecodeError(ValueError):
     """Raised when a client supplies a malformed ``cursor`` query param."""
@@ -103,7 +113,7 @@ def decode_cursor(value: str) -> tuple[int, str]:
     return decoded[0], decoded[1]
 
 
-def _row_to_payload(row: asyncpg.Record) -> dict[str, Any]:
+def _row_to_payload(row: asyncpg.Record, human_review: HumanReviewState | None = None) -> dict[str, Any]:
     claimed_at = row["claimed_at"]
     return {
         "id": row["id"],
@@ -117,6 +127,7 @@ def _row_to_payload(row: asyncpg.Record) -> dict[str, Any]:
         "description": row["description"] or "",
         "acceptance_criteria": _decode_json_list(row["acceptance_criteria"]),
         "test_steps": _decode_json_list(row["test_steps"]),
+        "human_review": _human_review_payload(human_review),
     }
 
 
@@ -157,16 +168,61 @@ async def list_tasks(
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *args)
+        has_more = len(rows) > limit
+        page_rows = rows[:limit]
+        task_ids = [str(row["id"]) for row in page_rows]
+        event_rows = await conn.fetch(_LIST_HUMAN_REVIEW_EVENTS_SQL, task_ids) if task_ids else []
 
-    has_more = len(rows) > limit
-    page_rows = rows[:limit]
-    tasks = [_row_to_payload(r) for r in page_rows]
+    human_review_by_task = human_review_states_from_events(tuple(_event_row(row) for row in event_rows))
+    tasks = [_row_to_payload(r, human_review_by_task.get(str(r["id"]))) for r in page_rows]
     next_cursor: str | None = None
     if has_more and page_rows:
         last = page_rows[-1]
         next_cursor = encode_cursor(int(last["priority_rank"]), last["id"])
 
     return {"tasks": tasks, "next_cursor": next_cursor}
+
+
+def _event_row(row: asyncpg.Record) -> EventRow:
+    return EventRow(
+        event_id=int(row["id"]),
+        task_id=str(row["task_id"]) if row["task_id"] is not None else None,
+        plan_id=str(row["plan_id"]) if row["plan_id"] is not None else None,
+        event_type=str(row["event_type"]),
+        created_at=row["created_at"],
+        detail=_merged_event_detail(row),
+    )
+
+
+def _merged_event_detail(row: asyncpg.Record) -> dict[str, Any]:
+    merged = _decode_json_mapping(row["detail"])
+    merged.update(_decode_json_mapping(row["payload"]))
+    return merged
+
+
+def _decode_json_mapping(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    return dict(value)
+
+
+def _human_review_payload(state: HumanReviewState | None) -> dict[str, Any]:
+    state = state or HumanReviewState()
+    return {
+        "required": state.required,
+        "decision": state.decision,
+        "stage_id": state.stage_id or None,
+        "reason": state.reason or None,
+        "reviewer": state.reviewer,
+    }
 
 
 __all__ = [

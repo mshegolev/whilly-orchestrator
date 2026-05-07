@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Final
+
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_APPROVED,
+    HUMAN_REVIEW_CHANGES_REQUESTED,
+    HUMAN_REVIEW_REJECTED,
+    HUMAN_REVIEW_REQUIRED,
+)
 
 
 class OperatorSurface(str, Enum):
@@ -20,6 +28,16 @@ class OperatorSurface(str, Enum):
 
 
 @dataclass(frozen=True)
+class HumanReviewState:
+    required: bool = False
+    decision: str | None = None
+    stage_id: str = ""
+    reason: str = ""
+    reviewer: str | None = None
+    approval_channel: str = ""
+
+
+@dataclass(frozen=True)
 class OperatorTaskRow:
     task_id: str
     plan_id: str
@@ -30,6 +48,7 @@ class OperatorTaskRow:
     updated_at: datetime
     acceptance_criteria: tuple[str, ...] = ()
     test_steps: tuple[str, ...] = ()
+    human_review: HumanReviewState = field(default_factory=HumanReviewState)
 
 
 @dataclass(frozen=True)
@@ -56,6 +75,9 @@ class ReviewGap:
     task_id: str
     plan_id: str
     reason: str
+    stage_id: str = ""
+    reviewer: str | None = None
+    approval_channel: str = ""
 
 
 @dataclass(frozen=True)
@@ -108,11 +130,19 @@ LIMIT $1
 """
 
 _EVENTS_SQL: Final[str] = """
-SELECT id, task_id, plan_id, event_type, created_at, COALESCE(detail, payload, '{}'::jsonb) AS detail
+SELECT id, task_id, plan_id, event_type, created_at, COALESCE(payload, '{}'::jsonb) AS payload, detail
 FROM events
 WHERE ($1::text IS NULL OR plan_id = $1)
 ORDER BY created_at DESC, id DESC
 LIMIT $2
+"""
+
+_HUMAN_REVIEW_EVENTS_SQL: Final[str] = """
+SELECT id, task_id, plan_id, event_type, created_at, COALESCE(payload, '{}'::jsonb) AS payload, detail
+FROM events
+WHERE task_id = ANY($1::text[])
+  AND event_type LIKE 'human_review.%'
+ORDER BY created_at ASC, id ASC
 """
 
 
@@ -131,10 +161,13 @@ async def fetch_operator_snapshot(
         task_rows = await conn.fetch(_TASKS_SQL, plan_id, tasks_limit)
         worker_rows = await conn.fetch(_WORKERS_SQL, workers_limit)
         event_rows = await conn.fetch(_EVENTS_SQL, plan_id, events_limit)
+        task_ids = [str(row["id"]) for row in task_rows]
+        human_review_rows = await conn.fetch(_HUMAN_REVIEW_EVENTS_SQL, task_ids) if task_ids else []
     return build_operator_snapshot(
         tasks=task_rows,
         workers=worker_rows,
         events=event_rows,
+        human_review_events=human_review_rows,
         rendered_at=rendered_at,
     )
 
@@ -144,6 +177,7 @@ def build_operator_snapshot(
     tasks: Sequence[Mapping[str, Any]],
     workers: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
+    human_review_events: Sequence[Mapping[str, Any]] | None = None,
     rendered_at: datetime | None = None,
 ) -> OperatorSnapshot:
     """Build a pure value snapshot from database-like mappings."""
@@ -151,6 +185,11 @@ def build_operator_snapshot(
     task_rows = tuple(_task_row(row) for row in tasks)
     worker_rows = tuple(_worker_row(row) for row in workers)
     event_rows = tuple(_event_row(row) for row in events)
+    human_review_event_rows = tuple(_event_row(row) for row in (human_review_events or ()))
+    human_review_by_task = human_review_states_from_events((*event_rows, *human_review_event_rows))
+    task_rows = tuple(
+        replace(task, human_review=human_review_by_task.get(task.task_id, task.human_review)) for task in task_rows
+    )
     review_gaps = _review_gaps(task_rows)
     by_status: dict[str, int] = {}
     for task in task_rows:
@@ -220,8 +259,53 @@ def _event_row(row: Mapping[str, Any]) -> EventRow:
         plan_id=_optional_str(row.get("plan_id")),
         event_type=str(row["event_type"]),
         created_at=row["created_at"],
-        detail=dict(row.get("detail") or {}),
+        detail=_merged_event_detail(row),
     )
+
+
+def human_review_states_from_events(events: Sequence[EventRow]) -> Mapping[str, HumanReviewState]:
+    """Derive the latest human-review checkpoint state per task from audit events."""
+
+    checkpoints: dict[tuple[str, str], HumanReviewState] = {}
+    ordered = sorted(events, key=lambda event: (event.created_at, event.event_id))
+    for event in ordered:
+        if not event.event_type.startswith("human_review."):
+            continue
+        task_id = event.task_id or _string_value(event.detail.get("task_id"))
+        if not task_id:
+            continue
+        stage_id = _string_value(event.detail.get("stage_id"))
+        key = (task_id, stage_id)
+        previous = checkpoints.get(key, HumanReviewState(stage_id=stage_id))
+        if event.event_type == HUMAN_REVIEW_REQUIRED:
+            checkpoints[key] = HumanReviewState(
+                required=True,
+                decision=None,
+                stage_id=stage_id,
+                reason=_string_value(event.detail.get("reason")),
+                reviewer=None,
+                approval_channel=_string_value(event.detail.get("approval_channel")),
+            )
+            continue
+
+        decision = _human_review_decision(event.event_type)
+        if decision is None:
+            continue
+        checkpoints[key] = HumanReviewState(
+            required=True,
+            decision=decision,
+            stage_id=stage_id or previous.stage_id,
+            reason=previous.reason or _string_value(event.detail.get("reason")),
+            reviewer=_optional_str(event.detail.get("reviewer")),
+            approval_channel=previous.approval_channel or _string_value(event.detail.get("approval_channel")),
+        )
+
+    by_task: dict[str, HumanReviewState] = {}
+    for (task_id, _), state in checkpoints.items():
+        current = by_task.get(task_id)
+        if current is None or _human_review_state_rank(state) < _human_review_state_rank(current):
+            by_task[task_id] = state
+    return by_task
 
 
 def _review_gaps(tasks: Sequence[OperatorTaskRow]) -> tuple[ReviewGap, ...]:
@@ -232,19 +316,87 @@ def _review_gaps(tasks: Sequence[OperatorTaskRow]) -> tuple[ReviewGap, ...]:
             continue
         if task.status in {"PENDING", "DONE"}:
             gaps.append(ReviewGap(task_id=task.task_id, plan_id=task.plan_id, reason="pending verification evidence"))
-        if _mentions_human_review(task) and task.status != "DONE":
+        if task.human_review.required and task.human_review.decision != "approved":
+            gaps.append(
+                ReviewGap(
+                    task_id=task.task_id,
+                    plan_id=task.plan_id,
+                    reason=_human_review_gap_reason(task.human_review),
+                    stage_id=task.human_review.stage_id,
+                    reviewer=task.human_review.reviewer,
+                    approval_channel=task.human_review.approval_channel,
+                )
+            )
+        elif _mentions_human_review(task) and task.status != "DONE":
             gaps.append(ReviewGap(task_id=task.task_id, plan_id=task.plan_id, reason="awaiting human review"))
     rank = {
         "missing acceptance criteria": 0,
         "awaiting human review": 1,
-        "pending verification evidence": 2,
+        "human review changes requested": 2,
+        "human review rejected": 3,
+        "pending verification evidence": 4,
     }
     return tuple(sorted(gaps, key=lambda gap: (rank.get(gap.reason, 99), gap.plan_id, gap.task_id)))
+
+
+def _merged_event_detail(row: Mapping[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    payload = row.get("payload")
+    detail = row.get("detail")
+    merged.update(_json_mapping(detail))
+    merged.update(_json_mapping(payload))
+    return merged
+
+
+def _json_mapping(raw: Any) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    return dict(raw)
+
+
+def _human_review_decision(event_type: str) -> str | None:
+    if event_type == HUMAN_REVIEW_APPROVED:
+        return "approved"
+    if event_type == HUMAN_REVIEW_REJECTED:
+        return "rejected"
+    if event_type == HUMAN_REVIEW_CHANGES_REQUESTED:
+        return "changes_requested"
+    return None
+
+
+def _human_review_state_rank(state: HumanReviewState) -> int:
+    if state.required and state.decision != "approved":
+        return 0
+    if state.required:
+        return 1
+    return 2
+
+
+def _human_review_gap_reason(state: HumanReviewState) -> str:
+    if state.decision == "changes_requested":
+        return "human review changes requested"
+    if state.decision == "rejected":
+        return "human review rejected"
+    return "awaiting human review"
 
 
 def _mentions_human_review(task: OperatorTaskRow) -> bool:
     text = " ".join((*task.acceptance_criteria, *task.test_steps)).lower()
     return "human" in text or "approval" in text or "review" in text
+
+
+def _string_value(raw: Any) -> str:
+    if raw is None:
+        return ""
+    return str(raw)
 
 
 def _string_tuple(raw: Any) -> tuple[str, ...]:
@@ -264,7 +416,17 @@ def _optional_str(raw: Any) -> str | None:
 
 
 def _matches_task(row: OperatorTaskRow, needle: str) -> bool:
-    fields = (row.task_id, row.plan_id, row.status, row.priority, row.claimed_by or "")
+    fields = (
+        row.task_id,
+        row.plan_id,
+        row.status,
+        row.priority,
+        row.claimed_by or "",
+        row.human_review.stage_id,
+        row.human_review.decision or "",
+        row.human_review.reason,
+        row.human_review.reviewer or "",
+    )
     return any(needle in field.lower() for field in fields)
 
 
@@ -279,7 +441,7 @@ def _matches_event(row: EventRow, needle: str) -> bool:
 
 
 def _matches_gap(row: ReviewGap, needle: str) -> bool:
-    fields = (row.task_id, row.plan_id, row.reason)
+    fields = (row.task_id, row.plan_id, row.reason, row.stage_id, row.reviewer or "", row.approval_channel)
     return any(needle in field.lower() for field in fields)
 
 
@@ -289,6 +451,7 @@ __all__ = [
     "WORKERS_LIMIT",
     "ComplianceSummary",
     "EventRow",
+    "HumanReviewState",
     "OperatorSnapshot",
     "OperatorSurface",
     "OperatorTaskRow",
@@ -297,4 +460,5 @@ __all__ = [
     "build_operator_snapshot",
     "fetch_operator_snapshot",
     "filter_snapshot",
+    "human_review_states_from_events",
 ]

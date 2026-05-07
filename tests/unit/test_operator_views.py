@@ -95,6 +95,69 @@ def test_build_operator_snapshot_summarizes_operator_surfaces() -> None:
     )
 
 
+def test_human_review_required_event_opens_gap_until_approved() -> None:
+    now = datetime(2026, 5, 7, 9, 0, tzinfo=UTC)
+    task = {
+        "id": "T-release",
+        "plan_id": "P-release",
+        "status": "IN_PROGRESS",
+        "priority": "critical",
+        "claimed_by": "worker-release",
+        "claimed_at": now,
+        "updated_at": now,
+        "acceptance_criteria": ["release evidence attached"],
+        "test_steps": ["pytest -q"],
+    }
+    required = {
+        "id": 1,
+        "task_id": "T-release",
+        "plan_id": "P-release",
+        "event_type": "human_review.required",
+        "created_at": now,
+        "payload": {
+            "task_id": "T-release",
+            "plan_id": "P-release",
+            "stage_id": "release_review",
+            "reason": "stage_human_gate",
+        },
+        "detail": {
+            "task_id": "T-release",
+            "plan_id": "P-release",
+            "stage_id": "diagnostic_stage",
+            "reason": "diagnostic_reason",
+        },
+    }
+
+    waiting = build_operator_snapshot(tasks=[task], workers=[], events=[required], rendered_at=now)
+
+    assert waiting.review_gaps == (
+        ReviewGap(
+            task_id="T-release",
+            plan_id="P-release",
+            reason="awaiting human review",
+            stage_id="release_review",
+        ),
+    )
+
+    approved = {
+        "id": 2,
+        "task_id": "T-release",
+        "plan_id": "P-release",
+        "event_type": "human_review.approved",
+        "created_at": now,
+        "detail": {
+            "task_id": "T-release",
+            "plan_id": "P-release",
+            "stage_id": "release_review",
+            "reviewer": "lead@example.com",
+        },
+    }
+
+    closed = build_operator_snapshot(tasks=[task], workers=[], events=[required, approved], rendered_at=now)
+
+    assert closed.review_gaps == ()
+
+
 def test_filter_snapshot_keeps_matching_rows_across_surfaces() -> None:
     now = datetime(2026, 5, 7, 9, 0, tzinfo=UTC)
     snapshot = OperatorSnapshot(

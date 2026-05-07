@@ -74,7 +74,7 @@
     .table-wrapper { overflow-x: auto; }
     .surface-panel { margin-block: 1rem; }
     code { font-family: var(--whilly-mono); }
-    .status, .priority {
+    .status, .priority, .review {
       display: inline-block;
       padding: 0.1rem 0.5rem;
       border-radius: 0.25rem;
@@ -90,6 +90,9 @@
     .priority-high { color: #b36b00; }
     .priority-medium { color: inherit; }
     .priority-low { opacity: 0.7; }
+    .review-approved { color: #0a7d3e; }
+    .review-pending, .review-changes_requested { color: #b36b00; }
+    .review-rejected { color: #b00020; }
     .empty-state { opacity: 0.65; }
     .hotkeys, .polling-state { opacity: 0.72; }
     .polling-state[aria-live] { min-width: 4.5rem; }
@@ -151,7 +154,13 @@
 
     <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview">
       <header><h2>Overview</h2></header>
-      <section class="summary-cards" id="summary">
+      <section class="summary-cards"
+               id="summary"
+               hx-get="/"
+               hx-trigger="sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-select="#summary"
+               hx-target="#summary"
+               hx-swap="outerHTML">
         <article><header>Tasks</header><div class="value">{{ summary.total_tasks }}</div></article>
         <article><header>Workers online</header><div class="value">{{ summary.workers_online }}/{{ summary.workers_total }}</div></article>
         <article><header>Failed tasks</header><div class="value">{{ summary.failed_tasks }}</div></article>
@@ -165,26 +174,37 @@
     <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" hidden>
       <header><h2>Compliance - Human review / verification gaps</h2></header>
       <div class="table-wrapper">
-        <table id="review-gaps" role="grid">
+        <table id="review-gaps"
+               role="grid"
+               hx-get="/"
+               hx-trigger="sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-select="#review-gaps"
+               hx-target="#review-gaps"
+               hx-swap="outerHTML">
           <thead>
             <tr>
               <th scope="col">Task</th>
               <th scope="col">Plan</th>
               <th scope="col">Reason</th>
+              <th scope="col">Stage</th>
+              <th scope="col">Reviewer</th>
             </tr>
           </thead>
           <tbody>
             {% if review_gaps %}
               {% for gap in review_gaps %}
-                <tr id="review-gap-{{ gap.task_id }}" data-filter-text="{{ gap.task_id }} {{ gap.plan_id }} {{ gap.reason }}">
+                <tr id="review-gap-{{ gap.task_id }}"
+                    data-filter-text="{{ gap.task_id }} {{ gap.plan_id }} {{ gap.reason }} {{ gap.stage_id }} {{ gap.reviewer or '' }} {{ gap.approval_channel }}">
                   <td><code>{{ gap.task_id }}</code></td>
                   <td>{{ gap.plan_id }}</td>
                   <td>{{ gap.reason }}</td>
+                  <td>{{ gap.stage_id if gap.stage_id else "—" }}</td>
+                  <td>{{ gap.reviewer if gap.reviewer else "—" }}</td>
                 </tr>
               {% endfor %}
             {% else %}
               <tr id="review-gaps-empty">
-                <td colspan="3"><em class="empty-state">No human review or verification gaps.</em></td>
+                <td colspan="5"><em class="empty-state">No human review or verification gaps.</em></td>
               </tr>
             {% endif %}
           </tbody>

@@ -302,11 +302,13 @@ def _compliance_table(gaps: Sequence[ReviewGap]) -> Table:
     table.add_column("Task")
     table.add_column("Plan")
     table.add_column("Reason")
+    table.add_column("Stage")
+    table.add_column("Reviewer")
     if not gaps:
-        table.add_row("(no gaps)", "", "")
+        table.add_row("(no gaps)", "", "", "", "")
         return table
     for gap in gaps:
-        table.add_row(gap.task_id, gap.plan_id, gap.reason)
+        table.add_row(gap.task_id, gap.plan_id, gap.reason, gap.stage_id or "-", gap.reviewer or "-")
     return table
 
 
@@ -317,11 +319,19 @@ def _tasks_table(tasks: Sequence[OperatorTaskRow]) -> Table:
     table.add_column("Status")
     table.add_column("Priority")
     table.add_column("Worker")
+    table.add_column("Review")
     if not tasks:
-        table.add_row("(no tasks)", "", "", "", "")
+        table.add_row("(no tasks)", "", "", "", "", "")
         return table
     for task in tasks:
-        table.add_row(task.task_id, task.plan_id, task.status, task.priority, task.claimed_by or "-")
+        table.add_row(
+            task.task_id,
+            task.plan_id,
+            task.status,
+            task.priority,
+            task.claimed_by or "-",
+            _human_review_label(task.human_review),
+        )
     return table
 
 
@@ -365,6 +375,17 @@ def _events_table(events: Sequence[EventRow]) -> Table:
             event.created_at.strftime("%H:%M:%S"),
         )
     return table
+
+
+def _human_review_label(state: Any) -> str:
+    if not getattr(state, "required", False):
+        return "-"
+    decision = getattr(state, "decision", None)
+    label = str(decision).replace("_", " ") if decision else "pending"
+    stage_id = getattr(state, "stage_id", "")
+    if stage_id:
+        return f"{label} ({stage_id})"
+    return label
 
 
 def _stream_supports_color() -> bool:
