@@ -56,10 +56,10 @@ whilly --source gh:mycompany/myproject:ready-for-automation
 
 ```bash
 # Синхронизация Todo items
-whilly --sync-todo 'https://github.com/users/username/projects/4' --repo owner/repo
+whilly github-projects sync-todo 'https://github.com/users/username/projects/4' --repo owner/repo
 
 # Мониторинг проекта
-whilly --watch-project 'https://github.com/users/username/projects/4' --repo owner/repo
+whilly github-projects watch 'https://github.com/users/username/projects/4' --repo owner/repo
 ```
 
 ### 3. Программно через Python API

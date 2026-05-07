@@ -49,7 +49,7 @@ traceability, reviewability, safety, and operational control.
 
 ## Demo
 
-![Whilly demo: browser dashboard tracking a parallel worker run](docs/assets/whilly-demo.gif)
+![Whilly demo: dashboard, task movement, Slack notifications, and TUI](docs/assets/whilly-demo.gif)
 
 Run the local demo and keep the control plane open:
 
@@ -405,6 +405,8 @@ block.
 | `whilly worker register --connect <url> --bootstrap-token <tok>` | Mint a per-worker bearer (TASK-101). |
 | `whilly-worker --connect <url> --token <bearer> --plan <id>` | Standalone remote-worker entry (httpx-only closure). |
 | `whilly forge intake owner/repo/N` | GitHub Issue → Whilly plan + label transition. |
+| `whilly github-projects sync-todo <url> --repo owner/name` | GitHub Projects v2 Todo items → Issues/tasks. |
+| `whilly github-projects sync-status <issue> "Done"` | Move a synced Project item through the Status field. |
 
 ## Configuration
 
