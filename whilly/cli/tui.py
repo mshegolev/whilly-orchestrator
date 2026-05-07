@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
+from rich import box
 from rich.console import Console, Group
 from rich.live import Live
 from rich.table import Table
@@ -152,6 +153,7 @@ def render_tui(snapshot: OperatorSnapshot, state: TuiState) -> Group:
 
     visible = filter_snapshot(snapshot, state.filter_text)
     header = _header(snapshot, state)
+    queue_health = _queue_health_table(snapshot)
     if state.surface is OperatorSurface.OVERVIEW:
         body = _overview_table(visible)
     elif state.surface is OperatorSurface.COMPLIANCE:
@@ -162,7 +164,7 @@ def render_tui(snapshot: OperatorSnapshot, state: TuiState) -> Group:
         body = _workers_table(visible.workers)
     else:
         body = _events_table(visible.events)
-    return Group(header, body)
+    return Group(header, queue_health, body)
 
 
 async def _async_run(
@@ -210,7 +212,9 @@ async def _poll_loop(
     with Live(render_tui(snapshot, state), console=console, refresh_per_second=4, screen=False) as live:
         while not state.stop:
             iteration += 1
-            if not state.paused:
+            requested_refresh = state.immediate_refresh
+            state.immediate_refresh = False
+            if not state.paused or requested_refresh:
                 try:
                     snapshot = await fetch_operator_snapshot(pool, plan_id=plan_id)
                     state.last_error = None
@@ -225,7 +229,6 @@ async def _poll_loop(
             while slept < interval and not state.stop and not state.immediate_refresh:
                 await asyncio.sleep(slice_size)
                 slept += slice_size
-            state.immediate_refresh = False
 
 
 async def _listen_for_keys(state: TuiState, key_source: KeySource) -> None:
@@ -257,10 +260,10 @@ async def _empty_snapshot() -> OperatorSnapshot:
 
 
 def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
-    title = "Whilly operator"
+    title = "Whilly operator - compact control plane"
     if state.paused:
         title += " [PAUSED]"
-    table = Table(title=title, title_justify="left", expand=True, show_header=False, box=None)
+    table = Table(title=title, title_justify="left", expand=True, show_header=False, box=None, padding=(0, 1))
     for _ in range(5):
         table.add_column()
     table.add_row(
@@ -284,8 +287,32 @@ def _surface_tab(surface: OperatorSurface, index: int, active: OperatorSurface) 
     return Text(label)
 
 
+def _queue_health_table(snapshot: OperatorSnapshot) -> Table:
+    summary = snapshot.summary
+    active = summary.tasks_by_status.get("IN_PROGRESS", 0) + summary.tasks_by_status.get("CLAIMED", 0)
+    table = Table(
+        title="Queue health",
+        title_justify="left",
+        expand=True,
+        box=box.SIMPLE_HEAVY,
+        show_lines=False,
+    )
+    for label in ("Tasks", "Active", "Pending", "Done", "Failed", "Review", "Workers"):
+        table.add_column(label, justify="right")
+    table.add_row(
+        str(summary.total_tasks),
+        str(active),
+        str(summary.tasks_by_status.get("PENDING", 0)),
+        str(summary.tasks_by_status.get("DONE", 0)),
+        str(summary.failed_tasks),
+        str(summary.open_review_gaps),
+        f"{summary.workers_online}/{summary.workers_total}",
+    )
+    return table
+
+
 def _overview_table(snapshot: OperatorSnapshot) -> Table:
-    table = Table(title="Overview", title_justify="left", expand=True)
+    table = Table(title="Overview", title_justify="left", expand=True, box=box.SIMPLE)
     table.add_column("Metric")
     table.add_column("Value")
     table.add_row("Tasks", str(snapshot.summary.total_tasks))
@@ -298,7 +325,12 @@ def _overview_table(snapshot: OperatorSnapshot) -> Table:
 
 
 def _compliance_table(gaps: Sequence[ReviewGap]) -> Table:
-    table = Table(title="Compliance - Human review / verification gaps", title_justify="left", expand=True)
+    table = Table(
+        title="Compliance - Human review / verification gaps",
+        title_justify="left",
+        expand=True,
+        box=box.SIMPLE,
+    )
     table.add_column("Task")
     table.add_column("Plan")
     table.add_column("Reason")
@@ -313,7 +345,7 @@ def _compliance_table(gaps: Sequence[ReviewGap]) -> Table:
 
 
 def _tasks_table(tasks: Sequence[OperatorTaskRow]) -> Table:
-    table = Table(title="Plans/Tasks", title_justify="left", expand=True)
+    table = Table(title="Plans/Tasks", title_justify="left", expand=True, box=box.SIMPLE)
     table.add_column("Task")
     table.add_column("Plan")
     table.add_column("Status")
@@ -327,16 +359,16 @@ def _tasks_table(tasks: Sequence[OperatorTaskRow]) -> Table:
         table.add_row(
             task.task_id,
             task.plan_id,
-            task.status,
-            task.priority,
+            _status_text(task.status),
+            _priority_text(task.priority),
             task.claimed_by or "-",
-            _human_review_label(task.human_review),
+            _human_review_text(task.human_review),
         )
     return table
 
 
 def _workers_table(workers: Sequence[WorkerRow]) -> Table:
-    table = Table(title="Workers", title_justify="left", expand=True)
+    table = Table(title="Workers", title_justify="left", expand=True, box=box.SIMPLE)
     table.add_column("Worker")
     table.add_column("Host")
     table.add_column("Owner")
@@ -350,14 +382,14 @@ def _workers_table(workers: Sequence[WorkerRow]) -> Table:
             worker.worker_id,
             worker.hostname,
             worker.owner_email or "-",
-            worker.status,
+            _worker_status_text(worker.status),
             worker.last_heartbeat.strftime("%H:%M:%S"),
         )
     return table
 
 
 def _events_table(events: Sequence[EventRow]) -> Table:
-    table = Table(title="Events", title_justify="left", expand=True)
+    table = Table(title="Events", title_justify="left", expand=True, box=box.SIMPLE)
     table.add_column("Id")
     table.add_column("Task")
     table.add_column("Plan")
@@ -377,15 +409,48 @@ def _events_table(events: Sequence[EventRow]) -> Table:
     return table
 
 
-def _human_review_label(state: Any) -> str:
+def _status_text(status: str) -> Text:
+    style = {
+        "DONE": "green",
+        "FAILED": "red",
+        "IN_PROGRESS": "yellow",
+        "CLAIMED": "cyan",
+        "PENDING": "dim",
+        "SKIPPED": "dim",
+    }.get(status.upper(), "")
+    return Text(status, style=style)
+
+
+def _priority_text(priority: str) -> Text:
+    style = {
+        "critical": "bold red",
+        "high": "yellow",
+        "medium": "",
+        "low": "dim",
+    }.get(priority.lower(), "")
+    return Text(priority, style=style)
+
+
+def _worker_status_text(status: str) -> Text:
+    style = "green" if status.lower() == "online" else "red"
+    return Text(status, style=style)
+
+
+def _human_review_text(state: Any) -> Text:
     if not getattr(state, "required", False):
-        return "-"
+        return Text("-")
     decision = getattr(state, "decision", None)
     label = str(decision).replace("_", " ") if decision else "pending"
     stage_id = getattr(state, "stage_id", "")
     if stage_id:
-        return f"{label} ({stage_id})"
-    return label
+        label = f"{label} ({stage_id})"
+    style = {
+        "approved": "green",
+        "pending": "yellow",
+        "changes requested": "yellow",
+        "rejected": "red",
+    }.get(str(decision or "pending").replace("_", " "), "")
+    return Text(label, style=style)
 
 
 def _stream_supports_color() -> bool:

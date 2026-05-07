@@ -12,10 +12,11 @@ The ``events.event_type`` column for task-lifecycle rows is written by
 :class:`whilly.adapters.db.repository.TaskRepository` as the **uppercase**
 :class:`whilly.core.state_machine.Transition` value
 (``CLAIM`` / ``START`` / ``COMPLETE`` / ``FAIL`` / ``RELEASE`` / ``SKIP``)
-— see ``state_machine.py`` and the ``Transition.<NAME>.value`` writes in
-``repository.py``. Any dotted-lowercase ``task.*`` subscription in the
-template would silently miss every live update, leaving only the 5-second
-polling fallback (round 3 finding #3 / VAL-M3-HTMX-010 / -016 / -017).
+for the worker-driven transitions, plus dotted audit events such as
+``task.created`` and ``task.skipped`` for import/skip paths. Any missing
+subscription in the template would silently miss live updates, leaving only
+the 5-second polling fallback (round 3 finding #3 / VAL-M3-HTMX-010 / -016 /
+-017).
 
 This test drives a real Postgres ``NOTIFY`` (via INSERT-into-events,
 which fires the migration-011 trigger) and asserts that the SSE frame
@@ -49,12 +50,14 @@ pytestmark = DOCKER_REQUIRED
 _BOOTSTRAP_TOKEN = "bootstrap-dashboard-sse-event-names"
 
 _BROKER_TASK_EVENT_NAMES: tuple[str, ...] = (
+    "task.created",
     "CLAIM",
     "START",
     "COMPLETE",
     "FAIL",
     "RELEASE",
     "SKIP",
+    "task.skipped",
     "human_review.required",
     "human_review.approved",
     "human_review.rejected",
@@ -158,13 +161,12 @@ def _request_stub_with_disconnect_after(n_calls: int) -> Any:
 
 
 def test_template_subscribes_to_uppercase_broker_event_names() -> None:
-    """``_tasks_table.html`` hx-trigger names match what the broker emits.
+    """``_tasks_table.html`` hx-trigger names match what mutates task rows.
 
-    Round 3 finding #3: the prior ``sse:task.claim, …`` set never matched
-    the broker's UPPERCASE ``event_type`` values, so live updates silently
-    fell back to the 5 s poll. Pin the corrected set here so any future
-    template edit that re-introduces the dotted-lowercase form fails the
-    suite immediately.
+    Round 3 finding #3: the prior ``sse:task.claim, …`` set missed the
+    broker's UPPERCASE transition values, while later import/skip flows need
+    the dotted audit-event names. Pin the full corrected set here so any
+    future template edit silently dropping a task update fails the suite.
     """
     subscribed = _extract_sse_event_names(_TASKS_TEMPLATE)
     assert subscribed == set(_BROKER_TASK_EVENT_NAMES), (
@@ -197,11 +199,10 @@ async def test_pg_notify_emits_sse_frame_event_line_matching_template(
 ) -> None:
     """End-to-end: INSERT events row → trigger NOTIFY → SSE ``event:`` line.
 
-    For each transition the broker actually emits, we drive the real
+    For each task update event the broker actually emits, we drive the real
     Postgres NOTIFY trigger and confirm the SSE frame yielded by
-    :func:`stream_event_source` carries an ``event`` field equal to the
-    uppercase transition name — which is exactly what the
-    ``_tasks_table.html`` ``hx-trigger`` subscribes to after the fix.
+    :func:`stream_event_source` carries an ``event`` field equal to the name
+    that ``_tasks_table.html`` ``hx-trigger`` subscribes to.
     """
     plan_id = await _seed_plan(db_pool, f"plan-sse-name-{event_type.lower()}")
     task_id = f"task-sse-name-{event_type.lower()}"

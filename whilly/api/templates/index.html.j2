@@ -1,13 +1,10 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="auto">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   {% if events_token %}<meta name="whilly-events-token" content="{{ events_token }}">{% endif %}
   <title>Whilly Control Plane</title>
-  <link rel="stylesheet"
-        href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
-        crossorigin="anonymous">
   <script src="https://unpkg.com/htmx.org@1.9.12"
           crossorigin="anonymous"
           defer></script>
@@ -15,109 +12,235 @@
           crossorigin="anonymous"
           defer></script>
   <style>
-    :root { --whilly-mono: ui-monospace, SFMono-Regular, Menlo, monospace; }
-    main.container { padding-block: 1rem; }
-    h1 { margin-bottom: 0.25rem; }
+    :root {
+      --whilly-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --surface-strong: #f1f3f6;
+      --text: #1b1f24;
+      --muted: #5b6470;
+      --line: #d7dce2;
+      --line-strong: #aeb6c2;
+      --accent: #0f766e;
+      --danger: #b42318;
+      --warn: #a15c07;
+      --ok: #16703c;
+      --info: #0969da;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111315;
+        --surface: #171a1d;
+        --surface-strong: #202428;
+        --text: #eceff3;
+        --muted: #a6adb7;
+        --line: #343a40;
+        --line-strong: #59616b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body.operator-console {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font-family: var(--whilly-mono);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-x: hidden;
+    }
+    .operator-shell {
+      width: min(1440px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding-block: 14px 18px;
+    }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 1.15rem; line-height: 1.2; }
+    h2 { font-size: 0.95rem; line-height: 1.2; }
     .topbar {
       display: flex;
       flex-wrap: wrap;
-      align-items: end;
+      align-items: flex-end;
       justify-content: space-between;
-      gap: 0.75rem;
+      gap: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line-strong);
     }
     .operator-controls {
       display: grid;
       grid-template-columns: minmax(12rem, 20rem) auto;
-      gap: 0.5rem;
+      gap: 8px;
       align-items: center;
     }
-    .operator-controls input { margin: 0; }
+    .operator-controls input {
+      min-height: 32px;
+      margin: 0;
+      padding: 4px 8px;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-radius: 2px;
+      font: inherit;
+    }
     .surface-tabs {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.35rem;
-      margin-block: 0.75rem;
+      gap: 0;
+      margin-block: 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
     }
     .surface-tabs button {
-      width: auto;
       margin: 0;
-      padding: 0.35rem 0.65rem;
+      padding: 6px 10px;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      font: inherit;
+      cursor: pointer;
     }
+    .surface-tabs button:last-child { border-right: 0; }
     .surface-tabs button[aria-selected="true"] {
-      color: var(--pico-primary-inverse);
-      background: var(--pico-primary);
-      border-color: var(--pico-primary);
+      color: var(--surface);
+      background: var(--text);
     }
     .operator-surface[hidden] { display: none; }
-    .summary-cards {
+    .metric-strip {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 0.75rem;
-      margin-block: 1rem;
+      grid-template-columns: repeat(7, minmax(90px, 1fr));
+      margin-block: 8px 12px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
     }
-    .summary-cards article {
+    .metric-cell {
+      min-width: 0;
       margin: 0;
-      padding: 0.75rem 1rem;
-      text-align: center;
+      padding: 8px 10px;
+      border-right: 1px solid var(--line);
     }
-    .summary-cards article header {
-      font-size: 0.85rem;
-      opacity: 0.75;
-      padding: 0;
-      margin-bottom: 0.25rem;
+    .metric-cell:last-child { border-right: 0; }
+    .metric-cell header {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
     }
-    .summary-cards article .value {
-      font-size: 1.5rem;
+    .metric-cell .value {
+      margin-top: 2px;
+      font-size: 1.05rem;
       font-weight: bold;
       font-variant-numeric: tabular-nums;
     }
+    .surface-panel {
+      margin-block: 8px 12px;
+      padding: 0;
+    }
+    .surface-panel > header {
+      padding: 7px 10px;
+      color: var(--text);
+      background: var(--surface-strong);
+      border: 1px solid var(--line-strong);
+      border-bottom: 0;
+    }
     .table-wrapper { overflow-x: auto; }
-    .surface-panel { margin-block: 1rem; }
-    code { font-family: var(--whilly-mono); }
+    code { font-family: var(--whilly-mono); color: inherit; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      font-variant-numeric: tabular-nums;
+    }
+    th, td {
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    th {
+      color: var(--muted);
+      background: var(--surface-strong);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+    }
+    tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
     .status, .priority, .review {
       display: inline-block;
-      padding: 0.1rem 0.5rem;
-      border-radius: 0.25rem;
-      font-size: 0.85rem;
+      padding: 0;
+      border-radius: 0;
+      font-size: 0.8rem;
       font-weight: 600;
     }
-    .status-online, .status-DONE, .status-done { color: #0a7d3e; }
-    .status-offline, .status-FAILED, .status-failed { color: #b00020; }
-    .status-PENDING, .status-pending { color: #555; }
+    .status-online, .status-DONE, .status-done { color: var(--ok); }
+    .status-offline, .status-FAILED, .status-failed { color: var(--danger); }
+    .status-PENDING, .status-pending { color: var(--muted); }
     .status-CLAIMED, .status-claimed,
-    .status-IN_PROGRESS, .status-in_progress { color: #b36b00; }
-    .priority-critical { color: #b00020; }
-    .priority-high { color: #b36b00; }
+    .status-IN_PROGRESS, .status-in_progress { color: var(--warn); }
+    .priority-critical { color: var(--danger); }
+    .priority-high { color: var(--warn); }
     .priority-medium { color: inherit; }
     .priority-low { opacity: 0.7; }
-    .review-approved { color: #0a7d3e; }
-    .review-pending, .review-changes_requested { color: #b36b00; }
-    .review-rejected { color: #b00020; }
+    .review-approved { color: var(--ok); }
+    .review-pending, .review-changes_requested { color: var(--warn); }
+    .review-rejected { color: var(--danger); }
     .empty-state { opacity: 0.65; }
     .hotkeys, .polling-state { opacity: 0.72; }
-    .polling-state[aria-live] { min-width: 4.5rem; }
+    .hotkeys {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 18px;
+    }
+    .polling-state[aria-live] {
+      min-width: 4.5rem;
+      padding: 5px 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      text-align: center;
+    }
+    body[data-dashboard-state="stopped"] .polling-state {
+      color: var(--danger);
+      border-color: var(--danger);
+    }
     .error-banner {
-      border-left: 4px solid var(--pico-color-red-500, #b00020);
-      padding-left: 0.75rem;
+      margin-block: 10px;
+      padding: 10px;
+      border: 1px solid var(--danger);
+      background: var(--surface);
     }
     .error-banner button { margin-top: 0.5rem; }
-    @media (max-width: 480px) {
-      main.container { padding-inline: 0.75rem; }
-      .summary-cards { grid-template-columns: repeat(2, 1fr); }
+    footer {
+      margin-top: 12px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+    @media (max-width: 900px) {
+      .operator-shell { width: calc(100vw - 16px); padding-block: 8px; }
+      .metric-strip { grid-template-columns: repeat(2, 1fr); }
       .topbar { display: block; }
+      h1 { font-size: 1rem; }
+      .hotkeys { margin-block: 4px 8px; }
       .operator-controls { grid-template-columns: 1fr; }
-      .surface-tabs button { flex: 1 1 8rem; }
+      .surface-tabs button { flex: 1 0 11rem; text-align: left; }
       table { font-size: 0.85rem; }
-      table th, table td { padding: 0.4rem 0.4rem; }
+      table th, table td { padding: 0.4rem; }
     }
   </style>
 </head>
-<body hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
-  <main class="container">
+<body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
+  <main class="operator-shell">
     <header class="topbar">
       <hgroup>
         <h1>Whilly Control Plane</h1>
-        <p class="hotkeys">r=refresh &nbsp; 1-5=switch &nbsp; /=filter &nbsp; p=pause</p>
+        <p class="hotkeys">
+          <span>q=quit</span>
+          <span>r=refresh</span>
+          <span>1-5=switch</span>
+          <span>/=filter</span>
+          <span>p=pause</span>
+        </p>
       </hgroup>
       <div class="operator-controls">
         <input id="dashboard-filter"
@@ -152,23 +275,46 @@
       {% endfor %}
     </nav>
 
-    <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview">
-      <header><h2>Overview</h2></header>
-      <section class="summary-cards"
+    <section class="surface-panel queue-health-panel" aria-label="Queue health">
+      <header><h2>Overview · Queue health</h2></header>
+      <section class="metric-strip"
                id="summary"
                hx-get="/"
-               hx-trigger="sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-trigger="every 5s, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
                hx-select="#summary"
                hx-target="#summary"
                hx-swap="outerHTML">
-        <article><header>Tasks</header><div class="value">{{ summary.total_tasks }}</div></article>
-        <article><header>Workers online</header><div class="value">{{ summary.workers_online }}/{{ summary.workers_total }}</div></article>
-        <article><header>Failed tasks</header><div class="value">{{ summary.failed_tasks }}</div></article>
-        <article><header>Review gaps</header><div class="value">{{ summary.open_review_gaps }}</div></article>
-        <article><header>Pending</header><div class="value">{{ summary.tasks_by_status.get("PENDING", 0) }}</div></article>
-        <article><header>In progress</header><div class="value">{{ summary.tasks_by_status.get("IN_PROGRESS", 0) + summary.tasks_by_status.get("CLAIMED", 0) }}</div></article>
-        <article><header>Done</header><div class="value">{{ summary.tasks_by_status.get("DONE", 0) }}</div></article>
+        <article class="metric-cell"><header>Tasks</header><div class="value">{{ summary.total_tasks }}</div></article>
+        <article class="metric-cell"><header>Active</header><div class="value">{{ summary.tasks_by_status.get("IN_PROGRESS", 0) + summary.tasks_by_status.get("CLAIMED", 0) }}</div></article>
+        <article class="metric-cell"><header>Pending</header><div class="value">{{ summary.tasks_by_status.get("PENDING", 0) }}</div></article>
+        <article class="metric-cell"><header>Done</header><div class="value">{{ summary.tasks_by_status.get("DONE", 0) }}</div></article>
+        <article class="metric-cell"><header>Failed</header><div class="value">{{ summary.failed_tasks }}</div></article>
+        <article class="metric-cell"><header>Review</header><div class="value">{{ summary.open_review_gaps }}</div></article>
+        <article class="metric-cell"><header>Workers</header><div class="value">{{ summary.workers_online }}/{{ summary.workers_total }}</div></article>
       </section>
+    </section>
+
+    <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview">
+      <header><h2>Overview</h2></header>
+      <div class="table-wrapper">
+        <table id="overview-status" role="grid">
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Tasks</td><td>{{ summary.total_tasks }}</td></tr>
+            <tr><td>Workers</td><td>{{ summary.workers_online }}/{{ summary.workers_total }} online</td></tr>
+            <tr><td>Failed tasks</td><td>{{ summary.failed_tasks }}</td></tr>
+            <tr><td>Review gaps</td><td>{{ summary.open_review_gaps }}</td></tr>
+            {% for status, count in summary.tasks_by_status.items()|sort %}
+              <tr><td>{{ status }}</td><td>{{ count }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" hidden>
@@ -271,6 +417,10 @@
       const filter = document.getElementById("dashboard-filter");
       const pollingState = document.getElementById("polling-state");
       let pollingPaused = false;
+      let dashboardStopped = false;
+      let manualRefreshRequested = false;
+      const manualLiveRequests = new WeakSet();
+      const liveStreams = new Set();
 
       function isEditableTarget(target) {
         if (!target) return false;
@@ -295,7 +445,9 @@
       }
 
       function refreshDashboard() {
+        if (dashboardStopped) return;
         if (window.htmx) {
+          manualRefreshRequested = true;
           window.htmx.ajax("GET", "/", { target: "body", swap: "outerHTML" });
           return;
         }
@@ -303,22 +455,98 @@
       }
 
       function togglePolling() {
+        if (dashboardStopped) return;
         pollingPaused = !pollingPaused;
         document.documentElement.dataset.pollingPaused = String(pollingPaused);
         if (pollingState) pollingState.textContent = pollingPaused ? "Paused" : "Live";
+      }
+
+      function closeLiveStreams() {
+        liveStreams.forEach((source) => {
+          if (source && typeof source.close === "function") source.close();
+        });
+        liveStreams.clear();
+        document.body.removeAttribute("sse-connect");
+      }
+
+      function quitDashboard() {
+        dashboardStopped = true;
+        pollingPaused = true;
+        closeLiveStreams();
+        document.body.dataset.dashboardState = "stopped";
+        document.documentElement.dataset.pollingPaused = "true";
+        if (pollingState) pollingState.textContent = "Stopped";
+      }
+
+      function requestKeys(event) {
+        return [event?.detail?.xhr, event?.detail?.requestConfig].filter(Boolean);
+      }
+
+      function isManualLiveIntent(event, triggerType = "") {
+        const type = triggerType || event?.detail?.requestConfig?.triggeringEvent?.type || "";
+        return manualRefreshRequested || type === "click";
+      }
+
+      function markManualLiveRequest(event) {
+        requestKeys(event).forEach((key) => manualLiveRequests.add(key));
+        manualRefreshRequested = false;
+      }
+
+      function isManualLiveRequest(event) {
+        return requestKeys(event).some((key) => manualLiveRequests.has(key));
+      }
+
+      function shouldBlockLiveRequest(path, triggerType) {
+        if (dashboardStopped) return true;
+        if (!pollingPaused) return false;
+        return !isManualLiveIntent(null, triggerType);
+      }
+
+      function shouldBlockLiveSwap(event) {
+        if (dashboardStopped) return true;
+        if (!pollingPaused || isManualLiveRequest(event)) return false;
+        const target = event.detail?.target;
+        return Boolean(target === document.body || target?.closest?.("[hx-get], [data-surface], #summary, #review-gaps"));
       }
 
       filter?.addEventListener("input", applyFilter);
       document.querySelectorAll("[data-surface-tab]").forEach((button) => {
         button.addEventListener("click", () => setSurface(button.dataset.surfaceTab));
       });
+      document.body.addEventListener("htmx:sseOpen", (event) => {
+        const source = event.detail?.source || event.detail?.eventSource;
+        if (source) liveStreams.add(source);
+      });
       document.body.addEventListener("htmx:beforeRequest", (event) => {
         const path = event.detail?.pathInfo?.requestPath || "";
-        if (pollingPaused && path.includes("fragment=")) event.preventDefault();
+        const triggerType = event.detail?.requestConfig?.triggeringEvent?.type || "";
+        if (shouldBlockLiveRequest(path, triggerType)) {
+          manualRefreshRequested = false;
+          event.preventDefault();
+          return;
+        }
+        if (isManualLiveIntent(event, triggerType)) markManualLiveRequest(event);
+      });
+      document.body.addEventListener("htmx:afterRequest", () => {
+        manualRefreshRequested = false;
+      });
+      document.body.addEventListener("htmx:sendError", () => {
+        manualRefreshRequested = false;
+      });
+      document.body.addEventListener("htmx:afterSwap", () => {
+        applyFilter();
+      });
+      document.body.addEventListener("htmx:beforeSwap", (event) => {
+        if (!shouldBlockLiveSwap(event)) return;
+        event.detail.shouldSwap = false;
+        event.preventDefault();
       });
       document.addEventListener("keydown", (event) => {
         if (isEditableTarget(event.target)) return;
-        if (event.key === "r" || event.key === "R") {
+        if (event.key === "q" || event.key === "Q") {
+          event.preventDefault();
+          quitDashboard();
+        } else if (event.key === "r" || event.key === "R") {
           event.preventDefault();
           refreshDashboard();
         } else if (event.key === "p" || event.key === "P") {

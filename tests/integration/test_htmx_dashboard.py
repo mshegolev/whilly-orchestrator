@@ -12,9 +12,9 @@ Covers the m3-htmx-dashboard feature:
   message instead of a blank ``<tbody>``
 * DB-down error state renders a friendly banner with a Retry button
   (still ``200`` so the polling fallback doesn't blank the page)
-* Mobile-responsive ``@media (max-width: 480px)`` block ships in the page
-* pico.css is referenced and ``data-theme="auto"`` lets prefers-color-scheme
-  drive the dark-mode palette
+* Mobile/tablet-responsive ``@media (max-width: 900px)`` block ships in the page
+* The inline TUI-aligned shell uses ``prefers-color-scheme`` for dark-mode
+  palette selection
 * Jinja2 autoescape on — a worker registered with
   ``hostname=<script>alert(1)</script>`` renders escaped, no real
   ``<script>`` tag
@@ -184,10 +184,14 @@ async def test_get_root_returns_html_200(client: AsyncClient) -> None:
     assert response.headers["content-type"].startswith("text/html")
 
 
-async def test_dashboard_includes_pico_css_and_htmx_sse(client: AsyncClient) -> None:
+async def test_dashboard_includes_tui_shell_styles_and_htmx_sse(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
-    assert "@picocss/pico" in body, "pico.css CDN reference missing"
+    assert "@picocss/pico" not in body, "dashboard should use the TUI-aligned shell instead of Pico cards"
+    assert 'class="operator-console"' in body
+    assert 'data-dashboard-state="live"' in body
+    assert "Queue health" in body
+    assert "metric-strip" in body
     assert "htmx.org@1.9.12" in body, "htmx CDN reference missing"
     assert "htmx-ext-sse@2.2.4" in body, "htmx-ext-sse@2.2.4 CDN reference missing"
 
@@ -213,13 +217,13 @@ async def test_dashboard_polling_fallback_every_5s(client: AsyncClient) -> None:
 async def test_dashboard_dark_mode_via_pico_prefers_color_scheme(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
-    assert 'data-theme="auto"' in body, "data-theme=auto required for pico.css prefers-color-scheme"
+    assert "prefers-color-scheme" in body, "TUI shell should still respect OS color preference"
 
 
 async def test_dashboard_mobile_responsive_block(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
-    assert "@media (max-width: 480px)" in body, "mobile-responsive media query missing"
+    assert "@media (max-width: 900px)" in body, "mobile-responsive media query missing"
 
 
 async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClient) -> None:
@@ -234,11 +238,55 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert 'data-surface="plans_tasks"' in body
     assert 'data-surface="workers"' in body
     assert 'data-surface="events"' in body
+    assert "q=quit" in body
     assert "r=refresh" in body
     assert "1-5=switch" in body
     assert "/=filter" in body
     assert "p=pause" in body
+    assert "quitDashboard" in body
+    assert "closeLiveStreams" in body
+    assert "shouldBlockLiveRequest" in body
+    assert "manualRefreshRequested" in body
+    assert "manualLiveRequests" in body
+    assert "requestKeys" in body
+    assert "markManualLiveRequest" in body
+    assert "isManualLiveIntent" in body
+    assert 'type === "click"' in body
+    assert "shouldBlockLiveSwap" in body
+    assert "isManualLiveRequest" in body
+    assert "htmx:sseOpen" in body
+    assert "htmx:afterRequest" in body
+    assert "htmx:sendError" in body
+    assert "htmx:afterSwap" in body
+    assert "htmx:beforeSwap" in body
     assert "isEditableTarget" in body, "hotkeys must not hijack typing in inputs"
+
+
+async def test_dashboard_queue_health_is_persistent_outside_active_surface(client: AsyncClient) -> None:
+    response = await client.get("/")
+    body = response.text
+
+    assert body.index('class="metric-strip"') < body.index('id="surface-overview"')
+    summary_block = re.search(r'<section class="metric-strip".*?</section>', body, re.DOTALL)
+    assert summary_block is not None
+    summary_html = summary_block.group(0)
+    for trigger in (
+        "every 5s",
+        "sse:task.created",
+        "sse:CLAIM",
+        "sse:START",
+        "sse:COMPLETE",
+        "sse:FAIL",
+        "sse:RELEASE",
+        "sse:SKIP",
+        "sse:task.skipped",
+        "sse:worker.registered",
+        "sse:worker.heartbeat",
+        "sse:worker.revoked",
+        "sse:worker.offline",
+        "sse:human_review.required",
+    ):
+        assert trigger in summary_html
 
 
 async def test_dashboard_renders_compliance_gaps_and_events(

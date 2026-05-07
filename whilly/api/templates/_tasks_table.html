@@ -1,6 +1,6 @@
 <table id="tasks"
        hx-get="/?fragment=tasks"
-       hx-trigger="every 5s, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+       hx-trigger="every 5s, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
        hx-swap="outerHTML"
        role="grid">
   <thead>

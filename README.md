@@ -91,10 +91,11 @@ The M3 milestone closes the live-observability surface and ships the headline
 two-host demo. Headline changes (full detail in [`CHANGELOG.md`](CHANGELOG.md);
 M2 / v4.5 release notes follow below):
 
-- **HTMX dashboard at `GET /`** — server-rendered Jinja2 page (Pico.css from CDN
-  for `prefers-color-scheme` dark / light, mobile-responsive at 375 × 812),
-  HTMX live-swaps tasks / workers rows on `sse:*` events from `/events/stream`,
-  and falls back to a 5 s `hx-trigger="every 5s"` poll if the SSE socket fails.
+- **HTMX dashboard at `GET /`** — server-rendered Jinja2 page with the same
+  compact operator surfaces and hotkeys as the browserless TUI, inline
+  `prefers-color-scheme` styling, HTMX live-swaps tasks / workers rows on
+  `sse:*` events from `/events/stream`, and falls back to a 5 s
+  `hx-trigger="every 5s"` poll if the SSE socket fails.
   `?fragment=workers|tasks` returns just the partial table for the polling
   fallback. Zero client-side build pipeline — `htmx@1.9.12` and
   `htmx-ext-sse@2.2.4` are loaded from CDN.
