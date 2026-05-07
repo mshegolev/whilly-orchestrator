@@ -14,6 +14,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly forge ...``     → :mod:`whilly.forge`
 * ``whilly qa-release ...`` → :mod:`whilly.cli.qa_release`
 * ``whilly project-config ...`` → :mod:`whilly.cli.project_config`
+* ``whilly github-projects ...`` → :mod:`whilly.cli.github_projects`
 * ``whilly compliance ...`` → :mod:`whilly.cli.compliance`
 * ``whilly tui ...`` → :mod:`whilly.cli.tui`
 
@@ -121,6 +122,7 @@ Commands:
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
   qa-release  Collect Jira release verification context and linked artifacts.
   project-config Validate domain configs and generate adaptive plans.
+  github-projects Sync GitHub Projects v2 items and statuses.
   compliance Generate target-doc compliance reports.
   tui         Browserless operator console mirroring the web dashboard.
   pr-feedback Poll open PRs for a plan and emit review events
@@ -415,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.project_config import run_project_config_command
 
         return run_project_config_command(rest)
+    if cmd == "github-projects":
+        from whilly.cli.github_projects import run_github_projects_command
+
+        return run_github_projects_command(rest)
     if cmd == "compliance":
         from whilly.cli.compliance import run_compliance_command
 
