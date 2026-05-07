@@ -117,10 +117,12 @@ from whilly.adapters.transport.schemas import (
     FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    ListTaskEventsResponse,
     RegisterRequest,
     RegisterResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskEventItem,
     TaskEventRequest,
     TaskEventResponse,
 )
@@ -472,6 +474,7 @@ class RemoteWorkerClient:
         path: str,
         *,
         json: Mapping[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
         bootstrap: bool = False,
     ) -> httpx.Response:
         """Issue an HTTP request with retry + typed-exception failure handling.
@@ -487,6 +490,8 @@ class RemoteWorkerClient:
             ``base_url + path`` round-trips cleanly.
         json:
             Optional JSON body. ``None`` means an empty request body.
+        params:
+            Optional query-string parameters.
         bootstrap:
             If True, swap the per-worker bearer header for the
             bootstrap token on this request. Only meaningful for
@@ -544,7 +549,7 @@ class RemoteWorkerClient:
         last_exc: Exception | None = None
         for attempt in range(total_attempts):
             try:
-                response = await self._client.request(method, path, json=json, headers=headers)
+                response = await self._client.request(method, path, json=json, params=params, headers=headers)
             except (httpx.ConnectError, httpx.TimeoutException) as exc:
                 # Transport-level failure: log + maybe sleep + retry.
                 # We log at INFO not WARNING because a single transient
@@ -1087,6 +1092,19 @@ class RemoteWorkerClient:
             json=request.model_dump(exclude_none=True),
         )
         return await self._parse_response(response, TaskEventResponse)
+
+    async def list_task_events(
+        self,
+        task_id: TaskId,
+        *,
+        event_prefix: str | None = None,
+    ) -> tuple[TaskEventItem, ...]:
+        """Return task events from ``GET /tasks/{task_id}/events``."""
+
+        params = {"event_prefix": event_prefix} if event_prefix is not None else None
+        response = await self._request("GET", task_event_path(task_id), params=params)
+        parsed = await self._parse_response(response, ListTaskEventsResponse)
+        return tuple(parsed.events)
 
     async def fail(
         self,

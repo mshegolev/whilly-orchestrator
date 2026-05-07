@@ -613,35 +613,50 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
     plan_id = "PLAN-EVENTS"
     task_id = "T-events"
     await _seed_task(db_pool, plan_id, task_id)
-    worker_id, _ = await _register(http_client, "host-events")
+    worker_id, worker_token = await _register(http_client, "host-events")
+
+    from whilly.adapters.db import TaskRepository
+
+    claimed = await TaskRepository(db_pool).claim_task(worker_id, plan_id)
+    assert claimed is not None
 
     accepted_events = [
         ("pipeline.stage.started", {"task_id": task_id, "plan_id": plan_id, "stage_id": "tests"}),
         ("verification.failed", {"task_id": task_id, "name": "unit", "required": True}),
         ("human_review.required", {"task_id": task_id, "reason": "task_review_text"}),
-        (
-            "human_review.approved",
-            {
-                "task_id": task_id,
-                "plan_id": plan_id,
-                "stage_id": "release_review",
-                "decision": "approved",
-                "reviewer": "lead@example.com",
-            },
-        ),
     ]
     for event_type, payload in accepted_events:
+        detail = None
+        if event_type == "verification.failed":
+            detail = {"stdout": "sample"}
         response = await http_client.post(
             f"/tasks/{task_id}/events",
             json={
                 "worker_id": worker_id,
                 "event_type": event_type,
                 "payload": payload,
-                "detail": {"stdout": "sample"} if event_type == "verification.failed" else None,
+                "detail": detail,
             },
-            headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+            headers={"Authorization": f"Bearer {worker_token}"},
         )
         assert response.status_code == 200, response.text
+
+    forged_approval = await http_client.post(
+        f"/tasks/{task_id}/events",
+        json={
+            "worker_id": worker_id,
+            "event_type": "human_review.approved",
+            "payload": {
+                "task_id": task_id,
+                "stage_id": "release_review",
+                "decision": "approved",
+                "reviewer": "worker-forged@example.com",
+            },
+        },
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert forged_approval.status_code == 400
+    assert "only human_review.required" in forged_approval.json()["detail"]
 
     rejected = await http_client.post(
         f"/tasks/{task_id}/events",
@@ -650,10 +665,29 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
             "event_type": "workspace.prepare_failed",
             "payload": {"task_id": task_id},
         },
-        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+        headers={"Authorization": f"Bearer {worker_token}"},
     )
     assert rejected.status_code == 400
     assert "diagnostic endpoint accepts only" in rejected.json()["detail"]
+
+    admin_token = "admin-review-token"
+    await TaskRepository(db_pool).mint_bootstrap_token(
+        admin_token,
+        owner_email="admin@example.com",
+        is_admin=True,
+    )
+    approved_response = await http_client.post(
+        f"/api/v1/tasks/{task_id}/human-review",
+        json={
+            "decision": "approved",
+            "reviewer": "lead@example.com",
+            "stage_id": "release_review",
+            "comment": "Evidence reviewed.",
+            "evidence": {"review_url": "https://example.test/reviews/42"},
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert approved_response.status_code == 200, approved_response.text
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
@@ -669,6 +703,100 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
     assert approved_payload["decision"] == "approved"
     assert approved_payload["reviewer"] == "lead@example.com"
     assert approved_payload["stage_id"] == "release_review"
+    assert approved_payload["operator"] == "admin@example.com"
+    assert approved_payload["source"] == "admin_api"
+
+    listed = await http_client.get(
+        f"/tasks/{task_id}/events",
+        params={"event_prefix": "human_review."},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert listed.status_code == 200, listed.text
+    listed_events = listed.json()["events"]
+    assert [event["event_type"] for event in listed_events] == [
+        "human_review.required",
+        "human_review.approved",
+    ]
+    assert listed_events[0]["task_id"] == task_id
+    assert listed_events[0]["plan_id"] == plan_id
+    assert isinstance(listed_events[0]["id"], int)
+    assert listed_events[0]["created_at"]
+    assert listed_events[1]["payload"]["reviewer"] == "lead@example.com"
+    assert listed_events[1]["payload"]["stage_id"] == "release_review"
+    assert listed_events[1]["payload"]["evidence"]["review_url"] == "https://example.test/reviews/42"
+
+
+async def test_list_task_events_requires_worker_bearer(http_client: AsyncClient) -> None:
+    """Read-side audit evidence is still a worker-private route."""
+    without_bearer = await http_client.get("/tasks/T-events/events")
+    assert without_bearer.status_code == 401
+    assert without_bearer.headers.get("WWW-Authenticate", "").startswith("Bearer ")
+
+    with_bootstrap = await http_client.get(
+        "/tasks/T-events/events",
+        headers={"Authorization": f"Bearer {_BOOTSTRAP_TOKEN}"},
+    )
+    assert with_bootstrap.status_code == 401
+
+    with_legacy_shared = await http_client.get(
+        "/tasks/T-events/events",
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+    assert with_legacy_shared.status_code == 403
+
+
+async def test_human_review_release_holds_task_until_admin_approval(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A human-review release parks the task until a later admin approval event exists."""
+    plan_id = "PLAN-HUMAN-REVIEW-HOLD"
+    task_id = "T-human-review-hold"
+    await _seed_task(db_pool, plan_id, task_id)
+    worker_id, _ = await _register(http_client, "host-human-review-hold")
+
+    from whilly.adapters.db import TaskRepository
+
+    repo = TaskRepository(db_pool)
+    claimed = await repo.claim_task(worker_id, plan_id)
+    assert claimed is not None
+    started = await repo.start_task(task_id, claimed.version)
+    await repo.record_task_event(
+        task_id,
+        "human_review.required",
+        {"task_id": task_id, "stage_id": "release_review"},
+    )
+    await repo.release_task(task_id, started.version, "human_review_required")
+
+    assert await repo.claim_task(worker_id, plan_id) is None
+
+    admin_token = "admin-review-hold-token"
+    await repo.mint_bootstrap_token(admin_token, owner_email="admin@example.com", is_admin=True)
+    stage_less_approval = await http_client.post(
+        f"/api/v1/tasks/{task_id}/human-review",
+        json={
+            "decision": "approved",
+            "reviewer": "lead@example.com",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert stage_less_approval.status_code == 200, stage_less_approval.text
+    assert await repo.claim_task(worker_id, plan_id) is None
+
+    approved = await http_client.post(
+        f"/api/v1/tasks/{task_id}/human-review",
+        json={
+            "decision": "approved",
+            "reviewer": "lead@example.com",
+            "stage_id": "release_review",
+        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert approved.status_code == 200, approved.text
+
+    claimed_after_approval = await repo.claim_task(worker_id, plan_id)
+    assert claimed_after_approval is not None
+    assert claimed_after_approval.id == task_id
 
 
 # ---------------------------------------------------------------------------

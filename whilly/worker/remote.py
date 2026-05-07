@@ -136,7 +136,12 @@ from whilly.pipeline.events import (
     make_stage_succeeded_event,
     stage_context_from_task,
 )
-from whilly.pipeline.human_review import build_human_review_checkpoint, make_human_review_required_event
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_REQUIRED_RELEASE_REASON,
+    build_human_review_checkpoint,
+    is_human_review_approved,
+    make_human_review_required_event,
+)
 from whilly.pipeline.verification import (
     VERIFICATION_FAILED_EVENT,
     VerificationRunOutcome,
@@ -870,6 +875,29 @@ async def run_remote_worker(
                             max_processed,
                         )
                         break
+                    continue
+
+            if checkpoint is not None:
+                review_events = await client.list_task_events(claimed.id, event_prefix="human_review.")
+                if not is_human_review_approved(checkpoint, review_events):
+                    try:
+                        await client.release(
+                            claimed.id,
+                            worker_id,
+                            claimed.version,
+                            HUMAN_REVIEW_REQUIRED_RELEASE_REASON,
+                        )
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "remote human-review release lost the race: "
+                            "task=%s expected_version=%d actual_version=%s actual_status=%s",
+                            claimed.id,
+                            claimed.version,
+                            exc.actual_version,
+                            exc.actual_status.value if exc.actual_status else None,
+                        )
+                        continue
+                    log.info("remote worker=%s task=%s → PENDING (human_review_required)", worker_id, claimed.id)
                     continue
 
             try:
