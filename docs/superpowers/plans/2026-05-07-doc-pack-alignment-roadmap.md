@@ -157,7 +157,7 @@ Validation:
 
 - [x] Add checkpoint events: `human_review.required`, `human_review.approved`, `human_review.rejected`, `human_review.changes_requested`.
 - [x] Surface tasks/checkpoints needing human input in the API, dashboard, and browserless TUI.
-- [ ] Add plan-show checkpoint markers from task/event evidence.
+- [x] Add plan-show checkpoint markers from task/event evidence.
 - [x] Keep approval as auditable data, not a new terminal task state for MVP.
 - [ ] Block configured risky sinks/stages until approval evidence exists.
 

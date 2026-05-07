@@ -186,6 +186,47 @@ def test_show_acyclic_plan_returns_zero_and_renders_graph(
     assert "Cycle detected" not in out
 
 
+def test_show_marks_task_waiting_for_human_review(
+    database_url: str,
+    acyclic_plan_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """End-to-end: plan show reads human-review audit events and marks the task."""
+    assert run_plan_command(["import", str(acyclic_plan_file)]) == EXIT_OK
+    capsys.readouterr()
+
+    async def _seed_review_event() -> None:
+        conn = await asyncpg.connect(database_url)
+        try:
+            await conn.execute(
+                """
+                INSERT INTO events (task_id, plan_id, event_type, payload, detail)
+                VALUES ($1, NULL, 'human_review.required', $2::jsonb, $3::jsonb)
+                """,
+                "T-002",
+                json.dumps(
+                    {
+                        "task_id": "T-002",
+                        "plan_id": "plan-show-acyclic-001",
+                        "stage_id": "release_review",
+                        "reason": "stage_human_gate",
+                    }
+                ),
+                json.dumps({"stage_id": "diagnostic_stage"}),
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_seed_review_event())
+
+    rc = run_plan_command(["show", "plan-show-acyclic-001", "--no-color"])
+
+    assert rc == EXIT_OK
+    out = _strip_ansi(capsys.readouterr().out)
+    assert "T-002  (high)  review=pending stage=release_review" in out
+    assert "diagnostic_stage" not in out
+
+
 # ─── cycle path ──────────────────────────────────────────────────────────
 
 

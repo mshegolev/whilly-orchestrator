@@ -94,7 +94,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
 
 import asyncpg
@@ -107,6 +107,7 @@ from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
 from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskId, TaskStatus
 from whilly.core.scheduler import detect_cycles
 from whilly.core.triz import analyze_plan_triz, format_plan_triz_report, plan_triz_report_to_dict
+from whilly.operator_views import EventRow, HumanReviewState, human_review_states_from_events
 
 __all__ = ["build_plan_parser", "render_plan_graph", "run_plan_command"]
 
@@ -340,6 +341,15 @@ FROM tasks
 LEFT JOIN task_repo_targets trt ON trt.task_id = tasks.id
 WHERE plan_id = $1
 ORDER BY id
+"""
+
+
+_SELECT_HUMAN_REVIEW_EVENTS_SQL: str = """
+SELECT id, task_id, plan_id, event_type, created_at, COALESCE(payload, '{}'::jsonb) AS payload, detail
+FROM events
+WHERE task_id = ANY($1::text[])
+  AND event_type LIKE 'human_review.%'
+ORDER BY created_at ASC, id ASC
 """
 
 
@@ -969,6 +979,23 @@ async def _async_export(dsn: str, plan_id: str) -> tuple[Plan, list[Task]] | Non
         await close_pool(pool)
 
 
+async def _async_show(dsn: str, plan_id: str) -> tuple[Plan, list[Task], Mapping[str, HumanReviewState]] | None:
+    """Fetch plan-show data, including display-only human-review audit state."""
+
+    pool = await create_pool(dsn)
+    try:
+        async with pool.acquire() as conn:
+            result = await _select_plan_with_tasks(conn, plan_id)
+            if result is None:
+                return None
+            plan, tasks = result
+            task_ids = [str(task.id) for task in tasks]
+            event_rows = await conn.fetch(_SELECT_HUMAN_REVIEW_EVENTS_SQL, task_ids) if task_ids else []
+    finally:
+        await close_pool(pool)
+    return plan, tasks, human_review_states_from_events(tuple(_event_row_to_operator_event(row) for row in event_rows))
+
+
 async def _select_plan_with_tasks(
     conn: asyncpg.Connection,
     plan_id: str,
@@ -1044,6 +1071,40 @@ def _decode_jsonb(raw: object) -> list[str]:
             raise TypeError(f"JSONB array contains non-string element {item!r}")
         out.append(item)
     return out
+
+
+def _event_row_to_operator_event(row: asyncpg.Record) -> EventRow:
+    return EventRow(
+        event_id=int(row["id"]),
+        task_id=_optional_text(row["task_id"]),
+        plan_id=_optional_text(row["plan_id"]),
+        event_type=str(row["event_type"]),
+        created_at=row["created_at"],
+        detail=_merge_event_payload_detail(row["payload"], row["detail"]),
+    )
+
+
+def _merge_event_payload_detail(payload: object, detail: object) -> dict[str, object]:
+    merged = _json_object(detail)
+    merged.update(_json_object(payload))
+    return merged
+
+
+def _json_object(raw: object) -> dict[str, object]:
+    if raw is None:
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        decoded = json.loads(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    return dict(raw)  # type: ignore[arg-type]
+
+
+def _optional_text(raw: object) -> str | None:
+    if raw is None:
+        return None
+    return str(raw)
 
 
 def _row_to_task(row: asyncpg.Record) -> Task:
@@ -1129,6 +1190,7 @@ def render_plan_graph(
     cycles: Sequence[Sequence[TaskId]],
     *,
     use_color: bool,
+    human_review_by_task: Mapping[str, HumanReviewState] | None = None,
 ) -> str:
     """Return the ASCII dependency graph for ``plan`` as a single string.
 
@@ -1200,9 +1262,17 @@ def render_plan_graph(
     # bound on the enum (not the actual rows) so the layout stays
     # consistent across exports of small plans.
     badge_width = max(len(s.value) for s in TaskStatus)
+    human_review_by_task = human_review_by_task or {}
 
     for task in ordered:
-        body_lines.append(_render_task_line(task, badge_width=badge_width, use_color=use_color))
+        body_lines.append(
+            _render_task_line(
+                task,
+                badge_width=badge_width,
+                use_color=use_color,
+                human_review=human_review_by_task.get(task.id),
+            )
+        )
         if task.dependencies:
             # Filter to in-plan deps only — cross-plan deps are silently
             # ignored throughout the scheduler (see scheduler.py docstring
@@ -1236,7 +1306,13 @@ def render_plan_graph(
     return raw
 
 
-def _render_task_line(task: Task, *, badge_width: int, use_color: bool) -> str:
+def _render_task_line(
+    task: Task,
+    *,
+    badge_width: int,
+    use_color: bool,
+    human_review: HumanReviewState | None = None,
+) -> str:
     """Format one ``[STATUS] task_id (priority)`` row.
 
     The badge is left-padded to ``badge_width`` so the trailing ids and
@@ -1253,7 +1329,18 @@ def _render_task_line(task: Task, *, badge_width: int, use_color: bool) -> str:
         badge = f"[{color}]{badge_text}[/{color}]"
     else:
         badge = badge_text
-    return f"[{badge}] {task.id}  ({task.priority.value})"
+    suffix = _human_review_suffix(human_review)
+    return f"[{badge}] {task.id}  ({task.priority.value}){suffix}"
+
+
+def _human_review_suffix(state: HumanReviewState | None) -> str:
+    if state is None or not state.required:
+        return ""
+    label = state.decision or "pending"
+    suffix = f"  review={label}"
+    if state.stage_id:
+        suffix += f" stage={state.stage_id}"
+    return suffix
 
 
 def _compute_topological_depth(
@@ -1370,7 +1457,7 @@ def _run_show(plan_id: str, *, no_color: bool) -> int:
         )
         return EXIT_ENVIRONMENT_ERROR
 
-    result = asyncio.run(_async_export(dsn, plan_id))
+    result = asyncio.run(_async_show(dsn, plan_id))
     if result is None:
         print(
             f"whilly plan show: plan {plan_id!r} not found — check the id matches the "
@@ -1379,10 +1466,16 @@ def _run_show(plan_id: str, *, no_color: bool) -> int:
         )
         return EXIT_ENVIRONMENT_ERROR
 
-    plan, tasks = result
+    plan, tasks, human_review_by_task = result
     cycles = detect_cycles(plan)
     use_color = _should_use_color(no_color=no_color)
-    rendered = render_plan_graph(plan, tasks, cycles, use_color=use_color)
+    rendered = render_plan_graph(
+        plan,
+        tasks,
+        cycles,
+        use_color=use_color,
+        human_review_by_task=human_review_by_task,
+    )
 
     # Use a Rich Console so [green]...[/green] tags resolve to ANSI when
     # color is enabled. ``soft_wrap=True`` keeps long task ids on a
