@@ -97,7 +97,8 @@ Flag documentation as inaccurate if it claims:
 
 - Whilly is already a fully autonomous developer.
 - DONE always means verified code.
-- DONE automatically creates PRs.
+- DONE automatically creates PRs without `WHILLY_AUTO_OPEN_PR=1` and an
+  explicit configured GitHub PR sink or legacy PR context.
 - Whilly supports full multi-repo execution.
 - Whilly has full sandbox/VM isolation.
 - Whilly has semantic long-term memory.

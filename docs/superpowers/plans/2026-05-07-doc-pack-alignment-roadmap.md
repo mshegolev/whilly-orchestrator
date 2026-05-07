@@ -174,10 +174,10 @@ Validation:
 - Modify: `whilly/sinks/post_complete_pr_hook.py`, `whilly/cli/run.py`, `whilly/project_config/models.py`
 - Test: `tests/unit/test_configured_sinks.py`, `tests/integration/test_pr_sink_profile.py`
 
-- [ ] Move PR creation from env-only behavior toward a profile sink/stage.
-- [ ] Keep `WHILLY_AUTO_OPEN_PR=1` as backwards-compatible opt-in.
-- [ ] Require human review or explicit profile approval before externally visible PR/release actions when configured.
-- [ ] Document PR review feedback as manual one-shot polling until bounded repair is implemented.
+- [x] Move PR creation from env-only behavior toward a profile sink/stage.
+- [x] Keep `WHILLY_AUTO_OPEN_PR=1` as backwards-compatible opt-in.
+- [x] Require human review or explicit profile approval before externally visible PR/release actions when configured.
+- [x] Document PR review feedback as manual one-shot polling until bounded repair is implemented.
 
 Validation:
 

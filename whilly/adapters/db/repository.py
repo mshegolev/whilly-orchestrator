@@ -75,6 +75,7 @@ import asyncpg
 
 from whilly.core.models import PlanId, Priority, RepoTarget, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
+from whilly.pipeline.sinks import PlanPRContext
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import to avoid import cycles.
     from whilly.api.event_flusher import EventRecord
@@ -3158,6 +3159,40 @@ class TaskRepository:
             return None
         ref = row["github_issue_ref"]
         return None if ref is None else str(ref)
+
+    async def get_plan_pr_context(self, plan_id: PlanId) -> PlanPRContext:
+        """Return PR routing/provenance context for ``plan_id``.
+
+        The post-COMPLETE PR hook needs the legacy ``plans.github_issue_ref``
+        plus optional plan-origin provenance so project-config plans can use a
+        stricter sink-stage policy instead of the historical issue-ref fallback.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    p.github_issue_ref,
+                    COALESCE(wi.origin_system, '') AS origin_system,
+                    COALESCE(wi.origin_ref, '') AS origin_ref,
+                    COALESCE(po.decomposition_mode, '') AS decomposition_mode
+                FROM plans p
+                LEFT JOIN plan_origins po ON po.plan_id = p.id
+                LEFT JOIN work_intents wi ON wi.id = po.work_intent_id
+                WHERE p.id = $1
+                ORDER BY po.created_at ASC NULLS LAST
+                LIMIT 1
+                """,
+                plan_id,
+            )
+        if row is None:
+            return PlanPRContext()
+        github_issue_ref = row["github_issue_ref"]
+        return PlanPRContext(
+            github_issue_ref=None if github_issue_ref is None else str(github_issue_ref),
+            origin_system=row["origin_system"],
+            origin_ref=row["origin_ref"],
+            decomposition_mode=row["decomposition_mode"],
+        )
 
     async def get_repo_target(self, repo_target_id: str) -> RepoTarget | None:
         """Return the repository target identified by ``repo_target_id``."""

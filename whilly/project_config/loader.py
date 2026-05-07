@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import tomllib
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from whilly.core.agent_runner import scan_command
 from whilly.project_config.models import (
     HumanLoopConfig,
     PipelineStepConfig,
@@ -23,7 +25,6 @@ from whilly.project_config.presets import (
     normalize_project_type,
     preset_pipeline,
 )
-from whilly.core.agent_runner import scan_command
 
 
 class ProjectConfigError(ValueError):
@@ -136,13 +137,49 @@ def _validate_config(config: ProjectConfig, *, source: str, validate_repo_roles:
     for required_step in config.human_loop.required_steps:
         if required_step not in step_ids:
             raise ProjectConfigError(f"{source}: required human_loop step {required_step!r} is not in pipeline")
-    repo_roles = {repo.role for repo in config.repositories}
+    repo_by_role = {repo.role: repo for repo in config.repositories}
+    repo_roles = set(repo_by_role)
+    _validate_configured_sinks(config, source=source, repo_by_role=repo_by_role)
     for step in config.pipeline:
         missing = [dep for dep in step.depends_on if dep not in step_ids]
         if missing:
             raise ProjectConfigError(f"{source}: step {step.id!r} depends on unknown step(s): {', '.join(missing)}")
         if validate_repo_roles and step.repo_role and step.repo_role not in repo_roles:
             raise ProjectConfigError(f"{source}: step {step.id!r} references unknown repo_role {step.repo_role!r}")
+
+
+def _validate_configured_sinks(
+    config: ProjectConfig, *, source: str, repo_by_role: dict[str, RepositoryConfig]
+) -> None:
+    for sink in config.sinks:
+        if sink.type != "github_pr":
+            continue
+        sink_config = sink.config or {}
+        repo_role = _optional_string(sink_config.get("repo_role", "")).lower()
+        if repo_role and repo_role not in repo_by_role:
+            raise ProjectConfigError(f"{source}: github_pr sink references unknown repo_role {repo_role!r}")
+        repo = repo_by_role.get(repo_role) if repo_role else _first_repo_target(repo_by_role.values())
+        if repo is None or not repo.is_repo_target():
+            raise ProjectConfigError(f"{source}: github_pr sink requires a provider repo target")
+        if not config.human_loop.enabled and not _github_pr_sink_has_profile_approval(sink_config):
+            raise ProjectConfigError(
+                f"{source}: github_pr sink requires human_loop.enabled=true or explicit profile approval"
+            )
+
+
+def _github_pr_sink_has_profile_approval(config: dict[str, str]) -> bool:
+    return _optional_string(config.get("approval", "")).lower() == "profile" or _truthy(config.get("profile_approved"))
+
+
+def _first_repo_target(repositories: Iterable[RepositoryConfig]) -> RepositoryConfig | None:
+    for repo in repositories:
+        if repo.is_repo_target():
+            return repo
+    return None
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _required_string(data: dict[str, Any], field: str, source: str) -> str:
