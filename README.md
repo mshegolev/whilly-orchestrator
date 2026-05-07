@@ -47,6 +47,23 @@ traceability, reviewability, safety, and operational control.
 
 > "I'm helping — and I've read TRIZ." — Whilly Wiggum
 
+## Demo
+
+![Whilly demo: browser dashboard tracking a parallel worker run](docs/assets/whilly-demo.gif)
+
+Run the local demo and keep the control plane open:
+
+```bash
+./workshop-demo.sh --cli stub --keep-running
+```
+
+Then open `http://127.0.0.1:8000/` for the web dashboard, or use the
+browserless TUI from the running control-plane container:
+
+```bash
+docker-compose -f docker-compose.demo.yml exec control-plane whilly dashboard --plan parallel
+```
+
 ## What Whilly Does
 
 - Accepts work from JSON plans, GitHub Issues, GitHub Projects, Jira, and
