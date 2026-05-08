@@ -9,6 +9,7 @@ import pytest
 
 from whilly.adapters.filesystem.plan_io import parse_plan_dict
 from whilly.cli import main
+from whilly.core.models import Plan, VerificationCommand
 from whilly.project_config import ProjectConfigError, build_plan_payload, load_project_config, project_config_from_dict
 
 
@@ -68,6 +69,41 @@ def test_etl_config_uses_default_qa_stlc_pipeline_and_generates_valid_plan() -> 
     assert any("HUMAN-IN-THE-LOOP CHECKPOINT" in task["description"] for task in payload["tasks"])
     generate = next(task for task in payload["tasks"] if task["id"].endswith("GENERATE-AUTOTESTS"))
     assert generate["key_files"] == ["~/etl_testing", "out/rel-1234-release-context.json"]
+
+
+def test_core_plan_carries_typed_verification_commands() -> None:
+    command = VerificationCommand(name="unit", command="pytest -q", required=True, source="profile")
+    plan = Plan(id="P-VERIFY", name="Verification", verification_commands=(command,))
+
+    assert plan.verification_commands == (command,)
+
+
+def test_project_config_plan_emits_profile_verification_commands_in_order() -> None:
+    config = project_config_from_dict(
+        {
+            "name": "Verification profile",
+            "project_type": "generic",
+            "verification_commands": [
+                {"name": "unit", "command": "pytest -q tests/unit", "required": True},
+                {"name": "lint", "command": "ruff check whilly tests", "required": False},
+            ],
+        }
+    )
+
+    payload = build_plan_payload(config, plan_id="P-VERIFY")
+
+    assert payload["verification_commands"] == [
+        {"name": "unit", "command": "pytest -q tests/unit", "required": True, "source": "profile"},
+        {"name": "lint", "command": "ruff check whilly tests", "required": False, "source": "profile"},
+    ]
+
+
+def test_project_config_plan_omits_empty_verification_commands() -> None:
+    config = project_config_from_dict({"name": "No verification", "project_type": "generic"})
+
+    payload = build_plan_payload(config, plan_id="P-NO-VERIFY")
+
+    assert "verification_commands" not in payload
 
 
 def test_graphql_config_generates_api_autotest_pipeline() -> None:
