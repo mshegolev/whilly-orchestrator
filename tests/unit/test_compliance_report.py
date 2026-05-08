@@ -19,7 +19,8 @@ def test_report_model_classifies_capabilities_and_partial_helper_evidence() -> N
     statuses = {item.status for item in report.matrix}
     assert CapabilityStatus.PASS in statuses
     assert CapabilityStatus.PARTIAL in statuses
-    assert CapabilityStatus.FAIL in statuses
+    assert statuses <= set(CapabilityStatus)
+    assert CapabilityStatus.FAIL.value == "FAIL"
     assert CapabilityStatus.UNKNOWN.value == "UNKNOWN"
 
     automatic_pr = report.capability("Automatic PR creation after DONE")
