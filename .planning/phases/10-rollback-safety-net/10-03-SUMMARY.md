@@ -111,9 +111,8 @@ Each TDD task was committed atomically:
 - Post-plan orchestration cleanup fixed Phase 10 fallout outside Plan 10-03's original write set:
   `tests/unit/test_rollback.py` was Ruff-formatted, and
   `tests/unit/test_pr_title_argv_sanitization.py` now injects clean rollback preflight evidence so the tests remain focused on PR title/body argv sanitization.
-- `make test` still has one unrelated README quickstart failure:
+- Post-plan repo-health cleanup restored the README quickstart long-running marker expected by
   `tests/unit/test_readme_quickstart_extractable.py::test_long_running_block_is_segregated_in_readme`.
-  Final full-suite line after cleanup: `1 failed, 2796 passed, 648 skipped, 10 warnings in 65.61s`.
 
 ## Verification
 
@@ -127,7 +126,8 @@ Each TDD task was committed atomically:
 - `make lint` - `All checks passed`; `435 files already formatted`
 - `.venv/bin/python -m pytest -q tests/unit/test_pr_title_argv_sanitization.py --maxfail=1` - `6 passed`
 - `.venv/bin/python -m pytest -q tests/unit/test_rollback.py tests/integration/test_rollback_cli.py tests/test_github_pr_sink.py tests/unit/test_pr_hook_failure_events.py tests/integration/test_post_complete_pr_hook.py tests/unit/test_compliance_report.py --maxfail=1` - `65 passed, 3 skipped`
-- `make test` - failed only on the unrelated README quickstart test, exact summary documented above
+- `.venv/bin/python -m pytest -q tests/unit/test_readme_quickstart_extractable.py::test_long_running_block_is_segregated_in_readme --maxfail=1` - `1 passed`
+- `make test` - `2797 passed, 648 skipped, 10 warnings`
 
 ## User Setup Required
 
@@ -135,7 +135,7 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 
-Phase 10 rollback safety-net behavior is complete for the targeted gate: rollback core, CLI, PR preflight, hook evidence, compliance evidence, lint, and Phase 10 targeted tests are green. The remaining full-suite failure is the unrelated README quickstart extraction test documented above.
+Phase 10 rollback safety-net behavior is complete for the targeted gate: rollback core, CLI, PR preflight, hook evidence, compliance evidence, lint, and Phase 10 targeted tests are green. The full repository test suite is also green after the README quickstart marker cleanup.
 
 ---
 *Phase: 10-rollback-safety-net*
