@@ -58,7 +58,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskStatus, VerificationCommand
 from whilly.core.task_id import validate_task_id
 
 __all__ = ["PlanParseError", "parse_plan", "parse_plan_dict", "serialize_plan"]
@@ -202,6 +202,10 @@ def serialize_plan(plan: Plan, tasks: Iterable[Task]) -> dict[str, Any]:
         out["origin"] = _origin_to_dict(plan.origin)
     if plan.repo_targets:
         out["repo_targets"] = [_repo_target_to_dict(target) for target in plan.repo_targets]
+    if plan.verification_commands:
+        out["verification_commands"] = [
+            _verification_command_to_dict(command) for command in plan.verification_commands
+        ]
     return out
 
 
@@ -240,6 +244,7 @@ def _plan_from_dict(data: dict[str, Any], *, source: str) -> tuple[Plan, list[Ta
 
     origin = _origin_from_dict(data.get("origin"), source=source)
     repo_targets = _repo_targets_from_dict(data.get("repo_targets", ()), source=source)
+    verification_commands = _verification_commands_from_dict(data.get("verification_commands"), source=source)
     repo_target_ids = {target.id for target in repo_targets}
     for task in tasks:
         if task.repo_target_id and task.repo_target_id not in repo_target_ids:
@@ -254,6 +259,7 @@ def _plan_from_dict(data: dict[str, Any], *, source: str) -> tuple[Plan, list[Ta
         tasks=tuple(tasks),
         origin=origin,
         repo_targets=repo_targets,
+        verification_commands=verification_commands,
     )
     return plan, tasks
 
@@ -334,6 +340,46 @@ def _repo_targets_from_dict(raw: Any, *, source: str) -> tuple[RepoTarget, ...]:
         )
         seen.add(target_id)
     return tuple(targets)
+
+
+def _verification_commands_from_dict(raw: Any, *, source: str) -> tuple[VerificationCommand, ...]:
+    """Parse optional top-level ``verification_commands`` metadata."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise PlanParseError(f"{source}: 'verification_commands' must be a JSON array when provided")
+
+    commands: list[VerificationCommand] = []
+    for index, item in enumerate(raw):
+        field = f"verification_commands[{index}]"
+        if not isinstance(item, dict):
+            raise PlanParseError(f"{source}: {field} must be a JSON object")
+
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise PlanParseError(f"{source}: {field}.name must be a non-empty string")
+
+        command = item.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise PlanParseError(f"{source}: {field}.command must be a non-empty string")
+
+        required = item.get("required", True)
+        if not isinstance(required, bool):
+            raise PlanParseError(f"{source}: {field}.required must be a bool when provided")
+
+        command_source = item.get("source", "profile")
+        if not isinstance(command_source, str) or not command_source.strip():
+            raise PlanParseError(f"{source}: {field}.source must be a non-empty string when provided")
+
+        commands.append(
+            VerificationCommand(
+                name=name,
+                command=command,
+                required=required,
+                source=command_source,
+            )
+        )
+    return tuple(commands)
 
 
 def _optional_string(value: Any, *, source: str, field: str) -> str:
@@ -489,6 +535,15 @@ def _repo_target_to_dict(target: RepoTarget) -> dict[str, Any]:
     if target.credential_policy:
         out["credential_policy"] = target.credential_policy
     return out
+
+
+def _verification_command_to_dict(command: VerificationCommand) -> dict[str, Any]:
+    return {
+        "name": command.name,
+        "command": command.command,
+        "required": command.required,
+        "source": command.source,
+    }
 
 
 def _task_to_dict(task: Task) -> dict[str, Any]:
