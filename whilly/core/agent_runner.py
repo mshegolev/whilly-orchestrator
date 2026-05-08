@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from typing import Final
 
 from whilly.core.models import Task
+from whilly.security.secret_lint import (
+    SECRET_LINT_BLOCKED_EVENT_TYPE,
+    SECRET_LINT_FAIL_REASON,
+    SecretFinding,
+    first_secret_finding,
+)
 
 SHELL_COMMAND_BLOCKED_EVENT_TYPE: Final[str] = "shell_command_blocked"
 SHELL_COMMAND_WARN_EVENT_TYPE: Final[str] = "shell_command_warn"
@@ -157,13 +163,32 @@ def scan_task_command_surface(task: Task) -> ShellScanResult:
     return scan_command(surface)
 
 
+def scan_task_secret_surface(task: Task, *, prompt: str = "") -> SecretFinding | None:
+    """Scan task-owned text and rendered runner prompt for secret-like values."""
+
+    surfaces: dict[str, object] = {
+        "task.description": task.description,
+        "task.prd_requirement": task.prd_requirement,
+    }
+    for idx, criterion in enumerate(task.acceptance_criteria):
+        surfaces[f"task.acceptance_criteria[{idx}]"] = criterion
+    for idx, step in enumerate(task.test_steps):
+        surfaces[f"task.test_steps[{idx}]"] = step
+    surfaces["runner.prompt"] = prompt
+    return first_secret_finding(surfaces)
+
+
 __all__ = [
+    "SECRET_LINT_BLOCKED_EVENT_TYPE",
+    "SECRET_LINT_FAIL_REASON",
     "SHELL_COMMAND_BLOCKED_EVENT_TYPE",
     "SHELL_COMMAND_FAIL_REASON",
     "SHELL_COMMAND_WARN_EVENT_TYPE",
     "SHELL_DENY_ENV",
     "ShellScanResult",
+    "SecretFinding",
     "normalize_shell_command",
     "scan_command",
     "scan_task_command_surface",
+    "scan_task_secret_surface",
 ]
