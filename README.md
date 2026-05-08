@@ -31,10 +31,15 @@ traceability, reviewability, safety, and operational control.
 > log, web dashboard, browserless operator surfaces, SSE stream, Prometheus
 > metrics, health endpoints, worker heartbeat, repo-target metadata, and project
 > config plan generation. Configured verification commands can block `DONE`,
-> project-config tasks emit pipeline stage audit events, and human-review
-> checkpoint event models exist. GitHub PR sinks can be represented as explicit
+> profile-native verification commands feed runtime verification, project-config
+> tasks emit pipeline stage audit events, and human-review checkpoint event
+> models exist. Operator-triggered rollback, explicit configured CI polling,
+> bounded repair attempts, and deterministic governance risk policy are current
+> scoped capabilities. GitHub PR sinks can be represented as explicit
 > project-config sink stages, but still require `WHILLY_AUTO_OPEN_PR=1` plus a
-> human-review or profile-approval guard. Remaining configured sinks are still
+> human-review or profile-approval guard. Semantic memory is explicitly deferred
+> from current scope; deterministic events, task history, PR evidence, and
+> verification logs remain authoritative. Remaining configured sinks are still
 > being aligned with the target documentation in
 > [`docs/target/`](docs/target/). Legacy v3.x remains historical at tag
 > [`v3-final`](https://github.com/mshegolev/whilly-orchestrator/releases/tag/v3-final).
@@ -111,8 +116,15 @@ execution.
 The core worker loop does **not** claim all of the following as complete product
 guarantees: full multi-repo execution, automatic PR review feedback loops,
 mandatory CI/lint verification unless verification commands are configured,
-full sandbox or VM isolation, semantic long-term memory, reliable git rollback,
-or autonomous production release without human review.
+full sandbox or VM isolation, autonomous rollback/recovery, automatic merge,
+or production release without human review. No continuous polling,
+auto-merge, production recovery, or unbounded repair is claimed.
+
+Current scope wording: operator-triggered rollback; explicit configured CI polling; bounded repair attempts; deterministic governance risk policy.
+
+Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
+
+No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
 
 ## What's new in v4.6.1 (M3 of Whilly Distributed v5.0)
 

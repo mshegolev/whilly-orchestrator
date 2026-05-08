@@ -624,7 +624,7 @@ def _governance_policy_gap(files: _RepoFiles) -> str:
 
 def _governance_policy_action(files: _RepoFiles) -> str:
     if _governance_policy_status(files) is CapabilityStatus.PASS:
-        return "Keep governance scoring deterministic, inspectable, and covered by category-level tests."
+        return "Keep deterministic governance risk policy scoring inspectable and covered by category-level tests."
     return "Complete pure governance scoring and category-level tests before reporting this capability as PASS."
 
 
@@ -690,8 +690,8 @@ def _git_rollback_gap(files: _RepoFiles) -> str:
 def _git_rollback_action(files: _RepoFiles) -> str:
     if _git_rollback_status(files) is CapabilityStatus.PASS:
         return (
-            "Keep scope explicit: operator-triggered only; no autonomous recovery; continue covering backup tags, "
-            "preflight reports, confirmation-gated restore, and PR push preflight."
+            "Keep operator-triggered rollback scope explicit: operator-triggered only; no autonomous recovery; "
+            "continue covering backup tags, preflight reports, confirmation-gated restore, and PR push preflight."
         )
     return (
         "Complete rollback service, CLI, PR push preflight, and refusal-first restore coverage before broader claims."

@@ -4,7 +4,11 @@
 
 The next step toward an autonomous developer is not simply “let the agent code more.” The system needs additional control loops, verification layers, repository understanding, review handling, rollback, sandboxing, and decision governance.
 
-Current Whilly is best understood as an AI-assisted task orchestrator. To become an autonomous developer, it must evolve from executing isolated tasks to managing the full engineering lifecycle:
+Current Whilly is best understood as a controlled AI-assisted engineering control plane. It now includes profile-native verification commands feed runtime verification, operator-triggered rollback, explicit configured CI polling, bounded repair attempts, and deterministic governance risk policy as scoped current capabilities. No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
+
+Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
+
+To become an autonomous developer, it must evolve from executing isolated tasks to managing the full engineering lifecycle:
 
 ```text
 Understand → Plan → Implement → Verify → Review → Repair → Integrate → Release candidate → Learn
@@ -28,13 +32,15 @@ Current Whilly is roughly here, with stronger orchestration features: queue, sta
 
 System executes a task and runs configured verification before considering it successful.
 
-Required next step:
+Current scoped evidence:
 
 - project profiles;
-- verification stages;
+- profile-native verification commands feed runtime verification;
 - human review checkpoints;
 - compliance validation;
 - documentation alignment.
+
+Remaining target work includes broader profile-native stage execution and stronger release governance.
 
 ### Level 3 — PR-Capable Autonomous Contributor
 
@@ -116,7 +122,9 @@ MVP implementation:
 - dependency graph for supported languages;
 - test discovery;
 - changed-file to test mapping;
-- lightweight project memory from previous events and PRs.
+- lightweight project memory from previous deterministic events and PRs.
+
+Semantic-memory retrieval belongs to future target architecture, not current runtime capability. Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
 
 Risks:
 
@@ -169,7 +177,7 @@ Required capabilities:
 MVP implementation:
 
 - configured verification commands;
-- CI status polling;
+- explicit configured CI polling;
 - required vs optional checks;
 - verification artifacts linked to task events.
 
@@ -205,6 +213,7 @@ Acceptance criteria:
 - repeated failures do not loop forever;
 - repair attempts are linked to original task;
 - human sees concise failure history.
+- bounded repair attempts do not imply continuous autonomous repair.
 
 ## 5. PR Review Feedback Loop
 
@@ -348,6 +357,7 @@ Acceptance criteria:
 - high-risk tasks cannot bypass approval;
 - approval events are auditable;
 - policy is configurable per project.
+- current deterministic governance risk policy is evidence/reporting policy, not autonomous production release enforcement.
 
 ## 10. Evaluation and Quality Scoring
 
@@ -492,7 +502,7 @@ These can initially be modeled as events/metadata, then promoted to first-class 
    Letting repair or review cycles continue without budget limits.
 
 5. **Bad memory**
-   Persisting stale or incorrect assumptions.
+   Persisting stale or incorrect assumptions. Semantic recall must not override deterministic events, task history, PR evidence, or verification logs.
 
 6. **Multi-repo complexity**
    Coordinating changes without integration verification.
