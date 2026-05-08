@@ -102,10 +102,7 @@ def test_bounded_ci_polling_and_repair_compliance_is_scoped() -> None:
     assert "explicit configured CI polling" in wording
     assert "bounded repair attempts" in wording
     assert "repair.escalated" in wording
-    assert (
-        "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed."
-        in wording
-    )
+    assert "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed." in wording
 
 
 def test_bounded_ci_polling_and_repair_compliance_requires_runtime_evidence(tmp_path: Path) -> None:
