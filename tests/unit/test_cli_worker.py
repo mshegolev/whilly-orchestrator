@@ -804,6 +804,87 @@ async def test_async_worker_fetches_plan_and_builds_profile_verification_runner(
 
 
 @pytest.mark.asyncio
+async def test_remote_worker_passes_ci_poll_runner_for_ci_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = Task(id="T-CI-VERIFY", status=TaskStatus.PENDING)
+    fetched_plan = Plan(
+        id="P-1",
+        name="Fetched CI plan",
+        verification_commands=(
+            VerificationCommand(
+                name="ci-status",
+                command="ci://github/example/repo/pull/42",
+                required=True,
+                source="ci",
+                repair_max_attempts=1,
+            ),
+        ),
+    )
+    captured: dict[str, object] = {}
+    ci_runner = object()
+
+    class _FakeClient:
+        def __init__(self, _base_url: str, _token: str) -> None:
+            return None
+
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_plan(self, _plan_id: str) -> Plan:
+            return fetched_plan
+
+    async def _fake_run_verification_commands(commands: object, **kwargs: object) -> VerificationRunOutcome:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        captured["verification_kwargs"] = kwargs
+        return VerificationRunOutcome(results=())
+
+    async def _fake_run_remote_worker_with_heartbeat(
+        _client: object,
+        _runner: object,
+        _plan: Plan,
+        _worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> RemoteWorkerStats:
+        assert verification_runner is not None
+        await verification_runner(task)  # type: ignore[misc]
+        return RemoteWorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_worker, "GitHubCIPollAdapter", lambda: ci_runner, raising=False)
+    monkeypatch.setattr(cli_worker, "RemoteWorkerClient", _FakeClient)
+    monkeypatch.setattr(cli_worker, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_worker, "run_remote_worker_with_heartbeat", _fake_run_remote_worker_with_heartbeat)
+
+    await cli_worker._async_worker(
+        connect_url="http://127.0.0.1:8000",
+        token="token",
+        plan_id="P-1",
+        worker_id="w-ci-verify",
+        runner=_stub_runner,  # type: ignore[arg-type]
+        heartbeat_interval=1,
+        max_iterations=1,
+        max_processed=None,
+        install_signal_handlers=False,
+        verify_commands=(),
+        optional_verify_commands=(),
+    )
+
+    commands = captured["commands"]  # type: ignore[assignment]
+    assert [(command.name, command.source, command.repair_max_attempts) for command in commands] == [
+        ("ci-status", "ci", 1),
+    ]
+    assert captured["verification_kwargs"]["ci_poll_runner"] is ci_runner  # type: ignore[index]
+
+
+@pytest.mark.asyncio
 async def test_async_worker_preserves_cli_only_remote_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

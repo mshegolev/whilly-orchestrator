@@ -45,10 +45,11 @@ import pytest
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import VersionConflictError
+from whilly.ci.events import CI_POLL_RESULT_EVENT, CI_POLL_STARTED_EVENT
+from whilly.ci.models import CIPollEvidence, CIPollResult, CIPollSpec
 from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON
 from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON
-from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE, SECRET_LINT_FAIL_REASON
 from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
 from whilly.pipeline.human_review import HUMAN_REVIEW_APPROVED, HUMAN_REVIEW_REQUIRED
 from whilly.pipeline.verification import (
@@ -57,6 +58,12 @@ from whilly.pipeline.verification import (
     VerificationCommandResult,
     VerificationRunOutcome,
 )
+from whilly.repair.events import (
+    REPAIR_ATTEMPT_COMPLETED_EVENT,
+    REPAIR_ATTEMPT_REQUESTED_EVENT,
+    REPAIR_ESCALATED_EVENT,
+)
+from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE, SECRET_LINT_FAIL_REASON
 from whilly.worker import remote as worker_remote
 from whilly.worker.remote import (
     OPERATOR_PAUSE_RELEASE_REASON,
@@ -127,6 +134,57 @@ def _make_conflict(
     )
 
 
+def _ci_failure_outcome(
+    *,
+    name: str = "required-ci",
+    repair_max_attempts: int = 0,
+    timeout_s: float = 123.0,
+    poll_interval_s: float = 7.0,
+    max_attempts: int = 4,
+) -> VerificationRunOutcome:
+    spec = CIPollSpec(
+        name=name,
+        provider="github",
+        target="ci://github/example/repo/pull/42",
+        required=True,
+        timeout_s=timeout_s,
+        poll_interval_s=poll_interval_s,
+        max_attempts=max_attempts,
+    )
+    result = CIPollResult(
+        name=name,
+        provider="github",
+        target=spec.target,
+        state="completed",
+        conclusion="failure",
+        required=True,
+        attempts=max_attempts,
+        max_attempts=max_attempts,
+        timeout_s=timeout_s,
+        duration_s=12.5,
+        reason="ci failed",
+    )
+    return VerificationRunOutcome(
+        results=(
+            VerificationCommandResult(
+                name=name,
+                command=spec.target,
+                required=True,
+                succeeded=False,
+                warning=False,
+                event_name=VERIFICATION_FAILED_EVENT,
+                returncode=None,
+                stdout="",
+                stderr="ci failed",
+                duration_s=12.5,
+                source="ci",
+                repair_max_attempts=repair_max_attempts,
+            ),
+        ),
+        ci_polls=(CIPollEvidence(spec=spec, result=result),),
+    )
+
+
 class FakeRemoteClient:
     """In-memory stand-in for :class:`RemoteWorkerClient`.
 
@@ -156,12 +214,14 @@ class FakeRemoteClient:
         self.complete_calls: list[tuple[TaskId, str, int, object]] = []
         self.fail_calls: list[tuple[TaskId, str, int, str]] = []
         self.release_calls: list[tuple[TaskId, str, int, str]] = []
+        self.request_repair_calls: list[tuple[TaskId, str, int, dict[str, object], dict[str, object]]] = []
         self.heartbeat_calls: list[str] = []
         self.fail_details: list[dict[str, object] | None] = []
         self.event_calls: list[tuple[TaskId, str, str, dict[str, object], dict[str, object] | None]] = []
         self.task_event_results: dict[TaskId, list[dict[str, object]]] = {}
         self.list_task_events_calls: list[tuple[TaskId, str | None]] = []
         self.control_state_results: list[bool] = []
+        self.call_order: list[tuple[str, TaskId]] = []
 
     async def control_state(self) -> object:
         paused = self.control_state_results.pop(0) if self.control_state_results else False
@@ -181,6 +241,7 @@ class FakeRemoteClient:
         cost_usd: object = None,  # TASK-102
     ) -> object:
         self.complete_calls.append((task_id, worker_id, version, cost_usd))
+        self.call_order.append(("complete", task_id))
         if not self.complete_results:
             raise AssertionError("FakeRemoteClient.complete called more times than scripted")
         result = self.complete_results.pop(0)
@@ -204,6 +265,7 @@ class FakeRemoteClient:
     ) -> object:
         self.fail_calls.append((task_id, worker_id, version, reason))
         self.fail_details.append(detail)
+        self.call_order.append(("fail", task_id))
         if not self.fail_results:
             raise AssertionError("FakeRemoteClient.fail called more times than scripted")
         result = self.fail_results.pop(0)
@@ -219,6 +281,7 @@ class FakeRemoteClient:
         reason: str,
     ) -> object:
         self.release_calls.append((task_id, worker_id, version, reason))
+        self.call_order.append(("release", task_id))
         if not self.release_results:
             raise AssertionError("FakeRemoteClient.release called more times than scripted")
         result = self.release_results.pop(0)
@@ -240,7 +303,20 @@ class FakeRemoteClient:
         detail: dict[str, object] | None = None,
     ) -> object:
         self.event_calls.append((task_id, worker_id, event_type, payload or {}, detail))
+        self.call_order.append((event_type, task_id))
         return object()
+
+    async def request_repair(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        repair_task: dict[str, object],
+        event: dict[str, object],
+    ) -> str:
+        self.request_repair_calls.append((task_id, worker_id, version, repair_task, event))
+        self.call_order.append(("request_repair", task_id))
+        return str(repair_task["id"])
 
     async def list_task_events(self, task_id: TaskId, event_prefix: str | None = None) -> tuple[dict[str, object], ...]:
         self.list_task_events_calls.append((task_id, event_prefix))
@@ -611,6 +687,253 @@ async def test_remote_required_verification_failure_blocks_complete_and_records_
     assert verification_failed[0]["name"] == "profile-smoke"
     assert verification_failed[0]["source"] == "profile"
     assert verification_failed[1] == {"stdout": "failed", "stderr": "trace"}
+
+
+async def test_remote_worker_records_ci_poll_events_before_verification_failure(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    claimed = _make_task("T-ci-order", status=TaskStatus.CLAIMED, version=4)
+    failed = replace(claimed, status=TaskStatus.FAILED, version=5)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "T-ci-order"
+        return _ci_failure_outcome()
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
+    assert event_types.index(CI_POLL_STARTED_EVENT) < event_types.index(CI_POLL_RESULT_EVENT)
+    assert event_types.index(CI_POLL_RESULT_EVENT) < event_types.index(VERIFICATION_FAILED_EVENT)
+
+
+async def test_remote_worker_ci_started_event_includes_original_poll_budget(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    claimed = _make_task("T-ci-budget", status=TaskStatus.CLAIMED, version=4)
+    failed = replace(claimed, status=TaskStatus.FAILED, version=5)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "T-ci-budget"
+        return _ci_failure_outcome(timeout_s=90.0, poll_interval_s=3.5, max_attempts=6)
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    started = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == CI_POLL_STARTED_EVENT)
+    assert started["provider"] == "github"
+    assert started["target"] == "ci://github/example/repo/pull/42"
+    assert started["timeout_s"] == 90.0
+    assert started["poll_interval_s"] == 3.5
+    assert started["max_attempts"] == 6
+
+
+async def test_remote_worker_configured_ci_status_stage_emits_ci_poll_events(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Remote Plan",
+        origin=PlanOrigin(system="project_config", ref="remote-qa-profile", decomposition_mode="configured:qa"),
+    )
+    claimed = replace(
+        _make_task("CFG-R-CI-STATUS", status=TaskStatus.CLAIMED, version=4),
+        prd_requirement="Configured qa pipeline step: ci_status",
+    )
+    failed = replace(claimed, status=TaskStatus.FAILED, version=5)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "CFG-R-CI-STATUS"
+        return _ci_failure_outcome(name="configured-ci-status")
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
+    assert CI_POLL_STARTED_EVENT in event_types
+    assert CI_POLL_RESULT_EVENT in event_types
+
+
+async def test_remote_worker_requests_repair_without_release_retry(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    claimed = replace(
+        _make_task("T-ci-repair", status=TaskStatus.CLAIMED, version=4),
+        key_files=("whilly/worker/remote.py",),
+        repo_target_id="repo-main",
+    )
+    failed = replace(claimed, status=TaskStatus.FAILED, version=5)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "T-ci-repair"
+        return _ci_failure_outcome(repair_max_attempts=2)
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert client.release_calls == []
+    assert client.fail_calls == [("T-ci-repair", WORKER_ID, 4, "verification_failed")]
+    assert len(client.request_repair_calls) == 1
+    task_id, worker_id, version, repair_task, event = client.request_repair_calls[0]
+    assert (task_id, worker_id, version) == ("T-ci-repair", WORKER_ID, 4)
+    assert repair_task["id"] == "T-ci-repair-repair-1"
+    assert repair_task["dependencies"] == []
+    assert repair_task["key_files"] == ["whilly/worker/remote.py"]
+    assert repair_task["repo_target_id"] == "repo-main"
+    assert event["event_type"] == REPAIR_ATTEMPT_REQUESTED_EVENT
+    assert event["payload"]["repair_task_id"] == "T-ci-repair-repair-1"  # type: ignore[index]
+    failed_result = client.fail_details[0]["failed_results"][0]  # type: ignore[index]
+    assert failed_result["source"] == "ci"  # type: ignore[index]
+    assert failed_result["repair_max_attempts"] == 2  # type: ignore[index]
+
+
+async def test_remote_worker_escalates_when_repair_budget_exhausted(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    claimed = _make_task("T-exhausted-repair-1", status=TaskStatus.CLAIMED, version=4)
+    failed = replace(claimed, status=TaskStatus.FAILED, version=5)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "T-exhausted-repair-1"
+        return _ci_failure_outcome(repair_max_attempts=1)
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert client.request_repair_calls == []
+    escalated = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == REPAIR_ESCALATED_EVENT)
+    assert escalated["reason"] == "repair_budget_exhausted"
+    assert escalated["last_repair_task_id"] == "T-exhausted-repair-1"
+    assert escalated["attempts"] == 1
+    assert escalated["max_attempts"] == 1
+
+
+async def test_remote_worker_records_repair_attempt_completed_on_done(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    claimed = _make_task("T-original-repair-1", status=TaskStatus.CLAIMED, version=2)
+    done = replace(claimed, status=TaskStatus.DONE, version=3)
+    client.claim_results.append(claimed)
+    client.complete_results.append(done)
+    client.task_event_results["T-original"] = [
+        {
+            "payload": {
+                "repair_task_id": "T-original-repair-1",
+                "max_attempts": 3,
+            }
+        }
+    ]
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+    )
+
+    completed = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT)
+    assert completed["task_id"] == "T-original-repair-1"
+    assert completed["orig_task_id"] == "T-original"
+    assert completed["terminal_status"] == "DONE"
+    assert completed["max_attempts"] == 3
+    assert client.call_order.index((REPAIR_ATTEMPT_COMPLETED_EVENT, "T-original-repair-1")) < client.call_order.index(
+        ("complete", "T-original-repair-1")
+    )
+
+
+async def test_remote_worker_records_repair_attempt_completed_on_failed(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    claimed = _make_task("T-original-repair-2", status=TaskStatus.CLAIMED, version=2)
+    failed = replace(claimed, status=TaskStatus.FAILED, version=3)
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+    client.task_event_results["T-original"] = [
+        {
+            "payload": {
+                "repair_task_id": "T-original-repair-2",
+                "max_attempts": 4,
+            }
+        }
+    ]
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="repair still failed", exit_code=1, is_complete=False)
+
+    await run_remote_worker(  # type: ignore[arg-type]
+        client,
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+    )
+
+    completed = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT)
+    assert completed["task_id"] == "T-original-repair-2"
+    assert completed["orig_task_id"] == "T-original"
+    assert completed["terminal_status"] == "FAILED"
+    assert completed["max_attempts"] == 4
+    assert client.call_order.index((REPAIR_ATTEMPT_COMPLETED_EVENT, "T-original-repair-2")) < client.call_order.index(
+        ("fail", "T-original-repair-2")
+    )
 
 
 async def test_remote_heartbeat_composition_forwards_verification_runner(
