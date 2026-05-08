@@ -194,6 +194,23 @@ def _row_block(table_html: str, row_id: str) -> str:
     return match.group(0)
 
 
+def _review_decision_pre_fetch_source(page_source: str) -> str:
+    function_start = page_source.index("async function submitReviewDecision(row, decision)")
+    fetch_start = page_source.index("fetch(", function_start)
+    prefix = page_source[function_start:fetch_start]
+    assert "fetch(" not in prefix
+    return prefix
+
+
+def _assert_status_then_return_in_order(source: str, statuses: list[str]) -> None:
+    cursor = 0
+    for status in statuses:
+        status_index = source.index(status, cursor)
+        return_index = source.index("return;", status_index)
+        assert status_index < return_index
+        cursor = return_index
+
+
 # ─── Endpoint registration ───────────────────────────────────────────────
 
 
@@ -424,13 +441,117 @@ async def test_dashboard_mobile_labels_match_table_contract_and_review_actions_a
     assert 'data-review-decision="approved"' in review_row
     assert 'data-review-decision="rejected"' in review_row
     assert 'data-review-decision="changes_requested"' in review_row
-    assert ">A<" in review_row
-    assert ">X<" in review_row
-    assert ">C<" in review_row
+    assert ">A Approve</button>" in review_row
+    assert ">X Reject</button>" in review_row
+    assert ">C Changes</button>" in review_row
 
     events_table = _table_block(body, "events")
     event_row = _row_block(events_table, f"event-{normal_event_id}")
     assert _mobile_labels(event_row) == _header_labels(events_table)
+
+
+async def test_dashboard_review_actions_use_clear_affordance_contract(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = await _seed_plan(db_pool, "plan-review-affordances")
+    await _seed_worker(db_pool, worker_id="worker-review-actions", hostname="review-actions.local")
+    await _seed_task(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        status="IN_PROGRESS",
+        priority="critical",
+        claimed_by="worker-review-actions",
+        acceptance_criteria=["manual approval is captured"],
+        test_steps=["human review required"],
+    )
+    await _seed_task(db_pool, task_id="t-missing-ac", plan_id=plan_id, status="PENDING")
+    await _seed_event(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        event_type="human_review.required",
+        payload={
+            "task_id": "t-human-review",
+            "plan_id": plan_id,
+            "stage_id": "release_review",
+            "reason": "stage_human_gate",
+        },
+    )
+
+    response = await client.get("/")
+    body = response.text
+    review_table = _table_block(body, "review-gaps")
+    review_row = _row_block(review_table, "review-gap-t-human-review")
+
+    approve_index = review_row.index(">A Approve</button>")
+    reject_index = review_row.index(">X Reject</button>")
+    changes_index = review_row.index(">C Changes</button>")
+    assert approve_index < reject_index < changes_index
+    assert 'title="Approve review (a)"' in review_row
+    assert 'title="Reject review - comment required (x)"' in review_row
+    assert 'title="Request changes - details required (c)"' in review_row
+    assert 'aria-label="Approve review for t-human-review"' in review_row
+    assert 'aria-label="Reject review for t-human-review"' in review_row
+    assert 'aria-label="Request changes for t-human-review"' in review_row
+    assert 'data-review-decision="approved"' in review_row
+    assert 'data-review-decision="rejected"' in review_row
+    assert 'data-review-decision="changes_requested"' in review_row
+
+    read_only_row = _row_block(review_table, "review-gap-t-missing-ac")
+    assert "read-only" in read_only_row
+    assert "data-review-decision=" not in read_only_row
+    assert "<button" not in read_only_row
+
+    desktop_css = body[: body.index("@media (max-width: 900px)")]
+    assert ".review-actions button" in desktop_css
+    assert "min-height: 32px;" in desktop_css
+    assert "padding: 4px 8px;" in desktop_css
+    assert "border-radius: 2px;" in desktop_css
+
+    mobile_css = body[body.index("@media (max-width: 900px)") :]
+    assert "#review-gaps .review-actions button" in mobile_css
+    assert "min-width: 44px;" in mobile_css
+    assert "min-height: 44px;" in mobile_css
+    assert "padding: 8px;" in mobile_css
+
+
+async def test_dashboard_review_prompt_recovery_copy_and_hotkey_contract(client: AsyncClient) -> None:
+    response = await client.get("/")
+    body = response.text
+
+    for expected in (
+        "No review row selected",
+        "Admin token required",
+        "Reviewer required",
+        'window.prompt("Reject review: enter required comment", "")',
+        "Reject canceled",
+        "Reject requires a comment",
+        'window.prompt("Request changes: describe required changes", "")',
+        "Changes canceled",
+        "Changes requires details",
+        "Review recorded: approved",
+        "Review recorded: rejected",
+        "Review recorded: changes requested",
+        "/api/v1/tasks/${encodeURIComponent(taskId)}/human-review",
+        "actionButton.dataset.reviewDecision",
+        'submitReviewDecision(selectedReviewRow(), "approved")',
+        'submitReviewDecision(selectedReviewRow(), "rejected")',
+        'submitReviewDecision(selectedReviewRow(), "changes_requested")',
+    ):
+        assert expected in body
+
+    pre_fetch = _review_decision_pre_fetch_source(body)
+    _assert_status_then_return_in_order(
+        pre_fetch,
+        [
+            'setPollingStatus("Reject canceled");',
+            'setPollingStatus("Reject requires a comment", true);',
+            'setPollingStatus("Changes canceled");',
+            'setPollingStatus("Changes requires details", true);',
+        ],
+    )
 
 
 async def test_dashboard_preserves_local_state_across_refresh_and_sse_swaps(client: AsyncClient) -> None:
@@ -542,9 +663,9 @@ async def test_dashboard_renders_compliance_gaps_and_events(
     assert 'id="dashboard-admin-token"' in body
     assert 'id="dashboard-reviewer"' in body
     assert "j/k=select" in body
-    assert "a=approve" in body
-    assert "x=reject" in body
-    assert "c=changes" in body
+    assert "a=Approve review" in body
+    assert "x=Reject review" in body
+    assert "c=Changes" in body
     assert 'data-review-task="t-human-review"' in body
     assert 'data-review-stage="release_review"' in body
     assert 'data-review-actionable="true"' in body
