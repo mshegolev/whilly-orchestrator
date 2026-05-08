@@ -216,7 +216,7 @@ GSD initialization and are now tracked here as completed history.
 | 6. Mobile WUI row actions | 1/1 | Complete | 2026-05-08 |
 | 7. Review action affordances | 1/1 | Complete | 2026-05-08 |
 | 8. Sandbox and secrets hardening | 4/4 | Complete | 2026-05-08 |
-| 9. Profile-native verification wiring | 1/4 | In Progress | - |
+| 9. Profile-native verification wiring | 3/4 | In Progress | - |
 | 10. Rollback safety net | 0/1 | Not started | - |
 | 11. CI polling and bounded repair | 0/1 | Not started | - |
 | 12. Governance and semantic-memory decision | 0/1 | Not started | - |
