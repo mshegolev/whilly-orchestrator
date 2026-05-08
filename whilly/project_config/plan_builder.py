@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from whilly.ci.models import CI_VERIFICATION_SOURCE
 from whilly.pipeline.sinks import (
+    CI_STATUS_SINK_TYPE,
+    CONFIGURED_CI_STATUS_SINK_REQUIREMENT_PREFIX,
     CONFIGURED_GITHUB_PR_SINK_REQUIREMENT_PREFIX,
     GITHUB_PR_SINK_TYPE,
     PROFILE_APPROVED_PR_SINK_MARKER,
@@ -41,7 +44,12 @@ def build_plan_payload(config: ProjectConfig, *, plan_id: str | None = None) -> 
             task["repo_target_id"] = repo.repo_target_id()
         tasks.append(task)
 
-    tasks.extend(_sink_tasks(config, step_task_ids=step_task_ids, repo_by_role=repo_by_role))
+    sink_tasks, sink_verification_commands = _sink_tasks(
+        config,
+        step_task_ids=step_task_ids,
+        repo_by_role=repo_by_role,
+    )
+    tasks.extend(sink_tasks)
 
     payload: dict[str, Any] = {
         "plan_id": resolved_plan_id,
@@ -55,16 +63,10 @@ def build_plan_payload(config: ProjectConfig, *, plan_id: str | None = None) -> 
         "repo_targets": repo_targets,
         "tasks": tasks,
     }
-    if config.verification_commands:
-        payload["verification_commands"] = [
-            {
-                "name": command.name,
-                "command": command.command,
-                "required": command.required,
-                "source": "profile",
-            }
-            for command in config.verification_commands
-        ]
+    verification_commands = [_verification_command_to_dict(command) for command in config.verification_commands]
+    verification_commands.extend(sink_verification_commands)
+    if verification_commands:
+        payload["verification_commands"] = verification_commands
     return payload
 
 
@@ -73,10 +75,12 @@ def _sink_tasks(
     *,
     step_task_ids: dict[str, str],
     repo_by_role: dict[str, RepositoryConfig],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     tasks: list[dict[str, Any]] = []
+    verification_commands: list[dict[str, Any]] = []
     leaf_task_ids = _leaf_task_ids(config, step_task_ids)
-    for index, sink in enumerate((sink for sink in config.sinks if sink.type == GITHUB_PR_SINK_TYPE), start=1):
+    sink_index = 1
+    for sink in (sink for sink in config.sinks if sink.type == GITHUB_PR_SINK_TYPE):
         sink_config = sink.config or {}
         stage_id = sink_config.get("stage_id", "") or "open-github-pr"
         repo = _sink_repo(sink_config, repo_by_role)
@@ -96,7 +100,7 @@ def _sink_tasks(
             ),
         )
         task: dict[str, Any] = {
-            "id": f"CFG-SINK-{index:03d}-{_slug(stage_id).upper()}",
+            "id": f"CFG-SINK-{sink_index:03d}-{_slug(stage_id).upper()}",
             "status": "PENDING",
             "dependencies": leaf_task_ids,
             "key_files": _key_files(config, repo),
@@ -109,7 +113,53 @@ def _sink_tasks(
         if repo is not None and repo.is_repo_target():
             task["repo_target_id"] = repo.repo_target_id()
         tasks.append(task)
-    return tasks
+        sink_index += 1
+    for sink in (sink for sink in config.sinks if sink.type == CI_STATUS_SINK_TYPE):
+        sink_config = sink.config or {}
+        stage_id = sink_config.get("stage_id", "") or "ci-status"
+        target = _ci_status_sink_target(sink_config)
+        verification_command = _ci_status_verification_command(stage_id, sink_config)
+        step = PipelineStepConfig(
+            id=stage_id,
+            kind="sink",
+            title="Poll CI status",
+            description="\n".join(
+                [
+                    "Configured sink: ci_status",
+                    "one-shot CI polling evidence only",
+                    f"Target: {target}",
+                ]
+            ),
+            depends_on=(),
+            acceptance_criteria=("CI polling evidence is captured through source=\"ci\" verification.",),
+            test_steps=(f"Run configured CI status target {target} through the verification runner.",),
+        )
+        task = {
+            "id": f"CFG-SINK-{sink_index:03d}-{_slug(stage_id).upper()}",
+            "status": "PENDING",
+            "dependencies": leaf_task_ids,
+            "key_files": _key_files(config, None),
+            "priority": "medium",
+            "description": _description(config, step, None),
+            "acceptance_criteria": _acceptance_criteria(config, step),
+            "test_steps": _test_steps(step),
+            "prd_requirement": f"{CONFIGURED_CI_STATUS_SINK_REQUIREMENT_PREFIX} {stage_id}",
+            "verification_commands": [verification_command],
+        }
+        tasks.append(task)
+        verification_commands.append(verification_command)
+        sink_index += 1
+    return tasks, verification_commands
+
+
+def _verification_command_to_dict(command: Any) -> dict[str, Any]:
+    return {
+        "name": command.name,
+        "command": command.command,
+        "required": command.required,
+        "source": command.source,
+        "repair_max_attempts": command.repair_max_attempts,
+    }
 
 
 def _repo_target(repo: RepositoryConfig) -> dict[str, Any]:
@@ -181,6 +231,40 @@ def _github_pr_sink_has_profile_approval(config: dict[str, str]) -> bool:
     approval = (config.get("approval", "") or "").strip().lower()
     profile_approved = (config.get("profile_approved", "") or "").strip().lower()
     return approval == "profile" or profile_approved in {"1", "true", "yes", "on"}
+
+
+def _ci_status_sink_target(config: dict[str, str]) -> str:
+    return (config.get("target", "") or config.get("command", "") or config.get("ci_target", "") or "").strip()
+
+
+def _ci_status_verification_command(stage_id: str, config: dict[str, str]) -> dict[str, Any]:
+    return {
+        "name": config.get("name", "") or stage_id,
+        "command": _ci_status_sink_target(config),
+        "required": _sink_bool(config, "required", default=True),
+        "source": CI_VERIFICATION_SOURCE,
+        "repair_max_attempts": _sink_non_negative_int(config.get("repair_max_attempts", 0)),
+    }
+
+
+def _sink_bool(config: dict[str, str], field: str, *, default: bool) -> bool:
+    if field not in config:
+        return default
+    return str(config[field]).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sink_non_negative_int(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("repair_max_attempts must be a non-negative integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdecimal():
+        parsed = int(value.strip())
+    else:
+        raise ValueError("repair_max_attempts must be a non-negative integer")
+    if parsed < 0:
+        raise ValueError("repair_max_attempts must be a non-negative integer")
+    return parsed
 
 
 def _key_files(config: ProjectConfig, repo: RepositoryConfig | None) -> list[str]:
