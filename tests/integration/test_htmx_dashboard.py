@@ -296,7 +296,7 @@ async def test_dashboard_uses_compact_operator_identity_panel(client: AsyncClien
     assert body.index('id="operator-identity-panel"') < body.index('id="dashboard-reviewer"')
     assert body.index('id="dashboard-pause-workers"') < body.index('id="operator-identity-panel"')
     assert body.index('id="dashboard-resume-workers"') < body.index('id="operator-identity-panel"')
-    assert "closest(\"details\")" in body
+    assert 'closest("details")' in body
     assert "panel.open = true" in body
 
 
