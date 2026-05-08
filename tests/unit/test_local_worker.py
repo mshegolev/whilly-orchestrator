@@ -41,9 +41,14 @@ import pytest
 
 from whilly.adapters.db.repository import VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
-from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE, SHELL_COMMAND_FAIL_REASON
+from whilly.core.agent_runner import (
+    SHELL_COMMAND_BLOCKED_EVENT_TYPE,
+    SHELL_COMMAND_FAIL_REASON,
+    scan_task_secret_surface,
+)
 from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE, PROMPT_INJECTION_FAIL_REASON
+from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE, SECRET_LINT_FAIL_REASON
 from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
 from whilly.pipeline.human_review import HUMAN_REVIEW_APPROVED, HUMAN_REVIEW_REQUIRED
 from whilly.pipeline.verification import (
@@ -792,6 +797,76 @@ async def test_shell_deny_blocks_before_runner_and_emits_prelude_event(fake_slee
     assert payload["pattern_matched"] == "rm-rf-root"
     assert payload["task_id"] == "T-shell"
     assert payload["plan_id"] == PLAN_ID
+
+
+def test_scan_task_secret_surface_checks_task_fields_and_prompt() -> None:
+    task = _make_task("T-secret-surface")
+    safe_prompt_secret = "sk-ant-" + "P" * 32
+    finding = scan_task_secret_surface(
+        replace(
+            task,
+            acceptance_criteria=("no leaks",),
+            test_steps=("still safe",),
+            prd_requirement="no secret here",
+        ),
+        prompt="runner prompt leaks " + safe_prompt_secret,
+    )
+
+    assert finding is not None
+    assert finding.pattern_id == "anthropic-api-key"
+    assert finding.field_path == "runner.prompt"
+    assert safe_prompt_secret not in finding.redacted_excerpt
+
+    criteria_secret = "sk-ant-" + "C" * 32
+    criteria_finding = scan_task_secret_surface(
+        replace(task, acceptance_criteria=("first", "leak " + criteria_secret)),
+        prompt="plain prompt",
+    )
+
+    assert criteria_finding is not None
+    assert criteria_finding.pattern_id == "anthropic-api-key"
+    assert criteria_finding.field_path == "task.acceptance_criteria[1]"
+    assert criteria_secret not in criteria_finding.redacted_excerpt
+
+
+async def test_secret_lint_blocks_before_runner_and_emits_prelude_event(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+    fake_secret = "sk-ant-" + "A" * 32
+
+    claimed = _make_task("T-secret", status=TaskStatus.CLAIMED, version=1)
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        description="Use token " + fake_secret,
+    )
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:  # pragma: no cover
+        raise AssertionError("secret lint must block before runner is called")
+
+    stats = await run_local_worker(repo, runner, plan, WORKER_ID, idle_wait=0, max_iterations=1)  # type: ignore[arg-type]
+
+    assert stats.failed == 1
+    assert repo.complete_calls == []
+    assert repo.fail_calls == [("T-secret", 2, SECRET_LINT_FAIL_REASON)]
+    assert repo.fail_prelude_events[0][0] == SECRET_LINT_BLOCKED_EVENT_TYPE
+    payload = repo.fail_prelude_events[0][1]
+    assert payload is not None
+    assert payload["event_type"] == SECRET_LINT_BLOCKED_EVENT_TYPE
+    assert payload["pattern_id"] == "anthropic-api-key"
+    assert payload["field_path"] == "task.description"
+    assert payload["task_id"] == "T-secret"
+    assert payload["plan_id"] == PLAN_ID
+    assert fake_secret not in str(payload)
+    assert "[REDACTED:anthropic-api-key]" in str(payload["redacted_excerpt"])
+    stage_failed = next(event for event in repo.event_calls if event[1] == PIPELINE_STAGE_FAILED)
+    assert stage_failed[3] == payload
 
 
 async def test_fails_task_truncates_long_output_in_reason(fake_sleep: list[float]) -> None:

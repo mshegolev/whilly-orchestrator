@@ -48,6 +48,7 @@ from whilly.adapters.transport.client import VersionConflictError
 from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON
 from whilly.core.models import Plan, PlanOrigin, Priority, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON
+from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE, SECRET_LINT_FAIL_REASON
 from whilly.pipeline.events import PIPELINE_STAGE_FAILED, PIPELINE_STAGE_STARTED, PIPELINE_STAGE_SUCCEEDED
 from whilly.pipeline.human_review import HUMAN_REVIEW_APPROVED, HUMAN_REVIEW_REQUIRED
 from whilly.pipeline.verification import (
@@ -824,6 +825,43 @@ async def test_shell_deny_blocks_before_remote_runner_and_sends_detail(fake_slee
     assert detail["pattern_matched"] == "git-force-push"
     assert detail["task_id"] == "T-remote-shell"
     assert detail["plan_id"] == PLAN_ID
+
+
+async def test_secret_lint_blocks_before_remote_runner_and_sends_detail(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    plan = _make_plan()
+    fake_secret = "sk-ant-" + "B" * 32
+
+    claimed = _make_task("T-remote-secret", status=TaskStatus.CLAIMED, version=1)
+    claimed = replace(claimed, description="Use token " + fake_secret)
+    failed = replace(claimed, status=TaskStatus.FAILED, version=2)
+
+    client.claim_results.append(claimed)
+    client.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:  # pragma: no cover
+        raise AssertionError("secret lint must block before remote runner is called")
+
+    stats = await run_remote_worker(
+        client,  # type: ignore[arg-type]
+        runner,
+        plan,
+        WORKER_ID,
+        max_iterations=1,
+    )
+
+    assert stats.failed == 1
+    assert client.complete_calls == []
+    assert client.fail_calls == [("T-remote-secret", WORKER_ID, 1, SECRET_LINT_FAIL_REASON)]
+    detail = client.fail_details[0]
+    assert detail is not None
+    assert detail["event_type"] == SECRET_LINT_BLOCKED_EVENT_TYPE
+    assert detail["pattern_id"] == "anthropic-api-key"
+    assert detail["field_path"] == "task.description"
+    assert detail["task_id"] == "T-remote-secret"
+    assert detail["plan_id"] == PLAN_ID
+    assert fake_secret not in str(detail)
+    assert "[REDACTED:anthropic-api-key]" in str(detail["redacted_excerpt"])
 
 
 # --------------------------------------------------------------------------- #
