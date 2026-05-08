@@ -84,6 +84,10 @@ Completed Block A features:
 - `a2-shell-deny-list`: task-authored command surfaces are scanned before
   runner invocation with baseline plus `WHILLY_SHELL_DENY_PATTERNS` patterns;
   blocked tasks emit `shell_command_blocked` immediately before `FAIL`.
+- `a3-a4-sandbox-and-secrets-lint`: secret linting, runner env allowlists,
+  and auditable guard reasons are implemented for task, runner, verification,
+  and worker failure paths; full per-task VM/container isolation remains future
+  work.
 
 ## Hard Boundaries
 
