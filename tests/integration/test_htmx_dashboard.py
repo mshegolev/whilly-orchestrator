@@ -265,6 +265,26 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert "isEditableTarget" in body, "hotkeys must not hijack typing in inputs"
 
 
+async def test_dashboard_preserves_local_state_across_refresh_and_sse_swaps(client: AsyncClient) -> None:
+    response = await client.get("/")
+    body = response.text
+
+    assert "DASHBOARD_STATE_KEY" in body
+    assert "sessionStorage?.getItem(DASHBOARD_STATE_KEY)" in body
+    assert "sessionStorage?.setItem(DASHBOARD_STATE_KEY" in body
+    assert "readDashboardState" in body
+    assert "saveDashboardState" in body
+    assert "restoreDashboardState" in body
+    assert "restoreDashboardFocus" in body
+    assert "focusId" in body
+    assert "selectedReviewIndex" in body
+    assert "saveDashboardState();" in body
+    assert "restoreDashboardState();" in body
+    assert "restoreDashboardFocus" in body
+    assert "htmx:beforeRequest" in body
+    assert "htmx:afterSwap" in body
+
+
 async def test_dashboard_queue_health_is_persistent_outside_active_surface(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text

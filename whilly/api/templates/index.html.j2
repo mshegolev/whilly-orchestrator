@@ -507,19 +507,75 @@
   </main>
   <script>
     (() => {
+      const DASHBOARD_STATE_KEY = "whilly.operator.dashboard.state.v1";
       const surfaceOrder = ["overview", "compliance", "plans_tasks", "workers", "events"];
+      const restorableFocusIds = new Set(["dashboard-filter", "dashboard-admin-token", "dashboard-reviewer"]);
       const filter = document.getElementById("dashboard-filter");
       const pollingState = document.getElementById("polling-state");
       const workerControlState = document.getElementById("worker-control-state");
       let dashboardStopped = false;
       let manualRefreshRequested = false;
       let selectedReviewIndex = 0;
+      let restoringDashboardState = false;
       const liveStreams = new Set();
 
       function isEditableTarget(target) {
         if (!target) return false;
         const tag = target.tagName;
         return target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      }
+
+      function readDashboardState() {
+        try {
+          const raw = window.sessionStorage?.getItem(DASHBOARD_STATE_KEY);
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function focusedDashboardInputId() {
+        const active = document.activeElement;
+        if (!active?.id || !restorableFocusIds.has(active.id)) return "";
+        return active.id;
+      }
+
+      function saveDashboardState() {
+        if (restoringDashboardState) return;
+        try {
+          window.sessionStorage?.setItem(DASHBOARD_STATE_KEY, JSON.stringify({
+            surface: currentSurface(),
+            filterText: filter?.value || "",
+            selectedReviewIndex,
+            focusId: focusedDashboardInputId(),
+          }));
+        } catch {
+          // Browser storage can be unavailable in private or embedded contexts.
+        }
+      }
+
+      function restoreDashboardFocus(focusId) {
+        if (!focusId || !restorableFocusIds.has(focusId)) return;
+        const target = document.getElementById(focusId);
+        if (target && typeof target.focus === "function") target.focus();
+      }
+
+      function restoreDashboardState() {
+        const state = readDashboardState();
+        restoringDashboardState = true;
+        try {
+          const surface = surfaceOrder.includes(state.surface) ? state.surface : "overview";
+          setSurface(surface);
+          if (filter && typeof state.filterText === "string") filter.value = state.filterText;
+          const index = Number.parseInt(String(state.selectedReviewIndex ?? "0"), 10);
+          selectedReviewIndex = Number.isFinite(index) ? Math.max(0, index) : 0;
+          applyFilter();
+          restoreDashboardFocus(state.focusId);
+        } finally {
+          restoringDashboardState = false;
+        }
       }
 
       function setSurface(surface) {
@@ -529,6 +585,7 @@
         document.querySelectorAll("[data-surface-tab]").forEach((button) => {
           button.setAttribute("aria-selected", String(button.dataset.surfaceTab === surface));
         });
+        saveDashboardState();
       }
 
       function currentSurface() {
@@ -546,10 +603,12 @@
           row.hidden = Boolean(needle) && !row.dataset.filterText.toLowerCase().includes(needle);
         });
         selectReviewRow(selectedReviewIndex);
+        saveDashboardState();
       }
 
       function refreshDashboard() {
         if (dashboardStopped) return;
+        saveDashboardState();
         if (window.htmx) {
           manualRefreshRequested = true;
           window.htmx.ajax("GET", "/", { target: "body", swap: "outerHTML" });
@@ -604,6 +663,7 @@
         const selected = rows[selectedReviewIndex];
         selected.classList.add("review-row-selected");
         selected.setAttribute("aria-selected", "true");
+        saveDashboardState();
         return selected;
       }
 
@@ -612,6 +672,7 @@
       }
 
       function refreshReviewFragments() {
+        saveDashboardState();
         if (window.htmx) {
           manualRefreshRequested = true;
           window.htmx.trigger(document.body, "whilly:reviewDecision");
@@ -770,6 +831,7 @@
           event.preventDefault();
           return;
         }
+        saveDashboardState();
         if (isManualLiveIntent(event, triggerType)) markManualLiveRequest(event);
       });
       document.body.addEventListener("htmx:afterRequest", () => {
@@ -779,8 +841,7 @@
         manualRefreshRequested = false;
       });
       document.body.addEventListener("htmx:afterSwap", () => {
-        applyFilter();
-        selectReviewRow(selectedReviewIndex);
+        restoreDashboardState();
       });
       document.addEventListener("keydown", (event) => {
         if (isEditableTarget(event.target)) return;
@@ -819,8 +880,7 @@
           setSurface(surfaceOrder[Number(event.key) - 1]);
         }
       });
-      setSurface("overview");
-      selectReviewRow(0);
+      restoreDashboardState();
     })();
   </script>
 </body>
