@@ -29,20 +29,22 @@ What we cover here
 * ``whilly --resume`` and ``whilly --all`` exit 0 with a diagnostic
   (they have no v4 equivalent, but legacy scripts must not break).
 * New-style invocations (``whilly run ...``, ``whilly init ...``,
-  ``whilly worker connect ...``) route unchanged.
+  ``whilly worker connect ...``, ``whilly rollback ...``) route unchanged.
 * The shim does not interfere with ``whilly --help`` / ``whilly -V``.
 
 How we isolate
 --------------
 We patch the v4 subcommand entry points (``run_run_command``,
 ``run_init_command``, ``run_plan_command``, ``run_worker_command``,
-``run_register_command``, ``run_connect_command``, ``run_dashboard_command``)
+``run_register_command``, ``run_connect_command``, ``run_dashboard_command``,
+``run_rollback_command``)
 on :mod:`whilly.cli` so the shim's routing decision is observable
 without spinning up Postgres or invoking Claude.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Sequence
 
 import pytest
@@ -90,6 +92,7 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
         "register": _Spy(),
         "connect": _Spy(),
         "forge": _Spy(),
+        "rollback": _Spy(),
     }
     # The dispatcher imports each handler lazily; inject the spies into
     # the source modules so the eventual ``from whilly.cli.run import
@@ -97,6 +100,7 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
     import whilly.cli.dashboard as cli_dashboard
     import whilly.cli.init as cli_init
     import whilly.cli.plan as cli_plan
+    import whilly.cli.rollback as cli_rollback
     import whilly.cli.run as cli_run
     import whilly.cli.worker as cli_worker
     import whilly.forge.intake as forge_intake
@@ -109,6 +113,7 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
     monkeypatch.setattr(cli_worker, "run_register_command", bag["register"])
     monkeypatch.setattr(cli_worker, "run_connect_command", bag["connect"])
     monkeypatch.setattr(forge_intake, "run_forge_command", bag["forge"])
+    monkeypatch.setattr(cli_rollback, "run_rollback_command", bag["rollback"])
     return bag
 
 
@@ -358,6 +363,11 @@ class TestMainDispatchWithShim:
         assert rc == 0
         assert spies["plan"].calls == [["show", "p"]]
 
+    def test_main_new_style_rollback_preflight_dispatches_lazily(self, spies: dict[str, _Spy]) -> None:
+        rc = main(["rollback", "preflight", "push", "--json"])
+        assert rc == 0
+        assert spies["rollback"].calls == [["preflight", "push", "--json"]]
+
     def test_main_new_style_dashboard_unchanged(self, spies: dict[str, _Spy]) -> None:
         rc = main(["dashboard", "--once"])
         assert rc == 0
@@ -366,10 +376,13 @@ class TestMainDispatchWithShim:
     # ── Ensure --help / --version paths still work ──
 
     def test_main_dash_help_prints_v4_help(self, capsys: pytest.CaptureFixture[str]) -> None:
+        sys.modules.pop("whilly.cli.rollback", None)
         rc = main(["--help"])
         assert rc == 0
         out = capsys.readouterr().out
         assert "Whilly v4" in out
+        assert "rollback" in out
+        assert "whilly.cli.rollback" not in sys.modules
 
     def test_main_dash_version_prints_version(self, capsys: pytest.CaptureFixture[str]) -> None:
         rc = main(["--version"])
