@@ -20,7 +20,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
 - [x] **Phase 10: Rollback safety net** - Backup tags, branch preflight, and explicit rollback CLI are operator-ready. (completed 2026-05-08)
 - [x] **Phase 11: CI polling and bounded repair** - CI/PR feedback can create bounded auditable repair loops. (completed 2026-05-08)
-- [ ] **Phase 12: Governance and semantic-memory decision** - Risk policy and semantic-memory scope are explicit.
+- [x] **Phase 12: Governance and semantic-memory decision** - Risk policy and semantic-memory scope are explicit. (completed 2026-05-08)
 
 ## Phase Details
 
@@ -205,7 +205,7 @@ Plans:
 **Plans**: 1 plan
 
 Plans:
-- [ ] 12-01-PLAN.md - Settle governance policy and semantic-memory target status.
+- [x] 12-01-PLAN.md - Settle governance policy and semantic-memory target status.
 
 ## Progress
 
@@ -226,4 +226,4 @@ GSD initialization and are now tracked here as completed history.
 | 9. Profile-native verification wiring | 4/4 | Complete | 2026-05-08 |
 | 10. Rollback safety net | 3/3 | Complete | 2026-05-08 |
 | 11. CI polling and bounded repair | 6/6 | Complete    | 2026-05-08 |
-| 12. Governance and semantic-memory decision | 0/1 | Not started | - |
+| 12. Governance and semantic-memory decision | 1/1 | Complete   | 2026-05-08 |
