@@ -4,7 +4,7 @@
 
 Add a real operator stop-crane for Whilly: pressing `Pause` stops work across
 all workers, and pressing `Resume` lets workers continue. This replaces the
-current overloaded dashboard meaning where `p` only freezes UI refresh.
+current overloaded dashboard meaning where `p` only pauses UI refresh.
 
 ## Approved Semantics
 
@@ -25,6 +25,10 @@ The current WUI/TUI `pause` is local to the view:
 - WUI blocks automatic HTMX/SSE swaps while paused.
 - TUI stops polling the operator snapshot while paused.
 - Workers keep running.
+
+That local UI-only pause behavior will be removed rather than preserved under a
+new hotkey. `Pause` should mean one thing everywhere: stop worker execution
+softly.
 
 Postgres does not currently have a control-plane pause state. The older
 `paused`, `pause_reason`, and `paused_at` fields exist only in a legacy local
@@ -78,13 +82,11 @@ WUI:
 - `Resume` button calls the admin resume endpoint.
 - `p` triggers global pause.
 - `R` triggers global resume.
-- The old UI-only pause becomes `Freeze view` with hotkey `f`.
 
 TUI:
 
 - `p` triggers global pause through the DB-backed operator path.
 - `R` triggers global resume.
-- `f` freezes local screen refresh.
 - The header shows `WORKERS PAUSED` plus reason/operator/time when paused.
 
 ## Audit And Observability
@@ -96,7 +98,8 @@ Record events:
 - `RELEASE` with `payload.reason = "operator_pause"` when a worker returns a
   task because of the stop-crane.
 
-Dashboards must show the paused state even when local view refresh is frozen.
+Dashboards must keep refreshing paused/resumed state so operators can see when
+the cluster stop-crane is active.
 
 ## Non-Goals
 
@@ -111,7 +114,7 @@ Dashboards must show the paused state even when local view refresh is frozen.
 - Active workers release their current task with `operator_pause` at a safe
   checkpoint and do not complete it while paused.
 - Pressing resume lets workers claim again.
-- WUI and TUI distinguish global worker pause from local view freeze.
+- WUI and TUI use `Pause` only for global worker pause.
 - Admin auth protects HTTP pause/resume endpoints.
 - Tests cover repository state, admin API, local worker, remote worker, WUI,
   TUI, and audit event payloads.
