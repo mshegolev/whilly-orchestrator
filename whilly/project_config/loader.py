@@ -25,6 +25,7 @@ from whilly.project_config.presets import (
     normalize_project_type,
     preset_pipeline,
 )
+from whilly.security.secret_lint import SecretFinding, scan_mapping
 
 
 class ProjectConfigError(ValueError):
@@ -68,6 +69,13 @@ def load_project_config(path: str | Path) -> ProjectConfig:
 
 def project_config_from_dict(data: dict[str, Any], *, source: str = "<dict>") -> ProjectConfig:
     """Parse and validate an in-memory project configuration."""
+
+    secret_finding = _project_config_secret_finding(data)
+    if secret_finding is not None:
+        raise ProjectConfigError(
+            f"{source}: secret_lint_blocked: plaintext secret-like value at {secret_finding.field_path} "
+            f"matched {secret_finding.pattern_id}; use env:, keyring:, or file: references"
+        )
 
     project_data = data.get("project") if isinstance(data.get("project"), dict) else {}
     name = _project_string(data, project_data, "name", source)
@@ -124,6 +132,28 @@ def project_config_from_dict(data: dict[str, Any], *, source: str = "<dict>") ->
     )
     _validate_config(cfg, source=source, validate_repo_roles=has_explicit_pipeline)
     return cfg
+
+
+def _project_config_secret_finding(data: dict[str, Any]) -> SecretFinding | None:
+    flattened: dict[str, object] = {}
+    _flatten_project_config(data, "", flattened)
+    return scan_mapping(flattened, field_path_prefix="project_config")
+
+
+def _flatten_project_config(value: object, field_path: str, flattened: dict[str, object]) -> None:
+    if isinstance(value, dict):
+        for raw_key, nested_value in value.items():
+            key = str(raw_key)
+            child_path = f"{field_path}.{key}" if field_path else key
+            _flatten_project_config(nested_value, child_path, flattened)
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested_value in enumerate(value):
+            child_path = f"{field_path}[{index}]" if field_path else f"[{index}]"
+            _flatten_project_config(nested_value, child_path, flattened)
+        return
+    if field_path:
+        flattened[field_path] = value
 
 
 def _validate_config(config: ProjectConfig, *, source: str, validate_repo_roles: bool) -> None:
