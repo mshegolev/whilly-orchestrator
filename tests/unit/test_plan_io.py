@@ -313,6 +313,45 @@ def test_plan_verification_commands_parse_and_serialize_round_trip(tmp_path: Pat
     assert parsed_tasks == tasks
 
 
+def test_plan_verification_commands_preserve_source_and_repair_budget(tmp_path: Path) -> None:
+    payload = _minimal_plan_dict(
+        verification_commands=[
+            {
+                "name": "ci-checks",
+                "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+                "required": True,
+                "source": "ci",
+                "repair_max_attempts": 2,
+            },
+            {"name": "profile-unit", "command": "pytest -q tests/unit"},
+        ],
+    )
+    target = _write_json(tmp_path, payload)
+
+    plan, tasks = parse_plan(target)
+
+    assert plan.verification_commands[0].source == "ci"
+    assert plan.verification_commands[0].repair_max_attempts == 2
+    assert plan.verification_commands[1].source == "profile"
+    assert plan.verification_commands[1].repair_max_attempts == 0
+    assert serialize_plan(plan, tasks)["verification_commands"] == [
+        {
+            "name": "ci-checks",
+            "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+            "required": True,
+            "source": "ci",
+            "repair_max_attempts": 2,
+        },
+        {
+            "name": "profile-unit",
+            "command": "pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+    ]
+
+
 def test_plan_verification_commands_default_required_and_source(tmp_path: Path) -> None:
     target = _write_json(
         tmp_path,

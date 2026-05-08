@@ -350,6 +350,60 @@ def test_import_export_preserves_profile_verification_commands(
     assert run_plan_command(["import", str(exported_file)]) == EXIT_OK
 
 
+def test_import_export_preserves_ci_verification_repair_budget(
+    db_pool: asyncpg.Pool,  # noqa: ARG001
+    database_url: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CI verification metadata and repair budget survive Postgres import/export."""
+    plan_file = tmp_path / "ci-verification-plan.json"
+    commands = [
+        {
+            "name": "github-ci",
+            "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+            "required": True,
+            "source": "ci",
+            "repair_max_attempts": 2,
+        },
+    ]
+    plan_file.write_text(
+        json.dumps(
+            {
+                "plan_id": "plan-ci-verification-roundtrip-001",
+                "project": "CI Verification Roundtrip",
+                "verification_commands": commands,
+                "tasks": [
+                    {
+                        "id": "T-CI-VERIFY-001",
+                        "status": "PENDING",
+                        "priority": "high",
+                        "description": "Task with CI verification metadata.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert run_plan_command(["import", str(plan_file)]) == EXIT_OK
+    capsys.readouterr()
+
+    stored_commands = asyncio.run(_fetch_plan_verification_commands(database_url, "plan-ci-verification-roundtrip-001"))
+    assert stored_commands == commands
+
+    assert run_plan_command(["export", "plan-ci-verification-roundtrip-001"]) == EXIT_OK
+    exported_json = capsys.readouterr().out
+    exported_payload = json.loads(exported_json)
+    assert exported_payload["verification_commands"] == commands
+
+    exported_file = tmp_path / "ci-verification-exported.json"
+    exported_file.write_text(exported_json, encoding="utf-8")
+    exported_plan, _exported_tasks = parse_plan(exported_file)
+    assert exported_plan.verification_commands[0].source == "ci"
+    assert exported_plan.verification_commands[0].repair_max_attempts == 2
+
+
 def test_import_without_verification_commands_stores_empty_array_and_export_omits_key(
     db_pool: asyncpg.Pool,  # noqa: ARG001
     database_url: str,
