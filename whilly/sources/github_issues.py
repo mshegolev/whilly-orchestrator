@@ -25,6 +25,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from whilly.security.secret_lint import SECRET_PATTERNS, scan_text
 from whilly.security.prompt_sanitizer import sanitize_external_text
 from whilly.task_manager import Task
 
@@ -44,15 +45,6 @@ PRIORITY_LABELS = {
     "priority:medium": "medium",
     "priority:low": "low",
 }
-
-# Heuristic regex to detect leaked secrets in issue body — best effort warning.
-_SECRET_PATTERNS = [
-    re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key id
-    re.compile(r"ghp_[A-Za-z0-9]{36,}"),  # GitHub PAT
-    re.compile(r"sk-[A-Za-z0-9]{32,}"),  # OpenAI / generic SK
-    re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}"),  # Slack tokens
-]
-
 
 @dataclass
 class FetchStats:
@@ -207,12 +199,26 @@ def _extract_inline_field(body: str, field_name: str) -> list[str]:
 
 
 def _detect_secrets(text: str) -> list[str]:
-    """Return names of secret pattern matches found in text. Best effort."""
+    """Return shared secret pattern ids found in text. Best effort."""
+    if scan_text(text, field_path="github_issue.body") is None:
+        return []
+
     hits: list[str] = []
-    for rx in _SECRET_PATTERNS:
-        if rx.search(text):
-            hits.append(rx.pattern)
+    matched_spans: list[tuple[int, int]] = []
+    for secret_pattern in SECRET_PATTERNS:
+        for match in secret_pattern.regex.finditer(text):
+            span = match.span()
+            if _overlaps_any(span, matched_spans):
+                continue
+            hits.append(secret_pattern.pattern_id)
+            matched_spans.append(span)
+            break
     return hits
+
+
+def _overlaps_any(span: tuple[int, int], existing_spans: list[tuple[int, int]]) -> bool:
+    start, end = span
+    return any(start < existing_end and existing_start < end for existing_start, existing_end in existing_spans)
 
 
 def _priority_from_labels(labels: list[dict]) -> str:
