@@ -11,14 +11,14 @@ grounded in template/TUI code, parity tests, and worker-control behavior tests.
 
 ## Current Score
 
-Overall: 19 / 24
+Overall: 22 / 24
 
 - Visual hierarchy: 4 / 4
-- Workflow clarity: 3 / 4
+- Workflow clarity: 4 / 4
 - Control parity: 4 / 4
 - State feedback: 4 / 4
-- Responsive resilience: 2 / 4
-- Risk and recovery: 2 / 4
+- Responsive resilience: 3 / 4
+- Risk and recovery: 3 / 4
 
 ## Resolved In This Pass
 
@@ -36,25 +36,28 @@ Overall: 19 / 24
   fragment swaps: active surface, filter text, selected review row, and dashboard input focus.
 - WUI admin bearer and reviewer inputs now live in a compact `Operator identity` panel, while
   pause/resume and filter controls stay visible in the primary topbar.
+- Phase 5 shared table contracts now centralize table labels and field order for tasks, workers,
+  review gaps, and events, with intentional medium-specific omissions documented in tests.
+- Phase 6 mobile stacked rows now replace horizontal scrolling for the dense operator tables, and
+  review action targets retain the 44 px mobile tap-area contract.
+- Phase 7 Review action affordances now make WUI buttons read `A Approve`, `X Reject`, and
+  `C Changes`; reject and request-changes prompts cancel or reject blank input before posting; the
+  existing review endpoint, decision literals, and Compliance-surface hotkeys are preserved; and
+  TUI help now spells out `a=Approve review`, `x=Reject review`, and `c=Changes`.
 
-## Remaining Findings
+## Remaining Residual Risks
 
-1. Mobile tables are functional but cramped.
-   The WUI relies heavily on horizontal scrolling and `nowrap`. Convert dense action columns into
-   a row detail/action drawer or stacked mobile layout so controls remain easy to hit.
+1. True undo remains deferred.
+   Reject/request-changes actions now require clearer intent and recover from cancel or blank
+   prompt input before posting, but reversing a recorded decision still requires backend/audit
+   reversal semantics that are outside this UI-only pass.
 
-2. Table contracts are not fully identical.
-   Tasks show `Claimed by` in WUI and `Worker` in TUI; WUI also exposes `Updated`. Worker table
-   order differs. Define a shared operator column contract and let both surfaces intentionally
-   diverge only when the medium requires it.
-
-3. Review actions need stronger affordance.
-   `A/X/C` are efficient for expert operators but weak for first-time use and risky when
-   destructive. Add tooltips, clearer labels in constrained spaces, and confirmation or undo
-   affordances for reject/request-changes paths.
+2. Browser and assistive-technology QA still need a live pass.
+   This review is grounded in source and automated tests. A future verification pass should capture
+   live browser behavior and screen-reader/keyboard traversal evidence for the WUI dashboard.
 
 ## Recommended Next Tasks
 
-1. Add a mobile row-detail/action layout for the WUI dashboard tables.
-2. Define a shared TUI/WUI table-column contract for tasks, workers, review queue, and events.
-3. Add clearer review-action affordances for reject/request-changes paths.
+1. Add a backend/audit-reversal phase if operators need true undo for recorded human-review
+   decisions.
+2. Run live browser and screen-reader QA for the WUI dashboard once the environment supports it.
