@@ -6,7 +6,13 @@ import sys
 
 import pytest
 
-from whilly.pipeline.verification import VerificationCommandSpec, run_verification_commands
+from whilly.pipeline.verification import (
+    VERIFICATION_FAILED_EVENT,
+    VerificationCommandResult,
+    VerificationCommandSpec,
+    make_verification_result_event,
+    run_verification_commands,
+)
 from whilly.project_config.models import VerificationCommandConfig
 
 
@@ -158,3 +164,50 @@ async def test_stdout_and_stderr_are_capped(tmp_path):
     assert result.stderr == "jkl\n"
     assert result.stdout_truncated is True
     assert result.stderr_truncated is True
+
+
+@pytest.mark.asyncio
+async def test_stdout_and_stderr_are_redacted_before_result_persistence(tmp_path):
+    fake_secret = "sk-ant-" + "V" * 32
+    outcome = await run_verification_commands(
+        [
+            VerificationCommandSpec(
+                name="secret-output",
+                command=_python(f"import sys; print({fake_secret!r}); print({fake_secret!r}, file=sys.stderr)"),
+                required=True,
+            )
+        ],
+        cwd=tmp_path,
+    )
+
+    result = outcome.results[0]
+    assert fake_secret not in result.stdout
+    assert fake_secret not in result.stderr
+    assert "[REDACTED:anthropic-api-key]" in result.stdout
+    assert "[REDACTED:anthropic-api-key]" in result.stderr
+
+
+def test_verification_result_event_redacts_command_and_detail() -> None:
+    fake_secret = "sk-ant-" + "E" * 32
+    result = VerificationCommandResult(
+        name="secret-event",
+        command="echo " + fake_secret,
+        required=True,
+        succeeded=False,
+        warning=False,
+        event_name=VERIFICATION_FAILED_EVENT,
+        returncode=1,
+        stdout="stdout " + fake_secret,
+        stderr="stderr " + fake_secret,
+        duration_s=0.1,
+    )
+
+    event = make_verification_result_event("T-secret-event", result, plan_id="P-secret")
+
+    assert fake_secret not in str(event.payload)
+    assert fake_secret not in str(event.detail)
+    assert event.payload["command"] == "echo [REDACTED:anthropic-api-key]"
+    assert event.detail == {
+        "stdout": "stdout [REDACTED:anthropic-api-key]",
+        "stderr": "stderr [REDACTED:anthropic-api-key]",
+    }
