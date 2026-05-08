@@ -78,18 +78,21 @@ class TuiState:
     surface: OperatorSurface = OperatorSurface.OVERVIEW
     filter_text: str = ""
     searching: bool = False
-    paused: bool = False
     immediate_refresh: bool = False
     stop: bool = False
     last_error: str | None = None
     selected_review_index: int = 0
     pending_review_action: str | None = None
+    pending_control_action: str | None = None
 
 
 def build_tui_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="whilly tui",
-        description="Browserless operator interface. Hotkeys: q=quit, r=refresh, 1-5=switch, /=filter, p=pause.",
+        description=(
+            "Browserless operator interface. Hotkeys: q=quit, r=refresh, R=resume workers, "
+            "1-5=switch, /=filter, p=pause workers."
+        ),
     )
     parser.add_argument("--plan", dest="plan_id", default=None, help="Optional plan id filter.")
     parser.add_argument("--interval", type=float, default=DEFAULT_POLL_INTERVAL, help="Seconds between refreshes.")
@@ -153,10 +156,14 @@ def handle_tui_key(state: TuiState, key: str) -> None:
 
     if key in {"q", "Q", "\x03"}:
         state.stop = True
-    elif key in {"r", "R"}:
+    elif key == "r":
+        state.immediate_refresh = True
+    elif key == "R":
+        state.pending_control_action = "resume"
         state.immediate_refresh = True
     elif key in {"p", "P"}:
-        state.paused = not state.paused
+        state.pending_control_action = "pause"
+        state.immediate_refresh = True
     elif key == "/":
         state.searching = True
     elif key in _SURFACE_BY_KEY:
@@ -243,14 +250,14 @@ async def _poll_loop(
     with Live(render_tui(snapshot, state), console=console, refresh_per_second=4, screen=False) as live:
         while not state.stop:
             iteration += 1
-            requested_refresh = state.immediate_refresh
             state.immediate_refresh = False
-            if not state.paused or requested_refresh:
-                try:
-                    snapshot = await fetch_operator_snapshot(pool, plan_id=plan_id)
-                    state.last_error = None
-                except (OSError, RuntimeError) as exc:
-                    state.last_error = f"{type(exc).__name__}: {exc}"
+            if state.pending_control_action is not None:
+                await _apply_pending_control_action(pool, state, operator=reviewer)
+            try:
+                snapshot = await fetch_operator_snapshot(pool, plan_id=plan_id)
+                state.last_error = None
+            except (OSError, RuntimeError) as exc:
+                state.last_error = f"{type(exc).__name__}: {exc}"
             if state.pending_review_action is not None:
                 await _apply_pending_review_action(pool, snapshot, state, reviewer=reviewer)
             live.update(render_tui(snapshot, state))
@@ -262,6 +269,28 @@ async def _poll_loop(
             while slept < interval and not state.stop and not state.immediate_refresh:
                 await asyncio.sleep(slice_size)
                 slept += slice_size
+
+
+async def _apply_pending_control_action(pool: Any, state: TuiState, *, operator: str) -> bool:
+    action = state.pending_control_action
+    state.pending_control_action = None
+    if action is None:
+        return False
+    repo = TaskRepository(pool)
+    operator = operator.strip() or "tui"
+    try:
+        if action == "pause":
+            await repo.pause_workers(reason="Paused from TUI", operator=operator)
+        elif action == "resume":
+            await repo.resume_workers(operator=operator)
+        else:
+            state.last_error = f"unknown control action: {action}"
+            return False
+    except (OSError, RuntimeError) as exc:
+        state.last_error = f"{type(exc).__name__}: {exc}"
+        return False
+    state.last_error = None
+    return True
 
 
 async def _listen_for_keys(state: TuiState, key_source: KeySource) -> None:
@@ -340,8 +369,8 @@ async def _empty_snapshot() -> OperatorSnapshot:
 
 def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     title = "Whilly operator - compact control plane"
-    if state.paused:
-        title += " [PAUSED]"
+    if snapshot.control_state.paused:
+        title += " [WORKERS PAUSED]"
     table = Table(title=title, title_justify="left", expand=True, show_header=False, box=None, padding=(0, 1))
     for _ in range(5):
         table.add_column()
@@ -352,7 +381,7 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     filter_part = f"filter: {state.filter_text}" if state.filter_text else "filter: -"
     error_part = f" error: {state.last_error}" if state.last_error else ""
     table.caption = (
-        f"hotkeys: q=quit  r=refresh  1-5=switch  /=filter  p=pause  "
+        f"hotkeys: q=quit  r=refresh  R=resume workers  1-5=switch  /=filter  p=pause workers  "
         f"j/k=select  a=approve  x=reject  c=changes  {filter_part}  "
         f"mode: {mode}  rendered: {snapshot.rendered_at.strftime('%H:%M:%S')}{error_part}"
     )

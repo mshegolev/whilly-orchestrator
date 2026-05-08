@@ -20,6 +20,7 @@ from whilly.operator_views import (
     ComplianceSummary,
     EventRow,
     HumanReviewState,
+    OperatorControlState,
     OperatorSnapshot,
     OperatorSurface,
     OperatorTaskRow,
@@ -116,8 +117,9 @@ def test_render_tui_overview_includes_surfaces_and_hotkeys() -> None:
     assert "Review gaps" in rendered
     assert "q=quit" in rendered
     assert "r=refresh" in rendered
+    assert "R=resume workers" in rendered
     assert "/=filter" in rendered
-    assert "p=pause" in rendered
+    assert "p=pause workers" in rendered
     assert "j/k=select" in rendered
     assert "a=approve" in rendered
     assert "x=reject" in rendered
@@ -146,9 +148,16 @@ def test_handle_tui_key_switches_views_filter_pause_refresh_review_actions_and_q
     assert state.pending_review_action == "changes_requested"
 
     handle_tui_key(state, "p")
-    assert state.paused is True
+    assert state.pending_control_action == "pause"
+    assert state.immediate_refresh is True
+    state.pending_control_action = None
+    state.immediate_refresh = False
 
     handle_tui_key(state, "r")
+    assert state.immediate_refresh is True
+    state.immediate_refresh = False
+    handle_tui_key(state, "R")
+    assert state.pending_control_action == "resume"
     assert state.immediate_refresh is True
 
     handle_tui_key(state, "/")
@@ -165,15 +174,29 @@ def test_handle_tui_key_switches_views_filter_pause_refresh_review_actions_and_q
 
 
 @pytest.mark.asyncio
-async def test_poll_loop_refresh_fetches_while_paused(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_poll_loop_applies_pending_control_action(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str | None] = []
+    control_actions: list[tuple[str, str, str]] = []
 
     async def fake_fetch_operator_snapshot(pool: Any, *, plan_id: str | None) -> OperatorSnapshot:
         calls.append(plan_id)
         return _snapshot()
 
+    class FakeTaskRepository:
+        def __init__(self, pool: Any) -> None:
+            self.pool = pool
+
+        async def pause_workers(self, *, reason: str | None = None, operator: str | None = None) -> object:
+            control_actions.append(("pause", reason or "", operator or ""))
+            return object()
+
+        async def resume_workers(self, *, operator: str | None = None) -> object:
+            control_actions.append(("resume", "", operator or ""))
+            return object()
+
     monkeypatch.setattr(tui_module, "fetch_operator_snapshot", fake_fetch_operator_snapshot)
-    state = TuiState(paused=True, immediate_refresh=True)
+    monkeypatch.setattr(tui_module, "TaskRepository", FakeTaskRepository)
+    state = TuiState(pending_control_action="pause", immediate_refresh=True)
     console = Console(file=io.StringIO(), force_terminal=False, no_color=True)
 
     await tui_module._poll_loop(
@@ -184,9 +207,11 @@ async def test_poll_loop_refresh_fetches_while_paused(monkeypatch: pytest.Monkey
         console=console,
         interval=0,
         max_iterations=1,
+        reviewer="lead@example.com",
     )
 
     assert calls == ["P-1"]
+    assert control_actions == [("pause", "Paused from TUI", "lead@example.com")]
 
 
 def test_render_tui_filter_limits_task_rows() -> None:
@@ -209,6 +234,23 @@ def test_render_tui_compliance_shows_human_review_stage() -> None:
     assert "release_review" in rendered
     assert "Actions" in rendered
     assert "a/x/c" in rendered
+
+
+def test_render_tui_header_marks_workers_paused() -> None:
+    snapshot = _snapshot()
+    paused_snapshot = OperatorSnapshot(
+        rendered_at=snapshot.rendered_at,
+        summary=snapshot.summary,
+        tasks=snapshot.tasks,
+        workers=snapshot.workers,
+        events=snapshot.events,
+        review_gaps=snapshot.review_gaps,
+        control_state=OperatorControlState(paused=True, pause_reason="release gate"),
+    )
+
+    rendered = _render_to_text(render_tui(paused_snapshot, TuiState()))
+
+    assert "WORKERS PAUSED" in rendered
 
 
 @pytest.mark.asyncio
