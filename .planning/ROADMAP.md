@@ -226,4 +226,4 @@ GSD initialization and are now tracked here as completed history.
 | 9. Profile-native verification wiring | 4/4 | Complete | 2026-05-08 |
 | 10. Rollback safety net | 3/3 | Complete | 2026-05-08 |
 | 11. CI polling and bounded repair | 6/6 | Complete    | 2026-05-08 |
-| 12. Governance and semantic-memory decision | 1/1 | Complete   | 2026-05-08 |
+| 12. Governance and semantic-memory decision | 1/1 | Complete    | 2026-05-08 |
