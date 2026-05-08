@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from whilly.pipeline.human_review import (
     HUMAN_REVIEW_APPROVED,
@@ -25,6 +25,128 @@ class OperatorSurface(str, Enum):
     PLANS_TASKS = "plans_tasks"
     WORKERS = "workers"
     EVENTS = "events"
+
+
+class OperatorTable(str, Enum):
+    """Stable operator table identifiers shared by TUI and web renderers."""
+
+    TASKS = "tasks"
+    WORKERS = "workers"
+    REVIEW_GAPS = "review_gaps"
+    EVENTS = "events"
+
+
+OperatorMedium = Literal["tui", "wui"]
+
+
+@dataclass(frozen=True)
+class OperatorTableColumn:
+    field_key: str
+    canonical_label: str
+    tui_label: str | None = None
+    wui_label: str | None = None
+    show_tui: bool = True
+    show_wui: bool = True
+    medium_note: str = ""
+
+    def label_for(self, medium: OperatorMedium) -> str:
+        if medium == "tui":
+            return self.tui_label or self.canonical_label
+        if medium == "wui":
+            return self.wui_label or self.canonical_label
+        raise ValueError(f"unsupported operator medium: {medium}")
+
+
+OPERATOR_SURFACE_LABELS: Final[Mapping[OperatorSurface, str]] = {
+    OperatorSurface.OVERVIEW: "Overview",
+    OperatorSurface.COMPLIANCE: "Compliance",
+    OperatorSurface.PLANS_TASKS: "Plans/Tasks",
+    OperatorSurface.WORKERS: "Workers",
+    OperatorSurface.EVENTS: "Events",
+}
+
+
+OPERATOR_TABLE_COLUMNS: Final[Mapping[OperatorTable, tuple[OperatorTableColumn, ...]]] = {
+    OperatorTable.TASKS: (
+        OperatorTableColumn("task_id", "Task"),
+        OperatorTableColumn("plan_id", "Plan"),
+        OperatorTableColumn("status", "Status"),
+        OperatorTableColumn("priority", "Priority"),
+        OperatorTableColumn("claimed_by", "Worker"),
+        OperatorTableColumn("human_review", "Review"),
+        OperatorTableColumn(
+            "updated_at",
+            "Updated",
+            show_tui=False,
+            show_wui=True,
+            medium_note="WUI shows update time; TUI omits it for width.",
+        ),
+    ),
+    OperatorTable.WORKERS: (
+        OperatorTableColumn("worker_id", "Worker"),
+        OperatorTableColumn(
+            "hostname",
+            "Hostname",
+            tui_label="Host",
+            medium_note="TUI uses a compact label only.",
+        ),
+        OperatorTableColumn("owner_email", "Owner"),
+        OperatorTableColumn("status", "Status"),
+        OperatorTableColumn(
+            "last_heartbeat",
+            "Last heartbeat",
+            tui_label="Heartbeat",
+            medium_note="TUI uses a compact label only.",
+        ),
+    ),
+    OperatorTable.REVIEW_GAPS: (
+        OperatorTableColumn(
+            "selected",
+            "Sel",
+            show_tui=True,
+            show_wui=False,
+            medium_note="WUI uses selected row outline and aria-selected.",
+        ),
+        OperatorTableColumn("task_id", "Task"),
+        OperatorTableColumn("plan_id", "Plan"),
+        OperatorTableColumn("reason", "Reason"),
+        OperatorTableColumn("stage_id", "Stage"),
+        OperatorTableColumn("reviewer", "Reviewer"),
+        OperatorTableColumn("actions", "Actions"),
+    ),
+    OperatorTable.EVENTS: (
+        OperatorTableColumn("event_id", "Id"),
+        OperatorTableColumn("task_id", "Task"),
+        OperatorTableColumn("plan_id", "Plan"),
+        OperatorTableColumn("event_type", "Type"),
+        OperatorTableColumn("created_at", "At"),
+    ),
+}
+
+
+def operator_surface_items() -> tuple[tuple[OperatorSurface, str], ...]:
+    """Return operator surfaces and labels in shared display order."""
+
+    return tuple((surface, OPERATOR_SURFACE_LABELS[surface]) for surface in OperatorSurface)
+
+
+def operator_table_columns(table: OperatorTable | str, medium: OperatorMedium) -> tuple[OperatorTableColumn, ...]:
+    """Return visible column metadata for an operator table and medium."""
+
+    operator_table = table if isinstance(table, OperatorTable) else OperatorTable(table)
+    if medium not in {"tui", "wui"}:
+        raise ValueError(f"unsupported operator medium: {medium}")
+    return tuple(
+        column
+        for column in OPERATOR_TABLE_COLUMNS[operator_table]
+        if (column.show_tui if medium == "tui" else column.show_wui)
+    )
+
+
+def operator_table_labels(table: OperatorTable | str, medium: OperatorMedium) -> tuple[str, ...]:
+    """Return visible column labels for an operator table and medium."""
+
+    return tuple(column.label_for(medium) for column in operator_table_columns(table, medium))
 
 
 @dataclass(frozen=True)
@@ -483,13 +605,18 @@ def _matches_gap(row: ReviewGap, needle: str) -> bool:
 
 __all__ = [
     "EVENTS_LIMIT",
+    "OPERATOR_SURFACE_LABELS",
+    "OPERATOR_TABLE_COLUMNS",
     "TASKS_LIMIT",
     "WORKERS_LIMIT",
     "ComplianceSummary",
     "EventRow",
     "HumanReviewState",
+    "OperatorMedium",
     "OperatorSnapshot",
     "OperatorSurface",
+    "OperatorTable",
+    "OperatorTableColumn",
     "OperatorTaskRow",
     "ReviewGap",
     "WorkerRow",
@@ -497,4 +624,7 @@ __all__ = [
     "fetch_operator_snapshot",
     "filter_snapshot",
     "human_review_states_from_events",
+    "operator_surface_items",
+    "operator_table_columns",
+    "operator_table_labels",
 ]
