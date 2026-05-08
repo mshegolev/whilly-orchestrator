@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 10
 current_phase_name: Rollback safety net
-current_plan: 1
+current_plan: 2
 status: in_progress
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-05-08T16:48:43.644Z"
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-05-08T17:00:07.253Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
   completed_phases: 9
   total_plans: 18
-  completed_plans: 16
-  percent: 89
+  completed_plans: 17
+  percent: 94
 ---
 
 # Project State
@@ -31,20 +31,20 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 10
 Current Phase Name: Rollback safety net
 Total Phases: 12
-Current Plan: 1
+Current Plan: 2
 Total Plans in Phase: 3
 Status: In progress
 Last Activity: 2026-05-08
-Last Activity Description: Phase 10 plan 01 rollback core models and service completed.
+Last Activity Description: Phase 10 plan 02 rollback CLI and lazy dispatch completed.
 
-Progress: [#########-] 89%
+Progress: [#########-] 94%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
+- Total plans completed: 17
 - Average duration: 6 min for tracked GSD execution
-- Total execution time: 29 min tracked after GSD initialization
+- Total execution time: 35 min tracked after GSD initialization
 
 **By Phase:**
 
@@ -61,12 +61,13 @@ Progress: [#########-] 89%
 | 9. Profile-native verification wiring | 4 complete | 4 | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: Phase 8 plan 04 plus Phase 9 plans 01-04 complete; Phases 5-9 tracked through GSD
+- Last 5 plans: Phase 9 plans 02-04 plus Phase 10 plans 01-02 complete; Phases 5-10 tracked through GSD
 - Trend: Stable
 | Phase 09-profile-native-verification-wiring P02 | 6 min | 2 tasks | 12 files |
 | Phase 09-profile-native-verification-wiring P03 | 6 min | 1 tasks | 5 files |
 | Phase 09-profile-native-verification-wiring P04 | 9 min 20 sec | 2 tasks | 8 files |
 | Phase 10-rollback-safety-net P01 | 7 min 6 sec | 2 tasks | 5 files |
+| Phase 10-rollback-safety-net P02 | 6 min 26 sec | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,9 @@ Recent decisions affecting current work:
 - [Phase 10-rollback-safety-net]: Rollback restore refuses dirty worktrees before confirmation or reset.
 - [Phase 10-rollback-safety-net]: Missing branch-protection evidence is reported as unknown with a warning, never as unprotected.
 - [Phase 10-rollback-safety-net]: Rollback points are annotated Git tags under whilly/rollback/ and are created without force replacement.
+- [Phase 10-rollback-safety-net]: Rollback restore exposes dry-run confirmation evidence but performs reset only after exact phrase confirmation.
+- [Phase 10-rollback-safety-net]: Annotated rollback tags are peeled to their target commit in the CLI restore path before confirmation and reset.
+- [Phase 10-rollback-safety-net]: Top-level rollback dispatch remains lazy so whilly --help advertises rollback without importing whilly.cli.rollback.
 
 ### Pending Todos
 
@@ -115,6 +119,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T16:48:43.641Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-05-08T16:59:42.332Z
+Stopped at: Completed 10-02-PLAN.md
 Resume file: None
