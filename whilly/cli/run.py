@@ -87,7 +87,7 @@ from whilly.cli.plan import _select_plan_with_tasks
 from whilly.config import WhillyConfig
 from whilly.core.models import Task, WorkerId
 from whilly.core.notifications import NotificationPort, RunCompletedEvent
-from whilly.pipeline.verification import VerificationCommandSpec, run_verification_commands
+from whilly.pipeline.verification import resolve_verification_specs, run_verification_commands
 from whilly.sinks.post_complete_pr_hook import (
     is_auto_open_pr_enabled,
     run_post_complete_pr_hook,
@@ -482,9 +482,10 @@ async def _async_run(
                     worktree_path=task_workspaces.get(task.id, Path.cwd()),
                 )
 
-        verification_specs = _build_verification_specs(
-            required=verify_commands,
-            optional=optional_verify_commands,
+        verification_specs = resolve_verification_specs(
+            profile_commands=plan.verification_commands,
+            required_cli=verify_commands,
+            optional_cli=optional_verify_commands,
         )
         verification_runner = None
         if verification_specs:
@@ -511,23 +512,3 @@ async def _async_run(
         )
     finally:
         await close_pool(pool)
-
-
-def _build_verification_specs(
-    *,
-    required: Sequence[str],
-    optional: Sequence[str],
-) -> tuple[VerificationCommandSpec, ...]:
-    specs: list[VerificationCommandSpec] = []
-    for raw in required:
-        name, command = _split_verification_command(raw)
-        specs.append(VerificationCommandSpec(name=name, command=command, required=True))
-    for raw in optional:
-        name, command = _split_verification_command(raw)
-        specs.append(VerificationCommandSpec(name=name, command=command, required=False))
-    return tuple(specs)
-
-
-def _split_verification_command(raw: str) -> tuple[str, str]:
-    name, _sep, command = raw.partition("=")
-    return name.strip(), command.strip()
