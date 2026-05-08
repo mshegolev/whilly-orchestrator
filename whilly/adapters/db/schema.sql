@@ -393,3 +393,18 @@ CREATE TABLE funnel_url (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT funnel_url_singleton CHECK (id = 1)
 );
+
+-- ─── control_state ───────────────────────────────────────────────────────
+-- Singleton operator control row. ``Pause`` / ``Resume`` in WUI and TUI
+-- mutate this state; workers read it at safe checkpoints so a soft
+-- stop-crane can prevent new claims and release in-flight work without
+-- killing subprocesses.
+CREATE TABLE control_state (
+    id           TEXT PRIMARY KEY,
+    paused       BOOLEAN NOT NULL DEFAULT false,
+    pause_reason TEXT,
+    paused_by    TEXT,
+    paused_at    TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_control_state_singleton CHECK (id = 'global')
+);
