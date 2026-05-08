@@ -167,6 +167,28 @@ async def _seed_noise_events(pool: asyncpg.Pool, *, plan_id: str, count: int) ->
         )
 
 
+def _table_block(body: str, table_id: str) -> str:
+    match = re.search(rf'<table id="{re.escape(table_id)}".*?</table>', body, re.DOTALL)
+    assert match is not None, f"table {table_id!r} not found"
+    return match.group(0)
+
+
+def _header_labels(table_html: str) -> list[str]:
+    return [label.strip() for label in re.findall(r"<th[^>]*>\s*([^<]+?)\s*</th>", _thead_block(table_html))]
+
+
+def _thead_block(table_html: str) -> str:
+    thead = re.search(r"<thead>.*?</thead>", table_html, re.DOTALL)
+    assert thead is not None, "table header not found"
+    return thead.group(0)
+
+
+def _row_block(table_html: str, row_id: str) -> str:
+    match = re.search(rf'<tr id="{re.escape(row_id)}".*?</tr>', table_html, re.DOTALL)
+    assert match is not None, f"row {row_id!r} not found"
+    return match.group(0)
+
+
 # ─── Endpoint registration ───────────────────────────────────────────────
 
 
@@ -263,6 +285,43 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert "htmx:sendError" in body
     assert "htmx:afterSwap" in body
     assert "isEditableTarget" in body, "hotkeys must not hijack typing in inputs"
+
+
+async def test_dashboard_table_contract_headers_and_worker_order(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = await _seed_plan(db_pool, "plan-table-contract")
+    await _seed_worker(db_pool, worker_id="worker-alpha", hostname="alpha.local", owner_email="a@x.com")
+    await _seed_task(
+        db_pool,
+        task_id="task-table-contract",
+        plan_id=plan_id,
+        status="IN_PROGRESS",
+        priority="high",
+        claimed_by="worker-alpha",
+        acceptance_criteria=["done"],
+        test_steps=["pytest"],
+    )
+    await _seed_event(db_pool, task_id="task-table-contract", plan_id=plan_id, event_type="START")
+
+    response = await client.get("/")
+    body = response.text
+
+    tasks_table = _table_block(body, "tasks")
+    assert _header_labels(tasks_table) == ["Task", "Plan", "Status", "Priority", "Worker", "Review", "Updated"]
+    assert "Claimed by" not in _thead_block(tasks_table)
+
+    workers_table = _table_block(body, "workers")
+    assert _header_labels(workers_table) == ["Worker", "Hostname", "Owner", "Status", "Last heartbeat"]
+    worker_row = _row_block(workers_table, "worker-worker-alpha")
+    assert worker_row.index("alpha.local") < worker_row.index("a@x.com")
+
+    review_table = _table_block(body, "review-gaps")
+    assert _header_labels(review_table) == ["Task", "Plan", "Reason", "Stage", "Reviewer", "Actions"]
+
+    events_table = _table_block(body, "events")
+    assert _header_labels(events_table) == ["Id", "Task", "Plan", "Type", "At"]
 
 
 async def test_dashboard_preserves_local_state_across_refresh_and_sse_swaps(client: AsyncClient) -> None:
