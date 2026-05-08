@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 11
 current_phase_name: CI polling and bounded repair
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 11-ci-polling-and-bounded-repair-02-PLAN.md
-last_updated: "2026-05-08T18:16:03.458Z"
+stopped_at: Completed 11-ci-polling-and-bounded-repair-03-PLAN.md
+last_updated: "2026-05-08T18:29:07.990Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 24
-  completed_plans: 20
-  percent: 79
+  completed_plans: 21
+  percent: 88
 ---
 
 # Project State
@@ -31,13 +31,13 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 11
 Current Phase Name: CI polling and bounded repair
 Total Phases: 12
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 6
 Status: In Progress
 Last Activity: 2026-05-08
 Last Activity Description: Plan 11-01 completed CI polling primitives and source="ci" verification dispatch.
 
-Progress: [########--] 79%
+Progress: [#########-] 88%
 
 ## Performance Metrics
 
@@ -71,6 +71,7 @@ Progress: [########--] 79%
 | Phase 10-rollback-safety-net P03 | 7 min 27 sec | 2 tasks | 6 files |
 | Phase 11-ci-polling-and-bounded-repair P01 | 5 min | 2 tasks | 8 files |
 | Phase 11-ci-polling-and-bounded-repair P02 | 5 min | 2 tasks | 6 files |
+| Phase 11-ci-polling-and-bounded-repair P03 | 9 min | 2 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -117,6 +118,9 @@ Recent decisions affecting current work:
 - [Phase 11-ci-polling-and-bounded-repair]: Budgeted repair creates deterministic <orig-task-id>-repair-N task ids and never releases the failed task.
 - [Phase 11-ci-polling-and-bounded-repair]: Repair tasks use empty dependencies so a failed original task cannot block the repair task under future scheduler rules.
 - [Phase 11-ci-polling-and-bounded-repair]: Repair task prompts describe trigger metadata and budget, while detailed failure evidence stays in audit events.
+- [Phase 11-ci-polling-and-bounded-repair]: Verification command metadata now carries repair_max_attempts explicitly with a default of 0 for old plan compatibility.
+- [Phase 11-ci-polling-and-bounded-repair]: Project-config source=ci commands require ci:// targets and bypass shell scanning because they are not shell commands.
+- [Phase 11-ci-polling-and-bounded-repair]: Configured ci_status sinks emit both a sink-stage task and a plan-level source=ci verification command so current workers can execute the CI poll path.
 
 ### Pending Todos
 
@@ -132,6 +136,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T18:16:03.456Z
-Stopped at: Completed 11-ci-polling-and-bounded-repair-02-PLAN.md
+Last session: 2026-05-08T18:29:07.984Z
+Stopped at: Completed 11-ci-polling-and-bounded-repair-03-PLAN.md
 Resume file: None
