@@ -112,6 +112,7 @@ from whilly.adapters.transport.schemas import (
     ClaimResponse,
     CompleteRequest,
     CompleteResponse,
+    ControlStateResponse,
     ErrorResponse,
     FailRequest,
     FailResponse,
@@ -133,12 +134,14 @@ __all__ = [
     "DEFAULT_BACKOFF_SCHEDULE",
     "DEFAULT_TIMEOUT_SECONDS",
     "REGISTER_PATH",
+    "CONTROL_STATE_PATH",
     "AuthError",
     "HTTPClientError",
     "RemoteWorkerClient",
     "ServerError",
     "VersionConflictError",
     "complete_path",
+    "control_state_path",
     "fail_path",
     "heartbeat_path",
     "release_path",
@@ -163,6 +166,8 @@ REGISTER_PATH: Final[str] = "/workers/register"
 #: the server module). The server-side constant pins the parity with an
 #: integration test in :mod:`tests.integration.test_transport_claim`.
 CLAIM_PATH: Final[str] = "/tasks/claim"
+
+CONTROL_STATE_PATH: Final[str] = "/workers/control-state"
 
 
 def heartbeat_path(worker_id: str) -> str:
@@ -227,6 +232,12 @@ def task_event_path(task_id: str) -> str:
     """Return the diagnostic-event endpoint path for ``task_id``."""
 
     return f"/tasks/{task_id}/events"
+
+
+def control_state_path() -> str:
+    """Return the worker-readable global control-state endpoint path."""
+
+    return CONTROL_STATE_PATH
 
 
 # ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
@@ -869,6 +880,12 @@ class RemoteWorkerClient:
             json=request.model_dump(),
         )
         return await self._parse_response(response, HeartbeatResponse)
+
+    async def control_state(self) -> ControlStateResponse:
+        """Read whether the control plane has globally paused workers."""
+
+        response = await self._request("GET", control_state_path())
+        return await self._parse_response(response, ControlStateResponse)
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
         """Long-poll for the next PENDING task in ``plan_id`` (``POST /tasks/claim``, PRD FR-1.3).

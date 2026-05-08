@@ -1625,6 +1625,13 @@ class TaskRepository:
         INSERT-side FK fires and asyncpg surfaces
         :class:`asyncpg.exceptions.ForeignKeyViolationError`.
         """
+        if await self.is_workers_paused():
+            logger.info(
+                "claim_task: global pause active, skipping claim for plan=%s worker=%s",
+                plan_id,
+                worker_id,
+            )
+            return None
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(_CLAIM_SQL, plan_id, worker_id)

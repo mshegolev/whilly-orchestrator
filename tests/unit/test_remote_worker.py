@@ -58,6 +58,7 @@ from whilly.pipeline.verification import (
 )
 from whilly.worker import remote as worker_remote
 from whilly.worker.remote import (
+    OPERATOR_PAUSE_RELEASE_REASON,
     RemoteWorkerStats,
     _build_fail_reason,
     _truncate_output,
@@ -159,6 +160,11 @@ class FakeRemoteClient:
         self.event_calls: list[tuple[TaskId, str, str, dict[str, object], dict[str, object] | None]] = []
         self.task_event_results: dict[TaskId, list[dict[str, object]]] = {}
         self.list_task_events_calls: list[tuple[TaskId, str | None]] = []
+        self.control_state_results: list[bool] = []
+
+    async def control_state(self) -> object:
+        paused = self.control_state_results.pop(0) if self.control_state_results else False
+        return SimpleNamespace(paused=paused)
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
         self.claim_calls.append((worker_id, plan_id))
@@ -267,6 +273,40 @@ def fake_sleep(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
 def test_remote_worker_stats_defaults_are_zero() -> None:
     """Empty stats are the natural zero so callers can compare equality."""
     assert RemoteWorkerStats() == RemoteWorkerStats(iterations=0, completed=0, failed=0, idle_polls=0)
+
+
+@pytest.mark.asyncio
+async def test_remote_worker_does_not_claim_when_global_pause_is_active(fake_sleep: list[float]) -> None:
+    client = FakeRemoteClient()
+    client.control_state_results.append(True)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:  # pragma: no cover - must not be called
+        raise AssertionError("runner must not be called while workers are paused")
+
+    stats = await run_remote_worker(client, runner, _make_plan(), WORKER_ID, max_iterations=1)
+
+    assert stats.idle_polls == 1
+    assert client.claim_calls == []
+    assert fake_sleep == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_remote_worker_releases_claimed_task_when_global_pause_arrives() -> None:
+    client = FakeRemoteClient()
+    claimed = _make_task("T-remote-pause-release", status=TaskStatus.CLAIMED, version=1)
+    released = replace(claimed, status=TaskStatus.PENDING, version=2)
+    client.control_state_results.extend([False, True])
+    client.claim_results.append(claimed)
+    client.release_results.append(released)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(is_complete=True, exit_code=0, output="<promise>COMPLETE</promise>")
+
+    stats = await run_remote_worker(client, runner, _make_plan(), WORKER_ID, max_iterations=1)
+
+    assert stats.completed == 0
+    assert client.complete_calls == []
+    assert client.release_calls == [("T-remote-pause-release", WORKER_ID, 1, OPERATOR_PAUSE_RELEASE_REASON)]
 
 
 def test_truncate_output_passes_short_strings_through() -> None:

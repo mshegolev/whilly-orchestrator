@@ -1453,6 +1453,17 @@ def create_app(
         ok = await repo.update_heartbeat(worker_id)
         return HeartbeatResponse(ok=ok)
 
+    @app.get(
+        "/workers/control-state",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(bearer_dep)],
+        include_in_schema=False,
+    )
+    async def worker_control_state(request: Request) -> ControlStateResponse:
+        """Worker-readable global pause state for safe-boundary checks."""
+
+        return _control_state_response(await repo.get_control_state())
+
     @app.post(
         CLAIM_PATH,
         # The 200 path returns ClaimResponse; FastAPI will infer this

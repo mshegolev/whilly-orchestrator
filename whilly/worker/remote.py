@@ -183,6 +183,8 @@ RemoteVerificationRunnerCallable = Callable[[Task], Awaitable[VerificationRunOut
 # the cooperative-shutdown path, distinct from the visibility-timeout
 # sweep's ``"visibility_timeout"``.
 SHUTDOWN_RELEASE_REASON: Final[str] = "shutdown"
+OPERATOR_PAUSE_RELEASE_REASON: Final[str] = "operator_pause"
+PAUSED_WORKER_IDLE_WAIT: Final[float] = 1.0
 
 # Signals we install handlers for in :func:`run_remote_worker_with_heartbeat`.
 # Same set as the local worker's :data:`whilly.worker.main._SHUTDOWN_SIGNALS`
@@ -390,6 +392,34 @@ async def _await_runner_or_stop(
     return runner_task.result(), False
 
 
+async def _workers_paused(client: RemoteWorkerClient) -> bool:
+    reader = getattr(client, "control_state", None)
+    if reader is None:
+        return False
+    state = await reader()
+    return bool(getattr(state, "paused", False))
+
+
+async def _release_for_operator_pause(client: RemoteWorkerClient, task: Task, worker_id: WorkerId) -> None:
+    try:
+        await client.release(task.id, worker_id, task.version, OPERATOR_PAUSE_RELEASE_REASON)
+    except VersionConflictError as exc:
+        log.warning(
+            "remote operator-pause release lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+            task.id,
+            task.version,
+            exc.actual_version,
+            exc.actual_status.value if exc.actual_status else None,
+        )
+    except HTTPClientError as exc:
+        log.warning(
+            "remote operator-pause release HTTP error: task=%s worker=%s exc=%s",
+            task.id,
+            worker_id,
+            exc,
+        )
+
+
 async def _await_verification_or_stop(
     verification_coro: Awaitable[VerificationRunOutcome],
     stop: asyncio.Event,
@@ -517,6 +547,16 @@ async def run_remote_worker(
 
         iterations += 1
 
+        if await _workers_paused(client):
+            idle_polls += 1
+            log.info(
+                "remote worker=%s plan=%s: global pause active, skipping claim",
+                worker_id,
+                plan.id,
+            )
+            await asyncio.sleep(PAUSED_WORKER_IDLE_WAIT)
+            continue
+
         claimed = await client.claim(worker_id, plan.id)
         if claimed is None:
             # 204 No Content: the server's long-poll already absorbed the
@@ -533,6 +573,15 @@ async def run_remote_worker(
                 worker_id,
                 plan.id,
             )
+            continue
+
+        if await _workers_paused(client):
+            log.info(
+                "remote worker=%s task=%s: global pause observed after claim, releasing claim",
+                worker_id,
+                claimed.id,
+            )
+            await _release_for_operator_pause(client, claimed, worker_id)
             continue
 
         stage_context = stage_context_from_task(claimed, plan)
@@ -738,6 +787,15 @@ async def run_remote_worker(
                 )
             except Exception:  # noqa: BLE001 - task completion/failure still owns the state transition
                 log.warning("remote llm ops finish record failed: task=%s", claimed.id, exc_info=True)
+
+        if await _workers_paused(client):
+            log.info(
+                "remote worker=%s task=%s: global pause observed before terminal transition, releasing claim",
+                worker_id,
+                claimed.id,
+            )
+            await _release_for_operator_pause(client, claimed, worker_id)
+            continue
 
         if result.is_complete and result.exit_code == 0:
             if verification_runner is not None:
@@ -1597,6 +1655,8 @@ from whilly.worker.funnel import FunnelUrlSource  # noqa: E402  pylint: disable=
 
 __all__ = [
     "DEFAULT_HEARTBEAT_INTERVAL",
+    "OPERATOR_PAUSE_RELEASE_REASON",
+    "PAUSED_WORKER_IDLE_WAIT",
     "SHUTDOWN_RELEASE_REASON",
     "WORKER_RECONNECT_URL_REASON",
     "RemoteClientFactory",

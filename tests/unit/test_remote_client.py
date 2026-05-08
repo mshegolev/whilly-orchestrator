@@ -37,6 +37,7 @@ import pytest
 
 from whilly.adapters.transport.client import (
     CLAIM_PATH,
+    CONTROL_STATE_PATH,
     DEFAULT_BACKOFF_SCHEDULE,
     REGISTER_PATH,
     AuthError,
@@ -45,12 +46,14 @@ from whilly.adapters.transport.client import (
     ServerError,
     VersionConflictError,
     complete_path,
+    control_state_path,
     fail_path,
     heartbeat_path,
     task_event_path,
 )
 from whilly.adapters.transport.schemas import (
     CompleteResponse,
+    ControlStateResponse,
     ErrorResponse,
     FailResponse,
     HeartbeatResponse,
@@ -178,6 +181,32 @@ async def test_bearer_token_attached_to_every_request() -> None:
         await client._request("POST", "/b", json={"x": 1})
 
     assert seen_headers == ["Bearer t-123", "Bearer t-123"]
+
+
+async def test_control_state_reads_worker_pause_state() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "paused": True,
+                "pause_reason": "release gate",
+                "paused_by": "lead@example.com",
+                "paused_at": "2026-05-08T10:00:00+00:00",
+                "updated_at": "2026-05-08T10:00:01+00:00",
+            },
+        )
+
+    async with _make_client(handler, token="t-123") as client:
+        state = await client.control_state()
+
+    assert control_state_path() == CONTROL_STATE_PATH
+    assert seen_paths == [CONTROL_STATE_PATH]
+    assert isinstance(state, ControlStateResponse)
+    assert state.paused is True
+    assert state.pause_reason == "release gate"
 
 
 async def test_bootstrap_flag_swaps_in_bootstrap_token() -> None:
