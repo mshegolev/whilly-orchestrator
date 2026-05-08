@@ -139,6 +139,8 @@ from urllib.parse import urlsplit
 
 from whilly.adapters.runner.claude_cli import run_task
 from whilly.adapters.transport.client import RemoteWorkerClient
+from whilly.ci.github import GitHubCIPollAdapter
+from whilly.ci.models import CI_VERIFICATION_SOURCE
 from whilly.core.models import Plan, Task, WorkerId
 from whilly.pipeline.verification import resolve_verification_specs, run_verification_commands
 from whilly.worker.funnel import (
@@ -876,12 +878,16 @@ def _build_verification_runner(
     )
     if not verification_specs:
         return None
+    ci_poll_runner = (
+        GitHubCIPollAdapter() if any(spec.source == CI_VERIFICATION_SOURCE for spec in verification_specs) else None
+    )
 
     async def verification_runner(_task: Task):
         return await run_verification_commands(
             verification_specs,
             cwd=Path.cwd(),
             env_allowlist=_VERIFICATION_ENV_ALLOWLIST,
+            ci_poll_runner=ci_poll_runner,
         )
 
     return verification_runner
