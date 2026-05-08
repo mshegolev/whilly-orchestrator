@@ -122,6 +122,8 @@ from whilly.adapters.transport.schemas import (
     PlanPayload,
     RegisterRequest,
     RegisterResponse,
+    RepairTaskRequest,
+    RepairTaskResponse,
     ReleaseRequest,
     ReleaseResponse,
     TaskEventItem,
@@ -147,6 +149,7 @@ __all__ = [
     "fail_path",
     "heartbeat_path",
     "plan_path",
+    "repair_path",
     "release_path",
     "task_event_path",
 ]
@@ -231,6 +234,12 @@ def release_path(task_id: str) -> str:
     shutdown release.
     """
     return f"/tasks/{task_id}/release"
+
+
+def repair_path(task_id: str) -> str:
+    """Return the remote repair-task request endpoint path for ``task_id``."""
+
+    return f"/tasks/{task_id}/repair"
 
 
 def task_event_path(task_id: str) -> str:
@@ -1172,6 +1181,30 @@ class RemoteWorkerClient:
         response = await self._request("GET", task_event_path(task_id), params=params)
         parsed = await self._parse_response(response, ListTaskEventsResponse)
         return tuple(parsed.events)
+
+    async def request_repair(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        repair_task: Mapping[str, Any],
+        event: Mapping[str, Any],
+    ) -> str:
+        """Request insertion of a deterministic repair task for ``task_id``."""
+
+        request = RepairTaskRequest(
+            worker_id=worker_id,
+            orig_task_version=version,
+            repair_task=repair_task,
+            event=event,
+        )
+        response = await self._request(
+            "POST",
+            repair_path(task_id),
+            json=request.model_dump(exclude_none=True),
+        )
+        parsed = await self._parse_response(response, RepairTaskResponse)
+        return parsed.repair_task_id
 
     async def fail(
         self,
