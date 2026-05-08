@@ -6,6 +6,7 @@ import asyncio
 import os
 import signal
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,6 +19,9 @@ VERIFICATION_STARTED_EVENT = "verification.started"
 VERIFICATION_SUCCEEDED_EVENT = "verification.succeeded"
 VERIFICATION_FAILED_EVENT = "verification.failed"
 VERIFICATION_WARNING_EVENT = "verification.warning"
+
+PROFILE_VERIFICATION_SOURCE = "profile"
+CLI_VERIFICATION_SOURCE = "cli"
 
 DEFAULT_TIMEOUT_S = 600.0
 DEFAULT_OUTPUT_LIMIT = 20_000
@@ -36,6 +40,7 @@ class VerificationCommandSpec:
     name: str
     command: str
     required: bool = True
+    source: str = CLI_VERIFICATION_SOURCE
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,7 @@ class VerificationCommandResult:
     stdout: str
     stderr: str
     duration_s: float
+    source: str = CLI_VERIFICATION_SOURCE
     timed_out: bool = False
     blocked: bool = False
     pattern_matched: str | None = None
@@ -102,6 +108,7 @@ def make_verification_result_event(
     payload: dict[str, Any] = {
         "task_id": task_id,
         "name": result.name,
+        "source": result.source,
         "command": redact_secrets(result.command),
         "required": result.required,
         "succeeded": result.succeeded,
@@ -141,16 +148,62 @@ async def run_verification_commands(
     the parent environment are omitted from the child environment.
     """
 
-    command_specs = tuple(
-        VerificationCommandSpec(name=command.name, command=command.command, required=command.required)
-        for command in commands
-    )
+    command_specs = tuple(_command_like_to_spec(command) for command in commands)
     cwd_path = Path(cwd)
     env = _allowed_env(env_allowlist)
     results = []
     for spec in command_specs:
         results.append(await _run_one(spec, cwd=cwd_path, timeout_s=timeout_s, env=env, output_limit=output_limit))
     return VerificationRunOutcome(results=tuple(results))
+
+
+def resolve_verification_specs(
+    *,
+    profile_commands: Sequence[VerificationCommandLike],
+    required_cli: Sequence[str] = (),
+    optional_cli: Sequence[str] = (),
+) -> tuple[VerificationCommandSpec, ...]:
+    """Resolve profile-native and explicit CLI verification commands in runtime order."""
+
+    specs: list[VerificationCommandSpec] = [
+        VerificationCommandSpec(
+            name=command.name,
+            command=command.command,
+            required=command.required,
+            source=PROFILE_VERIFICATION_SOURCE,
+        )
+        for command in profile_commands
+    ]
+    for raw in required_cli:
+        name, command = _split_verification_command(raw)
+        specs.append(
+            VerificationCommandSpec(
+                name=name,
+                command=command,
+                required=True,
+                source=CLI_VERIFICATION_SOURCE,
+            )
+        )
+    for raw in optional_cli:
+        name, command = _split_verification_command(raw)
+        specs.append(
+            VerificationCommandSpec(
+                name=name,
+                command=command,
+                required=False,
+                source=CLI_VERIFICATION_SOURCE,
+            )
+        )
+    return tuple(specs)
+
+
+def _command_like_to_spec(command: VerificationCommandLike) -> VerificationCommandSpec:
+    return VerificationCommandSpec(
+        name=command.name,
+        command=command.command,
+        required=command.required,
+        source=getattr(command, "source", CLI_VERIFICATION_SOURCE),
+    )
 
 
 async def _run_one(
@@ -203,6 +256,7 @@ async def _run_one(
         stdout=stdout,
         stderr=stderr,
         duration_s=time.monotonic() - started,
+        source=spec.source,
         pattern_matched=scan.pattern_matched,
         stdout_truncated=stdout_truncated,
         stderr_truncated=stderr_truncated,
@@ -227,6 +281,7 @@ def _blocked_result(
         stdout="",
         stderr=f"blocked by shell policy: {scan_pattern or 'unknown'}",
         duration_s=time.monotonic() - started,
+        source=spec.source,
         blocked=True,
         pattern_matched=scan_pattern,
     )
@@ -250,6 +305,7 @@ def _timeout_result(
         stdout="",
         stderr=f"timed out after {timeout_s:g}s",
         duration_s=time.monotonic() - started,
+        source=spec.source,
         timed_out=True,
     )
 
@@ -264,6 +320,11 @@ def _event_name(*, required: bool, succeeded: bool, warning: bool) -> str:
 
 def _allowed_env(env_allowlist: tuple[str, ...]) -> dict[str, str]:
     return {name: os.environ[name] for name in env_allowlist if name in os.environ}
+
+
+def _split_verification_command(raw: str) -> tuple[str, str]:
+    name, _sep, command = raw.partition("=")
+    return name.strip(), command.strip()
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
@@ -285,6 +346,8 @@ def _decode_and_cap(payload: bytes, output_limit: int) -> tuple[str, bool]:
 __all__ = [
     "DEFAULT_OUTPUT_LIMIT",
     "DEFAULT_TIMEOUT_S",
+    "CLI_VERIFICATION_SOURCE",
+    "PROFILE_VERIFICATION_SOURCE",
     "VERIFICATION_FAILED_EVENT",
     "VERIFICATION_STARTED_EVENT",
     "VERIFICATION_SUCCEEDED_EVENT",
@@ -294,5 +357,6 @@ __all__ = [
     "VerificationRunOutcome",
     "make_verification_result_event",
     "make_verification_started_event",
+    "resolve_verification_specs",
     "run_verification_commands",
 ]
