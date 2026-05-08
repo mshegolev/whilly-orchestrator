@@ -254,6 +254,7 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert "isManualLiveIntent" in body
     assert 'type === "click"' in body
     assert "submitControlAction" in body
+    assert "isComplianceSurface" in body
     assert "/api/v1/admin/workers/" in body
     assert "togglePolling" not in body
     assert "pollingPaused" not in body
