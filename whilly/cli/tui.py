@@ -378,7 +378,7 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     error_part = f" error: {state.last_error}" if state.last_error else ""
     table.caption = (
         f"hotkeys: q=quit  r=refresh  R=resume workers  1-5=switch  /=filter  p=pause workers  "
-        f"j/k=select  a=approve  x=reject  c=changes  {filter_part}  "
+        f"j/k=select  a=Approve review  x=Reject review  c=Changes  {filter_part}  "
         f"mode: {mode}  rendered: {snapshot.rendered_at.strftime('%H:%M:%S')}{error_part}"
     )
     table.caption_justify = "left"
