@@ -46,8 +46,9 @@ from whilly.adapters.transport.schemas import (
     TaskEventRequest,
     TaskEventResponse,
     TaskPayload,
+    VerificationCommandPayload,
 )
-from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.models import Plan, Priority, Task, TaskStatus, VerificationCommand
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -111,6 +112,77 @@ def test_plan_payload_from_plan_omits_tasks() -> None:
     assert payload.name == "Refactor"
     # ``tasks`` is not part of the schema at all — confirm it didn't sneak in.
     assert "tasks" not in payload.model_dump()
+
+
+def test_plan_payload_from_plan_includes_ordered_verification_commands() -> None:
+    """Plan metadata carries verification commands but not sibling tasks."""
+    commands = (
+        VerificationCommand(
+            name="profile-required",
+            command=".venv/bin/python -m pytest -q tests/unit",
+            required=True,
+            source="profile",
+        ),
+        VerificationCommand(
+            name="profile-optional",
+            command=".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+            required=False,
+            source="profile",
+        ),
+    )
+    plan = Plan(id="PLAN-VERIFY", name="Verification", tasks=(_sample_task(),), verification_commands=commands)
+
+    payload = PlanPayload.from_plan(plan)
+
+    assert [item.name for item in payload.verification_commands] == ["profile-required", "profile-optional"]
+    assert payload.model_dump()["verification_commands"] == [
+        {
+            "name": "profile-required",
+            "command": ".venv/bin/python -m pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+        },
+        {
+            "name": "profile-optional",
+            "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+            "required": False,
+            "source": "profile",
+        },
+    ]
+    assert "tasks" not in payload.model_dump()
+
+
+def test_plan_payload_json_round_trip_preserves_verification_source() -> None:
+    """Transport JSON recreates pure Plan metadata without sibling tasks."""
+    payload = PlanPayload(
+        id="PLAN-VERIFY",
+        name="Verification",
+        verification_commands=[
+            VerificationCommandPayload(
+                name="profile-required",
+                command=".venv/bin/python -m pytest -q tests/unit",
+                required=True,
+                source="profile",
+            )
+        ],
+    )
+
+    rebuilt = PlanPayload.model_validate_json(payload.model_dump_json())
+    plan = rebuilt.to_plan()
+
+    assert plan == Plan(
+        id="PLAN-VERIFY",
+        name="Verification",
+        verification_commands=(
+            VerificationCommand(
+                name="profile-required",
+                command=".venv/bin/python -m pytest -q tests/unit",
+                required=True,
+                source="profile",
+            ),
+        ),
+    )
+    assert plan.tasks == ()
 
 
 # ---------------------------------------------------------------------------

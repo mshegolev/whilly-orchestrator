@@ -39,6 +39,7 @@ from whilly.adapters.transport.client import (
     CLAIM_PATH,
     CONTROL_STATE_PATH,
     DEFAULT_BACKOFF_SCHEDULE,
+    PLAN_PATH_PREFIX,
     REGISTER_PATH,
     AuthError,
     HTTPClientError,
@@ -49,6 +50,7 @@ from whilly.adapters.transport.client import (
     control_state_path,
     fail_path,
     heartbeat_path,
+    plan_path,
     task_event_path,
 )
 from whilly.adapters.transport.schemas import (
@@ -207,6 +209,68 @@ async def test_control_state_reads_worker_pause_state() -> None:
     assert isinstance(state, ControlStateResponse)
     assert state.paused is True
     assert state.pause_reason == "release gate"
+
+
+async def test_get_plan_fetches_plan_metadata_with_verification_commands() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "id": "P-1",
+                "name": "Profile Verification",
+                "github_issue_ref": None,
+                "verification_commands": [
+                    {
+                        "name": "profile-required",
+                        "command": ".venv/bin/python -m pytest -q tests/unit",
+                        "required": True,
+                        "source": "profile",
+                    },
+                    {
+                        "name": "profile-optional",
+                        "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+                        "required": False,
+                        "source": "profile",
+                    },
+                ],
+            },
+        )
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        plan = await client.get_plan("P-1")
+
+    assert PLAN_PATH_PREFIX == "/api/v1/plans"
+    assert plan_path("P-1") == "/api/v1/plans/P-1"
+    assert captured == {
+        "method": "GET",
+        "path": "/api/v1/plans/P-1",
+        "auth": "Bearer bearer-tok",
+    }
+    assert plan.id == "P-1"
+    assert plan.name == "Profile Verification"
+    assert plan.tasks == ()
+    assert [command.name for command in plan.verification_commands] == [
+        "profile-required",
+        "profile-optional",
+    ]
+    assert [command.required for command in plan.verification_commands] == [True, False]
+
+
+async def test_get_plan_404_uses_existing_client_error_mapping(captured_sleeps: list[float]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not_found", "detail": "plan missing"})
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        with pytest.raises(HTTPClientError) as excinfo:
+            await client.get_plan("P-missing")
+
+    assert excinfo.value.status_code == 404
+    assert captured_sleeps == []
 
 
 async def test_bootstrap_flag_swaps_in_bootstrap_token() -> None:
