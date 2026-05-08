@@ -123,9 +123,9 @@ def test_render_tui_overview_includes_surfaces_and_hotkeys() -> None:
     assert "/=filter" in rendered
     assert "p=pause workers" in rendered
     assert "j/k=select" in rendered
-    assert "a=approve" in rendered
-    assert "x=reject" in rendered
-    assert "c=changes" in rendered
+    assert "a=Approve review" in rendered
+    assert "x=Reject review" in rendered
+    assert "c=Changes" in rendered
 
 
 def test_render_tui_tables_read_headers_from_operator_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -284,16 +284,21 @@ def test_render_tui_filter_limits_task_rows() -> None:
     assert "filter: human" in rendered
 
 
-def test_render_tui_compliance_shows_human_review_stage() -> None:
+def test_render_tui_compliance_shows_clear_review_action_help() -> None:
     state = TuiState(surface=OperatorSurface.COMPLIANCE)
 
     rendered = _render_to_text(render_tui(_snapshot(), state))
 
     assert "Queue health" in rendered
+    assert "Compliance - Human review / verification gaps" in rendered
+    assert ">" in rendered
     assert "awaiting human review" in rendered
     assert "release_review" in rendered
     assert "Actions" in rendered
     assert "a/x/c" in rendered
+    assert "a=Approve review" in rendered
+    assert "x=Reject review" in rendered
+    assert "c=Changes" in rendered
 
 
 def test_render_tui_header_marks_workers_paused() -> None:
@@ -348,7 +353,43 @@ async def test_apply_pending_review_action_requires_reviewer(monkeypatch: pytest
     assert recorded == []
     assert state.pending_review_action is None
     assert state.immediate_refresh is False
-    assert "reviewer required" in (state.last_error or "")
+    assert state.last_error == "reviewer required: pass --reviewer or set WHILLY_OPERATOR_EMAIL"
+
+
+@pytest.mark.asyncio
+async def test_apply_pending_review_action_requires_selected_actionable_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[tuple[ReviewGap, str, str]] = []
+
+    async def fake_record(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
+        recorded.append((gap, decision, reviewer))
+
+    monkeypatch.setattr(tui_module, "_record_human_review_decision", fake_record)
+    snapshot = _snapshot()
+    no_review_snapshot = OperatorSnapshot(
+        rendered_at=snapshot.rendered_at,
+        summary=snapshot.summary,
+        tasks=snapshot.tasks,
+        workers=snapshot.workers,
+        events=snapshot.events,
+        review_gaps=(),
+        control_state=snapshot.control_state,
+    )
+    state = TuiState(surface=OperatorSurface.COMPLIANCE, pending_review_action="rejected")
+
+    applied = await tui_module._apply_pending_review_action(
+        object(),
+        no_review_snapshot,
+        state,
+        reviewer="lead@example.com",
+    )
+
+    assert applied is False
+    assert recorded == []
+    assert state.pending_review_action is None
+    assert state.immediate_refresh is False
+    assert state.last_error == "no actionable human review gap selected"
 
 
 @pytest.mark.asyncio
