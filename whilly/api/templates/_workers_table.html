@@ -5,11 +5,9 @@
        role="grid">
   <thead>
     <tr>
-      <th scope="col">Worker</th>
-      <th scope="col">Owner</th>
-      <th scope="col">Hostname</th>
-      <th scope="col">Status</th>
-      <th scope="col">Last heartbeat</th>
+      {% for column in table_columns.workers %}
+        <th scope="col">{{ column.label_for("wui") }}</th>
+      {% endfor %}
     </tr>
   </thead>
   <tbody>
@@ -18,15 +16,15 @@
         <tr id="worker-{{ w.worker_id }}"
             data-filter-text="{{ w.worker_id }} {{ w.hostname }} {{ w.owner_email or '' }} {{ w.status }}">
           <td><code>{{ w.worker_id }}</code></td>
-          <td>{{ w.owner_email if w.owner_email else "—" }}</td>
           <td>{{ w.hostname }}</td>
+          <td>{{ w.owner_email if w.owner_email else "—" }}</td>
           <td><span class="status status-{{ w.status }}">{{ w.status }}</span></td>
           <td><time datetime="{{ format_iso(w.last_heartbeat) }}">{{ format_human(w.last_heartbeat) }}</time></td>
         </tr>
       {% endfor %}
     {% else %}
       <tr id="workers-empty">
-        <td colspan="5"><em class="empty-state">No workers connected yet.</em></td>
+        <td colspan="{{ table_columns.workers|length }}"><em class="empty-state">No workers connected yet.</em></td>
       </tr>
     {% endif %}
   </tbody>
