@@ -921,16 +921,11 @@ class RemoteWorkerClient:
         if not isinstance(payload, Mapping):
             body = response.text
             raise ServerError(
-                f"{response.request.method} {response.request.url.path}: "
-                "server response did not contain a plan object",
+                f"{response.request.method} {response.request.url.path}: server response did not contain a plan object",
                 status_code=response.status_code,
                 response_body=body,
             )
-        plan_payload = {
-            key: payload[key]
-            for key in ("id", "name", "verification_commands")
-            if key in payload
-        }
+        plan_payload = {key: payload[key] for key in ("id", "name", "verification_commands") if key in payload}
         try:
             return PlanPayload.model_validate(plan_payload)
         except ValidationError as exc:

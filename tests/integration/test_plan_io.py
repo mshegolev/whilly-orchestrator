@@ -330,9 +330,7 @@ def test_import_export_preserves_profile_verification_commands(
     assert run_plan_command(["import", str(plan_file)]) == EXIT_OK
     capsys.readouterr()
 
-    stored_commands = asyncio.run(
-        _fetch_plan_verification_commands(database_url, "plan-verification-roundtrip-001")
-    )
+    stored_commands = asyncio.run(_fetch_plan_verification_commands(database_url, "plan-verification-roundtrip-001"))
     assert stored_commands == commands
 
     assert run_plan_command(["export", "plan-verification-roundtrip-001"]) == EXIT_OK
