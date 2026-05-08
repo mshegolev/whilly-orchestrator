@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 11
 current_phase_name: CI polling and bounded repair
-current_plan: 5
+current_plan: 6
 status: executing
-stopped_at: Completed 11-ci-polling-and-bounded-repair-05-PLAN.md
-last_updated: "2026-05-08T18:56:26.021Z"
+stopped_at: Completed 11-ci-polling-and-bounded-repair-06-PLAN.md
+last_updated: "2026-05-08T19:06:17.329Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 24
-  completed_plans: 23
-  percent: 96
+  completed_plans: 24
+  percent: 100
 ---
 
 # Project State
@@ -31,13 +31,13 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 11
 Current Phase Name: CI polling and bounded repair
 Total Phases: 12
-Current Plan: 5
+Current Plan: 6
 Total Plans in Phase: 6
 Status: In Progress
 Last Activity: 2026-05-08
-Last Activity Description: Plan 11-05 completed remote transport and worker CI repair runtime wiring.
+Last Activity Description: Plan 11-06 completed scoped compliance wording and report tests.
 
-Progress: [##########] 96%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ Progress: [##########] 96%
 | Phase 11-ci-polling-and-bounded-repair P03 | 9 min | 2 tasks | 15 files |
 | Phase 11-ci-polling-and-bounded-repair P04 | 9 min 55 sec | 2 tasks | 5 files |
 | Phase 11-ci-polling-and-bounded-repair P05 | 9 min 56 sec | 2 tasks | 9 files |
+| Phase 11-ci-polling-and-bounded-repair P06 | 6 min 23 sec | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -131,10 +132,13 @@ Recent decisions affecting current work:
 - [Phase 11-ci-polling-and-bounded-repair]: Remote repair requests use a dedicated request_repair transport call and dependency-free task payload instead of client.release() retry behavior.
 - [Phase 11-ci-polling-and-bounded-repair]: Remote worker records CI poll started/result evidence from VerificationRunOutcome.ci_polls before mapped verification events.
 - [Phase 11-ci-polling-and-bounded-repair]: Remote terminal repair tasks emit repair.attempt.completed before complete_task or fail_task transport mutations.
+- [Phase 11-ci-polling-and-bounded-repair]: Compliance reports Bounded CI polling and repair as PASS only when CI primitives, repair primitives, local and remote runtime wiring, transport diagnostic prefixes, and focused local/remote runtime tests are present.
+- [Phase 11-ci-polling-and-bounded-repair]: PASS evidence uses scoped wording: explicit configured CI polling, bounded repair attempts, and repair.escalated.
+- [Phase 11-ci-polling-and-bounded-repair]: The only allowed overclaiming terms in the capability row are inside the exact negative sentence: No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
 
 ### Pending Todos
 
-- Plan and execute Phase 11 CI polling and bounded repair work.
+- Plan and execute Phase 12 governance and semantic-memory decision work.
 - Keep `docs/superpowers/plans/` and `docs/superpowers/reviews/` as detailed history.
 - Use `.planning/ROADMAP-ANALYSIS.md` as the short rationale for the updated phase order.
 
@@ -146,6 +150,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T18:56:26.019Z
-Stopped at: Completed 11-ci-polling-and-bounded-repair-05-PLAN.md
+Last session: 2026-05-08T19:06:17.326Z
+Stopped at: Completed 11-ci-polling-and-bounded-repair-06-PLAN.md
 Resume file: None

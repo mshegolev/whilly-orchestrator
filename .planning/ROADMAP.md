@@ -19,7 +19,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
 - [x] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
 - [x] **Phase 10: Rollback safety net** - Backup tags, branch preflight, and explicit rollback CLI are operator-ready. (completed 2026-05-08)
-- [ ] **Phase 11: CI polling and bounded repair** - CI/PR feedback can create bounded auditable repair loops.
+- [x] **Phase 11: CI polling and bounded repair** - CI/PR feedback can create bounded auditable repair loops. (completed 2026-05-08)
 - [ ] **Phase 12: Governance and semantic-memory decision** - Risk policy and semantic-memory scope are explicit.
 
 ## Phase Details
@@ -225,5 +225,5 @@ GSD initialization and are now tracked here as completed history.
 | 8. Sandbox and secrets hardening | 4/4 | Complete | 2026-05-08 |
 | 9. Profile-native verification wiring | 4/4 | Complete | 2026-05-08 |
 | 10. Rollback safety net | 3/3 | Complete | 2026-05-08 |
-| 11. CI polling and bounded repair | 5/6 | In Progress|  |
+| 11. CI polling and bounded repair | 6/6 | Complete   | 2026-05-08 |
 | 12. Governance and semantic-memory decision | 0/1 | Not started | - |
