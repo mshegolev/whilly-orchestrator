@@ -267,7 +267,9 @@ def test_project_config_allows_secret_reference_values(reference: str) -> None:
     assert config.sinks[0].config == {"token": reference}
 
 
-def test_project_config_cli_validate_reports_secret_lint_blocked(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_project_config_cli_validate_reports_secret_lint_blocked(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     token = "ghp_" + "A" * 36
     config_path = tmp_path / "project.json"
     config_path.write_text(json.dumps(_generic_config_with_sink_token(token)), encoding="utf-8")
