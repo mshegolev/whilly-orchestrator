@@ -14,7 +14,7 @@
 - [x] **OPUI-05**: WUI admin bearer and reviewer inputs are available without permanently occupying topbar space.
 - [x] **OPUI-07**: TUI and WUI table columns follow a shared operator contract or document intentional differences.
 - [x] **OPUI-06**: WUI mobile table layouts expose row details/actions without cramped horizontal scrolling.
-- [ ] **OPUI-08**: Reject and request-changes actions have clearer labels, tooltips, and recovery affordances.
+- [x] **OPUI-08**: Reject and request-changes actions have clearer labels, tooltips, and recovery affordances.
 
 ### Documentation Pack Alignment
 
@@ -68,7 +68,7 @@
 | OPUI-05 | Phase 4 | Complete |
 | OPUI-07 | Phase 5 | Complete |
 | OPUI-06 | Phase 6 | Complete |
-| OPUI-08 | Phase 7 | Pending |
+| OPUI-08 | Phase 7 | Complete |
 | DOC-01 | Phase 1 | Complete |
 | DOC-02 | Phase 1 | Complete |
 | DOC-03 | Phase 1 | Complete |
@@ -92,4 +92,4 @@
 
 ---
 *Requirements defined: 2026-05-08*
-*Last updated: 2026-05-08 after completing OPUI-06 in Phase 6*
+*Last updated: 2026-05-08 after completing OPUI-08 in Phase 7*
