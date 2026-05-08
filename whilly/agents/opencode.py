@@ -52,6 +52,7 @@ import time
 from pathlib import Path
 
 from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER, spawn_with_eagain_retry
+from whilly.adapters.runner.env import build_runner_env
 
 log = logging.getLogger("whilly")
 
@@ -358,7 +359,9 @@ class OpenCodeBackend:
         cwd: Path | None = None,
     ) -> AgentResult:
         start = time.monotonic()
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
+        child_env = build_runner_env(os.environ, model=resolved, backend="opencode")
         try:
             proc = spawn_with_eagain_retry(
                 lambda: subprocess.run(
@@ -368,6 +371,7 @@ class OpenCodeBackend:
                     timeout=timeout,
                     cwd=str(cwd) if cwd else None,
                     check=False,
+                    env=child_env,
                 )
             )
         except subprocess.TimeoutExpired:
@@ -405,7 +409,9 @@ class OpenCodeBackend:
         log_file: Path | None = None,
         cwd: Path | None = None,
     ) -> subprocess.Popen:
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
+        child_env = build_runner_env(os.environ, model=resolved, backend="opencode")
 
         if log_file:
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -415,7 +421,7 @@ class OpenCodeBackend:
                 "# whilly agent preamble\n"
                 f"# timestamp : {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"# backend   : {self.name}\n"
-                f"# model     : {model or self.default_model()}\n"
+                f"# model     : {resolved}\n"
                 f"# cwd       : {cwd or 'inherited'}\n"
                 f"# cmd       : {' '.join(cmd[:2])} ... <prompt {len(prompt)} chars>\n"
                 "# note      : opencode --format json streams events; final result\n"
@@ -433,6 +439,7 @@ class OpenCodeBackend:
                 stdout=stdout_target,
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd) if cwd else None,
+                env=child_env,
             )
         )
 
