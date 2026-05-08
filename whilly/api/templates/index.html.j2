@@ -234,8 +234,8 @@
     }
     .review-actions button {
       min-width: 2rem;
-      min-height: 1.75rem;
-      padding: 2px 6px;
+      min-height: 32px;
+      padding: 4px 8px;
       border: 1px solid var(--line-strong);
       border-radius: 2px;
       color: var(--text);
@@ -454,9 +454,9 @@
           <span>/=filter</span>
           <span>p=pause workers</span>
           <span>j/k=select</span>
-          <span>a=approve</span>
-          <span>x=reject</span>
-          <span>c=changes</span>
+          <span>a=Approve review</span>
+          <span>x=Reject review</span>
+          <span>c=Changes</span>
         </p>
       </hgroup>
       <div class="operator-controls">
@@ -597,15 +597,15 @@
                         <button type="button"
                                 data-review-decision="approved"
                                 aria-label="Approve review for {{ gap.task_id }}"
-                                title="Approve selected review gap (a)">A</button>
+                                title="Approve review (a)">A Approve</button>
                         <button type="button"
                                 data-review-decision="rejected"
                                 aria-label="Reject review for {{ gap.task_id }}"
-                                title="Reject selected review gap (x)">X</button>
+                                title="Reject review - comment required (x)">X Reject</button>
                         <button type="button"
                                 data-review-decision="changes_requested"
                                 aria-label="Request changes for {{ gap.task_id }}"
-                                title="Request changes for selected review gap (c)">C</button>
+                                title="Request changes - details required (c)">C Changes</button>
                       </span>
                     {% else %}
                       <span class="empty-state">read-only</span>
@@ -900,7 +900,7 @@
 
       async function submitReviewDecision(row, decision) {
         if (!row) {
-          setPollingStatus("No review row", true);
+          setPollingStatus("No review row selected", true);
           return;
         }
         const adminToken = document.getElementById("dashboard-admin-token");
@@ -921,14 +921,28 @@
         const payload = { decision, reviewer };
         if (row.dataset.reviewStage) payload.stage_id = row.dataset.reviewStage;
         if (decision === "rejected") {
-          const comment = window.prompt("Review comment", "");
-          if (comment === null) return;
-          if (comment.trim()) payload.comment = comment.trim();
+          const comment = window.prompt("Reject review: enter required comment", "");
+          if (comment === null) {
+            setPollingStatus("Reject canceled");
+            return;
+          }
+          if (!comment.trim()) {
+            setPollingStatus("Reject requires a comment", true);
+            return;
+          }
+          payload.comment = comment.trim();
         }
         if (decision === "changes_requested") {
-          const requested = window.prompt("Requested changes", "");
-          if (requested === null) return;
-          if (requested.trim()) payload.requested_changes = [requested.trim()];
+          const requested = window.prompt("Request changes: describe required changes", "");
+          if (requested === null) {
+            setPollingStatus("Changes canceled");
+            return;
+          }
+          if (!requested.trim()) {
+            setPollingStatus("Changes requires details", true);
+            return;
+          }
+          payload.requested_changes = [requested.trim()];
         }
         setPollingStatus("Recording");
         try {
@@ -948,13 +962,24 @@
             } catch {
               detail = response.statusText;
             }
-            setPollingStatus(`Review ${response.status}: ${detail}`, true);
+            setPollingStatus(
+              `Review not recorded: ${detail}. Check admin token, reviewer, and selected row, then retry.`,
+              true
+            );
             return;
           }
-          setPollingStatus("Recorded");
+          const recordedMessages = {
+            approved: "Review recorded: approved",
+            rejected: "Review recorded: rejected",
+            changes_requested: "Review recorded: changes requested",
+          };
+          setPollingStatus(recordedMessages[decision] || `Review recorded: ${decision}`);
           refreshReviewFragments();
         } catch (error) {
-          setPollingStatus(`Review error: ${error}`, true);
+          setPollingStatus(
+            `Review not recorded: ${error}. Check admin token, reviewer, and selected row, then retry.`,
+            true
+          );
         }
       }
 
