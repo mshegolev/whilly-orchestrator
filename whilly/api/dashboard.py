@@ -33,8 +33,10 @@ from whilly import __version__ as WHILLY_VERSION
 from whilly.operator_views import (
     ComplianceSummary,
     OperatorSnapshot,
-    OperatorSurface,
+    OperatorTable,
     fetch_operator_snapshot,
+    operator_surface_items,
+    operator_table_columns,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,15 +50,6 @@ TASKS_FRAGMENT_TEMPLATE: Final[str] = "_tasks_table.html"
 
 TASKS_LIMIT: Final[int] = 200
 WORKERS_LIMIT: Final[int] = 200
-
-_SURFACE_LABELS: Final[dict[OperatorSurface, str]] = {
-    OperatorSurface.OVERVIEW: "Overview",
-    OperatorSurface.COMPLIANCE: "Compliance",
-    OperatorSurface.PLANS_TASKS: "Plans/Tasks",
-    OperatorSurface.WORKERS: "Workers",
-    OperatorSurface.EVENTS: "Events",
-}
-
 
 _templates: Jinja2Templates | None = None
 
@@ -200,7 +193,13 @@ async def render_dashboard(
         "review_gaps": snapshot.review_gaps,
         "control_state": snapshot.control_state,
         "summary": snapshot.summary,
-        "surfaces": [(surface.value, _SURFACE_LABELS[surface]) for surface in OperatorSurface],
+        "surfaces": [(surface.value, label) for surface, label in operator_surface_items()],
+        "table_columns": {
+            "tasks": operator_table_columns(OperatorTable.TASKS, "wui"),
+            "workers": operator_table_columns(OperatorTable.WORKERS, "wui"),
+            "review_gaps": operator_table_columns(OperatorTable.REVIEW_GAPS, "wui"),
+            "events": operator_table_columns(OperatorTable.EVENTS, "wui"),
+        },
         "error": error,
         "version": WHILLY_VERSION,
         "rendered_at_iso": _format_iso(snapshot.rendered_at),

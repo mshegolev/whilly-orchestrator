@@ -5,13 +5,9 @@
        role="grid">
   <thead>
     <tr>
-      <th scope="col">Task</th>
-      <th scope="col">Plan</th>
-      <th scope="col">Status</th>
-      <th scope="col">Priority</th>
-      <th scope="col">Claimed by</th>
-      <th scope="col">Review</th>
-      <th scope="col">Updated</th>
+      {% for column in table_columns.tasks %}
+        <th scope="col">{{ column.label_for("wui") }}</th>
+      {% endfor %}
     </tr>
   </thead>
   <tbody>
@@ -38,7 +34,7 @@
       {% endfor %}
     {% else %}
       <tr id="tasks-empty">
-        <td colspan="7"><em class="empty-state">No tasks in queue.</em></td>
+        <td colspan="{{ table_columns.tasks|length }}"><em class="empty-state">No tasks in queue.</em></td>
       </tr>
     {% endif %}
   </tbody>
