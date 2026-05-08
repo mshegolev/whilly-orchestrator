@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 9
 current_phase_name: Profile-native verification wiring
-current_plan: 1
+current_plan: 3
 status: executing
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-05-08T15:27:35.961Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-05-08T15:40:23.988Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
   completed_phases: 8
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
   percent: 80
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 9
 Current Phase Name: Profile-native verification wiring
 Total Phases: 12
-Current Plan: 1
+Current Plan: 3
 Total Plans in Phase: 4
 Status: Ready to execute
 Last Activity: 2026-05-08
@@ -63,6 +63,7 @@ Progress: [########--] 80%
 **Recent Trend:**
 - Last 5 plans: Phase 8 plans 01-04 plus Phase 9 plan 01 complete; Phases 5-9 tracked through GSD
 - Trend: Stable
+| Phase 09-profile-native-verification-wiring P02 | 6 min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -87,6 +88,8 @@ Recent decisions affecting current work:
 - [Phase 08-sandbox-and-secrets-hardening]: Secret linting, runner env allowlists, guard audit payloads, verification redaction, and residual-risk docs are complete without claiming full VM/container isolation.
 - [Phase 09-profile-native-verification-wiring]: Profile-native verification commands are represented as typed plan-level metadata with source `profile`.
 - [Phase 09-profile-native-verification-wiring]: Filesystem plan JSON keeps `verification_commands` optional but validates every command item when present.
+- [Phase 09-profile-native-verification-wiring]: Plan import preserves existing rows with ON CONFLICT DO NOTHING; verification metadata is only written on first import.
+- [Phase 09-profile-native-verification-wiring]: Remote plan metadata uses task-free PlanPayload and ignores server-only endpoint fields when reconstructing core Plan values.
 
 ### Pending Todos
 
@@ -102,6 +105,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T15:26:26.059Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-05-08T15:40:23.985Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
