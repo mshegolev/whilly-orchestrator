@@ -44,6 +44,7 @@ dispatches itself.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Iterator
@@ -71,6 +72,20 @@ pytestmark = DOCKER_REQUIRED
 
 
 # ─── fixtures ────────────────────────────────────────────────────────────
+
+
+async def _fetch_plan_verification_commands(dsn: str, plan_id: str) -> list[dict[str, Any]]:
+    conn = await asyncpg.connect(dsn)
+    try:
+        raw = await conn.fetchval("SELECT verification_commands FROM plans WHERE id = $1", plan_id)
+    finally:
+        await conn.close()
+    if isinstance(raw, str):
+        decoded = json.loads(raw)
+    else:
+        decoded = raw
+    assert isinstance(decoded, list)
+    return decoded
 
 
 @pytest.fixture
@@ -269,6 +284,90 @@ def test_import_export_preserves_origin_and_repo_targets(
     assert exported["origin"]["ref"] == "owner/repo/42"
     assert exported["repo_targets"][0]["id"] == "github:owner/repo"
     assert exported["tasks"][0]["repo_target_id"] == "github:owner/repo"
+
+
+def test_import_export_preserves_profile_verification_commands(
+    db_pool: asyncpg.Pool,  # noqa: ARG001
+    database_url: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ordered plan-level verification commands survive Postgres import/export."""
+    plan_file = tmp_path / "verification-plan.json"
+    commands = [
+        {
+            "name": "profile-required",
+            "command": ".venv/bin/python -m pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+        },
+        {
+            "name": "profile-optional",
+            "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+            "required": False,
+            "source": "profile",
+        },
+    ]
+    plan_file.write_text(
+        json.dumps(
+            {
+                "plan_id": "plan-verification-roundtrip-001",
+                "project": "Verification Roundtrip",
+                "verification_commands": commands,
+                "tasks": [
+                    {
+                        "id": "T-VERIFY-001",
+                        "status": "PENDING",
+                        "priority": "high",
+                        "description": "Task with profile verification metadata.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert run_plan_command(["import", str(plan_file)]) == EXIT_OK
+    capsys.readouterr()
+
+    stored_commands = asyncio.run(
+        _fetch_plan_verification_commands(database_url, "plan-verification-roundtrip-001")
+    )
+    assert stored_commands == commands
+
+    assert run_plan_command(["export", "plan-verification-roundtrip-001"]) == EXIT_OK
+    exported_json = capsys.readouterr().out
+    exported_payload = json.loads(exported_json)
+    assert exported_payload["verification_commands"] == commands
+
+    exported_file = tmp_path / "verification-exported.json"
+    exported_file.write_text(exported_json, encoding="utf-8")
+    exported_plan, _exported_tasks = parse_plan(exported_file)
+    assert [command.name for command in exported_plan.verification_commands] == [
+        "profile-required",
+        "profile-optional",
+    ]
+    assert [command.required for command in exported_plan.verification_commands] == [True, False]
+
+    assert run_plan_command(["import", str(exported_file)]) == EXIT_OK
+
+
+def test_import_without_verification_commands_stores_empty_array_and_export_omits_key(
+    db_pool: asyncpg.Pool,  # noqa: ARG001
+    database_url: str,
+    sample_plan_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Missing verification metadata stores the JSONB default and keeps export compact."""
+    assert run_plan_command(["import", str(sample_plan_file)]) == EXIT_OK
+    capsys.readouterr()
+
+    stored_commands = asyncio.run(_fetch_plan_verification_commands(database_url, "plan-roundtrip-001"))
+    assert stored_commands == []
+
+    assert run_plan_command(["export", "plan-roundtrip-001"]) == EXIT_OK
+    exported_payload = json.loads(capsys.readouterr().out)
+    assert "verification_commands" not in exported_payload
 
 
 @pytest.mark.asyncio

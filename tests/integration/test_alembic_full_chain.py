@@ -56,6 +56,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "012_pull_requests_and_pr_events",
     "013_work_intents_repo_targets",
     "014_control_state",
+    "015_plan_verification_commands",
 )
 
 
@@ -141,7 +142,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "014_control_state"
+    assert head_version == "015_plan_verification_commands"
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -341,6 +342,17 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
         "updated_at",
     ]
 
+    verification_commands_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'plans' AND column_name = 'verification_commands'
+            """,
+        )
+    )
+    assert int(verification_commands_column_count) == 1
+
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
 
@@ -377,8 +389,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "014_control_state"
+    assert first_version == "015_plan_verification_commands"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "014_control_state"
+    assert second_version == "015_plan_verification_commands"

@@ -8,11 +8,11 @@ from tests.conftest import _build_alembic_config
 from whilly.adapters.db import MIGRATIONS_DIR
 
 
-def test_013_is_head_revision() -> None:
+def test_013_revision_remains_in_chain_with_015_head() -> None:
     cfg = _build_alembic_config("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
 
-    assert script.get_current_head() == "013_work_intents_repo_targets"
+    assert script.get_current_head() == "015_plan_verification_commands"
     revision = script.get_revision("013_work_intents_repo_targets")
     assert revision is not None
     assert revision.down_revision == "012_pull_requests_and_pr_events"
