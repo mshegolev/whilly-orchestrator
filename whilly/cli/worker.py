@@ -133,12 +133,14 @@ import subprocess
 import sys
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
 from whilly.adapters.runner.claude_cli import run_task
 from whilly.adapters.transport.client import RemoteWorkerClient
-from whilly.core.models import Plan, WorkerId
+from whilly.core.models import Plan, Task, WorkerId
+from whilly.pipeline.verification import resolve_verification_specs, run_verification_commands
 from whilly.worker.funnel import (
     FUNNEL_URL_FILE_ENV,
     FUNNEL_URL_POLL_SECONDS_ENV,
@@ -149,6 +151,7 @@ from whilly.worker.funnel import (
 )
 from whilly.worker.remote import (
     DEFAULT_HEARTBEAT_INTERVAL,
+    RemoteVerificationRunnerCallable,
     RemoteRunnerCallable,
     RemoteWorkerStats,
     RotationStats,
@@ -208,6 +211,8 @@ BOOTSTRAP_TOKEN_ENV: Final[str] = "WHILLY_WORKER_BOOTSTRAP_TOKEN"
 #: the toggle unambiguous and matches the existing
 #: ``WHILLY_USE_TMUX=1`` / ``WHILLY_USE_WORKSPACE=1`` style.
 BIG_PICKLE_HEALTHCHECK_ENV: Final[str] = "WHILLY_BIG_PICKLE_HEALTHCHECK"
+
+_VERIFICATION_ENV_ALLOWLIST: Final[tuple[str, ...]] = ("PATH", "HOME", "PYTHONPATH", "VIRTUAL_ENV")
 
 # Exit codes — kept aligned with :mod:`whilly.cli.run` so callers comparing
 # against the v4 CLI never see numbering drift between subcommands.
@@ -462,6 +467,30 @@ def build_worker_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--verify-command",
+        dest="verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run a required verification command after an agent reports completion; "
+            "repeatable. A non-zero exit marks the task FAILED."
+        ),
+    )
+    parser.add_argument(
+        "--optional-verify-command",
+        dest="optional_verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run an optional verification command after completion; repeatable. "
+            "Failures are recorded as warnings and do not block DONE."
+        ),
+    )
+    parser.add_argument(
         "--insecure",
         dest="insecure",
         action="store_true",
@@ -510,6 +539,15 @@ def build_worker_parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+def _verification_command_arg(value: str) -> str:
+    """Validate a ``NAME=COMMAND`` verification flag while preserving its string value."""
+
+    name, sep, command = value.partition("=")
+    if not sep or not name.strip() or not command.strip():
+        raise argparse.ArgumentTypeError("expected NAME=COMMAND")
+    return value
 
 
 def run_worker_command(
@@ -652,6 +690,8 @@ def run_worker_command(
                 max_processed=max_processed,
                 install_signal_handlers=install_signal_handlers,
                 funnel_env=funnel_env_overrides,
+                verify_commands=args.verify_commands,
+                optional_verify_commands=args.optional_verify_commands,
             )
         )
     except FunnelUrlSourceError as exc:
@@ -707,6 +747,8 @@ async def _async_worker(
     max_processed: int | None,
     install_signal_handlers: bool,
     funnel_env: dict[str, str] | None = None,
+    verify_commands: Sequence[str] = (),
+    optional_verify_commands: Sequence[str] = (),
 ) -> RemoteWorkerStats:
     """Open the HTTP client, build a synthetic Plan, run the loop.
 
@@ -726,11 +768,10 @@ async def _async_worker(
     :class:`RemoteWorkerClient` for the lifetime of the loop, no
     polling, no rotation supervisor.
 
-    The synthetic ``Plan(id=plan_id, name=plan_id)`` is documented in the
-    module docstring — the worker doesn't need the full task list and the
-    server has no ``GET /plans/{id}`` today.
+    Static mode fetches plan metadata once before the worker loop. Rotation
+    mode fetches it once per freshly opened client session so profile-native
+    verification commands follow the active control-plane connection.
     """
-    plan = Plan(id=plan_id, name=plan_id)
 
     merged_env: dict[str, str] = dict(os.environ)
     if funnel_env:
@@ -741,6 +782,12 @@ async def _async_worker(
         # Back-compat path: byte-equivalent to v4.4.
         try:
             async with RemoteWorkerClient(connect_url, token) as client:
+                plan = await client.get_plan(plan_id)
+                verification_runner = _build_verification_runner(
+                    plan,
+                    verify_commands=verify_commands,
+                    optional_verify_commands=optional_verify_commands,
+                )
                 logger.info(
                     "whilly-worker: connecting to %s as worker_id=%s plan_id=%s once=%s",
                     connect_url,
@@ -757,6 +804,7 @@ async def _async_worker(
                     max_iterations=max_iterations,
                     max_processed=max_processed,
                     install_signal_handlers=install_signal_handlers,
+                    verification_runner=verification_runner,
                 )
         finally:
             await source.aclose()
@@ -778,11 +826,21 @@ async def _async_worker(
         async with RemoteWorkerClient(url, token) as client:
             yield client
 
+    async def _session_context_factory(
+        client: RemoteWorkerClient,
+    ) -> tuple[Plan, RemoteVerificationRunnerCallable | None]:
+        plan = await client.get_plan(plan_id)
+        return plan, _build_verification_runner(
+            plan,
+            verify_commands=verify_commands,
+            optional_verify_commands=optional_verify_commands,
+        )
+
     try:
         rotation_stats: RotationStats = await run_remote_worker_with_url_rotation(
             _client_factory,
             runner,
-            plan,
+            Plan(id=plan_id, name=plan_id),
             worker_id,
             initial_url,
             source,
@@ -790,6 +848,7 @@ async def _async_worker(
             max_iterations=max_iterations,
             max_processed=max_processed,
             install_signal_handlers=install_signal_handlers,
+            session_context_factory=_session_context_factory,
         )
     finally:
         await source.aclose()
@@ -800,6 +859,32 @@ async def _async_worker(
         rotation_stats.url_rotations,
     )
     return rotation_stats.stats
+
+
+def _build_verification_runner(
+    plan: Plan,
+    *,
+    verify_commands: Sequence[str],
+    optional_verify_commands: Sequence[str],
+) -> RemoteVerificationRunnerCallable | None:
+    """Build the remote verification runner from profile and explicit CLI commands."""
+
+    verification_specs = resolve_verification_specs(
+        profile_commands=plan.verification_commands,
+        required_cli=verify_commands,
+        optional_cli=optional_verify_commands,
+    )
+    if not verification_specs:
+        return None
+
+    async def verification_runner(_task: Task):
+        return await run_verification_commands(
+            verification_specs,
+            cwd=Path.cwd(),
+            env_allowlist=_VERIFICATION_ENV_ALLOWLIST,
+        )
+
+    return verification_runner
 
 
 def build_register_parser() -> argparse.ArgumentParser:
