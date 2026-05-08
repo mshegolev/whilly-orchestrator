@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 11
 current_phase_name: CI polling and bounded repair
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 11-ci-polling-and-bounded-repair-03-PLAN.md
-last_updated: "2026-05-08T18:29:07.990Z"
+stopped_at: Completed 11-ci-polling-and-bounded-repair-04-PLAN.md
+last_updated: "2026-05-08T18:43:14.285Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 24
-  completed_plans: 21
-  percent: 88
+  completed_plans: 22
+  percent: 92
 ---
 
 # Project State
@@ -31,13 +31,13 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 11
 Current Phase Name: CI polling and bounded repair
 Total Phases: 12
-Current Plan: 3
+Current Plan: 4
 Total Plans in Phase: 6
 Status: In Progress
 Last Activity: 2026-05-08
-Last Activity Description: Plan 11-01 completed CI polling primitives and source="ci" verification dispatch.
+Last Activity Description: Plan 11-04 completed local CI evidence and bounded repair runtime wiring.
 
-Progress: [#########-] 88%
+Progress: [#########-] 92%
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Progress: [#########-] 88%
 | Phase 11-ci-polling-and-bounded-repair P01 | 5 min | 2 tasks | 8 files |
 | Phase 11-ci-polling-and-bounded-repair P02 | 5 min | 2 tasks | 6 files |
 | Phase 11-ci-polling-and-bounded-repair P03 | 9 min | 2 tasks | 15 files |
+| Phase 11-ci-polling-and-bounded-repair P04 | 9 min 55 sec | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,10 @@ Recent decisions affecting current work:
 - [Phase 11-ci-polling-and-bounded-repair]: Verification command metadata now carries repair_max_attempts explicitly with a default of 0 for old plan compatibility.
 - [Phase 11-ci-polling-and-bounded-repair]: Project-config source=ci commands require ci:// targets and bypass shell scanning because they are not shell commands.
 - [Phase 11-ci-polling-and-bounded-repair]: Configured ci_status sinks emit both a sink-stage task and a plan-level source=ci verification command so current workers can execute the CI poll path.
+- [Phase 11-ci-polling-and-bounded-repair]: Local whilly run creates a GitHub CI poll runner only when resolved verification specs include source=ci.
+- [Phase 11-ci-polling-and-bounded-repair]: Local worker records ci.poll.started and ci.poll.result from VerificationRunOutcome.ci_polls before mapped verification result events.
+- [Phase 11-ci-polling-and-bounded-repair]: Bounded repair creates deterministic repair tasks or emits repair.escalated; it does not call release_task for repair retry.
+- [Phase 11-ci-polling-and-bounded-repair]: Repair completion resolves max_attempts from prior repair.attempt.requested payloads, falling back to the parsed attempt number.
 
 ### Pending Todos
 
@@ -136,6 +141,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T18:29:07.984Z
-Stopped at: Completed 11-ci-polling-and-bounded-repair-03-PLAN.md
+Last session: 2026-05-08T18:42:51.541Z
+Stopped at: Completed 11-ci-polling-and-bounded-repair-04-PLAN.md
 Resume file: None
