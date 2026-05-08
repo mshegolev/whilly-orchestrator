@@ -83,6 +83,8 @@ from whilly.adapters.db import TaskRepository, close_pool, create_pool
 from whilly.adapters.notifications import make_notifier
 from whilly.adapters.runner import AgentResult, run_task
 from whilly.audit import JsonlEventSink
+from whilly.ci.github import GitHubCIPollAdapter
+from whilly.ci.models import CI_VERIFICATION_SOURCE
 from whilly.cli.plan import _select_plan_with_tasks
 from whilly.config import WhillyConfig
 from whilly.core.models import Task, WorkerId
@@ -489,6 +491,11 @@ async def _async_run(
         )
         verification_runner = None
         if verification_specs:
+            ci_poll_runner = (
+                GitHubCIPollAdapter()
+                if any(spec.source == CI_VERIFICATION_SOURCE for spec in verification_specs)
+                else None
+            )
 
             async def verification_runner(task: Task):
                 return await run_verification_commands(
@@ -496,6 +503,7 @@ async def _async_run(
                     cwd=task_workspaces.get(task.id, Path.cwd()),
                     timeout_s=verify_timeout,
                     env_allowlist=_VERIFICATION_ENV_ALLOWLIST,
+                    ci_poll_runner=ci_poll_runner,
                 )
 
         return await run_worker(
