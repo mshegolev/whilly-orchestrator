@@ -185,6 +185,36 @@ def test_plan_payload_json_round_trip_preserves_verification_source() -> None:
     assert plan.tasks == ()
 
 
+def test_plan_payload_includes_ci_repair_budget() -> None:
+    """Remote plan metadata preserves CI source and bounded repair budget."""
+    plan = Plan(
+        id="PLAN-CI-REPAIR",
+        name="CI Repair",
+        verification_commands=(
+            VerificationCommand(
+                name="github-ci",
+                command="ci://github/checks?owner=acme&repo=demo&pr=42",
+                required=True,
+                source="ci",
+                repair_max_attempts=2,
+            ),
+        ),
+    )
+
+    payload = PlanPayload.from_plan(plan)
+
+    assert payload.model_dump()["verification_commands"] == [
+        {
+            "name": "github-ci",
+            "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+            "required": True,
+            "source": "ci",
+            "repair_max_attempts": 2,
+        }
+    ]
+    assert payload.to_plan() == plan
+
+
 # ---------------------------------------------------------------------------
 # Request / response shapes
 # ---------------------------------------------------------------------------
