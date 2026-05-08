@@ -31,10 +31,9 @@ from whilly.operator_views import (
     fetch_operator_snapshot,
     filter_snapshot,
 )
-from whilly.pipeline.human_review import (
-    HUMAN_REVIEW_APPROVED,
-    HUMAN_REVIEW_CHANGES_REQUESTED,
-    HUMAN_REVIEW_REJECTED,
+from whilly.pipeline.human_review_decisions import (
+    HumanReviewDecisionCommand,
+    record_human_review_decision as record_review_decision,
 )
 
 try:
@@ -329,22 +328,20 @@ async def _apply_pending_review_action(
 
 
 async def _record_human_review_decision(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
-    event_type = {
-        "approved": HUMAN_REVIEW_APPROVED,
-        "rejected": HUMAN_REVIEW_REJECTED,
-        "changes_requested": HUMAN_REVIEW_CHANGES_REQUESTED,
-    }[decision]
-    payload: dict[str, Any] = {
-        "task_id": gap.task_id,
-        "decision": decision,
-        "reviewer": reviewer,
-        "source": "tui",
-    }
-    if gap.stage_id:
-        payload["stage_id"] = gap.stage_id
+    requested_changes: tuple[str, ...] = ()
     if decision == "changes_requested":
-        payload["requested_changes"] = ["Requested from TUI operator controls."]
-    await TaskRepository(pool).record_task_event(gap.task_id, event_type, payload)
+        requested_changes = ("Requested from TUI operator controls.",)
+    await record_review_decision(
+        TaskRepository(pool),
+        HumanReviewDecisionCommand(
+            task_id=gap.task_id,
+            decision=decision,  # type: ignore[arg-type]
+            reviewer=reviewer,
+            source="tui",
+            stage_id=gap.stage_id,
+            requested_changes=requested_changes,
+        ),
+    )
 
 
 async def _empty_snapshot() -> OperatorSnapshot:

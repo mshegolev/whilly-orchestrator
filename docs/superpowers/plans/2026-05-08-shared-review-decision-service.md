@@ -26,16 +26,18 @@
 
 ## Tasks
 
+Status: **implemented and verified on 2026-05-08**.
+
 ### Task 1: Shared Service
 
 **Files:**
 - Create: `whilly/pipeline/human_review_decisions.py`
 - Test: `tests/unit/test_human_review_decisions.py`
 
-- [ ] Write failing tests for approved and changes-requested commands.
-- [ ] Implement `HumanReviewDecisionCommand` and `record_human_review_decision`.
-- [ ] Verify service tests pass.
-- [ ] Commit: `feat(review): add shared decision service`.
+- [x] Write failing tests for approved and changes-requested commands.
+- [x] Implement `HumanReviewDecisionCommand` and `record_human_review_decision`.
+- [x] Verify service tests pass.
+- [x] Commit: included in `feat(operator): share review decision path`.
 
 ### Task 2: API And TUI Wiring
 
@@ -45,17 +47,17 @@
 - Test: `tests/integration/test_transport_tasks.py`
 - Test: `tests/unit/test_tui.py`
 
-- [ ] Add failing assertions that API and TUI payloads include shared-service fields.
-- [ ] Replace duplicated payload construction with `record_human_review_decision`.
-- [ ] Keep API auth and TUI reviewer validation unchanged.
-- [ ] Verify focused API/TUI tests pass.
-- [ ] Commit: `feat(operator): share review decision path`.
+- [x] Add failing assertions that API and TUI payloads include shared-service fields.
+- [x] Replace duplicated payload construction with `record_human_review_decision`.
+- [x] Keep API auth and TUI reviewer validation unchanged.
+- [x] Verify focused API/TUI tests pass.
+- [x] Commit: `feat(operator): share review decision path`.
 
 ### Task 3: Compliance And Review Evidence
 
 **Files:**
 - Modify: `docs/superpowers/reviews/2026-05-08-whilly-operator-ui-review.md`
 
-- [ ] Mark the first UI audit finding as resolved.
-- [ ] Keep remaining UI findings unchanged.
-- [ ] Run focused verification and commit docs.
+- [x] Mark the first UI audit finding as resolved.
+- [x] Keep remaining UI findings unchanged.
+- [x] Run focused verification and commit docs.

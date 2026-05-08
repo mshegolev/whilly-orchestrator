@@ -799,6 +799,57 @@ async def test_human_review_release_holds_task_until_admin_approval(
     assert claimed_after_approval.id == task_id
 
 
+async def test_admin_human_review_endpoint_uses_shared_decision_service(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The WUI/API route should delegate event construction to the shared service."""
+
+    import whilly.adapters.transport.server as server_module
+    from whilly.adapters.db import TaskRepository
+
+    commands: list[object] = []
+
+    async def fake_record_review_decision(repo: object, command: object) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(server_module, "record_review_decision", fake_record_review_decision)
+    task_id = "T-human-review-shared-service"
+    await _seed_task(db_pool, "PLAN-HUMAN-REVIEW-SHARED-SERVICE", task_id)
+    await TaskRepository(db_pool).mint_bootstrap_token(
+        "admin-review-shared-service-token",
+        owner_email="admin@example.com",
+        is_admin=True,
+    )
+
+    response = await http_client.post(
+        f"/api/v1/tasks/{task_id}/human-review",
+        json={
+            "decision": "changes_requested",
+            "reviewer": "lead@example.com",
+            "stage_id": "release_review",
+            "comment": "Needs regression evidence.",
+            "evidence": {"review_url": "https://example.test/reviews/42"},
+            "requested_changes": ["Attach regression run"],
+        },
+        headers={"Authorization": "Bearer admin-review-shared-service-token"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.task_id == task_id
+    assert command.decision == "changes_requested"
+    assert command.reviewer == "lead@example.com"
+    assert command.source == "admin_api"
+    assert command.stage_id == "release_review"
+    assert command.comment == "Needs regression evidence."
+    assert command.evidence == {"review_url": "https://example.test/reviews/42"}
+    assert command.requested_changes == ("Attach regression run",)
+    assert command.operator == "admin@example.com"
+
+
 # ---------------------------------------------------------------------------
 # /tasks/{task_id}/fail — happy path (CLAIMED → FAILED, no START hop needed)
 # ---------------------------------------------------------------------------
