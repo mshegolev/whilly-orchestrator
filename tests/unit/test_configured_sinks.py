@@ -46,6 +46,43 @@ def _project_config(
     }
 
 
+def _ci_status_project_config(*, sink_config: dict[str, object] | None = None) -> dict:
+    return {
+        "name": "Configured CI status sink",
+        "project_type": "python_backend",
+        "repositories": [
+            {
+                "id": "app",
+                "role": "code",
+                "provider": "github",
+                "repo_full_name": "foo/bar",
+                "clone_url": "https://github.com/foo/bar.git",
+            }
+        ],
+        "pipeline": [
+            {"id": "implement", "type": "development", "title": "Implement feature", "repo_role": "code"},
+            {
+                "id": "verify",
+                "type": "quality_gate",
+                "title": "Verify feature",
+                "depends_on": ["implement"],
+            },
+        ],
+        "sinks": [
+            {
+                "type": "ci_status",
+                "config": sink_config
+                or {
+                    "stage_id": "poll-ci",
+                    "target": "ci://github/checks?owner=foo&repo=bar&pr=42",
+                    "required": "true",
+                    "repair_max_attempts": "2",
+                },
+            }
+        ],
+    }
+
+
 def _task(
     *,
     repo_target_id: str = "",
@@ -172,3 +209,41 @@ def test_profile_approval_marker_allows_configured_pr_sink_without_human_gate() 
 
     assert is_configured_github_pr_sink_task(task)
     assert should_open_pr_for_completed_task(context, task).allowed is True
+
+
+def test_build_plan_payload_adds_ci_status_sink_stage_with_ci_verification() -> None:
+    config = project_config_from_dict(_ci_status_project_config())
+
+    payload = build_plan_payload(config, plan_id="configured-ci-status")
+    plan, tasks = parse_plan_dict(payload)
+
+    assert len(tasks) == 3
+    sink_task = payload["tasks"][-1]
+    expected_verification = {
+        "name": "poll-ci",
+        "command": "ci://github/checks?owner=foo&repo=bar&pr=42",
+        "required": True,
+        "source": "ci",
+        "repair_max_attempts": 2,
+    }
+    assert sink_task["id"] == "CFG-SINK-001-POLL-CI"
+    assert sink_task["dependencies"] == ["CFG-002-VERIFY"]
+    assert sink_task["prd_requirement"] == "Configured ci_status sink stage: poll-ci"
+    assert "Configured sink: ci_status" in sink_task["description"]
+    assert "one-shot CI polling evidence only" in sink_task["description"]
+    assert sink_task["verification_commands"] == [expected_verification]
+    assert payload["verification_commands"] == [expected_verification]
+    assert plan.verification_commands[0].source == "ci"
+    assert plan.verification_commands[0].repair_max_attempts == 2
+
+
+def test_ci_status_sink_stage_rejects_non_ci_target() -> None:
+    with pytest.raises(ProjectConfigError, match="ci://"):
+        project_config_from_dict(
+            _ci_status_project_config(
+                sink_config={
+                    "stage_id": "poll-ci",
+                    "target": "https://github.com/foo/bar/actions",
+                }
+            )
+        )

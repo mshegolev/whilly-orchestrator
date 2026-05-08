@@ -98,6 +98,73 @@ def test_project_config_plan_emits_profile_verification_commands_in_order() -> N
     ]
 
 
+def test_project_config_accepts_ci_verification_source_with_repair_budget() -> None:
+    config = project_config_from_dict(
+        {
+            "name": "CI verification profile",
+            "project_type": "generic",
+            "verification_commands": [
+                {
+                    "name": "github-ci",
+                    "command": "ci://github/checks?owner=foo&repo=bar&pr=42&note=rm -rf /",
+                    "required": True,
+                    "source": "ci",
+                    "repair_max_attempts": 2,
+                }
+            ],
+        }
+    )
+
+    command = config.verification_commands[0]
+    assert command.source == "ci"
+    assert command.repair_max_attempts == 2
+
+    payload = build_plan_payload(config, plan_id="P-CI-VERIFY")
+    assert payload["verification_commands"] == [
+        {
+            "name": "github-ci",
+            "command": "ci://github/checks?owner=foo&repo=bar&pr=42&note=rm -rf /",
+            "required": True,
+            "source": "ci",
+            "repair_max_attempts": 2,
+        }
+    ]
+
+
+def test_project_config_rejects_ci_source_without_ci_uri() -> None:
+    with pytest.raises(ProjectConfigError, match="ci://"):
+        project_config_from_dict(
+            {
+                "name": "Bad CI verification profile",
+                "project_type": "generic",
+                "verification_commands": [
+                    {
+                        "name": "github-ci",
+                        "command": "pytest -q tests/unit",
+                        "source": "ci",
+                    }
+                ],
+            }
+        )
+
+
+def test_project_config_rejects_negative_repair_budget() -> None:
+    with pytest.raises(ProjectConfigError, match="repair_max_attempts"):
+        project_config_from_dict(
+            {
+                "name": "Bad repair budget",
+                "project_type": "generic",
+                "verification_commands": [
+                    {
+                        "name": "unit",
+                        "command": "pytest -q tests/unit",
+                        "repair_max_attempts": -1,
+                    }
+                ],
+            }
+        )
+
+
 def test_project_config_plan_omits_empty_verification_commands() -> None:
     config = project_config_from_dict({"name": "No verification", "project_type": "generic"})
 
