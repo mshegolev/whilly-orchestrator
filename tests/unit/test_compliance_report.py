@@ -52,6 +52,20 @@ def test_human_review_compliance_reports_admin_controls_and_remaining_ui_gap() -
     assert "approval capture/enforcement is not yet" not in finding.gap.lower()
 
 
+def test_sandbox_compliance_reports_guard_evidence_without_overclaiming_isolation() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    finding = report.capability("Sandbox/VM isolation")
+
+    assert finding.status is CapabilityStatus.PARTIAL
+    assert "prompt, shell, secret, and runner-env guards" in finding.evidence
+    assert "No per-task VM/container sandbox isolation is enforced by the worker runtime." in finding.gap
+    assert report.security_risks[0] == (
+        "No per-task VM/container sandbox isolation; prompt, shell, secret, and runner-env guards reduce but do "
+        "not eliminate agent execution risk."
+    )
+
+
 def test_markdown_renderer_includes_required_sections_and_matrix() -> None:
     report = build_compliance_report(repo_root=Path.cwd())
     markdown = render_markdown(report)
