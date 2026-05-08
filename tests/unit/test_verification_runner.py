@@ -7,12 +7,16 @@ import sys
 import pytest
 
 from whilly.pipeline.verification import (
+    CLI_VERIFICATION_SOURCE,
+    PROFILE_VERIFICATION_SOURCE,
     VERIFICATION_FAILED_EVENT,
     VerificationCommandResult,
     VerificationCommandSpec,
     make_verification_result_event,
+    resolve_verification_specs,
     run_verification_commands,
 )
+from whilly.core.models import VerificationCommand
 from whilly.project_config.models import VerificationCommandConfig
 
 
@@ -20,10 +24,39 @@ def _python(command: str) -> str:
     return f"{sys.executable} -c {command!r}"
 
 
+def test_resolve_verification_specs_orders_profile_then_required_then_optional_cli() -> None:
+    specs = resolve_verification_specs(
+        profile_commands=(
+            VerificationCommand(
+                name="profile-unit",
+                command="pytest -q tests/unit",
+                required=True,
+            ),
+        ),
+        required_cli=("cli-required=pytest -q",),
+        optional_cli=("cli-optional=ruff check whilly",),
+    )
+
+    assert [spec.name for spec in specs] == ["profile-unit", "cli-required", "cli-optional"]
+    assert [spec.source for spec in specs] == [
+        PROFILE_VERIFICATION_SOURCE,
+        CLI_VERIFICATION_SOURCE,
+        CLI_VERIFICATION_SOURCE,
+    ]
+    assert [spec.required for spec in specs] == [True, True, False]
+
+
 @pytest.mark.asyncio
 async def test_required_command_success_emits_succeeded_event(tmp_path):
     outcome = await run_verification_commands(
-        [VerificationCommandSpec(name="unit", command=_python("print('ok')"), required=True)],
+        [
+            VerificationCommandSpec(
+                name="unit",
+                command=_python("print('ok')"),
+                required=True,
+                source=PROFILE_VERIFICATION_SOURCE,
+            )
+        ],
         cwd=tmp_path,
     )
 
@@ -33,6 +66,7 @@ async def test_required_command_success_emits_succeeded_event(tmp_path):
     assert outcome.results[0].succeeded is True
     assert outcome.results[0].stdout == "ok\n"
     assert outcome.results[0].stderr == ""
+    assert outcome.results[0].source == PROFILE_VERIFICATION_SOURCE
 
 
 @pytest.mark.asyncio
@@ -85,6 +119,7 @@ async def test_blocked_required_command_fails_without_execution(tmp_path):
                 name="cleanup",
                 command="rm -rf / ",
                 required=True,
+                source=PROFILE_VERIFICATION_SOURCE,
             )
         ],
         cwd=tmp_path,
@@ -94,6 +129,7 @@ async def test_blocked_required_command_fails_without_execution(tmp_path):
     assert outcome.succeeded is False
     assert outcome.event_names == ("verification.started", "verification.failed")
     assert result.blocked is True
+    assert result.source == PROFILE_VERIFICATION_SOURCE
     assert result.pattern_matched == "rm-rf-root"
     assert result.returncode is None
     assert marker.exists() is False
@@ -133,7 +169,14 @@ async def test_env_allowlist_exposes_only_requested_variables(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_timeout_kills_process_and_marks_required_failed(tmp_path):
     outcome = await run_verification_commands(
-        [VerificationCommandSpec(name="slow", command=_python("import time; time.sleep(5)"), required=True)],
+        [
+            VerificationCommandSpec(
+                name="slow",
+                command=_python("import time; time.sleep(5)"),
+                required=True,
+                source=PROFILE_VERIFICATION_SOURCE,
+            )
+        ],
         cwd=tmp_path,
         timeout_s=0.05,
     )
@@ -141,6 +184,7 @@ async def test_timeout_kills_process_and_marks_required_failed(tmp_path):
     result = outcome.results[0]
     assert outcome.succeeded is False
     assert result.timed_out is True
+    assert result.source == PROFILE_VERIFICATION_SOURCE
     assert result.returncode is None
     assert "timed out" in result.stderr
 
@@ -193,6 +237,7 @@ def test_verification_result_event_redacts_command_and_detail() -> None:
         name="secret-event",
         command="echo " + fake_secret,
         required=True,
+        source=PROFILE_VERIFICATION_SOURCE,
         succeeded=False,
         warning=False,
         event_name=VERIFICATION_FAILED_EVENT,
@@ -207,6 +252,7 @@ def test_verification_result_event_redacts_command_and_detail() -> None:
     assert fake_secret not in str(event.payload)
     assert fake_secret not in str(event.detail)
     assert event.payload["command"] == "echo [REDACTED:anthropic-api-key]"
+    assert event.payload["source"] == PROFILE_VERIFICATION_SOURCE
     assert event.detail == {
         "stdout": "stdout [REDACTED:anthropic-api-key]",
         "stderr": "stderr [REDACTED:anthropic-api-key]",
