@@ -7,6 +7,12 @@ from whilly.cli.compliance import run_compliance_command
 from whilly.compliance import CapabilityStatus, build_compliance_report, render_markdown
 
 
+def _write_repo_file(repo: Path, relative_path: str, content: str) -> None:
+    path = repo / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
 def test_report_model_classifies_capabilities_and_partial_helper_evidence() -> None:
     report = build_compliance_report(repo_root=Path.cwd())
 
@@ -84,6 +90,67 @@ def test_git_rollback_compliance_reports_phase10_safety_net_without_overclaiming
     assert "operator-triggered only; no autonomous recovery" in wording
     assert "auto-merge" not in wording.lower()
     assert "automatic production recovery" not in wording.lower()
+
+
+def test_bounded_ci_polling_and_repair_compliance_is_scoped() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    finding = report.capability("Bounded CI polling and repair")
+
+    assert finding.status is CapabilityStatus.PASS
+    wording = f"{finding.evidence} {finding.gap} {finding.recommended_action}"
+    assert "explicit configured CI polling" in wording
+    assert "bounded repair attempts" in wording
+    assert "repair.escalated" in wording
+    assert (
+        "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed."
+        in wording
+    )
+
+
+def test_bounded_ci_polling_and_repair_compliance_requires_runtime_evidence(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_repo_file(repo, "whilly/ci/verification.py", "def ci_result_to_verification_result(): pass\n")
+    _write_repo_file(repo, "whilly/repair/policy.py", "REPAIR_ACTION_REQUEST = 'request_repair'\n")
+    _write_repo_file(
+        repo,
+        "whilly/worker/local.py",
+        "ci.poll.result\nrepair.escalated\nrepair.attempt.completed\n",
+    )
+    _write_repo_file(repo, "whilly/worker/remote.py", "ci.poll.result\nrepair.escalated\n")
+    _write_repo_file(repo, "whilly/adapters/transport/server.py", "ci.\nrepair.\n")
+    _write_repo_file(
+        repo,
+        "tests/unit/test_local_worker.py",
+        "test_local_worker_records_ci_poll_events_before_verification_failure\n",
+    )
+    _write_repo_file(
+        repo,
+        "tests/unit/test_remote_worker.py",
+        "test_remote_worker_records_ci_poll_events_before_verification_failure\n",
+    )
+
+    finding = build_compliance_report(repo_root=repo, doc_root=repo / "docs").capability(
+        "Bounded CI polling and repair"
+    )
+
+    assert finding.status is not CapabilityStatus.PASS
+    assert "remote worker repair.attempt.completed" in finding.gap
+    assert "focused local worker repair tests" in finding.gap
+    assert "focused remote worker repair tests" in finding.gap
+
+
+def test_bounded_ci_polling_and_repair_compliance_does_not_overclaim_autonomy() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    finding = report.capability("Bounded CI polling and repair")
+    allowed_negative_scope = "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed."
+    wording_without_scope_boundary = (
+        f"{finding.evidence} {finding.gap} {finding.recommended_action}".replace(allowed_negative_scope, "")
+    ).lower()
+
+    for forbidden_claim in ("continuous autonomous", "auto-merge", "production recovery", "unbounded repair"):
+        assert forbidden_claim not in wording_without_scope_boundary
 
 
 def test_sandbox_compliance_reports_guard_evidence_without_overclaiming_isolation() -> None:
