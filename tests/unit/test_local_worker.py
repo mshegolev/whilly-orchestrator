@@ -56,6 +56,7 @@ from whilly.pipeline.verification import (
 from whilly.worker import local as worker_local
 from whilly.worker.local import (
     DEFAULT_IDLE_WAIT,
+    OPERATOR_PAUSE_RELEASE_REASON,
     WorkerStats,
     _build_fail_reason,
     _truncate_output,
@@ -129,6 +130,12 @@ class FakeRepo:
         self.event_calls: list[tuple[TaskId, str, dict[str, object], dict[str, object] | None]] = []
         self.task_event_results: dict[TaskId, list[dict[str, object]]] = {}
         self.list_task_events_calls: list[tuple[TaskId, str | None]] = []
+        self.workers_paused_results: list[bool] = []
+
+    async def is_workers_paused(self) -> bool:
+        if not self.workers_paused_results:
+            return False
+        return self.workers_paused_results.pop(0)
 
     async def claim_task(self, worker_id: WorkerId, plan_id: str) -> Task | None:
         self.claim_calls.append((worker_id, plan_id))
@@ -233,6 +240,42 @@ def test_default_idle_wait_is_one_second() -> None:
 def test_worker_stats_defaults_are_zero() -> None:
     """Empty stats are the natural zero so callers can compare equality."""
     assert WorkerStats() == WorkerStats(iterations=0, completed=0, failed=0, idle_polls=0)
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_claim_when_global_pause_is_active(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    repo.workers_paused_results.append(True)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:  # pragma: no cover - must not be called
+        raise AssertionError("runner must not be called while workers are paused")
+
+    stats = await run_local_worker(repo, runner, _make_plan(), WORKER_ID, idle_wait=0, max_iterations=1)
+
+    assert stats.idle_polls == 1
+    assert repo.claim_calls == []
+    assert fake_sleep == [0]
+
+
+@pytest.mark.asyncio
+async def test_worker_releases_started_task_when_global_pause_arrives() -> None:
+    repo = FakeRepo()
+    claimed = _make_task("T-pause-release", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    released = replace(running, status=TaskStatus.PENDING, version=3)
+    repo.workers_paused_results.extend([False, False, True])
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.release_results.append(released)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(is_complete=True, exit_code=0, output="<promise>COMPLETE</promise>")
+
+    stats = await run_local_worker(repo, runner, _make_plan(), WORKER_ID, idle_wait=0, max_iterations=1)
+
+    assert stats.completed == 0
+    assert repo.complete_calls == []
+    assert repo.release_calls == [("T-pause-release", 2, OPERATOR_PAUSE_RELEASE_REASON)]
 
 
 # --------------------------------------------------------------------------- #

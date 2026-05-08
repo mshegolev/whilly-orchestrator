@@ -79,3 +79,34 @@ async def test_non_admin_cannot_mutate_control_state(
     )
 
     assert response.status_code == 403
+
+
+async def test_worker_bearer_can_read_control_state(
+    client: AsyncClient,
+    task_repo: TaskRepository,
+) -> None:
+    admin_token = "admin-control-state-worker-read"
+    await task_repo.mint_bootstrap_token(admin_token, owner_email="lead@example.com", is_admin=True)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    registered = await client.post(
+        "/workers/register",
+        json={"hostname": "worker-control-state-reader"},
+        headers=admin_headers,
+    )
+    assert registered.status_code == 201, registered.text
+    worker_token = registered.json()["token"]
+
+    await client.post(
+        "/api/v1/admin/workers/pause",
+        json={"reason": "operator gate"},
+        headers=admin_headers,
+    )
+
+    response = await client.get(
+        "/workers/control-state",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["paused"] is True
+    assert response.json()["pause_reason"] == "operator gate"

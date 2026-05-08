@@ -278,6 +278,7 @@ def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, o
 # tell why a row bounced. Keep in sync with the value asserted in
 # tests/integration/test_worker_signals.py.
 SHUTDOWN_RELEASE_REASON: Final[str] = "shutdown"
+OPERATOR_PAUSE_RELEASE_REASON: Final[str] = "operator_pause"
 
 
 async def _sleep_or_stop(idle_wait: float, stop: asyncio.Event | None) -> None:
@@ -297,6 +298,26 @@ async def _sleep_or_stop(idle_wait: float, stop: asyncio.Event | None) -> None:
         # Normal "interval elapsed" path — caller re-checks ``stop`` at
         # the top of the next iteration.
         return
+
+
+async def _workers_paused(repo: TaskRepository) -> bool:
+    checker = getattr(repo, "is_workers_paused", None)
+    if checker is None:
+        return False
+    return bool(await checker())
+
+
+async def _release_for_operator_pause(repo: TaskRepository, task: Task, worker_id: WorkerId) -> None:
+    try:
+        await repo.release_task(task.id, task.version, OPERATOR_PAUSE_RELEASE_REASON)
+    except VersionConflictError as exc:
+        log.warning(
+            "operator-pause release lost the race: worker=%s task=%s expected_version=%d actual=%s",
+            worker_id,
+            task.id,
+            task.version,
+            exc.actual_version,
+        )
 
 
 async def _await_runner_or_stop(
@@ -469,6 +490,16 @@ async def run_local_worker(
 
         iterations += 1
 
+        if await _workers_paused(repo):
+            idle_polls += 1
+            log.info(
+                "worker=%s plan=%s: global pause active, skipping claim",
+                worker_id,
+                plan.id,
+            )
+            await _sleep_or_stop(idle_wait, stop)
+            continue
+
         claimed = await repo.claim_task(worker_id, plan.id)
         if claimed is None:
             idle_polls += 1
@@ -492,6 +523,15 @@ async def run_local_worker(
                 claimed.version,
                 exc.actual_version,
             )
+            continue
+
+        if await _workers_paused(repo):
+            log.info(
+                "worker=%s task=%s: global pause observed after start, releasing claim",
+                worker_id,
+                running.id,
+            )
+            await _release_for_operator_pause(repo, running, worker_id)
             continue
 
         stage_context = stage_context_from_task(running, plan)
@@ -668,6 +708,15 @@ async def run_local_worker(
                 )
             except Exception:  # noqa: BLE001 - task completion/failure still owns the state transition
                 log.warning("llm ops finish record failed: task=%s", running.id, exc_info=True)
+
+        if await _workers_paused(repo):
+            log.info(
+                "worker=%s task=%s: global pause observed before terminal transition, releasing claim",
+                worker_id,
+                running.id,
+            )
+            await _release_for_operator_pause(repo, running, worker_id)
+            continue
 
         if result.is_complete and result.exit_code == 0:
             if verification_runner is not None:
@@ -849,6 +898,7 @@ async def run_local_worker(
 
 __all__ = [
     "DEFAULT_IDLE_WAIT",
+    "OPERATOR_PAUSE_RELEASE_REASON",
     "SHUTDOWN_RELEASE_REASON",
     "RunnerCallable",
     "VerificationRunnerCallable",
