@@ -20,22 +20,32 @@ Current Whilly is between Level 1 and Level 2 of the target roadmap:
   SSE, web dashboard, PR feedback polling, repo-target metadata, project
   profiles, built-in profile vocabulary, project config plan generation,
   audit-event pipeline stage lifecycle, configured verification commands that
-  block `DONE` on required failure, human-review approval/rejection/change-request
-  controls in the web dashboard and TUI, and env-gated GitHub PR sink stages for
-  project-config plans.
-- **Partial:** profile-native verification command runtime wiring,
-  non-PR configured sinks, multi-repo execution, sandbox/VM isolation with
-  improved guards but no full per-task VM/container isolation, PR-review repair
-  loops, semantic memory, and robust smart rollback.
-- **Target:** profile-native runtime pipeline stages, configured sinks, bounded
-  repair loops, CI polling, and governance policy.
+  block `DONE` on required failure, profile-native verification commands feed
+  runtime verification, human-review approval/rejection/change-request controls
+  in the web dashboard and TUI, operator-triggered rollback, explicit configured
+  CI polling, bounded repair attempts, deterministic governance risk policy, and
+  env-gated GitHub PR sink stages for project-config plans.
+- **Partial or limited:** non-PR configured sinks, multi-repo execution,
+  sandbox/VM isolation with improved guards but no full per-task VM/container
+  isolation, and PR-review repair loops that are not continuous autonomous
+  repair.
+- **Explicitly deferred:** Semantic memory is explicitly deferred from current
+  scope; deterministic events, task history, PR evidence, and verification logs
+  remain authoritative.
+- **Target:** profile-native runtime pipeline stage execution, broader configured
+  sinks, continuous PR review feedback handling, semantic-memory retrieval, full
+  per-task sandbox/VM isolation, multi-repo orchestration, and release-candidate
+  automation with human approval.
+
+Current scope wording: profile-native verification commands feed runtime verification; operator-triggered rollback; explicit configured CI polling; bounded repair attempts; deterministic governance risk policy.
+
+Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
 
 Do not describe current Whilly as providing full autonomous multi-repo
 execution, mandatory CI/lint verification unless verification commands are
-configured, full sandbox or VM isolation, semantic long-term memory, reliable
-git rollback, autonomous production release, or an automatic PR-review repair
-loop. PR review feedback remains manual one-shot polling until bounded repair is
-implemented.
+configured, full sandbox or VM isolation, autonomous rollback/recovery,
+autonomous production release, default auto-merge, or a continuous PR-review
+repair loop. No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
 
 Use the compliance report command to produce a current, auditable snapshot:
 

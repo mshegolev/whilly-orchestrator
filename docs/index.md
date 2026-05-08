@@ -43,8 +43,14 @@ observable, and keeping humans in control at critical points.
 The current core should not be described as full autonomous multi-repo
 execution, automatic PR-review feedback handling, mandatory CI/lint
 verification unless verification commands are configured, full sandbox or VM
-isolation, semantic long-term memory, reliable git rollback, or autonomous
+isolation, autonomous rollback/recovery, automatic merge, or autonomous
 production release.
+
+Current scope wording: operator-triggered rollback; explicit configured CI polling; bounded repair attempts; deterministic governance risk policy.
+
+Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
+
+No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
 
 ## One-liner demo
 
@@ -86,6 +92,10 @@ Full module map lives in [`Whilly-Interfaces-and-Tasks`]({{ site.baseurl }}/Whil
 
 - Focused pytest suites, Ruff formatting/linting, and import-boundary checks.
 - Layered config — `whilly.toml` + OS keyring, migrates from legacy `.env` with one command.
+- Profile-native verification commands feed runtime verification, with
+  operator-triggered rollback, explicit configured CI polling, bounded repair
+  attempts, and deterministic governance risk policy represented as scoped
+  current capabilities.
 - Target documentation imported under [`docs/target/`]({{ site.baseurl }}/target/)
   with current-vs-target status tracked separately.
 - [Latest release](https://github.com/mshegolev/whilly-orchestrator/releases/latest) · [Open issues](https://github.com/mshegolev/whilly-orchestrator/issues) · [Changelog](https://github.com/mshegolev/whilly-orchestrator/commits/main)

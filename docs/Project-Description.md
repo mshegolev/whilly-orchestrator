@@ -100,6 +100,12 @@ correct. Его ценность не в неограниченной автон
 - controlled local/remote worker execution;
 - observability of task lifecycle.
 
+Текущий scoped status: profile-native verification commands feed runtime verification; operator-triggered rollback; explicit configured CI polling; bounded repair attempts; deterministic governance risk policy.
+
+Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
+
+No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
+
 ## Чего Не Нужно Обещать
 
 Документация и демо не должны обещать то, что core worker loop пока не
@@ -109,8 +115,8 @@ correct. Его ценность не в неограниченной автон
 - автоматический PR review feedback loop;
 - обязательный CI/lint verification без настроенных verification commands;
 - полноценную sandbox/VM isolation;
-- semantic long-term memory;
-- надёжный git rollback;
+- autonomous rollback/recovery;
+- automatic merge;
 - автономный production release без человека.
 
 Эти направления могут развиваться поверх текущей архитектуры, но их нельзя
