@@ -221,7 +221,7 @@ def build_compliance_report(
             _human_review_status(files),
             _human_review_evidence(files),
             _human_review_gap(files),
-            "Add dashboard/API approval workflow and enforcement for configured high-risk stages.",
+            "Add first-class dashboard/TUI controls for configured approve, reject, and request-changes decisions.",
         ),
         _cap(
             "Automatic PR creation after DONE",
@@ -437,17 +437,33 @@ def _human_review_status(files: _RepoFiles) -> CapabilityStatus:
 
 
 def _human_review_evidence(files: _RepoFiles) -> str:
-    if files.exists("whilly/pipeline/human_review.py"):
+    if not files.exists("whilly/pipeline/human_review.py"):
+        return "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements."
+    if files.contains("whilly/adapters/transport/server.py", "/api/v1/tasks/{task_id}/human-review") and files.contains(
+        "tests/integration/test_transport_tasks.py", "test_human_review_release_holds_task_until_admin_approval"
+    ):
         return (
             "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements; "
-            "whilly/pipeline/human_review.py defines checkpoint events and workers emit human_review.required."
+            "whilly/pipeline/human_review.py defines checkpoint events; "
+            "the admin human-review decision endpoint records approval/rejection events; "
+            "integration tests cover release-hold enforcement until admin approval."
         )
-    return "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements."
+    return (
+        "HumanLoopConfig and PipelineStepConfig.human_gate model review requirements; "
+        "whilly/pipeline/human_review.py defines checkpoint events and workers emit human_review.required."
+    )
 
 
 def _human_review_gap(files: _RepoFiles) -> str:
+    if files.exists("whilly/pipeline/human_review.py") and files.contains(
+        "whilly/adapters/transport/server.py", "/api/v1/tasks/{task_id}/human-review"
+    ):
+        return (
+            "Admin approval capture and release-hold enforcement exist; remaining gap is first-class "
+            "dashboard/TUI operator controls for approve, reject, and request-changes decisions."
+        )
     if files.exists("whilly/pipeline/human_review.py"):
-        return "Checkpoint events exist, but approval capture/enforcement is not yet a full dashboard/API workflow."
+        return "Checkpoint events exist, but approval capture and release enforcement are still incomplete."
     return "Review gates are represented in generated tasks, not enforced as a separate runtime approval state."
 
 
