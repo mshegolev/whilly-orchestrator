@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER, spawn_with_eagain_retry
+from whilly.adapters.runner import proxy
 
 log = logging.getLogger("whilly")
 
@@ -208,7 +209,8 @@ class ClaudeBackend:
         ``exit_code=-2`` when the binary cannot be found — never raises.
         """
         start = time.monotonic()
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
         try:
             proc = spawn_with_eagain_retry(
                 lambda: subprocess.run(
@@ -218,6 +220,7 @@ class ClaudeBackend:
                     timeout=timeout,
                     cwd=str(cwd) if cwd else None,
                     check=False,
+                    env=proxy.spawn_env_for_claude(model=resolved),
                 )
             )
         except subprocess.TimeoutExpired:
@@ -263,7 +266,8 @@ class ClaudeBackend:
         format Claude CLI also writes JSONL events live — events appear in the
         log as soon as the model produces them, not only at the end.
         """
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
 
         if log_file:
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -273,7 +277,7 @@ class ClaudeBackend:
                 "# whilly agent preamble\n"
                 f"# timestamp : {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"# backend   : {self.name}\n"
-                f"# model     : {model or self.default_model()}\n"
+                f"# model     : {resolved}\n"
                 f"# cwd       : {cwd or 'inherited'}\n"
                 f"# cmd       : {' '.join(cmd[:2])} ... -p <prompt {len(prompt)} chars>\n"
                 "# note      : claude --output-format stream-json пишет JSONL events live (tail -f работает).\n"
@@ -290,6 +294,7 @@ class ClaudeBackend:
                 stdout=stdout_target,
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd) if cwd else None,
+                env=proxy.spawn_env_for_claude(model=resolved),
             )
         )
 
