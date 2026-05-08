@@ -523,7 +523,13 @@ def _contains_positive_claim(text: str, needle: str) -> bool:
         index = text.find(needle, start)
         if index < 0:
             return False
-        sentence_start = max(text.rfind(".", 0, index), text.rfind(";", 0, index)) + 1
+        sentence_start = (
+            max(
+                text.rfind(".", 0, index),
+                text.rfind(";", 0, index),
+            )
+            + 1
+        )
         sentence_end_candidates = [pos for pos in (text.find(".", index), text.find(";", index)) if pos >= 0]
         sentence_end = min(sentence_end_candidates) if sentence_end_candidates else len(text)
         sentence = text[sentence_start:sentence_end].strip()
@@ -534,7 +540,7 @@ def _contains_positive_claim(text: str, needle: str) -> bool:
 
 
 def _has_negative_boundary(prefix: str) -> bool:
-    normalized = prefix[-160:].replace("*", "").replace("_", "").replace("`", "")
+    normalized = prefix.replace("*", "").replace("_", "").replace("`", "")
     markers = (
         "does not",
         "do not",
