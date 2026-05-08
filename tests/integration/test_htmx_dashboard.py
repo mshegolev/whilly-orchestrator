@@ -138,12 +138,13 @@ async def _seed_event(
     plan_id: str | None,
     event_type: str,
     payload: dict[str, object] | None = None,
-) -> None:
+) -> int:
     async with pool.acquire() as conn:
-        await conn.execute(
+        return await conn.fetchval(
             """
             INSERT INTO events (task_id, plan_id, event_type, payload, detail, created_at)
             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+            RETURNING id
             """,
             task_id,
             plan_id,
@@ -175,6 +176,10 @@ def _table_block(body: str, table_id: str) -> str:
 
 def _header_labels(table_html: str) -> list[str]:
     return [label.strip() for label in re.findall(r"<th[^>]*>\s*([^<]+?)\s*</th>", _thead_block(table_html))]
+
+
+def _mobile_labels(row_html: str) -> list[str]:
+    return re.findall(r'data-mobile-label="([^"]+)"', row_html)
 
 
 def _thead_block(table_html: str) -> str:
@@ -322,6 +327,76 @@ async def test_dashboard_table_contract_headers_and_worker_order(
 
     events_table = _table_block(body, "events")
     assert _header_labels(events_table) == ["Id", "Task", "Plan", "Type", "At"]
+
+
+async def test_dashboard_mobile_labels_match_table_contract_and_review_actions_are_accessible(
+    client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = await _seed_plan(db_pool, "plan-mobile-labels")
+    await _seed_worker(
+        db_pool,
+        worker_id="worker-mobile",
+        hostname="mobile.local",
+        owner_email="mobile@example.com",
+    )
+    await _seed_task(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        status="IN_PROGRESS",
+        priority="critical",
+        claimed_by="worker-mobile",
+        acceptance_criteria=["manual approval is captured"],
+        test_steps=["human review required"],
+    )
+    normal_event_id = await _seed_event(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        event_type="START",
+    )
+    await _seed_event(
+        db_pool,
+        task_id="t-human-review",
+        plan_id=plan_id,
+        event_type="human_review.required",
+        payload={
+            "task_id": "t-human-review",
+            "plan_id": plan_id,
+            "stage_id": "release_review",
+            "reason": "stage_human_gate",
+            "approval_channel": "ops",
+        },
+    )
+
+    response = await client.get("/")
+    body = response.text
+
+    tasks_table = _table_block(body, "tasks")
+    task_row = _row_block(tasks_table, "task-t-human-review")
+    assert _mobile_labels(task_row) == _header_labels(tasks_table)
+
+    workers_table = _table_block(body, "workers")
+    worker_row = _row_block(workers_table, "worker-worker-mobile")
+    assert _mobile_labels(worker_row) == _header_labels(workers_table)
+
+    review_table = _table_block(body, "review-gaps")
+    review_row = _row_block(review_table, "review-gap-t-human-review")
+    assert _mobile_labels(review_row) == _header_labels(review_table)
+    assert 'aria-label="Approve review for t-human-review"' in review_row
+    assert 'aria-label="Reject review for t-human-review"' in review_row
+    assert 'aria-label="Request changes for t-human-review"' in review_row
+    assert 'data-review-decision="approved"' in review_row
+    assert 'data-review-decision="rejected"' in review_row
+    assert 'data-review-decision="changes_requested"' in review_row
+    assert ">A<" in review_row
+    assert ">X<" in review_row
+    assert ">C<" in review_row
+
+    events_table = _table_block(body, "events")
+    event_row = _row_block(events_table, f"event-{normal_event_id}")
+    assert _mobile_labels(event_row) == _header_labels(events_table)
 
 
 async def test_dashboard_preserves_local_state_across_refresh_and_sse_swaps(client: AsyncClient) -> None:
@@ -559,6 +634,9 @@ async def test_workers_fragment_returns_just_workers_table(client: AsyncClient, 
     body = response.text
     assert '<table id="workers"' in body
     assert 'id="worker-w-frag"' in body
+    workers_table = _table_block(body, "workers")
+    worker_row = _row_block(workers_table, "worker-w-frag")
+    assert _mobile_labels(worker_row) == _header_labels(workers_table)
     assert "<!DOCTYPE html>" not in body, "fragment must not contain full document"
 
 
@@ -571,6 +649,9 @@ async def test_tasks_fragment_returns_just_tasks_table(client: AsyncClient, db_p
     body = response.text
     assert '<table id="tasks"' in body
     assert 'id="task-t-frag"' in body
+    tasks_table = _table_block(body, "tasks")
+    task_row = _row_block(tasks_table, "task-t-frag")
+    assert _mobile_labels(task_row) == _header_labels(tasks_table)
     assert "<!DOCTYPE html>" not in body
 
 
