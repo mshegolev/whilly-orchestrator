@@ -82,9 +82,12 @@ from typing import Final
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.core.agent_runner import (
+    SECRET_LINT_BLOCKED_EVENT_TYPE,
+    SECRET_LINT_FAIL_REASON,
     SHELL_COMMAND_BLOCKED_EVENT_TYPE,
     SHELL_COMMAND_FAIL_REASON,
     scan_task_command_surface,
+    scan_task_secret_surface,
 )
 from whilly.core.models import Plan, Task, WorkerId
 from whilly.core.prompts import (
@@ -579,6 +582,44 @@ async def run_local_worker(
                 running.id,
                 PROMPT_INJECTION_FAIL_REASON,
                 exc.match.matched_marker,
+            )
+            continue
+
+        secret_finding = scan_task_secret_surface(running, prompt=prompt)
+        if secret_finding is not None:
+            payload = secret_finding.event_payload(task_id=running.id, plan_id=plan.id)
+            try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=SECRET_LINT_FAIL_REASON,
+                        detail=payload,
+                    ),
+                )
+                await repo.fail_task(
+                    running.id,
+                    running.version,
+                    SECRET_LINT_FAIL_REASON,
+                    detail=payload,
+                    prelude_event_type=SECRET_LINT_BLOCKED_EVENT_TYPE,
+                    prelude_payload=payload,
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "secret guard fail_task lost the race: task=%s expected_version=%d actual=%s",
+                    running.id,
+                    running.version,
+                    conflict.actual_version,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "worker=%s task=%s → FAILED (%s pattern_id=%r)",
+                worker_id,
+                running.id,
+                SECRET_LINT_FAIL_REASON,
+                secret_finding.pattern_id,
             )
             continue
 

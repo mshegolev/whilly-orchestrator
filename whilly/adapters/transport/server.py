@@ -171,6 +171,7 @@ from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.core.models import TaskStatus
 from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE
+from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE
 from whilly.api.event_flusher import (
     DEFAULT_BATCH_LIMIT as EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
 )
@@ -1857,6 +1858,7 @@ def create_app(
         security_prelude_events = {
             PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
             SHELL_COMMAND_BLOCKED_EVENT_TYPE,
+            SECRET_LINT_BLOCKED_EVENT_TYPE,
         }
         if payload.detail and payload.detail.get("event_type") in security_prelude_events:
             prelude_event_type = str(payload.detail["event_type"])
