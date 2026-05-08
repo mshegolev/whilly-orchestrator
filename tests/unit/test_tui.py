@@ -23,6 +23,8 @@ from whilly.operator_views import (
     OperatorControlState,
     OperatorSnapshot,
     OperatorSurface,
+    OperatorTable,
+    OperatorTableColumn,
     OperatorTaskRow,
     ReviewGap,
     WorkerRow,
@@ -124,6 +126,64 @@ def test_render_tui_overview_includes_surfaces_and_hotkeys() -> None:
     assert "a=approve" in rendered
     assert "x=reject" in rendered
     assert "c=changes" in rendered
+
+
+def test_render_tui_tables_read_headers_from_operator_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels_by_table = {
+        OperatorTable.TASKS: ("Task*", "Plan*", "Status*", "Priority*", "Worker*", "Review*"),
+        OperatorTable.WORKERS: ("Worker*", "Host*", "Owner*", "Status*", "Heartbeat*"),
+        OperatorTable.REVIEW_GAPS: ("Sel*", "Task*", "Plan*", "Reason*", "Stage*", "Reviewer*", "Actions*"),
+        OperatorTable.EVENTS: ("Id*", "Task*", "Plan*", "Type*", "At*"),
+    }
+    calls: list[tuple[OperatorTable, str]] = []
+
+    def fake_operator_table_columns(table: OperatorTable, medium: str) -> tuple[OperatorTableColumn, ...]:
+        calls.append((table, medium))
+        return tuple(OperatorTableColumn(f"field_{index}", label) for index, label in enumerate(labels_by_table[table]))
+
+    monkeypatch.setattr(tui_module, "operator_table_columns", fake_operator_table_columns, raising=False)
+
+    surface_cases = (
+        (OperatorSurface.PLANS_TASKS, OperatorTable.TASKS),
+        (OperatorSurface.WORKERS, OperatorTable.WORKERS),
+        (OperatorSurface.COMPLIANCE, OperatorTable.REVIEW_GAPS),
+        (OperatorSurface.EVENTS, OperatorTable.EVENTS),
+    )
+    for surface, table in surface_cases:
+        rendered = _render_to_text(render_tui(_snapshot(), TuiState(surface=surface)))
+        for label in labels_by_table[table]:
+            assert label in rendered
+
+    assert calls == [(table, "tui") for _, table in surface_cases]
+
+
+def test_render_tui_tasks_surface_uses_contract_labels_without_updated() -> None:
+    rendered = _render_to_text(render_tui(_snapshot(), TuiState(surface=OperatorSurface.PLANS_TASKS)))
+
+    for label in ("Task", "Plan", "Status", "Priority", "Worker", "Review"):
+        assert label in rendered
+    assert "Updated" not in rendered
+
+
+def test_render_tui_workers_surface_uses_contract_labels() -> None:
+    rendered = _render_to_text(render_tui(_snapshot(), TuiState(surface=OperatorSurface.WORKERS)))
+
+    for label in ("Worker", "Host", "Owner", "Status", "Heartbeat"):
+        assert label in rendered
+
+
+def test_render_tui_compliance_surface_uses_contract_labels() -> None:
+    rendered = _render_to_text(render_tui(_snapshot(), TuiState(surface=OperatorSurface.COMPLIANCE)))
+
+    for label in ("Sel", "Task", "Plan", "Reason", "Stage", "Reviewer", "Actions"):
+        assert label in rendered
+
+
+def test_render_tui_events_surface_uses_contract_labels() -> None:
+    rendered = _render_to_text(render_tui(_snapshot(), TuiState(surface=OperatorSurface.EVENTS)))
+
+    for label in ("Id", "Task", "Plan", "Type", "At"):
+        assert label in rendered
 
 
 def test_handle_tui_key_switches_views_filter_pause_refresh_review_actions_and_quit() -> None:
