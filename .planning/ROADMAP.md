@@ -137,10 +137,12 @@ Plans:
   2. Runner environments use explicit allowlists plus configured required tokens.
   3. Blocked work emits auditable reasons.
   4. Docs clearly state residual sandbox risk.
-**Plans**: Ready to plan
+**Plans**: 3 plans
 
 Plans:
-- [ ] 08-01: Add sandbox/secrets hardening and update compliance evidence.
+- [ ] 08-01-PLAN.md - Add shared secret-lint registry and migrate sanitizer/source warning code.
+- [ ] 08-02-PLAN.md - Add runner environment allowlist contract and wire agent subprocess envs.
+- [ ] 08-03-PLAN.md - Wire secret guard audits, redact verification details, and update residual-risk evidence.
 
 ### Phase 9: Profile-native verification wiring
 **Goal**: Wire `ProjectConfig.verification_commands` into generated plans and local/remote worker execution.
