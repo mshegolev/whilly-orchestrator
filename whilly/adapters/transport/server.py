@@ -409,6 +409,18 @@ def _decode_json_value(value: Any) -> dict[str, Any]:
     return {}
 
 
+def _decode_json_array(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
 def _html_page(title: str, body: str) -> HTMLResponse:
     return HTMLResponse(
         f"""<!doctype html>
@@ -2005,7 +2017,7 @@ def create_app(
         """
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, name, github_issue_ref, prd_file FROM plans WHERE id = $1",
+                "SELECT id, name, github_issue_ref, prd_file, verification_commands FROM plans WHERE id = $1",
                 plan_id,
             )
             origin_row = await conn.fetchrow(
@@ -2064,6 +2076,7 @@ def create_app(
                 "name": row["name"],
                 "github_issue_ref": row["github_issue_ref"],
                 "prd_file": row["prd_file"],
+                "verification_commands": _decode_json_array(row["verification_commands"]),
                 "origin": origin,
                 "repo_targets": [dict(repo_target) for repo_target in repo_target_rows],
             }

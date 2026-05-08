@@ -119,6 +119,7 @@ from whilly.adapters.transport.schemas import (
     HeartbeatRequest,
     HeartbeatResponse,
     ListTaskEventsResponse,
+    PlanPayload,
     RegisterRequest,
     RegisterResponse,
     ReleaseRequest,
@@ -127,7 +128,7 @@ from whilly.adapters.transport.schemas import (
     TaskEventRequest,
     TaskEventResponse,
 )
-from whilly.core.models import Task, TaskId, TaskStatus
+from whilly.core.models import Plan, Task, TaskId, TaskStatus
 
 __all__ = [
     "CLAIM_PATH",
@@ -135,6 +136,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_SECONDS",
     "REGISTER_PATH",
     "CONTROL_STATE_PATH",
+    "PLAN_PATH_PREFIX",
     "AuthError",
     "HTTPClientError",
     "RemoteWorkerClient",
@@ -144,6 +146,7 @@ __all__ = [
     "control_state_path",
     "fail_path",
     "heartbeat_path",
+    "plan_path",
     "release_path",
     "task_event_path",
 ]
@@ -168,6 +171,8 @@ REGISTER_PATH: Final[str] = "/workers/register"
 CLAIM_PATH: Final[str] = "/tasks/claim"
 
 CONTROL_STATE_PATH: Final[str] = "/workers/control-state"
+
+PLAN_PATH_PREFIX: Final[str] = "/api/v1/plans"
 
 
 def heartbeat_path(worker_id: str) -> str:
@@ -238,6 +243,12 @@ def control_state_path() -> str:
     """Return the worker-readable global control-state endpoint path."""
 
     return CONTROL_STATE_PATH
+
+
+def plan_path(plan_id: str) -> str:
+    """Return the plan metadata endpoint path for ``plan_id``."""
+
+    return f"{PLAN_PATH_PREFIX}/{plan_id}"
 
 
 # ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
@@ -886,6 +897,50 @@ class RemoteWorkerClient:
 
         response = await self._request("GET", control_state_path())
         return await self._parse_response(response, ControlStateResponse)
+
+    async def get_plan(self, plan_id: str) -> Plan:
+        """Fetch task-free plan metadata from the control plane."""
+
+        response = await self._request("GET", plan_path(plan_id))
+        payload = await self._parse_plan_payload(response)
+        return payload.to_plan()
+
+    @staticmethod
+    async def _parse_plan_payload(response: httpx.Response) -> PlanPayload:
+        """Validate plan metadata while ignoring server-only plan fields."""
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                f"server returned non-JSON body for PlanPayload: {body[:200]}",
+                status_code=response.status_code,
+                response_body=body,
+            ) from exc
+        if not isinstance(payload, Mapping):
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                "server response did not contain a plan object",
+                status_code=response.status_code,
+                response_body=body,
+            )
+        plan_payload = {
+            key: payload[key]
+            for key in ("id", "name", "verification_commands")
+            if key in payload
+        }
+        try:
+            return PlanPayload.model_validate(plan_payload)
+        except ValidationError as exc:
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                f"server response did not match PlanPayload: {exc.error_count()} validation error(s)",
+                status_code=response.status_code,
+                response_body=body,
+            ) from exc
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
         """Long-poll for the next PENDING task in ``plan_id`` (``POST /tasks/claim``, PRD FR-1.3).

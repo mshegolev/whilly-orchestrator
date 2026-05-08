@@ -79,7 +79,7 @@ from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
+from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus, VerificationCommand
 
 # ---------------------------------------------------------------------------
 # Validation primitives
@@ -220,6 +220,34 @@ class TaskPayload(_FrozenModel):
         )
 
 
+class VerificationCommandPayload(_FrozenModel):
+    """Wire-format projection of :class:`whilly.core.models.VerificationCommand`."""
+
+    name: NonEmptyShortStr
+    command: Annotated[str, Field(min_length=1, max_length=MAX_DESCRIPTION_LEN)]
+    required: bool = True
+    source: NonEmptyShortStr = "profile"
+
+    @classmethod
+    def from_verification_command(cls, command: VerificationCommand) -> VerificationCommandPayload:
+        """Build a wire payload from a domain verification command."""
+        return cls(
+            name=command.name,
+            command=command.command,
+            required=command.required,
+            source=command.source,
+        )
+
+    def to_verification_command(self) -> VerificationCommand:
+        """Reconstruct a domain verification command from this wire payload."""
+        return VerificationCommand(
+            name=self.name,
+            command=self.command,
+            required=self.required,
+            source=self.source,
+        )
+
+
 class PlanPayload(_FrozenModel):
     """JSON-serialisable projection of :class:`whilly.core.models.Plan`.
 
@@ -234,11 +262,29 @@ class PlanPayload(_FrozenModel):
 
     id: NonEmptyShortStr
     name: NonEmptyShortStr
+    verification_commands: list[VerificationCommandPayload] = Field(default_factory=list)
 
     @classmethod
     def from_plan(cls, plan: Plan) -> PlanPayload:
         """Build a wire payload from a domain :class:`Plan`."""
-        return cls(id=plan.id, name=plan.name)
+        return cls(
+            id=plan.id,
+            name=plan.name,
+            verification_commands=[
+                VerificationCommandPayload.from_verification_command(command)
+                for command in plan.verification_commands
+            ],
+        )
+
+    def to_plan(self) -> Plan:
+        """Reconstruct task-free domain plan metadata from this wire payload."""
+        return Plan(
+            id=self.id,
+            name=self.name,
+            verification_commands=tuple(
+                command.to_verification_command() for command in self.verification_commands
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -613,4 +659,5 @@ __all__ = [
     "TaskEventItem",
     "TaskEventRequest",
     "TaskEventResponse",
+    "VerificationCommandPayload",
 ]
