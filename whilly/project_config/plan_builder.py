@@ -131,7 +131,7 @@ def _sink_tasks(
                 ]
             ),
             depends_on=(),
-            acceptance_criteria=("CI polling evidence is captured through source=\"ci\" verification.",),
+            acceptance_criteria=('CI polling evidence is captured through source="ci" verification.',),
             test_steps=(f"Run configured CI status target {target} through the verification runner.",),
         )
         task = {
