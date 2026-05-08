@@ -87,3 +87,40 @@ def test_doc_mismatch_scan_ignores_negative_boundary_claims(tmp_path: Path) -> N
     report = build_compliance_report(repo_root=repo, doc_root=docs)
 
     assert not any(item.startswith("README.md:") for item in report.doc_mismatches)
+
+
+def test_doc_mismatch_scan_ignores_long_negative_boundary_list(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (repo / "README.md").write_text(
+        "The core worker loop does **not** claim all of the following as complete product "
+        "guarantees: full multi-repo execution, automatic PR review feedback loops, "
+        "mandatory CI/lint verification unless verification commands are configured, "
+        "full sandbox or VM isolation, semantic long-term memory, reliable git rollback, "
+        "or autonomous production release without human review.\n",
+        encoding="utf-8",
+    )
+    for relative in ("Whilly-v4-Architecture.md", "Whilly-Usage.md", "CODEX-MISSION.md"):
+        (docs / relative).write_text("Current capability boundaries are documented here.\n", encoding="utf-8")
+
+    report = build_compliance_report(repo_root=repo, doc_root=docs)
+
+    assert not any(item.startswith("README.md:") for item in report.doc_mismatches)
+
+
+def test_doc_mismatch_scan_still_flags_positive_claims(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (repo / "README.md").write_text(
+        "Whilly provides full sandbox or VM isolation and semantic long-term memory.\n",
+        encoding="utf-8",
+    )
+    for relative in ("Whilly-v4-Architecture.md", "Whilly-Usage.md", "CODEX-MISSION.md"):
+        (docs / relative).write_text("Current capability boundaries are documented here.\n", encoding="utf-8")
+
+    report = build_compliance_report(repo_root=repo, doc_root=docs)
+
+    assert any("claims full sandbox/VM isolation" in item for item in report.doc_mismatches)
+    assert any("claims semantic long-term memory" in item for item in report.doc_mismatches)
