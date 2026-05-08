@@ -271,8 +271,7 @@ class PlanPayload(_FrozenModel):
             id=plan.id,
             name=plan.name,
             verification_commands=[
-                VerificationCommandPayload.from_verification_command(command)
-                for command in plan.verification_commands
+                VerificationCommandPayload.from_verification_command(command) for command in plan.verification_commands
             ],
         )
 
@@ -281,9 +280,7 @@ class PlanPayload(_FrozenModel):
         return Plan(
             id=self.id,
             name=self.name,
-            verification_commands=tuple(
-                command.to_verification_command() for command in self.verification_commands
-            ),
+            verification_commands=tuple(command.to_verification_command() for command in self.verification_commands),
         )
 
 
