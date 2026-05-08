@@ -206,7 +206,7 @@ def _print_preflight_report(report: PreflightReport) -> None:
 
 
 def _print_restore_result(result: RestoreResult, expected: str, requested_target: str) -> None:
-    print(f"operation: restore")
+    print("operation: restore")
     print(f"branch: {result.branch or '(detached)'}")
     print(f"HEAD: {result.preflight.worktree.head_sha}")
     print(f"target: {requested_target} ({result.target_sha})")
