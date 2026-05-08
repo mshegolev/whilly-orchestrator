@@ -524,11 +524,12 @@ async def test_required_verification_failure_blocks_complete_and_records_events(
 
     async def verification_runner(task: Task) -> VerificationRunOutcome:
         assert task.id == "CFG-002-VERIFY"
+        secret = "sk-ant-" + "V" * 32
         return VerificationRunOutcome(
             results=(
                 VerificationCommandResult(
-                    name="unit",
-                    command="pytest -q tests/unit",
+                    name="profile-unit",
+                    command=f"pytest -q tests/unit --token {secret}",
                     required=True,
                     succeeded=False,
                     warning=False,
@@ -537,6 +538,7 @@ async def test_required_verification_failure_blocks_complete_and_records_events(
                     stdout="one failed",
                     stderr="",
                     duration_s=0.2,
+                    source="profile",
                 ),
             )
         )
@@ -555,6 +557,20 @@ async def test_required_verification_failure_blocks_complete_and_records_events(
     assert stats.failed == 1
     assert repo.complete_calls == []
     assert repo.fail_calls == [("CFG-002-VERIFY", 2, "verification_failed")]
+    assert repo.fail_details[0] == {
+        "reason": "verification_failed",
+        "failed_results": [
+            {
+                "name": "profile-unit",
+                "command": "pytest -q tests/unit --token [REDACTED:anthropic-api-key]",
+                "source": "profile",
+                "returncode": 1,
+                "timed_out": False,
+                "blocked": False,
+                "pattern_matched": None,
+            }
+        ],
+    }
     event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
     assert VERIFICATION_STARTED_EVENT in event_types
     assert VERIFICATION_FAILED_EVENT in event_types
@@ -564,7 +580,8 @@ async def test_required_verification_failure_blocks_complete_and_records_events(
         for _task_id, event_type, payload, detail in repo.event_calls
         if event_type == VERIFICATION_FAILED_EVENT
     )
-    assert verification_failed[0]["name"] == "unit"
+    assert verification_failed[0]["name"] == "profile-unit"
+    assert verification_failed[0]["source"] == "profile"
     assert verification_failed[0]["required"] is True
     assert verification_failed[1] == {"stdout": "one failed", "stderr": ""}
 
