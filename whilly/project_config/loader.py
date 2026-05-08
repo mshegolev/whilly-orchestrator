@@ -43,7 +43,9 @@ SUPPORTED_TASK_SOURCE_KINDS = frozenset(
         "manual_prd",
     }
 )
-SUPPORTED_SINK_TYPES = frozenset({"github_pr", "ci_status", "github_issue_comment", "jira_comment", "jsonl", "dashboard"})
+SUPPORTED_SINK_TYPES = frozenset(
+    {"github_pr", "ci_status", "github_issue_comment", "jira_comment", "jsonl", "dashboard"}
+)
 SUPPORTED_RUNNERS = frozenset({"claude_cli", "opencode", "handoff"})
 SUPPORTED_VERIFICATION_SOURCES = frozenset({"profile", "ci"})
 
