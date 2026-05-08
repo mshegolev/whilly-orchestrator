@@ -73,6 +73,7 @@ from httpx import ASGITransport, AsyncClient
 
 from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.transport.server import CLAIM_PATH, REGISTER_PATH, create_app
+from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE, SECRET_LINT_FAIL_REASON
 
 pytestmark = DOCKER_REQUIRED
 
@@ -911,6 +912,57 @@ async def test_fail_transitions_claimed_to_failed_with_reason(
     payload = _json.loads(fail_event["payload"]) if isinstance(fail_event["payload"], str) else fail_event["payload"]
     assert payload["reason"] == "agent crashed before start"
     assert payload["version"] == claim_version + 1
+
+
+async def test_fail_accepts_secret_lint_blocked_detail_as_security_prelude(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = "PLAN-FAIL-SECRET-PRELUDE"
+    task_id = "T-fail-secret-prelude"
+    worker_id, claim_version = await _claim_and_start(
+        http_client, db_pool, plan_id=plan_id, task_id=task_id, hostname="host-fail-secret-prelude"
+    )
+    detail = {
+        "event_type": SECRET_LINT_BLOCKED_EVENT_TYPE,
+        "pattern_id": "anthropic-api-key",
+        "field_path": "task.description",
+        "task_id": task_id,
+        "plan_id": plan_id,
+        "redacted_excerpt": "Use token [REDACTED:anthropic-api-key]",
+    }
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/fail",
+        json={
+            "worker_id": worker_id,
+            "version": claim_version,
+            "reason": SECRET_LINT_FAIL_REASON,
+            "detail": detail,
+        },
+        headers={"Authorization": f"Bearer {_WORKER_TOKEN}"},
+    )
+
+    assert response.status_code == 200, response.text
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT event_type, payload, detail FROM events WHERE task_id = $1 ORDER BY id",
+            task_id,
+        )
+
+    assert [row["event_type"] for row in rows[-2:]] == [SECRET_LINT_BLOCKED_EVENT_TYPE, "FAIL"]
+    import json as _json
+
+    prelude_payload = rows[-2]["payload"]
+    prelude_payload = _json.loads(prelude_payload) if isinstance(prelude_payload, str) else prelude_payload
+    fail_detail = rows[-1]["detail"]
+    fail_detail = _json.loads(fail_detail) if isinstance(fail_detail, str) else fail_detail
+    assert prelude_payload == detail
+    assert fail_detail == detail
+    assert "sk-ant-" not in str(prelude_payload)
+    assert prelude_payload["pattern_id"] == "anthropic-api-key"
+    assert prelude_payload["field_path"] == "task.description"
+    assert prelude_payload["redacted_excerpt"] == "Use token [REDACTED:anthropic-api-key]"
 
 
 async def test_fail_transitions_in_progress_to_failed(
