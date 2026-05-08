@@ -51,6 +51,7 @@ from whilly.adapters.transport.client import (
     fail_path,
     heartbeat_path,
     plan_path,
+    repair_path,
     task_event_path,
 )
 from whilly.adapters.transport.schemas import (
@@ -1259,6 +1260,98 @@ async def test_record_event_posts_llm_diagnostic_payload() -> None:
         "event_type": "llm.run_finished",
         "payload": {"status": "success"},
         "detail": {"artifact_ref": "whilly_logs/tasks/TASK-022a3/attempt-1"},
+    }
+
+
+async def test_record_event_posts_ci_and_repair_diagnostics() -> None:
+    captured_bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured_bodies.append(json.loads(request.read().decode()))
+        return httpx.Response(200, json={"ok": True})
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        await client.record_event(
+            "TASK-022a3",
+            "w-1",
+            "ci.poll.started",
+            payload={"provider": "github", "target": "ci://repo/pr/42"},
+        )
+        await client.record_event(
+            "TASK-022a3",
+            "w-1",
+            "repair.attempt.completed",
+            payload={"task_id": "TASK-022a3-repair-1", "outcome": "DONE"},
+        )
+
+    assert captured_bodies == [
+        {
+            "worker_id": "w-1",
+            "event_type": "ci.poll.started",
+            "payload": {"provider": "github", "target": "ci://repo/pr/42"},
+        },
+        {
+            "worker_id": "w-1",
+            "event_type": "repair.attempt.completed",
+            "payload": {"task_id": "TASK-022a3-repair-1", "outcome": "DONE"},
+        },
+    ]
+
+
+async def test_request_repair_posts_repair_task_payload() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"ok": True, "repair_task_id": "TASK-022a3-repair-1"})
+
+    repair_task = {
+        "id": "TASK-022a3-repair-1",
+        "description": "Repair failing CI.",
+        "acceptance_criteria": ["CI passes"],
+        "test_steps": ["Run CI status verification"],
+        "prd_requirement": "CI-02",
+        "priority": "high",
+        "key_files": ["whilly/worker/remote.py"],
+        "repo_target_id": "repo-1",
+    }
+    event = {
+        "event_type": "repair.attempt.requested",
+        "task_id": "TASK-022a3",
+        "payload": {
+            "task_id": "TASK-022a3",
+            "repair_task_id": "TASK-022a3-repair-1",
+            "attempt": 1,
+            "max_attempts": 2,
+        },
+        "detail": {"failed_results": [{"name": "ci", "source": "ci"}]},
+    }
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        repair_task_id = await client.request_repair(
+            "TASK-022a3",
+            "w-1",
+            4,
+            repair_task,
+            event,
+        )
+
+    assert repair_task_id == "TASK-022a3-repair-1"
+    assert captured["method"] == "POST"
+    assert captured["path"] == repair_path("TASK-022a3")
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "orig_task_version": 4,
+        "repair_task": repair_task,
+        "event": event,
     }
 
 

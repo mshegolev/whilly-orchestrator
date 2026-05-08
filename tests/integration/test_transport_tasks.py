@@ -727,6 +727,185 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
     assert listed_events[1]["payload"]["evidence"]["review_url"] == "https://example.test/reviews/42"
 
 
+async def test_record_task_event_accepts_ci_and_repair_diagnostics(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = "PLAN-CI-REPAIR-EVENTS"
+    task_id = "T-ci-repair-events"
+    await _seed_task(db_pool, plan_id, task_id)
+    worker_id, worker_token = await _register(http_client, "host-ci-repair-events")
+
+    accepted_events = [
+        ("ci.poll.started", {"provider": "github", "target": "ci://repo/pr/42"}),
+        ("ci.poll.result", {"provider": "github", "target": "ci://repo/pr/42", "status": "failure"}),
+        ("repair.attempt.requested", {"repair_task_id": f"{task_id}-repair-1", "attempt": 1}),
+        ("repair.attempt.completed", {"task_id": f"{task_id}-repair-1", "outcome": "DONE"}),
+        ("repair.escalated", {"attempts": 2, "max_attempts": 2, "reason": "repair_budget_exhausted"}),
+    ]
+    for event_type, payload in accepted_events:
+        response = await http_client.post(
+            f"/tasks/{task_id}/events",
+            json={
+                "worker_id": worker_id,
+                "event_type": event_type,
+                "payload": payload,
+            },
+            headers={"Authorization": f"Bearer {worker_token}"},
+        )
+        assert response.status_code == 200, response.text
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT event_type FROM events WHERE task_id = $1 ORDER BY id",
+            task_id,
+        )
+    assert [row["event_type"] for row in rows] == [event_type for event_type, _payload in accepted_events]
+
+
+async def test_record_task_event_still_rejects_worker_forged_human_review_approval(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = "PLAN-HUMAN-REVIEW-GUARD"
+    task_id = "T-human-review-guard"
+    await _seed_task(db_pool, plan_id, task_id)
+    worker_id, worker_token = await _register(http_client, "host-human-review-guard")
+
+    for event_type in ("human_review.approved", "human_review.rejected", "human_review.changes_requested"):
+        response = await http_client.post(
+            f"/tasks/{task_id}/events",
+            json={
+                "worker_id": worker_id,
+                "event_type": event_type,
+                "payload": {"task_id": task_id, "decision": event_type.rsplit(".", maxsplit=1)[-1]},
+            },
+            headers={"Authorization": f"Bearer {worker_token}"},
+        )
+        assert response.status_code == 400
+        assert response.json()["error"] == "invalid_event_type"
+        assert "only human_review.required" in response.json()["detail"]
+
+
+async def test_remote_repair_request_inserts_dependency_free_repair_task(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = "PLAN-REMOTE-REPAIR"
+    task_id = "T-remote-repair"
+    await _seed_task(db_pool, plan_id, task_id, priority="high")
+    worker_id, worker_token = await _register(http_client, "host-remote-repair")
+
+    from whilly.adapters.db import TaskRepository
+
+    claimed = await TaskRepository(db_pool).claim_task(worker_id, plan_id)
+    assert claimed is not None
+    repair_task_id = f"{task_id}-repair-1"
+    repair_task = {
+        "id": repair_task_id,
+        "description": "Repair required CI failure.",
+        "acceptance_criteria": ["Required CI passes"],
+        "test_steps": ["Run CI status verification"],
+        "prd_requirement": "CI-02",
+        "priority": "high",
+        "key_files": ["whilly/worker/remote.py"],
+        "repo_target_id": "repo-remote",
+    }
+    event = {
+        "event_type": "repair.attempt.requested",
+        "task_id": task_id,
+        "payload": {
+            "task_id": task_id,
+            "repair_task_id": repair_task_id,
+            "attempt": 1,
+            "max_attempts": 2,
+            "trigger": "verification_failed",
+        },
+        "detail": {"failed_results": [{"name": "required-ci", "source": "ci"}]},
+    }
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/repair",
+        json={
+            "worker_id": worker_id,
+            "orig_task_version": claimed.version,
+            "repair_task": repair_task,
+            "event": event,
+        },
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"ok": True, "repair_task_id": repair_task_id}
+
+    async with db_pool.acquire() as conn:
+        task_row = await conn.fetchrow(
+            "SELECT plan_id, status, dependencies, priority, description FROM tasks WHERE id = $1",
+            repair_task_id,
+        )
+        event_row = await conn.fetchrow(
+            "SELECT event_type, payload, detail FROM events WHERE task_id = $1 AND event_type = $2",
+            task_id,
+            "repair.attempt.requested",
+        )
+    assert task_row is not None
+    assert task_row["plan_id"] == plan_id
+    assert task_row["status"] == "PENDING"
+    dependencies = json.loads(task_row["dependencies"]) if isinstance(task_row["dependencies"], str) else task_row[
+        "dependencies"
+    ]
+    assert dependencies == []
+    assert task_row["priority"] == "high"
+    assert task_row["description"] == "Repair required CI failure."
+    assert event_row is not None
+    payload = json.loads(event_row["payload"]) if isinstance(event_row["payload"], str) else event_row["payload"]
+    detail = json.loads(event_row["detail"]) if isinstance(event_row["detail"], str) else event_row["detail"]
+    assert payload["repair_task_id"] == repair_task_id
+    assert detail == {"failed_results": [{"name": "required-ci", "source": "ci"}]}
+
+
+async def test_remote_repair_request_rejects_non_empty_dependencies(
+    http_client: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    plan_id = "PLAN-REMOTE-REPAIR-DEPS"
+    task_id = "T-remote-repair-deps"
+    await _seed_task(db_pool, plan_id, task_id)
+    worker_id, worker_token = await _register(http_client, "host-remote-repair-deps")
+
+    from whilly.adapters.db import TaskRepository
+
+    claimed = await TaskRepository(db_pool).claim_task(worker_id, plan_id)
+    assert claimed is not None
+
+    response = await http_client.post(
+        f"/tasks/{task_id}/repair",
+        json={
+            "worker_id": worker_id,
+            "orig_task_version": claimed.version,
+            "repair_task": {
+                "id": f"{task_id}-repair-1",
+                "description": "Repair required CI failure.",
+                "acceptance_criteria": ["Required CI passes"],
+                "test_steps": ["Run CI status verification"],
+                "prd_requirement": "CI-02",
+                "priority": "medium",
+                "key_files": ["whilly/worker/remote.py"],
+                "repo_target_id": "",
+                "dependencies": [task_id],
+            },
+            "event": {
+                "event_type": "repair.attempt.requested",
+                "task_id": task_id,
+                "payload": {"repair_task_id": f"{task_id}-repair-1", "attempt": 1, "max_attempts": 1},
+            },
+        },
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_repair_task"
+    assert "invalid_repair_task" in response.json()["detail"]
+
+
 async def test_list_task_events_requires_worker_bearer(http_client: AsyncClient) -> None:
     """Read-side audit evidence is still a worker-private route."""
     without_bearer = await http_client.get("/tasks/T-events/events")
