@@ -198,6 +198,7 @@ async def render_dashboard(
         "tasks": snapshot.tasks,
         "events": snapshot.events,
         "review_gaps": snapshot.review_gaps,
+        "control_state": snapshot.control_state,
         "summary": snapshot.summary,
         "surfaces": [(surface.value, _SURFACE_LABELS[surface]) for surface in OperatorSurface],
         "error": error,

@@ -92,6 +92,15 @@ class ComplianceSummary:
 
 
 @dataclass(frozen=True)
+class OperatorControlState:
+    paused: bool = False
+    pause_reason: str | None = None
+    paused_by: str | None = None
+    paused_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class OperatorSnapshot:
     rendered_at: datetime
     summary: ComplianceSummary
@@ -99,6 +108,7 @@ class OperatorSnapshot:
     workers: tuple[WorkerRow, ...]
     events: tuple[EventRow, ...]
     review_gaps: tuple[ReviewGap, ...]
+    control_state: OperatorControlState = field(default_factory=OperatorControlState)
 
 
 TASKS_LIMIT: Final[int] = 200
@@ -146,6 +156,13 @@ WHERE task_id = ANY($1::text[])
 ORDER BY created_at ASC, id ASC
 """
 
+_CONTROL_STATE_SQL: Final[str] = """
+SELECT paused, pause_reason, paused_by, paused_at, updated_at
+FROM control_state
+WHERE id = 'global'
+LIMIT 1
+"""
+
 
 async def fetch_operator_snapshot(
     pool: Any,
@@ -162,6 +179,7 @@ async def fetch_operator_snapshot(
         task_rows = await conn.fetch(_TASKS_SQL, plan_id, tasks_limit)
         worker_rows = await conn.fetch(_WORKERS_SQL, workers_limit)
         event_rows = await conn.fetch(_EVENTS_SQL, plan_id, events_limit)
+        control_state_rows = await conn.fetch(_CONTROL_STATE_SQL)
         task_ids = [str(row["id"]) for row in task_rows]
         human_review_rows = await conn.fetch(_HUMAN_REVIEW_EVENTS_SQL, task_ids) if task_ids else []
     return build_operator_snapshot(
@@ -169,6 +187,7 @@ async def fetch_operator_snapshot(
         workers=worker_rows,
         events=event_rows,
         human_review_events=human_review_rows,
+        control_state=control_state_rows[0] if control_state_rows else None,
         rendered_at=rendered_at,
     )
 
@@ -179,6 +198,7 @@ def build_operator_snapshot(
     workers: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
     human_review_events: Sequence[Mapping[str, Any]] | None = None,
+    control_state: Mapping[str, Any] | None = None,
     rendered_at: datetime | None = None,
 ) -> OperatorSnapshot:
     """Build a pure value snapshot from database-like mappings."""
@@ -210,6 +230,7 @@ def build_operator_snapshot(
         workers=worker_rows,
         events=event_rows,
         review_gaps=review_gaps,
+        control_state=_control_state(control_state),
     )
 
 
@@ -226,6 +247,19 @@ def filter_snapshot(snapshot: OperatorSnapshot, query: str) -> OperatorSnapshot:
         workers=tuple(row for row in snapshot.workers if _matches_worker(row, needle)),
         events=tuple(row for row in snapshot.events if _matches_event(row, needle)),
         review_gaps=tuple(row for row in snapshot.review_gaps if _matches_gap(row, needle)),
+        control_state=snapshot.control_state,
+    )
+
+
+def _control_state(row: Mapping[str, Any] | None) -> OperatorControlState:
+    if row is None:
+        return OperatorControlState()
+    return OperatorControlState(
+        paused=bool(row.get("paused")),
+        pause_reason=_optional_str(row.get("pause_reason")),
+        paused_by=_optional_str(row.get("paused_by")),
+        paused_at=row.get("paused_at"),
+        updated_at=row.get("updated_at"),
     )
 
 

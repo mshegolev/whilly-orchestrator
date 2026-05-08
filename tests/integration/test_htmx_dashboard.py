@@ -240,25 +240,27 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert 'data-surface="events"' in body
     assert "q=quit" in body
     assert "r=refresh" in body
+    assert "R=resume workers" in body
     assert "1-5=switch" in body
     assert "/=filter" in body
-    assert "p=pause" in body
+    assert "p=pause workers" in body
+    assert "Pause workers" in body
+    assert "Resume workers" in body
+    assert "Workers running" in body
     assert "quitDashboard" in body
     assert "closeLiveStreams" in body
-    assert "shouldBlockLiveRequest" in body
     assert "manualRefreshRequested" in body
-    assert "manualLiveRequests" in body
-    assert "requestKeys" in body
     assert "markManualLiveRequest" in body
     assert "isManualLiveIntent" in body
     assert 'type === "click"' in body
-    assert "shouldBlockLiveSwap" in body
-    assert "isManualLiveRequest" in body
+    assert "submitControlAction" in body
+    assert "/api/v1/admin/workers/" in body
+    assert "togglePolling" not in body
+    assert "pollingPaused" not in body
     assert "htmx:sseOpen" in body
     assert "htmx:afterRequest" in body
     assert "htmx:sendError" in body
     assert "htmx:afterSwap" in body
-    assert "htmx:beforeSwap" in body
     assert "isEditableTarget" in body, "hotkeys must not hijack typing in inputs"
 
 
