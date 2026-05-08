@@ -449,6 +449,45 @@ class TaskEventResponse(_FrozenModel):
     ok: bool = True
 
 
+class RepairTaskPayload(_FrozenModel):
+    """Dependency-free task payload accepted by ``POST /tasks/{task_id}/repair``."""
+
+    id: NonEmptyShortStr
+    description: Annotated[str, Field(max_length=MAX_DESCRIPTION_LEN)]
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    test_steps: list[str] = Field(default_factory=list)
+    prd_requirement: str = ""
+    priority: Priority = Priority.MEDIUM
+    key_files: list[str] = Field(default_factory=list)
+    repo_target_id: str = ""
+    dependencies: list[NonEmptyShortStr] | None = None
+
+
+class RepairTaskEventPayload(_FrozenModel):
+    """Record-ready audit event supplied with a remote repair task request."""
+
+    event_type: NonEmptyShortStr
+    task_id: NonEmptyShortStr
+    payload: dict[str, Any] = Field(default_factory=dict)
+    detail: dict[str, Any] | None = None
+
+
+class RepairTaskRequest(_FrozenModel):
+    """``POST /tasks/{task_id}/repair`` request body."""
+
+    worker_id: NonEmptyShortStr
+    orig_task_version: NonNegativeVersion
+    repair_task: RepairTaskPayload
+    event: RepairTaskEventPayload
+
+
+class RepairTaskResponse(_FrozenModel):
+    """Acknowledgement for a remote repair task insertion."""
+
+    ok: bool = True
+    repair_task_id: NonEmptyShortStr
+
+
 class TaskEventItem(_FrozenModel):
     """One persisted task event returned by ``GET /tasks/{task_id}/events``."""
 
