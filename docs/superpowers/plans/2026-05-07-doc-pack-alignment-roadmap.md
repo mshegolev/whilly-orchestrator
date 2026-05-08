@@ -10,22 +10,51 @@ documentation pack in `/Users/mshegolev/Downloads/whilly_orchestrator_documentat
 profiles, verification, human review, and configured sinks as opt-in layers around
 the existing worker/repository/control-plane paths.
 
-**Tech Stack:** Python 3.12, asyncpg/Postgres, FastAPI, Pydantic v2, pytest,
-Ruff, import-linter.
+**Tech Stack:** Python 3.12, asyncpg/Postgres, FastAPI, project-config
+dataclasses with strict loader validation, pytest, Ruff, import-linter.
 
 ---
 
 ## Current Alignment Summary
 
-Overall status: **PARTIAL**.
+Current compliance status: **FAIL**, because the target pack still contains
+future capabilities that are not implemented or are only partial.
+
+Fresh evidence command:
+
+```bash
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+.venv/bin/python -m whilly compliance report --format json --out out/compliance-report.json
+```
+
+Latest refreshed report at the time of this roadmap update:
+
+- Repository commit: `2a8bc87`
+- Date: `2026-05-08`
+- Ignored local evidence files: `out/compliance-report.md`,
+  `out/compliance-report.json`
 
 Whilly is correctly positioned as an AI-assisted orchestration control plane,
 not a fully autonomous developer. Core queueing, state transitions, sources,
-workers, guards, events, metrics, dashboard, PR helper paths, and repo-target
-metadata exist. Project-config tasks now have an audit-event runtime overlay,
-and configured verification commands can block `DONE`. The main remaining gaps
-are profile-native verification wiring, human review approval/enforcement,
-configured sinks, bounded repair, and governance policy.
+workers, guards, events, metrics, dashboard, PR helper paths, repo-target
+metadata, project profiles, project-config plan generation, stage audit events,
+required verification commands, and configured PR sink stages now exist.
+
+The remaining capability gaps are:
+
+1. Human review approval/enforcement is still partial.
+2. Automatic PR creation remains opt-in runtime behavior, not default behavior.
+3. PR review feedback remains polling-based, not an automatic repair loop.
+4. Multi-repo execution has metadata/workspace support but no full planner.
+5. Sandbox/VM isolation is not enforced per task.
+6. Semantic memory is not implemented in this repository slice.
+7. Git rollback exists only as verifier-helper behavior, not a general smart
+   rollback system.
+8. Profile-native verification wiring is still a gap even though ad hoc
+   required verification commands can block `DONE`.
+9. Compliance documentation mismatch detection currently reports README
+   false positives for negative statements such as "do not describe current
+   Whilly as full sandbox/VM isolation or semantic long-term memory."
 
 ## Capability Matrix
 
@@ -37,30 +66,351 @@ configured sinks, bounded repair, and governance policy.
 | Deterministic task state | Implemented | `whilly/core/state_machine.py`, `TaskStatus` | Preserve; do not add risky statuses yet. |
 | Decision gates | Implemented | `whilly/core/gates.py`, `plan apply --strict` | Preserve. |
 | Prompt and shell guards | Implemented | `whilly/core/prompts.py`, `whilly/core/agent_runner.py` | Preserve, extend to profile verification commands. |
-| Project profiles | Partial | `whilly/project_config/*`, `whilly/cli/project_config.py` | Current shape differs from PRD: dataclasses, TOML/JSON, missing `python_backend` and `documentation`, not wired into worker runtime. |
-| Built-in profiles | Partial | `presets.py` supports `etl`, `graphql_api`, `feature_development`, `generic` | PRD expects `python_backend`, `graphql_api`, `etl_pipeline`, `documentation`, `generic`. |
-| Profile validation | Partial | Loader checks duplicate steps, unknown dependencies/repo roles | Missing runner/source/sink validation, required stage ids, unsafe command policy, contradictory human-review checks. |
+| Project profiles | Implemented MVP | `whilly/project_config/*`, `whilly/cli/project_config.py` | Uses dataclasses plus strict validation, not Pydantic. Preserve compatibility. |
+| Built-in profiles | Implemented MVP | `presets.py` supports `python_backend`, `etl_pipeline`, `documentation`, `graphql_api`, `generic`; aliases map `etl` and `feature_development`. | Preserve aliases and documented public names. |
+| Profile validation | Implemented MVP | Loader validates source/sink/runner names, dependencies, repo roles, human-loop contradictions, and unsafe verification commands. | Profile-native runtime wiring remains separate. |
 | Configurable pipeline stages | Implemented MVP | `whilly/pipeline/events.py`, local/remote workers | Stage lifecycle is audit-event based; no dedicated profile executor yet. |
 | Required verification before DONE | Implemented when configured | `whilly/pipeline/verification.py`, `whilly run --verify-command` | Profile-native verification command wiring remains future work. |
-| Human review checkpoints | Partial | `whilly/pipeline/human_review.py`, event endpoint allowlist | Checkpoint events exist; no full approval capture/enforcement/dashboard queue yet. |
-| PR creation as configured sink | Partial | `WHILLY_AUTO_OPEN_PR=1` post-complete hook | Env-gated hook, not project-profile sink/stage. |
+| Human review checkpoints | Partial | `whilly/pipeline/human_review.py`, API event allowlist, dashboard/TUI projections | Checkpoint events exist; full approval capture/enforcement queue still needs hardening. |
+| PR creation as configured sink | Partial | `WHILLY_AUTO_OPEN_PR=1`, `whilly/pipeline/sinks.py`, post-complete PR hook | Opt-in and credential-dependent; do not claim unconditional behavior. |
 | PR review feedback loop | Partial/future | `whilly pr-feedback poll` one-shot poller | Not automatic repair loop; keep documented as future. |
 | Multi-repo execution | Partial/future | `repo_targets`, `task_repo_targets`, `whilly/workspaces.py` | Per-task repo workspace exists, but full multi-repo orchestration is not current product guarantee. |
-| Compliance report generation | Missing | No `compliance` CLI/report module | Add report command matching archive guide. |
+| Compliance report generation | Implemented | `whilly/compliance/__init__.py`, `whilly/cli/compliance.py`, `tests/unit/test_compliance_report.py` | Fix false-positive documentation mismatch detection. |
+| Sandbox/VM isolation | Partial/future | Command guards and restricted runner flags | Add per-task isolation or keep documented as residual risk. |
+| Semantic memory | Missing/future | No deterministic runtime module | Decide whether to implement or explicitly keep out of current target. |
+| Smart rollback | Partial/future | Verifier helper can revert on verification failure | Add general backup-tag/restore/preflight flow before claiming robust rollback. |
 
 ## Roadmap
 
+### Current Task Decomposition: Plan > Act > Verify
+
+This is the active execution backlog. Each task is intentionally small enough
+to plan, implement, verify, and commit independently.
+
+#### Task 1: Refresh Compliance Roadmap Evidence
+
+**Files:**
+- Modify: `docs/superpowers/plans/2026-05-07-doc-pack-alignment-roadmap.md`
+- Generated evidence, not committed: `out/compliance-report.md`,
+  `out/compliance-report.json`
+
+**Plan**
+
+- Regenerate markdown and JSON compliance reports from the current checkout.
+- Make the roadmap point at the report command as the repeatable evidence
+  source.
+- Mark stale roadmap claims where code already exists.
+
+**Act**
+
+- Update this roadmap summary and capability matrix.
+- Preserve the target/current boundary: do not turn future autonomous-developer
+  capabilities into current claims.
+
+**Verify**
+
+```bash
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+.venv/bin/python -m whilly compliance report --format json --out out/compliance-report.json
+git diff --check
+```
+
+Expected evidence: reports are written, roadmap diff has no whitespace errors.
+
+#### Task 2: Fix Compliance Documentation-Mismatch False Positives
+
+**Files:**
+- Modify: `whilly/compliance/__init__.py`
+- Test: `tests/unit/test_compliance_report.py`
+
+**Plan**
+
+- Inspect the README mismatch detector that currently reports phrases inside
+  negative statements as claims.
+- Add a regression test with text like "Do not describe current Whilly as full
+  sandbox or VM isolation, semantic long-term memory, or reliable git rollback."
+- Keep positive claims flagged, for example "Whilly provides full sandbox/VM
+  isolation."
+
+**Act**
+
+- Make mismatch detection context-aware enough to distinguish explicit
+  non-goals from capability claims.
+- Keep the report conservative: ambiguous marketing claims should still be
+  flagged.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_compliance_report.py
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+rg -n "Documentation Mismatches|claims full sandbox|claims semantic" out/compliance-report.md
+```
+
+Expected evidence: tests pass, and the report no longer flags README non-goal
+sentences as positive claims.
+
+#### Task 3: Human Review Approval Workflow Hardening
+
+**Files:**
+- Modify: `whilly/pipeline/human_review.py`
+- Modify: `whilly/adapters/transport/server.py`
+- Modify: `whilly/api/templates/index.html.j2`
+- Modify: `whilly/dashboard.py`
+- Test: `tests/unit/test_human_review_checkpoint.py`
+- Test: `tests/integration/test_htmx_dashboard.py`
+- Test: `tests/integration/test_transport_tasks.py`
+
+**Plan**
+
+- Treat existing approval capture, worker hold/release enforcement, and
+  dashboard gap projection as implemented evidence.
+- Define only the remaining operator hardening: approval controls, rejection or
+  change-request controls, dashboard/TUI affordances, and compliance probe
+  alignment.
+- Keep approval as auditable event data, not a new `TaskStatus`.
+- Require existing admin/bearer auth for mutation endpoints.
+
+**Act**
+
+- Add or complete dashboard/TUI controls for approval, rejection, or
+  change-request actions.
+- Update compliance probes so implemented API capture/enforcement is not
+  under-reported.
+- Ensure configured risky stages/sinks stay blocked until approval evidence
+  exists.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_human_review_checkpoint.py
+.venv/bin/python -m pytest -q tests/integration/test_htmx_dashboard.py tests/integration/test_transport_tasks.py --maxfail=1
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: compliance no longer under-reports existing approval
+capture/enforcement, and only missing operator controls remain visible.
+
+#### Task 4: Profile-Native Verification Wiring
+
+**Files:**
+- Modify: `whilly/project_config/plan_builder.py`
+- Modify: `whilly/cli/run.py`
+- Modify: `whilly/worker/local.py`
+- Modify: `whilly/worker/remote.py`
+- Test: `tests/unit/test_project_config.py`
+- Test: `tests/unit/test_verification_runner.py`
+- Test: `tests/unit/test_local_worker.py`
+- Test: `tests/unit/test_remote_worker.py`
+
+**Plan**
+
+- Map `ProjectConfig.verification_commands` into runtime verification settings
+  for generated plans.
+- Preserve the existing explicit `whilly run --verify-command` behavior.
+- Define precedence when both profile commands and CLI commands are present.
+
+**Act**
+
+- Thread generated profile verification commands into local and remote worker
+  execution.
+- Emit the same `verification.*` events used by explicit commands.
+- Keep required failures blocking `DONE`.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_project_config.py tests/unit/test_verification_runner.py
+.venv/bin/python -m pytest -q tests/unit/test_local_worker.py tests/unit/test_remote_worker.py --maxfail=1
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: the "Required verification before DONE" row can say profile
+verification wiring exists, not only ad hoc CLI verification.
+
+#### Task 5: Sandbox And Secrets Hardening (`a3-a4`)
+
+**Files:**
+- Create or modify: `whilly/security/secret_lint.py`
+- Modify: `whilly/security/prompt_sanitizer.py`
+- Modify: `whilly/core/agent_runner.py`
+- Modify: `whilly/worker/local.py`
+- Modify: `whilly/worker/remote.py`
+- Test: `tests/unit/test_prompt_sanitizer.py`
+- Test: `tests/unit/test_prompt_sanitizer_wiring.py`
+- Test: `tests/unit/test_local_worker.py`
+- Test: `tests/unit/test_remote_worker.py`
+
+**Plan**
+
+- Define the minimum v6 hardening contract: secret lint, environment allowlist,
+  command deny-list coverage, and clear residual sandbox risk.
+- Do not claim full VM/container isolation unless an actual isolation backend is
+  wired into worker execution.
+
+**Act**
+
+- Add or extend secret linting for task descriptions, comments, config values,
+  runner prompts, and external issue/PR feedback.
+- Scrub runner environments to an explicit allowlist plus required configured
+  tokens.
+- Ensure blocked tasks emit auditable reasons.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_prompt_sanitizer.py tests/unit/test_prompt_sanitizer_wiring.py
+.venv/bin/python -m pytest -q tests/unit/test_local_worker.py tests/unit/test_remote_worker.py --maxfail=1
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: sandbox/security rows describe concrete guards and residual
+risk without overclaiming VM isolation.
+
+#### Task 6: Backup Tag, Branch Protection, And Smart Rollback
+
+**Files:**
+- Create or modify: `whilly/rollback/`
+- Create or modify: `whilly/cli/rollback.py`
+- Modify: `whilly/cli/__init__.py`
+- Test: `tests/unit/test_rollback.py`
+- Test: `tests/integration/test_rollback_cli.py`
+
+**Plan**
+
+- Implement rollback as an explicit operator safety-net, not an automatic
+  destructive cleanup.
+- Add backup tags before risky branch mutation.
+- Add branch protection/preflight checks before push, merge, or restore.
+
+**Act**
+
+- Add commands for creating a backup tag, listing rollback points, and restoring
+  a worktree/branch with operator confirmation.
+- Store rollback evidence in audit/report output.
+- Keep destructive operations opt-in.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_rollback.py
+.venv/bin/python -m pytest -q tests/integration/test_rollback_cli.py --maxfail=1
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: the Git rollback row can move beyond verifier-helper
+behavior.
+
+#### Task 7: CI Polling And Bounded Repair Loop
+
+**Files:**
+- Create or modify: `whilly/ci/`
+- Create or modify: `whilly/repair/`
+- Modify: `whilly/cli/pr_feedback.py`
+- Modify: `whilly/sources/github_pr_feedback.py`
+- Modify: `whilly/cli/run.py`
+- Test: `tests/unit/test_ci_polling.py`
+- Test: `tests/unit/test_repair_loop.py`
+
+**Plan**
+
+- Model `execute -> verify/CI -> repair attempt N -> verify/CI -> escalate`.
+- Set explicit retry budgets and stop conditions.
+- Reuse PR feedback polling as an input, not as an always-on hidden loop.
+
+**Act**
+
+- Add CI status polling as a configured verification/sink stage.
+- Add repair task creation from verification/CI/PR feedback failure evidence.
+- Emit repair attempt events and escalation events.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_ci_polling.py tests/unit/test_repair_loop.py
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: PR review feedback loop and CI verification can be described
+as bounded and auditable.
+
+#### Task 8: Multi-Repo Boundary Or Full Planner Decision
+
+**Files:**
+- Modify: `docs/Current-vs-Target.md`
+- Modify: `docs/Project-Config.md`
+- Modify if implementing: `whilly/workspaces.py`, `whilly/project_config/plan_builder.py`
+- Test if implementing: `tests/unit/test_project_config.py`
+
+**Plan**
+
+- Decide whether the next milestone implements true cross-repo scheduling or
+  keeps multi-repo as repo-target metadata plus per-task workspace preparation.
+- Do not leave docs ambiguous.
+
+**Act**
+
+- If deferring: document the boundary and keep compliance row `PARTIAL`.
+- If implementing: add dependency-aware cross-repo task planning, workspace
+  mapping, and integration verification.
+
+**Verify**
+
+```bash
+rg -n "full multi-repo|multi-repo execution|repo-target" README.md docs/
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: docs and compliance use the same multi-repo wording.
+
+#### Task 9: Governance Policy And Semantic Memory Decision
+
+**Files:**
+- Create or modify: `whilly/governance/`
+- Modify: `docs/target/06_Autonomous_Developer_Roadmap.md`
+- Modify: `docs/Current-vs-Target.md`
+- Modify: `docs/target/04_Compliance_Validation_Guide.md`
+- Test if implementing code: `tests/unit/test_governance_policy.py`
+
+**Plan**
+
+- Decide whether semantic memory is a current target, a future target, or a
+  non-goal for this milestone.
+- Define governance/risk categories for migrations, auth, infra, dependencies,
+  release actions, and externally visible PR/release behavior.
+
+**Act**
+
+- If semantic memory is deferred, change compliance target wording so missing
+  semantic memory is not a current failure.
+- If implemented, use deterministic event/PR/task history first; avoid opaque
+  semantic recall as an authority source.
+- Add risk scoring and approval requirements for high-risk actions.
+
+**Verify**
+
+```bash
+.venv/bin/python -m pytest -q tests/unit/test_governance_policy.py
+.venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
+```
+
+Expected evidence: compliance no longer fails on an ambiguous future-only
+semantic-memory row, and governance policy is explicit.
+
 ### Phase 0: Documentation Baseline And Vocabulary
+
+Status: **mostly complete; keep as documentation hygiene**.
 
 **Files:**
 - Create: `docs/target/01_BRD.md`, `docs/target/02_PRD.md`, `docs/target/03_ADR.md`, `docs/target/04_Compliance_Validation_Guide.md`
 - Modify: `README.md`, `docs/index.md`, `docs/Project-Description.md`, `docs/Project-Config.md`
 
-- [ ] Import the archive docs into a stable `docs/target/` location or link them from there.
-- [ ] Replace stale “v4.6.1 baseline” and migration-chain text with the current post-013 schema state.
+- [x] Import the archive docs into a stable `docs/target/` location or link them from there.
+- [x] Add a “Current vs Target” page that says Whilly is currently between Level 1 and Level 2 from the archive roadmap.
+- [x] Fix human-loop wording: current `TaskStatus` has no `BLOCKED` or `HUMAN_LOOP`; describe these as checkpoint events/evidence unless implemented as states.
+- [ ] Replace any remaining stale “v4.6.1 baseline” and migration-chain text with the current post-013 schema state where it appears in current docs.
 - [ ] Remove or clearly mark v3/worktree documents as historical, especially `docs/documents/task-execution-phases.md`.
-- [ ] Fix human-loop wording: current `TaskStatus` has no `BLOCKED` or `HUMAN_LOOP`; describe these as planned checkpoint events unless implemented.
-- [ ] Add a “Current vs Target” page that says Whilly is currently between Level 1 and Level 2 from the archive roadmap.
+- [ ] Fix compliance mismatch detection so negative non-goal wording is not reported as a positive README claim.
 
 Validation:
 
@@ -71,17 +421,20 @@ rg -n "fully autonomous|DONE always means verified|automatic PR review feedback|
 
 ### Phase 1: Compliance Validation Command
 
+Status: **implemented; next action is detector quality**.
+
 **Files:**
 - Create: `whilly/compliance/__init__.py`, `whilly/compliance/models.py`, `whilly/compliance/collector.py`, `whilly/compliance/report.py`
 - Create: `whilly/cli/compliance.py`
 - Modify: `whilly/cli/__init__.py`
 - Test: `tests/unit/test_compliance_report.py`
 
-- [ ] Add `CapabilityStatus = PASS | PARTIAL | FAIL | UNKNOWN`.
-- [ ] Encode the archive capability matrix as data, with evidence probes for known local modules and runtime wiring.
-- [ ] Add `whilly compliance report --format markdown|json --out PATH`.
-- [ ] Include repository commit, date, and detected version in every report.
-- [ ] Add tests that prove “helper exists but not wired” becomes `PARTIAL`, not `PASS`.
+- [x] Add `CapabilityStatus = PASS | PARTIAL | FAIL | UNKNOWN`.
+- [x] Encode the archive capability matrix as data, with evidence probes for known local modules and runtime wiring.
+- [x] Add `whilly compliance report --format markdown|json --out PATH`.
+- [x] Include repository commit, date, and detected version in every report.
+- [x] Add tests that prove “helper exists but not wired” becomes `PARTIAL`, not `PASS`.
+- [ ] Add tests for negative/non-goal documentation wording so the mismatch detector does not report false positives.
 
 Validation:
 
@@ -92,17 +445,19 @@ Validation:
 
 ### Phase 2: Project Profile Schema Consolidation
 
+Status: **implemented MVP; Pydantic is not required for the current contract**.
+
 **Files:**
 - Modify/Create: `whilly/project_config/models.py`, `whilly/project_config/loader.py`, `whilly/project_config/presets.py`, `whilly/project_config/validator.py`
 - Modify: `whilly/cli/project_config.py`, `docs/Project-Config.md`
 - Test: `tests/unit/test_project_config.py`
 
-- [ ] Decide the public name: use the archive’s `ProjectProfile` terminology while keeping `ProjectConfig` as a compatibility alias.
-- [ ] Move profile models to Pydantic v2 or add strict validation equivalent to Pydantic.
-- [ ] Support the PRD project types: `python_backend`, `graphql_api`, `etl_pipeline`, `documentation`, `generic`.
-- [ ] Keep aliases for current values: `etl -> etl_pipeline`, `feature_development -> python_backend` or document why not.
-- [ ] Support YAML if `PyYAML` is accepted as a dependency; otherwise update target docs to say JSON/TOML are the implementation contract.
-- [ ] Validate source types, sink types, runner names, required stage ids, human-review contradictions, and unsafe verification commands.
+- [x] Decide the public name: document target profile shape while keeping `ProjectConfig` as the implementation API.
+- [x] Add strict validation equivalent to Pydantic for the current JSON/TOML contract.
+- [x] Support the PRD project types: `python_backend`, `graphql_api`, `etl_pipeline`, `documentation`, `generic`.
+- [x] Keep aliases for current values: `etl -> etl_pipeline`, `feature_development -> python_backend`.
+- [x] Keep YAML out of the current implementation contract; JSON/TOML are the supported formats.
+- [x] Validate source types, sink types, runner names, required stage ids, human-review contradictions, and unsafe verification commands.
 
 Validation:
 
@@ -150,16 +505,19 @@ Validation:
 
 ### Phase 5: Human Review Checkpoint Model
 
+Status: **MVP events/projections implemented; approval workflow remains partial**.
+
 **Files:**
 - Create: `whilly/pipeline/human_review.py`
 - Modify: `whilly/adapters/transport/server.py`, `whilly/api/templates/index.html.j2`, `whilly/cli/plan.py`
-- Test: `tests/unit/test_human_review_checkpoint.py`, `tests/integration/test_dashboard_human_review.py`
+- Test: `tests/unit/test_human_review_checkpoint.py`, `tests/integration/test_htmx_dashboard.py`
 
 - [x] Add checkpoint events: `human_review.required`, `human_review.approved`, `human_review.rejected`, `human_review.changes_requested`.
 - [x] Surface tasks/checkpoints needing human input in the API, dashboard, and browserless TUI.
 - [x] Add plan-show checkpoint markers from task/event evidence.
 - [x] Keep approval as auditable data, not a new terminal task state for MVP.
 - [x] Block configured risky sinks/stages until approval evidence exists.
+- [ ] Complete dashboard/API approval queue hardening so compliance can move from `PARTIAL` to `PASS`.
 
 Validation:
 
@@ -168,6 +526,8 @@ Validation:
 ```
 
 ### Phase 6: Configured Sinks And PR Policy
+
+Status: **implemented MVP; remains opt-in and credential-dependent**.
 
 **Files:**
 - Create: `whilly/pipeline/sinks.py`
@@ -186,6 +546,8 @@ Validation:
 ```
 
 ### Phase 7: Autonomous Developer v0 Preparation
+
+Status: **next major capability wave**.
 
 **Files:**
 - Create: `whilly/repair/`, `whilly/ci/`, `whilly/governance/`
@@ -206,6 +568,14 @@ Validation:
 
 ## Recommended First Cut
 
-Phases 0-5 now have an MVP path in the repository. The next cut should finish
-the remaining Phase 5 workflow surface (approval capture, dashboard/API queue,
-and blocking policy) before moving PR sinks and bounded repair into Phases 6-7.
+Use the task decomposition above as the active backlog.
+
+Recommended order:
+
+1. Task 2: fix compliance documentation-mismatch false positives.
+2. Task 3: complete human review operator-control hardening and compliance probe alignment.
+3. Task 5: implement `a3-a4-sandbox-and-secrets-lint` from `docs/CODEX-MISSION.md`.
+4. Task 4: wire profile-native verification commands into runtime.
+5. Task 6: implement backup tag, branch protection preflight, and smart rollback CLI.
+6. Task 7: add CI polling and bounded repair.
+7. Task 9: settle governance and semantic-memory target status.
