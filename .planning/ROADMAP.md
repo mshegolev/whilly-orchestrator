@@ -13,7 +13,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 2: Shared review decision path** - TUI and WUI review decisions use one backend command.
 - [x] **Phase 3: WUI state-preserving refresh** - WUI retains local operator state across refresh/SSE swaps.
 - [x] **Phase 4: Compact operator identity panel** - Admin bearer and reviewer inputs move out of the permanent topbar.
-- [ ] **Phase 5: Shared operator table contract** - TUI and WUI table columns follow an explicit shared contract.
+- [x] **Phase 5: Shared operator table contract** - TUI and WUI table columns follow an explicit shared contract.
 - [ ] **Phase 6: Mobile WUI row actions** - Mobile tables expose row details and actions without cramped horizontal scroll.
 - [ ] **Phase 7: Review action affordances** - Reject/request-changes paths become clearer and safer.
 - [ ] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
@@ -92,10 +92,10 @@ Plans:
   2. Worker table ordering is consistent or intentionally medium-specific.
   3. Review queue and event table fields map to a shared operator contract.
   4. Contract tests pin labels and field mapping before mobile layout work begins.
-**Plans**: Ready to plan
+**Plans**: Complete
 
 Plans:
-- [ ] 05-01: Define shared operator table contract and align TUI/WUI where practical.
+- [x] 05-01: Define shared operator table contract and align TUI/WUI where practical.
 
 ### Phase 6: Mobile WUI row actions
 **Goal**: Make WUI tables usable on mobile without relying on cramped horizontal scrolling for critical row actions.
@@ -210,7 +210,7 @@ GSD initialization and are now tracked here as completed history.
 | 2. Shared review decision path | 1/1 | Complete | 2026-05-08 |
 | 3. WUI state-preserving refresh | 1/1 | Complete | 2026-05-08 |
 | 4. Compact operator identity panel | 1/1 | Complete | 2026-05-08 |
-| 5. Shared operator table contract | 0/1 | Not started | - |
+| 5. Shared operator table contract | 1/1 | Complete | 2026-05-08 |
 | 6. Mobile WUI row actions | 0/1 | Not started | - |
 | 7. Review action affordances | 0/1 | Not started | - |
 | 8. Sandbox and secrets hardening | 0/1 | Not started | - |
