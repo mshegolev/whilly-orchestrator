@@ -35,7 +35,7 @@
 
 ### Repair And Governance
 
-- [ ] **CI-01**: CI status polling can be used as a configured verification or sink stage.
+- [x] **CI-01**: CI status polling can be used as a configured verification or sink stage.
 - [ ] **CI-02**: Repair attempts are bounded, auditable, and stop with escalation when budgets are exhausted.
 - [ ] **GOV-01**: Governance policy scores risk for migrations, auth, infra, dependencies, release actions, and external PR behavior.
 - [ ] **GOV-02**: Semantic memory is either implemented deterministically from event/task history or explicitly deferred from current scope.
@@ -80,7 +80,7 @@
 | ROLL-01 | Phase 10 | Complete |
 | ROLL-02 | Phase 10 | Complete |
 | ROLL-03 | Phase 10 | Complete |
-| CI-01 | Phase 11 | Pending |
+| CI-01 | Phase 11 | Complete |
 | CI-02 | Phase 11 | Pending |
 | GOV-01 | Phase 12 | Pending |
 | GOV-02 | Phase 12 | Pending |
