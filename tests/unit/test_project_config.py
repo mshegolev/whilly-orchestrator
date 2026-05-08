@@ -238,6 +238,48 @@ def test_project_config_accepts_target_profile_shape() -> None:
     assert config.sinks[0].type == "jsonl"
 
 
+def _generic_config_with_sink_token(token_value: str) -> dict:
+    return {
+        "name": "Secret lint project",
+        "project_type": "generic",
+        "environment": "STAGE",
+        "sinks": [{"type": "jsonl", "config": {"token": token_value}}],
+    }
+
+
+def test_project_config_rejects_plaintext_secret_like_config_value() -> None:
+    token = "ghp_" + "A" * 36
+
+    with pytest.raises(ProjectConfigError) as exc_info:
+        project_config_from_dict(_generic_config_with_sink_token(token), source="project.json")
+
+    message = str(exc_info.value)
+    assert "secret_lint_blocked" in message
+    assert "project_config.sinks[0].config.token" in message
+    assert "github-token" in message
+    assert "use env:, keyring:, or file: references" in message
+
+
+@pytest.mark.parametrize("reference", ["env:GITHUB_TOKEN", "keyring:whilly/github", "file:/tmp/whilly-token"])
+def test_project_config_allows_secret_reference_values(reference: str) -> None:
+    config = project_config_from_dict(_generic_config_with_sink_token(reference), source="project.json")
+
+    assert config.sinks[0].config == {"token": reference}
+
+
+def test_project_config_cli_validate_reports_secret_lint_blocked(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    token = "ghp_" + "A" * 36
+    config_path = tmp_path / "project.json"
+    config_path.write_text(json.dumps(_generic_config_with_sink_token(token)), encoding="utf-8")
+
+    code = main(["project-config", "validate", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "whilly project-config validate:" in captured.err
+    assert "secret_lint_blocked" in captured.err
+
+
 def test_explicit_pipeline_overrides_preset_and_validates_repo_roles() -> None:
     with pytest.raises(ProjectConfigError, match="unknown repo_role"):
         project_config_from_dict(
