@@ -42,6 +42,8 @@ class VerificationCommandConfig:
     name: str
     command: str
     required: bool = True
+    source: str = "profile"
+    repair_max_attempts: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

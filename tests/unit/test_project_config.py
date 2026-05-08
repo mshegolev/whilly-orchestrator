@@ -93,8 +93,20 @@ def test_project_config_plan_emits_profile_verification_commands_in_order() -> N
     payload = build_plan_payload(config, plan_id="P-VERIFY")
 
     assert payload["verification_commands"] == [
-        {"name": "unit", "command": "pytest -q tests/unit", "required": True, "source": "profile"},
-        {"name": "lint", "command": "ruff check whilly tests", "required": False, "source": "profile"},
+        {
+            "name": "unit",
+            "command": "pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+        {
+            "name": "lint",
+            "command": "ruff check whilly tests",
+            "required": False,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
     ]
 
 
