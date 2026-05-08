@@ -1101,7 +1101,7 @@ async def test_local_worker_records_repair_attempt_completed_on_done(fake_sleep:
         if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT
     )
     assert completed_event["orig_task_id"] == "T-original"
-    assert completed_event["repair_task_id"] == "T-original-repair-1"
+    assert completed_event["task_id"] == "T-original-repair-1"
     assert completed_event["attempt"] == 1
     assert completed_event["max_attempts"] == 3
     assert completed_event["terminal_status"] == "DONE"
@@ -1154,7 +1154,7 @@ async def test_local_worker_records_repair_attempt_completed_on_failed(fake_slee
         if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT
     )
     assert completed_event["orig_task_id"] == "T-original"
-    assert completed_event["repair_task_id"] == "T-original-repair-2"
+    assert completed_event["task_id"] == "T-original-repair-2"
     assert completed_event["attempt"] == 2
     assert completed_event["max_attempts"] == 4
     assert completed_event["terminal_status"] == "FAILED"
