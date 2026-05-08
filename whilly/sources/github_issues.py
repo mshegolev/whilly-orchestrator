@@ -46,6 +46,7 @@ PRIORITY_LABELS = {
     "priority:low": "low",
 }
 
+
 @dataclass
 class FetchStats:
     """Summary of what changed during a fetch."""
