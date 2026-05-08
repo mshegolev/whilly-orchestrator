@@ -78,12 +78,17 @@ class TestSecretDetection:
     def test_aws_key_detected(self):
         text = "Use this credential: AKIAIOSFODNN7EXAMPLE"
         hits = _detect_secrets(text)
-        assert any("AKIA" in h for h in hits)
+        assert hits == ["aws-access-key-id"]
 
     def test_github_pat_detected(self):
         text = "token=ghp_" + "A" * 40
         hits = _detect_secrets(text)
-        assert any("ghp_" in h for h in hits)
+        assert hits == ["github-token"]
+
+    def test_multiple_secret_pattern_ids_detected(self):
+        text = "AKIAIOSFODNN7EXAMPLE and ghp_" + "A" * 40
+        hits = _detect_secrets(text)
+        assert hits == ["aws-access-key-id", "github-token"]
 
     def test_clean_text(self):
         assert _detect_secrets("just a normal description") == []
@@ -169,7 +174,7 @@ class TestIssueToTask:
             "url": "",
         }
         _, secrets = issue_to_task(issue)
-        assert secrets
+        assert secrets == ["aws-access-key-id"]
 
     def test_long_body_truncated(self):
         body = "Header\n" + ("line\n" * 200)
