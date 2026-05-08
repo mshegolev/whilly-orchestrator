@@ -428,6 +428,7 @@
     <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" hidden>
       <header><h2>Compliance - Human review / verification gaps</h2></header>
       <div class="table-wrapper">
+        {% set review_columns = table_columns.review_gaps %}
         <table id="review-gaps"
                role="grid"
                hx-get="/"
@@ -437,7 +438,7 @@
                hx-swap="outerHTML">
           <thead>
             <tr>
-              {% for column in table_columns.review_gaps %}
+              {% for column in review_columns %}
                 <th scope="col">{{ column.label_for("wui") }}</th>
               {% endfor %}
             </tr>
@@ -451,22 +452,25 @@
                     data-review-stage="{{ gap.stage_id }}"
                     data-review-actionable="{{ 'true' if gap.actionable else 'false' }}"
                     aria-selected="false">
-                  <td><code>{{ gap.task_id }}</code></td>
-                  <td>{{ gap.plan_id }}</td>
-                  <td>{{ gap.reason }}</td>
-                  <td>{{ gap.stage_id if gap.stage_id else "—" }}</td>
-                  <td>{{ gap.reviewer if gap.reviewer else "—" }}</td>
-                  <td>
+                  <td data-mobile-label="{{ review_columns[0].label_for("wui") }}"><code>{{ gap.task_id }}</code></td>
+                  <td data-mobile-label="{{ review_columns[1].label_for("wui") }}">{{ gap.plan_id }}</td>
+                  <td data-mobile-label="{{ review_columns[2].label_for("wui") }}">{{ gap.reason }}</td>
+                  <td data-mobile-label="{{ review_columns[3].label_for("wui") }}">{{ gap.stage_id if gap.stage_id else "—" }}</td>
+                  <td data-mobile-label="{{ review_columns[4].label_for("wui") }}">{{ gap.reviewer if gap.reviewer else "—" }}</td>
+                  <td data-mobile-label="{{ review_columns[5].label_for("wui") }}">
                     {% if gap.actionable %}
                       <span class="review-actions" aria-label="Human review actions">
                         <button type="button"
                                 data-review-decision="approved"
+                                aria-label="Approve review for {{ gap.task_id }}"
                                 title="Approve selected review gap (a)">A</button>
                         <button type="button"
                                 data-review-decision="rejected"
+                                aria-label="Reject review for {{ gap.task_id }}"
                                 title="Reject selected review gap (x)">X</button>
                         <button type="button"
                                 data-review-decision="changes_requested"
+                                aria-label="Request changes for {{ gap.task_id }}"
                                 title="Request changes for selected review gap (c)">C</button>
                       </span>
                     {% else %}
@@ -477,7 +481,7 @@
               {% endfor %}
             {% else %}
               <tr id="review-gaps-empty">
-                <td colspan="{{ table_columns.review_gaps|length }}"><em class="empty-state">No human review or verification gaps.</em></td>
+                <td colspan="{{ review_columns|length }}"><em class="empty-state">No human review or verification gaps.</em></td>
               </tr>
             {% endif %}
           </tbody>
@@ -502,10 +506,11 @@
     <section id="surface-events" class="operator-surface surface-panel" data-surface="events" hidden>
       <header><h2>Events</h2></header>
       <div class="table-wrapper">
+        {% set event_columns = table_columns.events %}
         <table id="events" role="grid">
           <thead>
             <tr>
-              {% for column in table_columns.events %}
+              {% for column in event_columns %}
                 <th scope="col">{{ column.label_for("wui") }}</th>
               {% endfor %}
             </tr>
@@ -515,16 +520,16 @@
               {% for event in events %}
                 <tr id="event-{{ event.event_id }}"
                     data-filter-text="{{ event.event_id }} {{ event.task_id or '' }} {{ event.plan_id or '' }} {{ event.event_type }} {{ event.detail }}">
-                  <td><code>{{ event.event_id }}</code></td>
-                  <td>{{ event.task_id if event.task_id else "—" }}</td>
-                  <td>{{ event.plan_id if event.plan_id else "—" }}</td>
-                  <td>{{ event.event_type }}</td>
-                  <td><time datetime="{{ format_iso(event.created_at) }}">{{ format_human(event.created_at) }}</time></td>
+                  <td data-mobile-label="{{ event_columns[0].label_for("wui") }}"><code>{{ event.event_id }}</code></td>
+                  <td data-mobile-label="{{ event_columns[1].label_for("wui") }}">{{ event.task_id if event.task_id else "—" }}</td>
+                  <td data-mobile-label="{{ event_columns[2].label_for("wui") }}">{{ event.plan_id if event.plan_id else "—" }}</td>
+                  <td data-mobile-label="{{ event_columns[3].label_for("wui") }}">{{ event.event_type }}</td>
+                  <td data-mobile-label="{{ event_columns[4].label_for("wui") }}"><time datetime="{{ format_iso(event.created_at) }}">{{ format_human(event.created_at) }}</time></td>
                 </tr>
               {% endfor %}
             {% else %}
               <tr id="events-empty">
-                <td colspan="{{ table_columns.events|length }}"><em class="empty-state">No events recorded.</em></td>
+                <td colspan="{{ event_columns|length }}"><em class="empty-state">No events recorded.</em></td>
               </tr>
             {% endif %}
           </tbody>
