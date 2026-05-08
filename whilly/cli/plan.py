@@ -102,9 +102,9 @@ from rich.console import Console
 
 from whilly.adapters.db import close_pool, create_pool
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
-from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
+from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, parse_plan_dict, serialize_plan
 from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
-from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskId, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskId, TaskStatus, VerificationCommand
 from whilly.core.scheduler import detect_cycles
 from whilly.core.triz import analyze_plan_triz, format_plan_triz_report, plan_triz_report_to_dict
 from whilly.operator_views import EventRow, HumanReviewState, human_review_states_from_events
@@ -130,8 +130,8 @@ DATABASE_URL_ENV: str = "WHILLY_DATABASE_URL"
 # дублей" half of the AC; the surrounding ``async with conn.transaction()``
 # in :func:`_async_import` handles the "в одной транзакции" half.
 _INSERT_PLAN_SQL: str = """
-INSERT INTO plans (id, name)
-VALUES ($1, $2)
+INSERT INTO plans (id, name, verification_commands)
+VALUES ($1, $2, $3::jsonb)
 ON CONFLICT (id) DO NOTHING
 """
 
@@ -279,7 +279,7 @@ VALUES (NULL, $1, 'plan.applied', $2::jsonb)
 # every operator-visible SQL string lives in module-scope so a schema review
 # can ``grep`` for table names without descending into function bodies.
 _SELECT_PLAN_SQL: str = """
-SELECT id, name
+SELECT id, name, verification_commands
 FROM plans
 WHERE id = $1
 """
@@ -791,7 +791,12 @@ async def _insert_plan_and_tasks(
     ``::jsonb`` casts in :data:`_INSERT_TASK_SQL` accept the resulting
     text without complaint.
     """
-    await conn.execute(_INSERT_PLAN_SQL, plan.id, plan.name)
+    await conn.execute(
+        _INSERT_PLAN_SQL,
+        plan.id,
+        plan.name,
+        json.dumps([_verification_command_to_dict(command) for command in plan.verification_commands]),
+    )
     await _upsert_plan_metadata(conn, plan)
     inserted = 0
     for task in tasks:
@@ -1034,6 +1039,7 @@ async def _select_plan_with_tasks(
         tasks=tuple(tasks),
         origin=origin,
         repo_targets=repo_targets,
+        verification_commands=_decode_verification_commands_jsonb(plan_row["verification_commands"]),
     )
     logger.info("plan export: fetched plan %s with %d task(s)", plan.id, len(tasks))
     return plan, tasks
@@ -1071,6 +1077,39 @@ def _decode_jsonb(raw: object) -> list[str]:
             raise TypeError(f"JSONB array contains non-string element {item!r}")
         out.append(item)
     return out
+
+
+def _decode_verification_commands_jsonb(raw: object) -> tuple[VerificationCommand, ...]:
+    """Return ``raw`` as validated plan-level verification command metadata."""
+    if raw is None:
+        decoded: list[object] = []
+    elif isinstance(raw, list):
+        decoded = raw
+    elif isinstance(raw, str):
+        decoded_any = json.loads(raw)
+        if not isinstance(decoded_any, list):
+            raise TypeError(f"expected verification_commands JSONB array, got {type(decoded_any).__name__}")
+        decoded = decoded_any
+    else:
+        raise TypeError(f"unexpected verification_commands JSONB type {type(raw).__name__}: {raw!r}")
+    plan, _tasks = parse_plan_dict(
+        {
+            "plan_id": "_verification_commands",
+            "project": "_verification_commands",
+            "tasks": [],
+            "verification_commands": decoded,
+        }
+    )
+    return plan.verification_commands
+
+
+def _verification_command_to_dict(command: VerificationCommand) -> dict[str, object]:
+    return {
+        "name": command.name,
+        "command": command.command,
+        "required": command.required,
+        "source": command.source,
+    }
 
 
 def _event_row_to_operator_event(row: asyncpg.Record) -> EventRow:
