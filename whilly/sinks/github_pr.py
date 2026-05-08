@@ -16,9 +16,12 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from whilly.rollback.models import PreflightReport
+from whilly.rollback.service import build_preflight_report
 from whilly.security.prompt_sanitizer import sanitize_external_text, sanitize_title_slot
 from whilly.task_manager import Task
 
@@ -59,7 +62,7 @@ class PRResult:
     reason: str = ""  # populated on failure
     pr_number: int | None = None
     head_sha: str | None = None
-    failure_mode: str = ""  # one of "git_push_failed", "git_push_timeout", "gh_pr_create_failed", "gh_pr_create_timeout", "worktree_missing"
+    failure_mode: str = ""  # e.g. "rollback_preflight_failed", "git_push_failed", "gh_pr_create_failed"
     push_exit_code: int | None = None
     gh_exit_code: int | None = None
 
@@ -225,12 +228,14 @@ def open_pr_for_task(
     pr_timeout: int = 60,
     gh_bin: str = DEFAULT_GH_BIN,
     git_bin: str = DEFAULT_GIT_BIN,
+    preflight_builder: Callable[..., PreflightReport] | None = None,
 ) -> PRResult:
     """Push the worktree branch and open a PR.
 
     Steps:
-    1. `git push origin HEAD:{branch} --force-with-lease`
-    2. `gh pr create --base {base} --head {branch} --title ... --body-file ...`
+    1. Build rollback preflight evidence for the push target.
+    2. `git push origin HEAD:{branch} --force-with-lease`
+    3. `gh pr create --base {base} --head {branch} --title ... --body-file ...`
 
     Never raises — failures populate PRResult.reason.
     """
@@ -244,6 +249,24 @@ def open_pr_for_task(
             branch=branch,
             reason=f"worktree not found: {worktree_path}",
             failure_mode="worktree_missing",
+        )
+
+    builder = preflight_builder or build_preflight_report
+    try:
+        report = builder(worktree_path, operation="push", target_ref=branch)
+    except Exception as exc:  # noqa: BLE001 - PR sink must not raise into the worker loop.
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason=f"rollback preflight failed: {type(exc).__name__}: {exc}",
+            failure_mode="rollback_preflight_failed",
+        )
+    if not report.ok:
+        return PRResult(
+            ok=False,
+            branch=branch,
+            reason="rollback preflight failed: " + "; ".join(report.blockers),
+            failure_mode="rollback_preflight_failed",
         )
 
     # 1) push
