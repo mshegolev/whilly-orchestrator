@@ -20,6 +20,7 @@ from rich.table import Table
 from rich.text import Text
 
 from whilly.adapters.db import close_pool, create_pool
+from whilly.adapters.db.repository import TaskRepository
 from whilly.operator_views import (
     EventRow,
     OperatorSnapshot,
@@ -29,6 +30,11 @@ from whilly.operator_views import (
     WorkerRow,
     fetch_operator_snapshot,
     filter_snapshot,
+)
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_APPROVED,
+    HUMAN_REVIEW_CHANGES_REQUESTED,
+    HUMAN_REVIEW_REJECTED,
 )
 
 try:
@@ -43,6 +49,7 @@ except ImportError:  # pragma: no cover
 
 
 DATABASE_URL_ENV: Final[str] = "WHILLY_DATABASE_URL"
+REVIEWER_ENV: Final[str] = "WHILLY_OPERATOR_EMAIL"
 DEFAULT_POLL_INTERVAL: Final[float] = 1.0
 EXIT_OK: Final[int] = 0
 EXIT_ENVIRONMENT_ERROR: Final[int] = 2
@@ -75,6 +82,8 @@ class TuiState:
     immediate_refresh: bool = False
     stop: bool = False
     last_error: str | None = None
+    selected_review_index: int = 0
+    pending_review_action: str | None = None
 
 
 def build_tui_parser() -> argparse.ArgumentParser:
@@ -86,6 +95,11 @@ def build_tui_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interval", type=float, default=DEFAULT_POLL_INTERVAL, help="Seconds between refreshes.")
     parser.add_argument("--max-iterations", type=int, default=None, help="Test hook: stop after N polling ticks.")
     parser.add_argument("--no-color", action="store_true", help="Force plain output.")
+    parser.add_argument(
+        "--reviewer",
+        default=None,
+        help=f"Reviewer identity for human-review hotkeys (env: {REVIEWER_ENV}).",
+    )
     return parser
 
 
@@ -111,6 +125,7 @@ def run_tui_command(
                 max_iterations=args.max_iterations,
                 use_color=use_color,
                 key_source=key_source or _default_key_source(),
+                reviewer=(args.reviewer or os.environ.get(REVIEWER_ENV) or "").strip(),
             )
         )
     except OSError as exc:
@@ -146,6 +161,19 @@ def handle_tui_key(state: TuiState, key: str) -> None:
         state.searching = True
     elif key in _SURFACE_BY_KEY:
         state.surface = _SURFACE_BY_KEY[key]
+    elif state.surface is OperatorSurface.COMPLIANCE and key in {"j", "J"}:
+        state.selected_review_index += 1
+    elif state.surface is OperatorSurface.COMPLIANCE and key in {"k", "K"}:
+        state.selected_review_index = max(0, state.selected_review_index - 1)
+    elif state.surface is OperatorSurface.COMPLIANCE and key in {"a", "A"}:
+        state.pending_review_action = "approved"
+        state.immediate_refresh = True
+    elif state.surface is OperatorSurface.COMPLIANCE and key in {"x", "X"}:
+        state.pending_review_action = "rejected"
+        state.immediate_refresh = True
+    elif state.surface is OperatorSurface.COMPLIANCE and key in {"c", "C"}:
+        state.pending_review_action = "changes_requested"
+        state.immediate_refresh = True
 
 
 def render_tui(snapshot: OperatorSnapshot, state: TuiState) -> Group:
@@ -157,7 +185,7 @@ def render_tui(snapshot: OperatorSnapshot, state: TuiState) -> Group:
     if state.surface is OperatorSurface.OVERVIEW:
         body = _overview_table(visible)
     elif state.surface is OperatorSurface.COMPLIANCE:
-        body = _compliance_table(visible.review_gaps)
+        body = _compliance_table(visible.review_gaps, state)
     elif state.surface is OperatorSurface.PLANS_TASKS:
         body = _tasks_table(visible.tasks)
     elif state.surface is OperatorSurface.WORKERS:
@@ -175,6 +203,7 @@ async def _async_run(
     max_iterations: int | None,
     use_color: bool,
     key_source: KeySource,
+    reviewer: str,
 ) -> None:
     pool = await create_pool(dsn)
     state = TuiState()
@@ -192,6 +221,7 @@ async def _async_run(
                     console=console,
                     interval=interval,
                     max_iterations=max_iterations,
+                    reviewer=reviewer,
                 )
             )
     finally:
@@ -207,6 +237,7 @@ async def _poll_loop(
     console: Console,
     interval: float,
     max_iterations: int | None,
+    reviewer: str = "",
 ) -> None:
     iteration = 0
     with Live(render_tui(snapshot, state), console=console, refresh_per_second=4, screen=False) as live:
@@ -220,6 +251,8 @@ async def _poll_loop(
                     state.last_error = None
                 except (OSError, RuntimeError) as exc:
                     state.last_error = f"{type(exc).__name__}: {exc}"
+            if state.pending_review_action is not None:
+                await _apply_pending_review_action(pool, snapshot, state, reviewer=reviewer)
             live.update(render_tui(snapshot, state))
             if max_iterations is not None and iteration >= max_iterations:
                 state.stop = True
@@ -237,6 +270,52 @@ async def _listen_for_keys(state: TuiState, key_source: KeySource) -> None:
         if key is None:
             return
         handle_tui_key(state, key)
+
+
+async def _apply_pending_review_action(
+    pool: Any,
+    snapshot: OperatorSnapshot,
+    state: TuiState,
+    *,
+    reviewer: str,
+) -> bool:
+    """Apply the pending review action to the selected actionable gap."""
+
+    decision = state.pending_review_action
+    state.pending_review_action = None
+    if decision is None:
+        return False
+    reviewer = reviewer.strip()
+    if not reviewer:
+        state.last_error = f"reviewer required: pass --reviewer or set {REVIEWER_ENV}"
+        return False
+    selected = _selected_review_gap(filter_snapshot(snapshot, state.filter_text).review_gaps, state)
+    if selected is None:
+        state.last_error = "no actionable human review gap selected"
+        return False
+    await _record_human_review_decision(pool, selected, decision, reviewer)
+    state.last_error = None
+    state.immediate_refresh = True
+    return True
+
+
+async def _record_human_review_decision(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
+    event_type = {
+        "approved": HUMAN_REVIEW_APPROVED,
+        "rejected": HUMAN_REVIEW_REJECTED,
+        "changes_requested": HUMAN_REVIEW_CHANGES_REQUESTED,
+    }[decision]
+    payload: dict[str, Any] = {
+        "task_id": gap.task_id,
+        "decision": decision,
+        "reviewer": reviewer,
+        "source": "tui",
+    }
+    if gap.stage_id:
+        payload["stage_id"] = gap.stage_id
+    if decision == "changes_requested":
+        payload["requested_changes"] = ["Requested from TUI operator controls."]
+    await TaskRepository(pool).record_task_event(gap.task_id, event_type, payload)
 
 
 async def _empty_snapshot() -> OperatorSnapshot:
@@ -273,7 +352,8 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     filter_part = f"filter: {state.filter_text}" if state.filter_text else "filter: -"
     error_part = f" error: {state.last_error}" if state.last_error else ""
     table.caption = (
-        f"hotkeys: q=quit  r=refresh  1-5=switch  /=filter  p=pause  {filter_part}  "
+        f"hotkeys: q=quit  r=refresh  1-5=switch  /=filter  p=pause  "
+        f"j/k=select  a=approve  x=reject  c=changes  {filter_part}  "
         f"mode: {mode}  rendered: {snapshot.rendered_at.strftime('%H:%M:%S')}{error_part}"
     )
     table.caption_justify = "left"
@@ -324,24 +404,43 @@ def _overview_table(snapshot: OperatorSnapshot) -> Table:
     return table
 
 
-def _compliance_table(gaps: Sequence[ReviewGap]) -> Table:
+def _compliance_table(gaps: Sequence[ReviewGap], state: TuiState) -> Table:
     table = Table(
         title="Compliance - Human review / verification gaps",
         title_justify="left",
         expand=True,
         box=box.SIMPLE,
     )
+    table.add_column("Sel")
     table.add_column("Task")
     table.add_column("Plan")
     table.add_column("Reason")
     table.add_column("Stage")
     table.add_column("Reviewer")
+    table.add_column("Actions")
     if not gaps:
-        table.add_row("(no gaps)", "", "", "", "")
+        table.add_row("", "(no gaps)", "", "", "", "", "")
         return table
+    selected = _selected_review_gap(gaps, state)
     for gap in gaps:
-        table.add_row(gap.task_id, gap.plan_id, gap.reason, gap.stage_id or "-", gap.reviewer or "-")
+        table.add_row(
+            ">" if gap == selected else "",
+            gap.task_id,
+            gap.plan_id,
+            gap.reason,
+            gap.stage_id or "-",
+            gap.reviewer or "-",
+            "a/x/c" if gap.actionable else "-",
+        )
     return table
+
+
+def _selected_review_gap(gaps: Sequence[ReviewGap], state: TuiState) -> ReviewGap | None:
+    actionable = tuple(gap for gap in gaps if gap.actionable)
+    if not actionable:
+        return None
+    index = min(max(state.selected_review_index, 0), len(actionable) - 1)
+    return actionable[index]
 
 
 def _tasks_table(tasks: Sequence[OperatorTaskRow]) -> Table:
@@ -512,6 +611,7 @@ __all__ = [
     "DEFAULT_POLL_INTERVAL",
     "EXIT_ENVIRONMENT_ERROR",
     "EXIT_OK",
+    "REVIEWER_ENV",
     "TuiState",
     "build_tui_parser",
     "handle_tui_key",

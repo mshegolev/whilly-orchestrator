@@ -96,6 +96,7 @@ def _snapshot() -> OperatorSnapshot:
                 plan_id="P-1",
                 reason="awaiting human review",
                 stage_id="release_review",
+                actionable=True,
             ),
         ),
     )
@@ -117,13 +118,32 @@ def test_render_tui_overview_includes_surfaces_and_hotkeys() -> None:
     assert "r=refresh" in rendered
     assert "/=filter" in rendered
     assert "p=pause" in rendered
+    assert "j/k=select" in rendered
+    assert "a=approve" in rendered
+    assert "x=reject" in rendered
+    assert "c=changes" in rendered
 
 
-def test_handle_tui_key_switches_views_filter_pause_refresh_and_quit() -> None:
+def test_handle_tui_key_switches_views_filter_pause_refresh_review_actions_and_quit() -> None:
     state = TuiState()
 
     handle_tui_key(state, "2")
     assert state.surface is OperatorSurface.COMPLIANCE
+
+    handle_tui_key(state, "j")
+    assert state.selected_review_index == 1
+    handle_tui_key(state, "k")
+    assert state.selected_review_index == 0
+    handle_tui_key(state, "a")
+    assert state.pending_review_action == "approved"
+    assert state.immediate_refresh is True
+    state.pending_review_action = None
+    state.immediate_refresh = False
+    handle_tui_key(state, "x")
+    assert state.pending_review_action == "rejected"
+    state.pending_review_action = None
+    handle_tui_key(state, "c")
+    assert state.pending_review_action == "changes_requested"
 
     handle_tui_key(state, "p")
     assert state.paused is True
@@ -187,6 +207,46 @@ def test_render_tui_compliance_shows_human_review_stage() -> None:
     assert "Queue health" in rendered
     assert "awaiting human review" in rendered
     assert "release_review" in rendered
+    assert "Actions" in rendered
+    assert "a/x/c" in rendered
+
+
+@pytest.mark.asyncio
+async def test_apply_pending_review_action_records_selected_gap(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[tuple[ReviewGap, str, str]] = []
+
+    async def fake_record(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
+        recorded.append((gap, decision, reviewer))
+
+    monkeypatch.setattr(tui_module, "_record_human_review_decision", fake_record)
+    state = TuiState(surface=OperatorSurface.COMPLIANCE, pending_review_action="approved")
+
+    applied = await tui_module._apply_pending_review_action(object(), _snapshot(), state, reviewer="lead@example.com")
+
+    assert applied is True
+    assert recorded == [(_snapshot().review_gaps[0], "approved", "lead@example.com")]
+    assert state.pending_review_action is None
+    assert state.immediate_refresh is True
+    assert state.last_error is None
+
+
+@pytest.mark.asyncio
+async def test_apply_pending_review_action_requires_reviewer(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[tuple[ReviewGap, str, str]] = []
+
+    async def fake_record(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
+        recorded.append((gap, decision, reviewer))
+
+    monkeypatch.setattr(tui_module, "_record_human_review_decision", fake_record)
+    state = TuiState(surface=OperatorSurface.COMPLIANCE, pending_review_action="approved")
+
+    applied = await tui_module._apply_pending_review_action(object(), _snapshot(), state, reviewer="")
+
+    assert applied is False
+    assert recorded == []
+    assert state.pending_review_action is None
+    assert state.immediate_refresh is False
+    assert "reviewer required" in (state.last_error or "")
 
 
 def test_run_tui_command_without_database_url_returns_exit_2(

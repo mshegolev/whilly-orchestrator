@@ -333,6 +333,20 @@ async def test_dashboard_renders_compliance_gaps_and_events(
     assert "human_review.required" in body
     assert "Events" in body
     assert "START" in body
+    assert 'id="dashboard-admin-token"' in body
+    assert 'id="dashboard-reviewer"' in body
+    assert "j/k=select" in body
+    assert "a=approve" in body
+    assert "x=reject" in body
+    assert "c=changes" in body
+    assert 'data-review-task="t-human-review"' in body
+    assert 'data-review-stage="release_review"' in body
+    assert 'data-review-actionable="true"' in body
+    assert 'data-review-decision="approved"' in body
+    assert 'data-review-decision="rejected"' in body
+    assert 'data-review-decision="changes_requested"' in body
+    assert "/api/v1/tasks/" in body
+    assert _BOOTSTRAP_TOKEN not in body
 
 
 # ─── Initial render: rows for ready / in_progress / done tasks ─────────

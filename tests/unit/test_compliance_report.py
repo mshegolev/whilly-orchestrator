@@ -44,10 +44,11 @@ def test_human_review_compliance_reports_admin_controls_and_remaining_ui_gap() -
 
     finding = report.capability("Human review checkpoint model")
 
-    assert finding.status is CapabilityStatus.PARTIAL
+    assert finding.status is CapabilityStatus.PASS
     assert "admin human-review decision endpoint" in finding.evidence.lower()
     assert "release-hold enforcement" in finding.evidence.lower()
-    assert "dashboard/tui operator controls" in finding.gap.lower()
+    assert "dashboard/tui operator controls" in finding.evidence.lower()
+    assert "dashboard/tui operator controls" not in finding.gap.lower()
     assert "approval capture/enforcement is not yet" not in finding.gap.lower()
 
 
