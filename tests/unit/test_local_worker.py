@@ -60,6 +60,11 @@ from whilly.pipeline.verification import (
     VerificationCommandResult,
     VerificationRunOutcome,
 )
+from whilly.repair.events import (
+    REPAIR_ATTEMPT_COMPLETED_EVENT,
+    REPAIR_ATTEMPT_REQUESTED_EVENT,
+    REPAIR_ESCALATED_EVENT,
+)
 from whilly.worker import local as worker_local
 from whilly.worker.local import (
     DEFAULT_IDLE_WAIT,
@@ -124,6 +129,7 @@ class FakeRepo:
         self.complete_results: list[Task | VersionConflictError] = []
         self.fail_results: list[Task | VersionConflictError] = []
         self.release_results: list[Task | VersionConflictError] = []
+        self.insert_repair_task_results: list[Task] = []
 
         # Recorded calls for assertion. Each entry captures the exact
         # arguments passed so tests can verify version threading.
@@ -132,12 +138,14 @@ class FakeRepo:
         self.complete_calls: list[tuple[TaskId, int, object]] = []
         self.fail_calls: list[tuple[TaskId, int, str]] = []
         self.release_calls: list[tuple[TaskId, int, str]] = []
+        self.insert_repair_task_calls: list[tuple[Task, Task, object]] = []
         self.fail_details: list[dict[str, object] | None] = []
         self.fail_prelude_events: list[tuple[str | None, dict[str, object] | None]] = []
         self.event_calls: list[tuple[TaskId, str, dict[str, object], dict[str, object] | None]] = []
         self.task_event_results: dict[TaskId, list[dict[str, object]]] = {}
         self.list_task_events_calls: list[tuple[TaskId, str | None]] = []
         self.workers_paused_results: list[bool] = []
+        self.call_order: list[tuple[str, str]] = []
 
     async def is_workers_paused(self) -> bool:
         if not self.workers_paused_results:
@@ -161,6 +169,7 @@ class FakeRepo:
 
     async def release_task(self, task_id: TaskId, version: int, reason: str) -> Task:
         self.release_calls.append((task_id, version, reason))
+        self.call_order.append(("release_task", task_id))
         if not self.release_results:
             raise AssertionError("FakeRepo.release_task called more times than scripted")
         result = self.release_results.pop(0)
@@ -177,10 +186,18 @@ class FakeRepo:
         detail: dict[str, object] | None = None,
     ) -> None:
         self.event_calls.append((task_id, event_type, payload or {}, detail))
+        self.call_order.append((event_type, task_id))
 
     async def list_task_events(self, task_id: TaskId, event_prefix: str | None = None) -> tuple[dict[str, object], ...]:
         self.list_task_events_calls.append((task_id, event_prefix))
         return tuple(self.task_event_results.get(task_id, ()))
+
+    async def insert_repair_task(self, orig_task: Task, repair_task: Task, event: object) -> Task:
+        self.insert_repair_task_calls.append((orig_task, repair_task, event))
+        self.call_order.append(("insert_repair_task", repair_task.id))
+        if self.insert_repair_task_results:
+            return self.insert_repair_task_results.pop(0)
+        return repair_task
 
     async def complete_task(
         self,
@@ -189,6 +206,7 @@ class FakeRepo:
         cost_usd: object = None,  # TASK-102: optional spend echo
     ) -> Task:
         self.complete_calls.append((task_id, version, cost_usd))
+        self.call_order.append(("complete_task", task_id))
         if not self.complete_results:
             raise AssertionError("FakeRepo.complete_task called more times than scripted")
         result = self.complete_results.pop(0)
@@ -207,6 +225,7 @@ class FakeRepo:
         prelude_payload: dict[str, object] | None = None,
     ) -> Task:
         self.fail_calls.append((task_id, version, reason))
+        self.call_order.append(("fail_task", task_id))
         self.fail_details.append(detail)
         self.fail_prelude_events.append((prelude_event_type, prelude_payload))
         if not self.fail_results:
@@ -857,6 +876,292 @@ async def test_local_worker_configured_ci_status_stage_emits_ci_poll_events(fake
     event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
     assert CI_POLL_STARTED_EVENT in event_types
     assert CI_POLL_RESULT_EVENT in event_types
+
+
+async def test_local_worker_requests_repair_task_with_budget_remaining(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task(
+        "T-ci-repair",
+        status=TaskStatus.CLAIMED,
+        version=1,
+    )
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        key_files=("whilly/worker/local.py",),
+        repo_target_id="repo-main",
+    )
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="ci-status",
+                    command="ci://github/acme/widgets#pr-42",
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=None,
+                    stdout="",
+                    stderr="github_status_rollup_failed",
+                    duration_s=0.2,
+                    source="ci",
+                    repair_max_attempts=2,
+                ),
+            )
+        )
+
+    stats = await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert stats.failed == 1
+    assert repo.fail_calls == [("T-ci-repair", 2, "verification_failed")]
+    assert repo.fail_details[0] is not None
+    failed_result = repo.fail_details[0]["failed_results"][0]  # type: ignore[index]
+    assert failed_result["source"] == "ci"  # type: ignore[index]
+    assert failed_result["repair_max_attempts"] == 2  # type: ignore[index]
+    assert repo.release_calls == []
+    assert len(repo.insert_repair_task_calls) == 1
+    orig_task, repair_task, event = repo.insert_repair_task_calls[0]
+    assert orig_task.id == "T-ci-repair"
+    assert repair_task.id == "T-ci-repair-repair-1"
+    assert repair_task.dependencies == ()
+    assert repair_task.key_files == ("whilly/worker/local.py",)
+    assert repair_task.repo_target_id == "repo-main"
+    assert getattr(event, "event_type") == REPAIR_ATTEMPT_REQUESTED_EVENT
+    assert getattr(event, "payload")["attempt"] == 1
+    assert getattr(event, "payload")["max_attempts"] == 2
+    assert getattr(event, "payload")["trigger_type"] == "ci"
+
+
+async def test_local_worker_escalates_when_repair_budget_exhausted(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-exhausted-repair-1", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="unit",
+                    command="pytest -q tests/unit",
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=1,
+                    stdout="failed",
+                    stderr="",
+                    duration_s=0.2,
+                    source="profile",
+                    repair_max_attempts=1,
+                ),
+            )
+        )
+
+    await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert repo.insert_repair_task_calls == []
+    escalated = next(
+        payload for _task_id, event_type, payload, _detail in repo.event_calls if event_type == REPAIR_ESCALATED_EVENT
+    )
+    assert escalated["task_id"] == "T-exhausted"
+    assert escalated["attempts"] == 1
+    assert escalated["max_attempts"] == 1
+    assert escalated["reason"] == "repair_budget_exhausted"
+    assert escalated["last_repair_task_id"] == "T-exhausted-repair-1"
+
+
+async def test_local_worker_repair_path_does_not_release_failed_task(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-no-release", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            results=(
+                VerificationCommandResult(
+                    name="ci-status",
+                    command="ci://github/acme/widgets#pr-43",
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=None,
+                    stdout="",
+                    stderr="github_status_rollup_failed",
+                    duration_s=0.2,
+                    source="ci",
+                    repair_max_attempts=1,
+                ),
+            )
+        )
+
+    await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert repo.insert_repair_task_calls
+    assert repo.release_calls == []
+
+
+async def test_local_worker_records_repair_attempt_completed_on_done(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-original-repair-1", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    done = replace(running, status=TaskStatus.DONE, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.complete_results.append(done)
+    repo.task_event_results["T-original"] = [
+        {
+            "event_type": REPAIR_ATTEMPT_REQUESTED_EVENT,
+            "payload": {
+                "task_id": "T-original",
+                "plan_id": PLAN_ID,
+                "repair_task_id": "T-original-repair-1",
+                "attempt": 1,
+                "max_attempts": 3,
+            },
+        }
+    ]
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    stats = await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+    )
+
+    assert stats.completed == 1
+    completed_event = next(
+        payload
+        for _task_id, event_type, payload, _detail in repo.event_calls
+        if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT
+    )
+    assert completed_event["orig_task_id"] == "T-original"
+    assert completed_event["repair_task_id"] == "T-original-repair-1"
+    assert completed_event["attempt"] == 1
+    assert completed_event["max_attempts"] == 3
+    assert completed_event["terminal_status"] == "DONE"
+    assert repo.call_order.index((REPAIR_ATTEMPT_COMPLETED_EVENT, "T-original-repair-1")) < repo.call_order.index(
+        ("complete_task", "T-original-repair-1")
+    )
+    assert repo.list_task_events_calls == [("T-original", REPAIR_ATTEMPT_REQUESTED_EVENT)]
+
+
+async def test_local_worker_records_repair_attempt_completed_on_failed(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-original-repair-2", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+    repo.task_event_results["T-original"] = [
+        {
+            "event_type": REPAIR_ATTEMPT_REQUESTED_EVENT,
+            "payload": {
+                "task_id": "T-original",
+                "plan_id": PLAN_ID,
+                "repair_task_id": "T-original-repair-2",
+                "attempt": 2,
+                "max_attempts": 4,
+            },
+        }
+    ]
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="repair still failed", exit_code=1, is_complete=False)
+
+    stats = await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+    )
+
+    assert stats.failed == 1
+    completed_event = next(
+        payload
+        for _task_id, event_type, payload, _detail in repo.event_calls
+        if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT
+    )
+    assert completed_event["orig_task_id"] == "T-original"
+    assert completed_event["repair_task_id"] == "T-original-repair-2"
+    assert completed_event["attempt"] == 2
+    assert completed_event["max_attempts"] == 4
+    assert completed_event["terminal_status"] == "FAILED"
+    assert repo.call_order.index((REPAIR_ATTEMPT_COMPLETED_EVENT, "T-original-repair-2")) < repo.call_order.index(
+        ("fail_task", "T-original-repair-2")
+    )
+    assert repo.list_task_events_calls == [("T-original", REPAIR_ATTEMPT_REQUESTED_EVENT)]
 
 
 async def test_shutdown_during_verification_releases_task(fake_sleep: list[float]) -> None:
