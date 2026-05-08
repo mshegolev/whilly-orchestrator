@@ -25,11 +25,14 @@ from whilly.operator_views import (
     EventRow,
     OperatorSnapshot,
     OperatorSurface,
+    OperatorTable,
     OperatorTaskRow,
     ReviewGap,
     WorkerRow,
     fetch_operator_snapshot,
     filter_snapshot,
+    operator_surface_items,
+    operator_table_columns,
 )
 from whilly.pipeline.human_review_decisions import (
     HumanReviewDecisionCommand,
@@ -62,15 +65,6 @@ _SURFACE_BY_KEY: Final[dict[str, OperatorSurface]] = {
     "4": OperatorSurface.WORKERS,
     "5": OperatorSurface.EVENTS,
 }
-
-_SURFACE_LABEL: Final[dict[OperatorSurface, str]] = {
-    OperatorSurface.OVERVIEW: "Overview",
-    OperatorSurface.COMPLIANCE: "Compliance",
-    OperatorSurface.PLANS_TASKS: "Plans/Tasks",
-    OperatorSurface.WORKERS: "Workers",
-    OperatorSurface.EVENTS: "Events",
-}
-
 
 @dataclass
 class TuiState:
@@ -369,10 +363,14 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     if snapshot.control_state.paused:
         title += " [WORKERS PAUSED]"
     table = Table(title=title, title_justify="left", expand=True, show_header=False, box=None, padding=(0, 1))
-    for _ in range(5):
+    surface_items = operator_surface_items()
+    for _ in surface_items:
         table.add_column()
     table.add_row(
-        *[_surface_tab(surface, index, state.surface) for index, surface in enumerate(OperatorSurface, start=1)]
+        *[
+            _surface_tab(surface, label, index, state.surface)
+            for index, (surface, label) in enumerate(surface_items, start=1)
+        ]
     )
     mode = "search" if state.searching else "live"
     filter_part = f"filter: {state.filter_text}" if state.filter_text else "filter: -"
@@ -386,11 +384,11 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     return table
 
 
-def _surface_tab(surface: OperatorSurface, index: int, active: OperatorSurface) -> Text:
-    label = f"{index} {_SURFACE_LABEL[surface]}"
+def _surface_tab(surface: OperatorSurface, label: str, index: int, active: OperatorSurface) -> Text:
+    tab_label = f"{index} {label}"
     if surface is active:
-        return Text(label, style="bold reverse")
-    return Text(label)
+        return Text(tab_label, style="bold reverse")
+    return Text(tab_label)
 
 
 def _queue_health_table(snapshot: OperatorSnapshot) -> Table:
@@ -437,15 +435,9 @@ def _compliance_table(gaps: Sequence[ReviewGap], state: TuiState) -> Table:
         expand=True,
         box=box.SIMPLE,
     )
-    table.add_column("Sel")
-    table.add_column("Task")
-    table.add_column("Plan")
-    table.add_column("Reason")
-    table.add_column("Stage")
-    table.add_column("Reviewer")
-    table.add_column("Actions")
+    field_keys = _add_contract_columns(table, OperatorTable.REVIEW_GAPS)
     if not gaps:
-        table.add_row("", "(no gaps)", "", "", "", "", "")
+        table.add_row(*_empty_contract_row("(no gaps)", len(field_keys), label_index=1))
         return table
     selected = _selected_review_gap(gaps, state)
     for gap in gaps:
@@ -471,14 +463,9 @@ def _selected_review_gap(gaps: Sequence[ReviewGap], state: TuiState) -> ReviewGa
 
 def _tasks_table(tasks: Sequence[OperatorTaskRow]) -> Table:
     table = Table(title="Plans/Tasks", title_justify="left", expand=True, box=box.SIMPLE)
-    table.add_column("Task")
-    table.add_column("Plan")
-    table.add_column("Status")
-    table.add_column("Priority")
-    table.add_column("Worker")
-    table.add_column("Review")
+    field_keys = _add_contract_columns(table, OperatorTable.TASKS)
     if not tasks:
-        table.add_row("(no tasks)", "", "", "", "", "")
+        table.add_row(*_empty_contract_row("(no tasks)", len(field_keys)))
         return table
     for task in tasks:
         table.add_row(
@@ -494,13 +481,9 @@ def _tasks_table(tasks: Sequence[OperatorTaskRow]) -> Table:
 
 def _workers_table(workers: Sequence[WorkerRow]) -> Table:
     table = Table(title="Workers", title_justify="left", expand=True, box=box.SIMPLE)
-    table.add_column("Worker")
-    table.add_column("Host")
-    table.add_column("Owner")
-    table.add_column("Status")
-    table.add_column("Heartbeat")
+    field_keys = _add_contract_columns(table, OperatorTable.WORKERS)
     if not workers:
-        table.add_row("(no workers)", "", "", "", "")
+        table.add_row(*_empty_contract_row("(no workers)", len(field_keys)))
         return table
     for worker in workers:
         table.add_row(
@@ -515,13 +498,9 @@ def _workers_table(workers: Sequence[WorkerRow]) -> Table:
 
 def _events_table(events: Sequence[EventRow]) -> Table:
     table = Table(title="Events", title_justify="left", expand=True, box=box.SIMPLE)
-    table.add_column("Id")
-    table.add_column("Task")
-    table.add_column("Plan")
-    table.add_column("Type")
-    table.add_column("At")
+    field_keys = _add_contract_columns(table, OperatorTable.EVENTS)
     if not events:
-        table.add_row("(no events)", "", "", "", "")
+        table.add_row(*_empty_contract_row("(no events)", len(field_keys)))
         return table
     for event in events:
         table.add_row(
@@ -532,6 +511,20 @@ def _events_table(events: Sequence[EventRow]) -> Table:
             event.created_at.strftime("%H:%M:%S"),
         )
     return table
+
+
+def _add_contract_columns(table: Table, operator_table: OperatorTable) -> tuple[str, ...]:
+    columns = operator_table_columns(operator_table, "tui")
+    for column in columns:
+        table.add_column(column.label_for("tui"))
+    return tuple(column.field_key for column in columns)
+
+
+def _empty_contract_row(label: str, column_count: int, *, label_index: int = 0) -> tuple[str, ...]:
+    row = [""] * column_count
+    if row:
+        row[label_index] = label
+    return tuple(row)
 
 
 def _status_text(status: str) -> Text:
