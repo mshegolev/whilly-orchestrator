@@ -4,17 +4,17 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 11
 current_phase_name: CI polling and bounded repair
-current_plan: 0
-status: planning
-stopped_at: Phase 10 complete; ready to plan Phase 11.
-last_updated: "2026-05-08T17:23:22.389Z"
+current_plan: 1
+status: in_progress
+stopped_at: Completed 11-ci-polling-and-bounded-repair-01-PLAN.md
+last_updated: "2026-05-08T18:06:58.341Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
   completed_phases: 10
-  total_plans: 18
-  completed_plans: 18
-  percent: 83
+  total_plans: 24
+  completed_plans: 19
+  percent: 79
 ---
 
 # Project State
@@ -31,20 +31,20 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 11
 Current Phase Name: CI polling and bounded repair
 Total Phases: 12
-Current Plan: 0
-Total Plans in Phase: 1
-Status: Ready to plan
+Current Plan: 1
+Total Plans in Phase: 6
+Status: In Progress
 Last Activity: 2026-05-08
-Last Activity Description: Phase 10 rollback safety net verified and completed.
+Last Activity Description: Plan 11-01 completed CI polling primitives and source="ci" verification dispatch.
 
-Progress: [#########-] 83%
+Progress: [########--] 79%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
+- Total plans completed: 19
 - Average duration: 6 min for tracked GSD execution
-- Total execution time: 35 min tracked after GSD initialization
+- Total execution time: 40 min tracked after GSD initialization
 
 **By Phase:**
 
@@ -69,6 +69,7 @@ Progress: [#########-] 83%
 | Phase 10-rollback-safety-net P01 | 7 min 6 sec | 2 tasks | 5 files |
 | Phase 10-rollback-safety-net P02 | 6 min 26 sec | 2 tasks | 4 files |
 | Phase 10-rollback-safety-net P03 | 7 min 27 sec | 2 tasks | 6 files |
+| Phase 11-ci-polling-and-bounded-repair P01 | 5 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,9 @@ Recent decisions affecting current work:
 - [Phase 10-rollback-safety-net]: PR push preflight uses the computed branch string passed to git push origin HEAD:<branch>.
 - [Phase 10-rollback-safety-net]: Preflight blockers return PRResult(failure_mode="rollback_preflight_failed") and skip push/PR creation.
 - [Phase 10-rollback-safety-net]: Compliance describes Git rollback as operator-triggered only; no autonomous recovery.
+- [Phase 11-ci-polling-and-bounded-repair]: source="ci" dispatches to a CI poll runner before shell scanning or subprocess execution.
+- [Phase 11-ci-polling-and-bounded-repair]: A missing CI poll runner produces explicit unavailable CI evidence with reason ci_poll_runner_not_configured.
+- [Phase 11-ci-polling-and-bounded-repair]: The GitHub CI adapter is one-shot and returns non-success evidence for provider auth, availability, and timeout failures.
 
 ### Pending Todos
 
@@ -123,6 +127,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T17:23:22.389Z
-Stopped at: Phase 10 complete; ready to plan Phase 11.
+Last session: 2026-05-08T18:06:58.338Z
+Stopped at: Completed 11-ci-polling-and-bounded-repair-01-PLAN.md
 Resume file: None
