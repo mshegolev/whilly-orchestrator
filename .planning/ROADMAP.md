@@ -15,7 +15,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 4: Compact operator identity panel** - Admin bearer and reviewer inputs move out of the permanent topbar.
 - [x] **Phase 5: Shared operator table contract** - TUI and WUI table columns follow an explicit shared contract.
 - [x] **Phase 6: Mobile WUI row actions** - Mobile tables expose row details and actions without cramped horizontal scroll.
-- [ ] **Phase 7: Review action affordances** - Reject/request-changes paths become clearer and safer.
+- [x] **Phase 7: Review action affordances** - Reject/request-changes paths become clearer and safer.
 - [ ] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
 - [ ] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
 - [ ] **Phase 10: Rollback safety net** - Backup tags, branch preflight, and explicit rollback CLI are operator-ready.
@@ -122,10 +122,10 @@ Plans:
   1. Review action controls communicate approve/reject/request-changes clearly.
   2. Destructive or blocking decisions have confirmation, undo, or stronger comment affordances.
   3. TUI and WUI hotkeys remain efficient for expert operators.
-**Plans**: Ready to plan
+**Plans**: Complete
 
 Plans:
-- [ ] 07-01: Improve review action labels, tooltips, prompts, and recovery affordances.
+- [x] 07-01: Improve review action labels, tooltips, prompts, and recovery affordances.
 
 ### Phase 8: Sandbox and secrets hardening
 **Goal**: Implement `a3-a4-sandbox-and-secrets-lint` from `docs/CODEX-MISSION.md` without overclaiming full VM isolation.
@@ -212,7 +212,7 @@ GSD initialization and are now tracked here as completed history.
 | 4. Compact operator identity panel | 1/1 | Complete | 2026-05-08 |
 | 5. Shared operator table contract | 1/1 | Complete | 2026-05-08 |
 | 6. Mobile WUI row actions | 1/1 | Complete | 2026-05-08 |
-| 7. Review action affordances | 0/1 | Not started | - |
+| 7. Review action affordances | 1/1 | Complete | 2026-05-08 |
 | 8. Sandbox and secrets hardening | 0/1 | Not started | - |
 | 9. Profile-native verification wiring | 0/1 | Not started | - |
 | 10. Rollback safety net | 0/1 | Not started | - |
