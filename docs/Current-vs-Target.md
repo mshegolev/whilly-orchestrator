@@ -19,15 +19,14 @@ Current Whilly is between Level 1 and Level 2 of the target roadmap:
   shell guards, audit events, metrics, SSE, web dashboard, PR feedback polling,
   repo-target metadata, project profiles, built-in profile vocabulary, project
   config plan generation, audit-event pipeline stage lifecycle, configured
-  verification commands that block `DONE` on required failure, and env-gated
-  GitHub PR sink stages for project-config plans.
+  verification commands that block `DONE` on required failure, human-review
+  approval/rejection/change-request controls in the web dashboard and TUI, and
+  env-gated GitHub PR sink stages for project-config plans.
 - **Partial:** profile-native verification command runtime wiring,
-  human-review operator controls/compliance probes, non-PR configured sinks,
-  multi-repo execution, sandbox/VM isolation, PR-review repair loops, semantic
-  memory, and robust smart rollback.
-- **Target:** profile-native runtime pipeline stages, first-class human-review
-  approval workflows, configured sinks, bounded repair loops, CI polling, and
-  governance policy.
+  non-PR configured sinks, multi-repo execution, sandbox/VM isolation,
+  PR-review repair loops, semantic memory, and robust smart rollback.
+- **Target:** profile-native runtime pipeline stages, configured sinks, bounded
+  repair loops, CI polling, and governance policy.
 
 Do not describe current Whilly as providing full autonomous multi-repo
 execution, mandatory CI/lint verification unless verification commands are

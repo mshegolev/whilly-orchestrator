@@ -29,7 +29,7 @@ Fresh evidence command:
 
 Latest refreshed report at the time of this roadmap update:
 
-- Repository commit: `2a8bc87`
+- Repository commit: `5c601b3`
 - Date: `2026-05-08`
 - Ignored local evidence files: `out/compliance-report.md`,
   `out/compliance-report.json`
@@ -38,23 +38,20 @@ Whilly is correctly positioned as an AI-assisted orchestration control plane,
 not a fully autonomous developer. Core queueing, state transitions, sources,
 workers, guards, events, metrics, dashboard, PR helper paths, repo-target
 metadata, project profiles, project-config plan generation, stage audit events,
-required verification commands, and configured PR sink stages now exist.
+required verification commands, human-review approval/rejection/change-request
+controls in the web dashboard and TUI, and configured PR sink stages now exist.
 
 The remaining capability gaps are:
 
-1. Human review approval/enforcement is still partial.
-2. Automatic PR creation remains opt-in runtime behavior, not default behavior.
-3. PR review feedback remains polling-based, not an automatic repair loop.
-4. Multi-repo execution has metadata/workspace support but no full planner.
-5. Sandbox/VM isolation is not enforced per task.
-6. Semantic memory is not implemented in this repository slice.
-7. Git rollback exists only as verifier-helper behavior, not a general smart
+1. Automatic PR creation remains opt-in runtime behavior, not default behavior.
+2. PR review feedback remains polling-based, not an automatic repair loop.
+3. Multi-repo execution has metadata/workspace support but no full planner.
+4. Sandbox/VM isolation is not enforced per task.
+5. Semantic memory is not implemented in this repository slice.
+6. Git rollback exists only as verifier-helper behavior, not a general smart
    rollback system.
-8. Profile-native verification wiring is still a gap even though ad hoc
+7. Profile-native verification wiring is still a gap even though ad hoc
    required verification commands can block `DONE`.
-9. Compliance documentation mismatch detection currently reports README
-   false positives for negative statements such as "do not describe current
-   Whilly as full sandbox/VM isolation or semantic long-term memory."
 
 ## Capability Matrix
 
@@ -71,7 +68,7 @@ The remaining capability gaps are:
 | Profile validation | Implemented MVP | Loader validates source/sink/runner names, dependencies, repo roles, human-loop contradictions, and unsafe verification commands. | Profile-native runtime wiring remains separate. |
 | Configurable pipeline stages | Implemented MVP | `whilly/pipeline/events.py`, local/remote workers | Stage lifecycle is audit-event based; no dedicated profile executor yet. |
 | Required verification before DONE | Implemented when configured | `whilly/pipeline/verification.py`, `whilly run --verify-command` | Profile-native verification command wiring remains future work. |
-| Human review checkpoints | Partial | `whilly/pipeline/human_review.py`, API event allowlist, dashboard/TUI projections | Checkpoint events exist; full approval capture/enforcement queue still needs hardening. |
+| Human review checkpoints | Implemented | `whilly/pipeline/human_review.py`, admin human-review API, release-hold enforcement, dashboard/TUI operator controls | Keep reviewer identity and admin-token handling documented. |
 | PR creation as configured sink | Partial | `WHILLY_AUTO_OPEN_PR=1`, `whilly/pipeline/sinks.py`, post-complete PR hook | Opt-in and credential-dependent; do not claim unconditional behavior. |
 | PR review feedback loop | Partial/future | `whilly pr-feedback poll` one-shot poller | Not automatic repair loop; keep documented as future. |
 | Multi-repo execution | Partial/future | `repo_targets`, `task_repo_targets`, `whilly/workspaces.py` | Per-task repo workspace exists, but full multi-repo orchestration is not current product guarantee. |
@@ -152,6 +149,8 @@ sentences as positive claims.
 
 #### Task 3: Human Review Approval Workflow Hardening
 
+Status: **implemented and pushed in `5c601b3`**.
+
 **Files:**
 - Modify: `whilly/pipeline/human_review.py`
 - Modify: `whilly/adapters/transport/server.py`
@@ -173,11 +172,11 @@ sentences as positive claims.
 
 **Act**
 
-- Add or complete dashboard/TUI controls for approval, rejection, or
-  change-request actions.
-- Update compliance probes so implemented API capture/enforcement is not
-  under-reported.
-- Ensure configured risky stages/sinks stay blocked until approval evidence
+- Added dashboard/TUI controls for approval, rejection, and change-request
+  actions.
+- Updated compliance probes so API capture, release-hold enforcement, and
+  operator controls are reported as implemented.
+- Kept configured risky stages/sinks blocked until matching approval evidence
   exists.
 
 **Verify**
@@ -188,8 +187,8 @@ sentences as positive claims.
 .venv/bin/python -m whilly compliance report --format markdown --out out/compliance-report.md
 ```
 
-Expected evidence: compliance no longer under-reports existing approval
-capture/enforcement, and only missing operator controls remain visible.
+Expected evidence: compliance reports `Human review checkpoint model` as
+`PASS`, with dashboard/TUI operator-control evidence.
 
 #### Task 4: Profile-Native Verification Wiring
 
@@ -505,7 +504,7 @@ Validation:
 
 ### Phase 5: Human Review Checkpoint Model
 
-Status: **MVP events/projections implemented; approval workflow remains partial**.
+Status: **implemented; approval workflow is event-backed and exposed in WUI/TUI**.
 
 **Files:**
 - Create: `whilly/pipeline/human_review.py`
@@ -517,7 +516,7 @@ Status: **MVP events/projections implemented; approval workflow remains partial*
 - [x] Add plan-show checkpoint markers from task/event evidence.
 - [x] Keep approval as auditable data, not a new terminal task state for MVP.
 - [x] Block configured risky sinks/stages until approval evidence exists.
-- [ ] Complete dashboard/API approval queue hardening so compliance can move from `PARTIAL` to `PASS`.
+- [x] Complete dashboard/API/TUI approval queue hardening so compliance can move from `PARTIAL` to `PASS`.
 
 Validation:
 
@@ -572,10 +571,8 @@ Use the task decomposition above as the active backlog.
 
 Recommended order:
 
-1. Task 2: fix compliance documentation-mismatch false positives.
-2. Task 3: complete human review operator-control hardening and compliance probe alignment.
-3. Task 5: implement `a3-a4-sandbox-and-secrets-lint` from `docs/CODEX-MISSION.md`.
-4. Task 4: wire profile-native verification commands into runtime.
-5. Task 6: implement backup tag, branch protection preflight, and smart rollback CLI.
-6. Task 7: add CI polling and bounded repair.
-7. Task 9: settle governance and semantic-memory target status.
+1. Task 5: implement `a3-a4-sandbox-and-secrets-lint` from `docs/CODEX-MISSION.md`.
+2. Task 4: wire profile-native verification commands into runtime.
+3. Task 6: implement backup tag, branch protection preflight, and smart rollback CLI.
+4. Task 7: add CI polling and bounded repair.
+5. Task 9: settle governance and semantic-memory target status.
