@@ -8,6 +8,8 @@ from whilly.ci import CI_PROVIDER_GITHUB
 from whilly.ci.events import make_ci_poll_result_event, make_ci_poll_started_event
 from whilly.ci.github import GitHubCIPollAdapter
 from whilly.ci.models import CICheckSummary, CIPollEvidence, CIPollResult, CIPollSpec
+from whilly.ci.verification import ci_result_to_verification_result
+from whilly.pipeline.verification import VERIFICATION_FAILED_EVENT, VERIFICATION_WARNING_EVENT
 
 
 def test_ci_poll_started_event_payload_has_target_provider_and_budget() -> None:
@@ -131,3 +133,46 @@ async def test_github_adapter_reports_unauthenticated_without_success(monkeypatc
     assert result.succeeded is False
     assert result.blocking is True
     assert result.reason == "github_authentication_required"
+
+
+def test_ci_result_maps_to_required_verification_failure() -> None:
+    ci_result = CIPollResult(
+        name="github-ci",
+        provider=CI_PROVIDER_GITHUB,
+        target="ci://github/acme/widgets#pr-42",
+        state="unavailable",
+        conclusion="unavailable",
+        required=True,
+        unavailable=True,
+        reason="ci provider unavailable",
+    )
+
+    result = ci_result_to_verification_result(ci_result)
+
+    assert result.event_name == VERIFICATION_FAILED_EVENT
+    assert result.source == "ci"
+    assert result.command == "ci://github/acme/widgets#pr-42"
+    assert result.required is True
+    assert result.succeeded is False
+    assert result.warning is False
+    assert result.stderr == "ci provider unavailable"
+
+
+def test_ci_result_maps_optional_failure_to_warning() -> None:
+    ci_result = CIPollResult(
+        name="github-ci",
+        provider=CI_PROVIDER_GITHUB,
+        target="ci://github/acme/widgets#pr-42",
+        state="completed",
+        conclusion="failure",
+        required=False,
+        reason="ci failed",
+    )
+
+    result = ci_result_to_verification_result(ci_result)
+
+    assert result.event_name == VERIFICATION_WARNING_EVENT
+    assert result.source == "ci"
+    assert result.required is False
+    assert result.succeeded is False
+    assert result.warning is True
