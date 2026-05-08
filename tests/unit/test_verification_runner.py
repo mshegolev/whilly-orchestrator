@@ -6,8 +6,10 @@ import sys
 
 import pytest
 
+from whilly.ci.models import CI_PROVIDER_GITHUB, CIPollResult
 from whilly.pipeline.verification import (
     CLI_VERIFICATION_SOURCE,
+    CI_VERIFICATION_SOURCE,
     PROFILE_VERIFICATION_SOURCE,
     VERIFICATION_FAILED_EVENT,
     VerificationCommandResult,
@@ -257,3 +259,95 @@ def test_verification_result_event_redacts_command_and_detail() -> None:
         "stdout": "stdout [REDACTED:anthropic-api-key]",
         "stderr": "stderr [REDACTED:anthropic-api-key]",
     }
+
+
+@pytest.mark.asyncio
+async def test_ci_source_does_not_call_create_subprocess_shell(tmp_path, monkeypatch) -> None:
+    async def fail_shell(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("CI verification must not reach shell execution")
+
+    runner_result = CIPollResult(
+        name="ci",
+        provider=CI_PROVIDER_GITHUB,
+        target="ci://github/foo/bar#pr-1",
+        state="completed",
+        conclusion="success",
+        required=True,
+    )
+
+    async def runner(spec):
+        assert spec.target == "ci://github/foo/bar#pr-1"
+        return runner_result
+
+    monkeypatch.setattr("asyncio.create_subprocess_shell", fail_shell)
+
+    outcome = await run_verification_commands(
+        [
+            VerificationCommandSpec(
+                name="ci",
+                command="ci://github/foo/bar#pr-1",
+                required=True,
+                source=CI_VERIFICATION_SOURCE,
+            )
+        ],
+        cwd=tmp_path,
+        ci_poll_runner=runner,
+    )
+
+    assert outcome.succeeded is True
+    assert outcome.results[0].source == CI_VERIFICATION_SOURCE
+    assert outcome.ci_polls[0].result is runner_result
+
+
+@pytest.mark.asyncio
+async def test_ci_source_without_runner_is_unavailable_failure(tmp_path) -> None:
+    outcome = await run_verification_commands(
+        [
+            VerificationCommandSpec(
+                name="ci",
+                command="ci://github/foo/bar#pr-1",
+                required=True,
+                source=CI_VERIFICATION_SOURCE,
+            )
+        ],
+        cwd=tmp_path,
+    )
+
+    result = outcome.results[0]
+    assert outcome.succeeded is False
+    assert result.event_name == VERIFICATION_FAILED_EVENT
+    assert result.source == CI_VERIFICATION_SOURCE
+    assert result.stderr == "ci_poll_runner_not_configured"
+    assert outcome.ci_polls[0].result.unavailable is True
+    assert outcome.ci_polls[0].result.reason == "ci_poll_runner_not_configured"
+
+
+@pytest.mark.asyncio
+async def test_ci_source_returns_ci_poll_evidence_with_original_spec_and_result(tmp_path) -> None:
+    runner_result = CIPollResult(
+        name="ci",
+        provider=CI_PROVIDER_GITHUB,
+        target="ci://github/foo/bar#pr-1",
+        state="completed",
+        conclusion="success",
+        required=True,
+    )
+
+    async def runner(spec):
+        return runner_result
+
+    outcome = await run_verification_commands(
+        [
+            VerificationCommandSpec(
+                name="ci",
+                command="ci://github/foo/bar#pr-1",
+                required=True,
+                source=CI_VERIFICATION_SOURCE,
+            )
+        ],
+        cwd=tmp_path,
+        ci_poll_runner=runner,
+    )
+
+    assert outcome.ci_polls[0].spec.target == "ci://github/foo/bar#pr-1"
+    assert outcome.ci_polls[0].result is runner_result
