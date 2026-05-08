@@ -86,6 +86,7 @@ __all__ = [
     "BUDGET_EXCEEDED_REASON",
     "BUDGET_EXCEEDED_THRESHOLD_PCT",
     "BootstrapTokenRecord",
+    "ControlState",
     "EventFlusherProtocol",
     "PLAN_APPLIED_EVENT_TYPE",
     "PR_EVENT_TYPES",
@@ -296,6 +297,7 @@ _HUMAN_REVIEW_REQUIRED_EVENT_SQL = "human_review.required"
 _HUMAN_REVIEW_APPROVED_EVENT_SQL = "human_review.approved"
 _HUMAN_REVIEW_REJECTED_EVENT_SQL = "human_review.rejected"
 _HUMAN_REVIEW_CHANGES_REQUESTED_EVENT_SQL = "human_review.changes_requested"
+_CONTROL_STATE_ID = "global"
 
 
 # Atomic claim. The CTE locks one PENDING row with SKIP LOCKED so concurrent
@@ -1228,6 +1230,48 @@ _PROBE_WORKER_EXISTS_SQL: str = """
 SELECT 1 FROM workers WHERE worker_id = $1 LIMIT 1
 """
 
+_ENSURE_CONTROL_STATE_SQL: str = """
+INSERT INTO control_state (id)
+VALUES ($1)
+ON CONFLICT (id) DO NOTHING
+"""
+
+_SELECT_CONTROL_STATE_SQL: str = """
+SELECT id, paused, pause_reason, paused_by, paused_at, updated_at
+FROM control_state
+WHERE id = $1
+"""
+
+_IS_WORKERS_PAUSED_SQL: str = """
+SELECT paused
+FROM control_state
+WHERE id = $1
+"""
+
+_PAUSE_WORKERS_SQL: str = """
+INSERT INTO control_state (id, paused, pause_reason, paused_by, paused_at, updated_at)
+VALUES ($1, TRUE, NULLIF($2, ''), NULLIF($3, ''), NOW(), NOW())
+ON CONFLICT (id) DO UPDATE
+SET paused = TRUE,
+    pause_reason = EXCLUDED.pause_reason,
+    paused_by = EXCLUDED.paused_by,
+    paused_at = EXCLUDED.paused_at,
+    updated_at = NOW()
+RETURNING id, paused, pause_reason, paused_by, paused_at, updated_at
+"""
+
+_RESUME_WORKERS_SQL: str = """
+INSERT INTO control_state (id, paused, pause_reason, paused_by, paused_at, updated_at)
+VALUES ($1, FALSE, NULL, NULL, NULL, NOW())
+ON CONFLICT (id) DO UPDATE
+SET paused = FALSE,
+    pause_reason = NULL,
+    paused_by = NULL,
+    paused_at = NULL,
+    updated_at = NOW()
+RETURNING id, paused, pause_reason, paused_by, paused_at, updated_at
+"""
+
 
 def hash_bootstrap_token(plaintext: str) -> str:
     """Return the canonical SHA-256 hex digest of a bootstrap-token plaintext.
@@ -1259,6 +1303,18 @@ class BootstrapTokenRecord:
     expires_at: datetime | None
     revoked_at: datetime | None
     is_admin: bool
+
+
+@dataclass(frozen=True)
+class ControlState:
+    """Current global operator control state."""
+
+    id: str
+    paused: bool
+    pause_reason: str | None
+    paused_by: str | None
+    paused_at: datetime | None
+    updated_at: datetime
 
 
 class VersionConflictError(Exception):
@@ -1345,6 +1401,19 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         prd_requirement=row["prd_requirement"],
         version=row["version"],
         repo_target_id=_optional_record_string(row, "repo_target_id"),
+    )
+
+
+def _row_to_control_state(row: asyncpg.Record) -> ControlState:
+    """Map a ``control_state`` row to the immutable repository value."""
+
+    return ControlState(
+        id=row["id"],
+        paused=bool(row["paused"]),
+        pause_reason=row["pause_reason"],
+        paused_by=row["paused_by"],
+        paused_at=row["paused_at"],
+        updated_at=row["updated_at"],
     )
 
 
@@ -1479,6 +1548,49 @@ class TaskRepository:
         invocation.
         """
         self._event_flusher = event_flusher
+
+    async def get_control_state(self) -> ControlState:
+        """Return the singleton global worker control state.
+
+        The row is created on first read so fresh databases start in the
+        natural unpaused state without a separate seed migration.
+        """
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(_ENSURE_CONTROL_STATE_SQL, _CONTROL_STATE_ID)
+                row = await conn.fetchrow(_SELECT_CONTROL_STATE_SQL, _CONTROL_STATE_ID)
+        if row is None:  # pragma: no cover - impossible after insert in one transaction
+            raise RuntimeError("control_state singleton was not created")
+        return _row_to_control_state(row)
+
+    async def pause_workers(self, *, reason: str | None = None, operator: str | None = None) -> ControlState:
+        """Set the global worker stop-crane state to paused."""
+
+        reason_text = (reason or "").strip()
+        operator_text = (operator or "").strip()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_PAUSE_WORKERS_SQL, _CONTROL_STATE_ID, reason_text, operator_text)
+        logger.info("pause_workers: operator=%s reason=%s", operator_text or None, reason_text or None)
+        return _row_to_control_state(row)
+
+    async def resume_workers(self, *, operator: str | None = None) -> ControlState:
+        """Clear the global worker stop-crane state."""
+
+        operator_text = (operator or "").strip()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_RESUME_WORKERS_SQL, _CONTROL_STATE_ID)
+        logger.info("resume_workers: operator=%s", operator_text or None)
+        return _row_to_control_state(row)
+
+    async def is_workers_paused(self) -> bool:
+        """Return whether the global worker stop-crane is currently active."""
+
+        async with self._pool.acquire() as conn:
+            value = await conn.fetchval(_IS_WORKERS_PAUSED_SQL, _CONTROL_STATE_ID)
+        if value is None:
+            return (await self.get_control_state()).paused
+        return bool(value)
 
     async def claim_task(
         self,
