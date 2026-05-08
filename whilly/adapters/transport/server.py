@@ -168,7 +168,7 @@ from fastapi import status as status_module
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
-from whilly.core.models import TaskStatus
+from whilly.core.models import Task, TaskStatus
 from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE
 from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE
@@ -254,6 +254,8 @@ from whilly.adapters.transport.schemas import (
     ListTaskEventsResponse,
     RegisterRequest,
     RegisterResponse,
+    RepairTaskRequest,
+    RepairTaskResponse,
     ReleaseRequest,
     ReleaseResponse,
     TaskEventItem,
@@ -261,6 +263,7 @@ from whilly.adapters.transport.schemas import (
     TaskEventResponse,
     TaskPayload,
 )
+from whilly.pipeline.events import PipelineTaskEvent
 from whilly.pipeline.human_review import (
     HUMAN_REVIEW_REQUIRED,
 )
@@ -365,6 +368,8 @@ DIAGNOSTIC_EVENT_PREFIXES: Final[tuple[str, ...]] = (
     "llm.",
     "pipeline.stage.",
     "verification.",
+    "ci.",
+    "repair.",
     "human_review.",
 )
 WORKER_HUMAN_REVIEW_EVENT_TYPES: Final[frozenset[str]] = frozenset({HUMAN_REVIEW_REQUIRED})
@@ -1827,6 +1832,106 @@ def create_app(
             payload.event_type,
         )
         return TaskEventResponse()
+
+    @app.post(
+        "/tasks/{task_id}/repair",
+        response_model=RepairTaskResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": RepairTaskResponse,
+                "description": "Dependency-free repair task inserted.",
+            },
+            status.HTTP_400_BAD_REQUEST: {
+                "model": ErrorResponse,
+                "description": "Repair task payload is invalid.",
+            },
+            status.HTTP_409_CONFLICT: {
+                "model": ErrorResponse,
+                "description": (
+                    "Optimistic-locking conflict — original task version moved or the task no longer exists."
+                ),
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def request_repair_task(
+        request: Request, task_id: str, payload: RepairTaskRequest
+    ) -> RepairTaskResponse | JSONResponse:
+        """Insert one deterministic repair task requested by the task's worker."""
+
+        _require_token_owner(request, payload.worker_id)
+        if payload.repair_task.dependencies:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_repair_task",
+                    detail="invalid_repair_task: remote repair tasks must not declare dependencies",
+                ).model_dump(exclude_none=True),
+            )
+        if payload.event.task_id != task_id:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_repair_task",
+                    detail="invalid_repair_task: repair request event task_id must match original task",
+                ).model_dump(exclude_none=True),
+            )
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT status, version, claimed_by FROM tasks WHERE id = $1",
+                task_id,
+            )
+        if row is None:
+            return _conflict_response(VersionConflictError(task_id, payload.orig_task_version, None, None))
+        actual_status = TaskStatus(row["status"])
+        actual_version = int(row["version"])
+        if actual_version != payload.orig_task_version:
+            return _conflict_response(
+                VersionConflictError(task_id, payload.orig_task_version, actual_version, actual_status)
+            )
+        claimed_by = row["claimed_by"]
+        if claimed_by is not None and claimed_by != payload.worker_id:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content=ErrorResponse(
+                    error="forbidden",
+                    detail=f"task {task_id!r} is claimed by worker {claimed_by!r}",
+                ).model_dump(exclude_none=True),
+            )
+
+        orig_task = Task(id=task_id, status=actual_status, version=actual_version)
+        repair_payload = payload.repair_task
+        repair_task = Task(
+            id=repair_payload.id,
+            status=TaskStatus.PENDING,
+            dependencies=tuple(repair_payload.dependencies or ()),
+            key_files=tuple(repair_payload.key_files),
+            priority=repair_payload.priority,
+            description=repair_payload.description,
+            acceptance_criteria=tuple(repair_payload.acceptance_criteria),
+            test_steps=tuple(repair_payload.test_steps),
+            prd_requirement=repair_payload.prd_requirement,
+            repo_target_id=repair_payload.repo_target_id,
+        )
+        event_payload = payload.event
+        event = PipelineTaskEvent(
+            task_id=event_payload.task_id,
+            event_type=event_payload.event_type,
+            payload=dict(event_payload.payload),
+            detail=event_payload.detail,
+        )
+        try:
+            inserted = await repo.insert_repair_task(orig_task, repair_task, event)
+        except ValueError:
+            return _conflict_response(VersionConflictError(task_id, payload.orig_task_version, None, None))
+        logger.info(
+            "request_repair_task: worker=%s orig_task=%s repair_task=%s",
+            payload.worker_id,
+            task_id,
+            inserted.id,
+        )
+        return RepairTaskResponse(repair_task_id=inserted.id)
 
     @app.post(
         "/tasks/{task_id}/fail",
