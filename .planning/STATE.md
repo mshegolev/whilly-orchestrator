@@ -4,16 +4,16 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 11
 current_phase_name: CI polling and bounded repair
-current_plan: 1
-status: in_progress
-stopped_at: Completed 11-ci-polling-and-bounded-repair-01-PLAN.md
-last_updated: "2026-05-08T18:06:58.341Z"
+current_plan: 2
+status: executing
+stopped_at: Completed 11-ci-polling-and-bounded-repair-02-PLAN.md
+last_updated: "2026-05-08T18:16:03.458Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 24
-  completed_plans: 19
+  completed_plans: 20
   percent: 79
 ---
 
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-05-08)
 Current Phase: 11
 Current Phase Name: CI polling and bounded repair
 Total Phases: 12
-Current Plan: 1
+Current Plan: 2
 Total Plans in Phase: 6
 Status: In Progress
 Last Activity: 2026-05-08
@@ -70,6 +70,7 @@ Progress: [########--] 79%
 | Phase 10-rollback-safety-net P02 | 6 min 26 sec | 2 tasks | 4 files |
 | Phase 10-rollback-safety-net P03 | 7 min 27 sec | 2 tasks | 6 files |
 | Phase 11-ci-polling-and-bounded-repair P01 | 5 min | 2 tasks | 8 files |
+| Phase 11-ci-polling-and-bounded-repair P02 | 5 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,10 @@ Recent decisions affecting current work:
 - [Phase 11-ci-polling-and-bounded-repair]: source="ci" dispatches to a CI poll runner before shell scanning or subprocess execution.
 - [Phase 11-ci-polling-and-bounded-repair]: A missing CI poll runner produces explicit unavailable CI evidence with reason ci_poll_runner_not_configured.
 - [Phase 11-ci-polling-and-bounded-repair]: The GitHub CI adapter is one-shot and returns non-success evidence for provider auth, availability, and timeout failures.
+- [Phase 11-ci-polling-and-bounded-repair]: RepairBudget(max_attempts=0) and negative budgets are disabled; there is no implicit repair budget.
+- [Phase 11-ci-polling-and-bounded-repair]: Budgeted repair creates deterministic <orig-task-id>-repair-N task ids and never releases the failed task.
+- [Phase 11-ci-polling-and-bounded-repair]: Repair tasks use empty dependencies so a failed original task cannot block the repair task under future scheduler rules.
+- [Phase 11-ci-polling-and-bounded-repair]: Repair task prompts describe trigger metadata and budget, while detailed failure evidence stays in audit events.
 
 ### Pending Todos
 
@@ -127,6 +132,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T18:06:58.338Z
-Stopped at: Completed 11-ci-polling-and-bounded-repair-01-PLAN.md
+Last session: 2026-05-08T18:16:03.456Z
+Stopped at: Completed 11-ci-polling-and-bounded-repair-02-PLAN.md
 Resume file: None
