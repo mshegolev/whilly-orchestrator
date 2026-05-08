@@ -202,10 +202,10 @@ Plans:
   1. Governance policy scores risk for migrations, auth, infra, dependencies, release actions, and external PR behavior.
   2. Semantic memory is either deterministic and evidence-backed or explicitly deferred.
   3. Compliance output and docs use the same current-vs-target wording.
-**Plans**: Ready to plan
+**Plans**: 1 plan
 
 Plans:
-- [ ] 12-01: Settle governance policy and semantic-memory target status.
+- [ ] 12-01-PLAN.md - Settle governance policy and semantic-memory target status.
 
 ## Progress
 
