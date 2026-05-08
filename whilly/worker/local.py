@@ -81,6 +81,7 @@ from typing import Final
 
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
+from whilly.ci.events import make_ci_poll_result_event, make_ci_poll_started_event
 from whilly.core.agent_runner import (
     SECRET_LINT_BLOCKED_EVENT_TYPE,
     SECRET_LINT_FAIL_REASON,
@@ -275,6 +276,20 @@ def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, o
         if result.required and not result.succeeded
     ]
     return {"reason": "verification_failed", "failed_results": failed_results}
+
+
+async def _record_ci_poll_evidence(
+    repo: TaskRepository,
+    task_id: str,
+    *,
+    plan_id: str,
+    outcome: VerificationRunOutcome,
+) -> None:
+    """Record CI poll evidence before mapped verification result events."""
+
+    for evidence in outcome.ci_polls:
+        await _record_pipeline_event(repo, make_ci_poll_started_event(task_id, evidence.spec, plan_id=plan_id))
+        await _record_pipeline_event(repo, make_ci_poll_result_event(task_id, evidence.result, plan_id=plan_id))
 
 
 # Reason string written into the RELEASE event payload when the worker
@@ -828,6 +843,7 @@ async def run_local_worker(
                     break
 
                 assert verification_outcome is not None
+                await _record_ci_poll_evidence(repo, running.id, plan_id=plan.id, outcome=verification_outcome)
                 for verification_result in verification_outcome.results:
                     await _record_pipeline_event(
                         repo,
