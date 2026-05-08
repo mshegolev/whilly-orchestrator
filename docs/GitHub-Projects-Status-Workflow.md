@@ -20,6 +20,10 @@ Sync only Todo items from a GitHub Project to Issues and Whilly tasks:
 whilly github-projects sync-todo "https://github.com/users/mshegolev/projects/4" --repo owner/name
 ```
 
+For demo or operator workflows where Project items already point to Issues,
+add `--existing-only` to record those Issues without converting draft Project
+items into new repository Issues.
+
 This will:
 - Fetch only items with "Todo" status from the project
 - Create GitHub Issues for new items (with label `whilly:ready`)

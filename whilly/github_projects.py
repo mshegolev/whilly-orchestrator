@@ -116,9 +116,35 @@ class GitHubProjectsConverter:
         try:
             result = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=True, env=_gh_env())
             if "Logged in to github.com" not in result.stdout:
-                raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
-        except subprocess.CalledProcessError:
-            raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login")
+                self._check_gh_api_probe()
+        except subprocess.CalledProcessError as exc:
+            try:
+                self._check_gh_api_probe()
+            except RuntimeError as probe_exc:
+                detail = (exc.stderr or "").strip()
+                if detail:
+                    raise RuntimeError(
+                        f"GitHub CLI not authenticated. Run: gh auth login. gh auth status: {detail}"
+                    ) from probe_exc
+                raise RuntimeError("GitHub CLI not authenticated. Run: gh auth login") from probe_exc
+        except FileNotFoundError:
+            raise RuntimeError("GitHub CLI not found. Install: https://cli.github.com/")
+
+    def _check_gh_api_probe(self) -> None:
+        """Verify GitHub API access when ``gh auth status`` is stale or noisy."""
+        try:
+            subprocess.run(
+                ["gh", "api", "user", "--jq", ".login"],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=_gh_env(),
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip()
+            if detail:
+                raise RuntimeError(f"GitHub CLI API probe failed: {detail}") from exc
+            raise RuntimeError("GitHub CLI API probe failed") from exc
         except FileNotFoundError:
             raise RuntimeError("GitHub CLI not found. Install: https://cli.github.com/")
 
@@ -395,7 +421,12 @@ class GitHubProjectsConverter:
         return output_file
 
     def sync_todo_items(
-        self, project_url: str, repo_owner: str, repo_name: str, output_file: str = "tasks-from-project.json"
+        self,
+        project_url: str,
+        repo_owner: str,
+        repo_name: str,
+        output_file: str = "tasks-from-project.json",
+        create_draft_issues: bool = True,
     ) -> Dict[str, Any]:
         """Sync only Todo items from GitHub Project to Issues and tasks.
 
@@ -439,6 +470,11 @@ class GitHubProjectsConverter:
                     "issue_url": item.url,
                     "last_sync": datetime.now(timezone.utc).isoformat(),
                 }
+                skipped_count += 1
+                continue
+
+            if not create_draft_issues:
+                print(f"⏭️  Skipping {item.title} - draft item; --existing-only is enabled")
                 skipped_count += 1
                 continue
 

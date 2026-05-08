@@ -15,8 +15,16 @@ class _FakeConverter:
         self.calls: list[tuple[Any, ...]] = []
         _FakeConverter.instances.append(self)
 
-    def sync_todo_items(self, project_url: str, owner: str, repo: str, *, output_file: str) -> dict[str, int]:
-        self.calls.append(("sync_todo_items", project_url, owner, repo, output_file))
+    def sync_todo_items(
+        self,
+        project_url: str,
+        owner: str,
+        repo: str,
+        *,
+        output_file: str,
+        create_draft_issues: bool = True,
+    ) -> dict[str, int]:
+        self.calls.append(("sync_todo_items", project_url, owner, repo, output_file, create_draft_issues))
         return {"created_count": 1, "skipped_count": 0, "synced_count": 1, "total_todo_items": 1}
 
     def sync_status_changes(self, issue_number: int, status: str) -> bool:
@@ -47,13 +55,16 @@ def test_sync_todo_routes_to_converter(monkeypatch, tmp_path, capsys) -> None:
             "test/repo",
             "--output",
             "tasks.json",
+            "--existing-only",
         ]
     )
 
     assert rc == 0
     fake = _FakeConverter.instances[0]
     assert fake.sync_config.sync_state_file == str(state_file)
-    assert fake.calls == [("sync_todo_items", "https://github.com/users/test/projects/1", "test", "repo", "tasks.json")]
+    assert fake.calls == [
+        ("sync_todo_items", "https://github.com/users/test/projects/1", "test", "repo", "tasks.json", False)
+    ]
     assert json.loads(capsys.readouterr().out)["created_count"] == 1
 
 

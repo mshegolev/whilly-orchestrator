@@ -30,6 +30,11 @@ def build_github_projects_parser() -> argparse.ArgumentParser:
     sync_todo.add_argument("project_url", help="GitHub Projects v2 URL.")
     sync_todo.add_argument("--repo", required=True, help="Target repository as owner/name.")
     sync_todo.add_argument("--output", default="tasks-from-project.json", help="Output plan path.")
+    sync_todo.add_argument(
+        "--existing-only",
+        action="store_true",
+        help="Record existing Issue items only; do not convert draft Project items into Issues.",
+    )
 
     from_project = subcommands.add_parser("from-project", help="Convert project items to Issues/tasks.")
     from_project.add_argument("project_url", help="GitHub Projects v2 URL.")
@@ -79,7 +84,13 @@ def run_github_projects_command(argv: Sequence[str]) -> int:
             repo_owner, repo_name = _parse_repo(args.repo)
         converter = GitHubProjectsConverter(sync_config=sync_config)
         if args.command == "sync-todo":
-            stats = converter.sync_todo_items(args.project_url, repo_owner, repo_name, output_file=args.output)
+            stats = converter.sync_todo_items(
+                args.project_url,
+                repo_owner,
+                repo_name,
+                output_file=args.output,
+                create_draft_issues=not args.existing_only,
+            )
             sys.stdout.write(json.dumps(stats, indent=2, sort_keys=True) + "\n")
             return EXIT_OK
         if args.command == "from-project":
