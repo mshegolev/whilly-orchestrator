@@ -41,6 +41,8 @@ import pytest
 
 from whilly.adapters.db.repository import VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
+from whilly.ci.events import CI_POLL_RESULT_EVENT, CI_POLL_STARTED_EVENT
+from whilly.ci.models import CIPollEvidence, CIPollResult, CIPollSpec
 from whilly.core.agent_runner import (
     SHELL_COMMAND_BLOCKED_EVENT_TYPE,
     SHELL_COMMAND_FAIL_REASON,
@@ -636,6 +638,225 @@ async def test_optional_verification_warning_does_not_block_completion(fake_slee
     event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
     assert VERIFICATION_STARTED_EVENT in event_types
     assert VERIFICATION_WARNING_EVENT in event_types
+
+
+async def test_local_worker_records_ci_poll_events_before_verification_failure(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-ci-order", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    spec = CIPollSpec(
+        name="ci-status",
+        provider="github",
+        target="ci://github/acme/widgets#pr-42",
+        required=True,
+    )
+    result = CIPollResult(
+        name=spec.name,
+        provider=spec.provider,
+        target=spec.target,
+        state="completed",
+        conclusion="failure",
+        required=True,
+        reason="github_status_rollup_failed",
+    )
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            ci_polls=(CIPollEvidence(spec=spec, result=result),),
+            results=(
+                VerificationCommandResult(
+                    name="ci-status",
+                    command=spec.target,
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=None,
+                    stdout="",
+                    stderr="github_status_rollup_failed",
+                    duration_s=0.2,
+                    source="ci",
+                ),
+            ),
+        )
+
+    await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
+    assert event_types.index(CI_POLL_STARTED_EVENT) < event_types.index(CI_POLL_RESULT_EVENT)
+    assert event_types.index(CI_POLL_RESULT_EVENT) < event_types.index(VERIFICATION_FAILED_EVENT)
+
+
+async def test_local_worker_ci_started_event_includes_original_poll_budget(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = _make_plan()
+
+    claimed = _make_task("T-ci-budget", status=TaskStatus.CLAIMED, version=1)
+    running = replace(claimed, status=TaskStatus.IN_PROGRESS, version=2)
+    failed = replace(running, status=TaskStatus.FAILED, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.fail_results.append(failed)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    spec = CIPollSpec(
+        name="ci-budget",
+        provider="github",
+        target="ci://github/acme/widgets#pr-99",
+        required=True,
+        timeout_s=123.0,
+        poll_interval_s=4.5,
+        max_attempts=7,
+    )
+    result = CIPollResult(
+        name=spec.name,
+        provider=spec.provider,
+        target=spec.target,
+        state="completed",
+        conclusion="failure",
+        required=True,
+        attempts=1,
+        max_attempts=1,
+        reason="github_status_rollup_failed",
+    )
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        return VerificationRunOutcome(
+            ci_polls=(CIPollEvidence(spec=spec, result=result),),
+            results=(
+                VerificationCommandResult(
+                    name="ci-budget",
+                    command=spec.target,
+                    required=True,
+                    succeeded=False,
+                    warning=False,
+                    event_name=VERIFICATION_FAILED_EVENT,
+                    returncode=None,
+                    stdout="",
+                    stderr="github_status_rollup_failed",
+                    duration_s=0.2,
+                    source="ci",
+                ),
+            ),
+        )
+
+    await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    started_payload = next(
+        payload for _task_id, event_type, payload, _detail in repo.event_calls if event_type == CI_POLL_STARTED_EVENT
+    )
+    assert started_payload["provider"] == "github"
+    assert started_payload["target"] == "ci://github/acme/widgets#pr-99"
+    assert started_payload["timeout_s"] == 123.0
+    assert started_payload["poll_interval_s"] == 4.5
+    assert started_payload["max_attempts"] == 7
+
+
+async def test_local_worker_configured_ci_status_stage_emits_ci_poll_events(fake_sleep: list[float]) -> None:
+    repo = FakeRepo()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured CI Plan",
+        origin=PlanOrigin(system="project_config", ref="ci-profile", decomposition_mode="configured:release"),
+    )
+
+    claimed = _make_task("CFG-003-CI_STATUS", status=TaskStatus.CLAIMED, version=1)
+    running = replace(
+        claimed,
+        status=TaskStatus.IN_PROGRESS,
+        version=2,
+        prd_requirement="Configured release pipeline step: ci_status",
+    )
+    done = replace(running, status=TaskStatus.DONE, version=3)
+
+    repo.claim_results.append(claimed)
+    repo.start_results.append(running)
+    repo.complete_results.append(done)
+
+    async def runner(task: Task, prompt: str) -> AgentResult:
+        return AgentResult(output="<promise>COMPLETE</promise>", exit_code=0, is_complete=True)
+
+    spec = CIPollSpec(
+        name="ci_status",
+        provider="github",
+        target="ci://github/acme/widgets#pr-7",
+        required=True,
+    )
+    result = CIPollResult(
+        name=spec.name,
+        provider=spec.provider,
+        target=spec.target,
+        state="completed",
+        conclusion="success",
+        required=True,
+        reason="",
+    )
+
+    async def verification_runner(task: Task) -> VerificationRunOutcome:
+        assert task.id == "CFG-003-CI_STATUS"
+        return VerificationRunOutcome(
+            ci_polls=(CIPollEvidence(spec=spec, result=result),),
+            results=(
+                VerificationCommandResult(
+                    name="ci_status",
+                    command=spec.target,
+                    required=True,
+                    succeeded=True,
+                    warning=False,
+                    event_name="verification.succeeded",
+                    returncode=None,
+                    stdout="",
+                    stderr="",
+                    duration_s=0.1,
+                    source="ci",
+                ),
+            ),
+        )
+
+    stats = await run_local_worker(  # type: ignore[arg-type]
+        repo,
+        runner,
+        plan,
+        WORKER_ID,
+        idle_wait=0,
+        max_iterations=1,
+        verification_runner=verification_runner,
+    )
+
+    assert stats.completed == 1
+    event_types = [event_type for _task_id, event_type, _payload, _detail in repo.event_calls]
+    assert CI_POLL_STARTED_EVENT in event_types
+    assert CI_POLL_RESULT_EVENT in event_types
 
 
 async def test_shutdown_during_verification_releases_task(fake_sleep: list[float]) -> None:

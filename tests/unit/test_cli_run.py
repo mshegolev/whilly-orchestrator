@@ -51,6 +51,7 @@ from whilly.cli.run import (
     build_run_parser,
     run_run_command,
 )
+from whilly.ci.github import GitHubCIPollAdapter
 from whilly.core.models import Plan, Task, TaskStatus, VerificationCommand
 from whilly.worker.local import WorkerStats
 
@@ -500,3 +501,77 @@ async def test_async_run_preserves_cli_only_verification_behavior(monkeypatch: p
         ("unit", "pytest -q tests/unit", "cli", True),
         ("lint", "ruff check whilly", "cli", False),
     ]
+
+
+@pytest.mark.asyncio
+async def test_async_run_passes_ci_poll_runner_for_ci_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = Task(id="T-CI", status=TaskStatus.PENDING)
+    plan = Plan(
+        id="P-CI",
+        name="CI plan",
+        tasks=(task,),
+        verification_commands=(
+            VerificationCommand(
+                name="ci-status",
+                command="ci://github/acme/widgets#pr-42",
+                required=True,
+                source="ci",
+            ),
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_create_pool(_dsn: str) -> _FakePool:
+        return _FakePool()
+
+    async def _fake_close_pool(_pool: object) -> None:
+        return None
+
+    async def _fake_select_plan_with_tasks(_conn: object, _plan_id: str) -> tuple[Plan, tuple[Task, ...]]:
+        return plan, (task,)
+
+    async def _fake_run_verification_commands(commands: object, **kwargs: object) -> object:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        captured["ci_poll_runner"] = kwargs.get("ci_poll_runner")
+        return object()
+
+    async def _fake_run_worker(
+        _repo: object,
+        _workspace_runner: object,
+        worker_plan: Plan,
+        _worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> WorkerStats:
+        captured["plan"] = worker_plan
+        assert verification_runner is not None
+        await verification_runner(task)  # type: ignore[misc]
+        return WorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_run, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(cli_run, "close_pool", _fake_close_pool)
+    monkeypatch.setattr(cli_run, "_select_plan_with_tasks", _fake_select_plan_with_tasks)
+    monkeypatch.setattr(cli_run, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_run, "run_worker", _fake_run_worker)
+    monkeypatch.setattr(cli_run, "TaskRepository", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli_run, "RepoTargetWorkspaceResolver", lambda _repo: object())
+    monkeypatch.setattr(cli_run, "is_auto_open_pr_enabled", lambda: False)
+
+    await cli_run._async_run(
+        dsn="postgresql://user@127.0.0.1/whilly",
+        plan_id=plan.id,
+        worker_id="w-ci",
+        runner=_stub_runner,
+        max_iterations=1,
+        idle_wait=0,
+        heartbeat_interval=1,
+        install_signal_handlers=False,
+        verify_timeout=5,
+    )
+
+    assert [command.source for command in captured["commands"]] == ["ci"]  # type: ignore[index]
+    assert isinstance(captured["ci_poll_runner"], GitHubCIPollAdapter)
