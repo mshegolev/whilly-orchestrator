@@ -21,7 +21,7 @@
 - [x] **DOC-01**: README/docs describe Whilly as a control plane with explicit current-vs-target boundaries.
 - [x] **DOC-02**: Compliance reports distinguish implemented, partial, and future capabilities.
 - [x] **DOC-03**: Negative non-goal wording is not treated as a positive capability claim.
-- [ ] **DOC-04**: Current docs and compliance wording stay synchronized as hardening phases ship.
+- [x] **DOC-04**: Current docs and compliance wording stay synchronized as hardening phases ship.
 
 ### Runtime Verification And Safety
 
@@ -37,8 +37,8 @@
 
 - [x] **CI-01**: CI status polling can be used as a configured verification or sink stage.
 - [x] **CI-02**: Repair attempts are bounded, auditable, and stop with escalation when budgets are exhausted.
-- [ ] **GOV-01**: Governance policy scores risk for migrations, auth, infra, dependencies, release actions, and external PR behavior.
-- [ ] **GOV-02**: Semantic memory is either implemented deterministically from event/task history or explicitly deferred from current scope.
+- [x] **GOV-01**: Governance policy scores risk for migrations, auth, infra, dependencies, release actions, and external PR behavior.
+- [x] **GOV-02**: Semantic memory is either implemented deterministically from event/task history or explicitly deferred from current scope.
 
 ## v2 Requirements
 
@@ -72,7 +72,7 @@
 | DOC-01 | Phase 1 | Complete |
 | DOC-02 | Phase 1 | Complete |
 | DOC-03 | Phase 1 | Complete |
-| DOC-04 | Phase 12 | Pending |
+| DOC-04 | Phase 12 | Complete |
 | SEC-01 | Phase 8 | Complete |
 | SEC-02 | Phase 8 | Complete |
 | SEC-03 | Phase 8 | Complete |
@@ -82,8 +82,8 @@
 | ROLL-03 | Phase 10 | Complete |
 | CI-01 | Phase 11 | Complete |
 | CI-02 | Phase 11 | Complete |
-| GOV-01 | Phase 12 | Pending |
-| GOV-02 | Phase 12 | Pending |
+| GOV-01 | Phase 12 | Complete |
+| GOV-02 | Phase 12 | Complete |
 
 **Coverage:**
 - v1 requirements: 23 total

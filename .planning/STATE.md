@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 11
-current_phase_name: CI polling and bounded repair
-current_plan: 6
-status: executing
-stopped_at: Completed 11-ci-polling-and-bounded-repair-06-PLAN.md
-last_updated: "2026-05-08T19:20:34.766Z"
+current_phase: 12
+current_phase_name: Governance and semantic-memory decision
+current_plan: 1
+status: ready_for_verification
+stopped_at: Completed 12-governance-and-semantic-memory-decision-01-PLAN.md
+last_updated: "2026-05-08T19:47:31.446Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 12
-  completed_phases: 11
-  total_plans: 24
-  completed_plans: 24
+  completed_phases: 12
+  total_plans: 25
+  completed_plans: 25
   percent: 100
 ---
 
@@ -24,18 +24,18 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state, human control, and verification before claiming success.
-**Current focus:** Phase 11: CI polling and bounded repair
+**Current focus:** Phase 12: Governance and semantic-memory decision
 
 ## Current Position
 
-Current Phase: 11
-Current Phase Name: CI polling and bounded repair
+Current Phase: 12
+Current Phase Name: Governance and semantic-memory decision
 Total Phases: 12
-Current Plan: 6
-Total Plans in Phase: 6
-Status: In Progress
+Current Plan: 1
+Total Plans in Phase: 1
+Status: Ready for Verification
 Last Activity: 2026-05-08
-Last Activity Description: Plan 11-06 completed scoped compliance wording and report tests.
+Last Activity Description: Plan 12-01 completed deterministic governance policy, explicit semantic-memory deferral, and docs/compliance synchronization.
 
 Progress: [##########] 100%
 
@@ -75,6 +75,7 @@ Progress: [##########] 100%
 | Phase 11-ci-polling-and-bounded-repair P04 | 9 min 55 sec | 2 tasks | 5 files |
 | Phase 11-ci-polling-and-bounded-repair P05 | 9 min 56 sec | 2 tasks | 9 files |
 | Phase 11-ci-polling-and-bounded-repair P06 | 6 min 23 sec | 1 tasks | 2 files |
+| Phase 12-governance-and-semantic-memory-decision P01 | 10 min 44 sec | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -135,10 +136,13 @@ Recent decisions affecting current work:
 - [Phase 11-ci-polling-and-bounded-repair]: Compliance reports Bounded CI polling and repair as PASS only when CI primitives, repair primitives, local and remote runtime wiring, transport diagnostic prefixes, and focused local/remote runtime tests are present.
 - [Phase 11-ci-polling-and-bounded-repair]: PASS evidence uses scoped wording: explicit configured CI polling, bounded repair attempts, and repair.escalated.
 - [Phase 11-ci-polling-and-bounded-repair]: The only allowed overclaiming terms in the capability row are inside the exact negative sentence: No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
+- [Phase 12-governance-and-semantic-memory-decision]: Governance risk policy is deterministic, pure, inspectable, and evidence-reported; it does not claim autonomous production release or default auto-merge.
+- [Phase 12-governance-and-semantic-memory-decision]: Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
+- [Phase 12-governance-and-semantic-memory-decision]: Operator-triggered rollback, explicit configured CI polling, and bounded repair attempts are current scoped capabilities; continuous polling, auto-merge, production recovery, and unbounded repair are not claimed.
 
 ### Pending Todos
 
-- Plan and execute Phase 12 governance and semantic-memory decision work.
+- Run milestone verification or complete the milestone archive.
 - Keep `docs/superpowers/plans/` and `docs/superpowers/reviews/` as detailed history.
 - Use `.planning/ROADMAP-ANALYSIS.md` as the short rationale for the updated phase order.
 
@@ -146,10 +150,10 @@ Recent decisions affecting current work:
 
 - Browser plugin and Playwright were unavailable in the last UI phases, so rendered browser QA was not captured.
 - Subagent thread limit was reached during recent work; phase execution may need inline fallback unless agents are freed.
-- Fresh compliance report still fails overall because sandbox/VM isolation is partial and semantic memory is missing.
+- Compliance remains PARTIAL because sandbox/VM isolation is partial and semantic memory is explicitly deferred.
 
 ## Session Continuity
 
-Last session: 2026-05-08T19:06:17.326Z
-Stopped at: Completed 11-ci-polling-and-bounded-repair-06-PLAN.md
+Last session: 2026-05-08T19:47:31.444Z
+Stopped at: Completed 12-governance-and-semantic-memory-decision-01-PLAN.md
 Resume file: None
