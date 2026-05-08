@@ -153,6 +153,7 @@ from whilly.pipeline.verification import (
     make_verification_result_event,
     make_verification_started_event,
 )
+from whilly.security.secret_lint import redact_secrets
 from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
 log = logging.getLogger(__name__)
@@ -337,7 +338,8 @@ def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, o
     failed_results = [
         {
             "name": result.name,
-            "command": result.command,
+            "command": redact_secrets(result.command),
+            "source": result.source,
             "returncode": result.returncode,
             "timed_out": result.timed_out,
             "blocked": result.blocked,

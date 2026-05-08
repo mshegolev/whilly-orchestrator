@@ -199,6 +199,13 @@ def build_compliance_report(
             "Keep verification commands configured for runs that need DONE to mean verified work.",
         ),
         _cap(
+            "Profile-native verification commands",
+            _profile_native_verification_status(files),
+            _profile_native_verification_evidence(files),
+            _profile_native_verification_gap(files),
+            _profile_native_verification_action(files),
+        ),
+        _cap(
             "Project profiles",
             CapabilityStatus.PASS
             if files.exists(
@@ -387,16 +394,67 @@ def _verification_evidence(files: _RepoFiles) -> str:
     if _verification_status(files) is CapabilityStatus.PASS:
         return (
             "whilly/pipeline/verification.py provides command execution/events; "
-            "worker/local.py blocks completion with verification_failed; "
-            "cli/run.py exposes required/optional verification commands."
+            "worker/local.py and worker/remote.py block completion with verification_failed; "
+            "cli/run.py and cli/worker.py expose explicit required/optional CLI verification commands."
         )
     return "whilly/verifier.py helper exists, but verification is not fully wired into worker completion."
 
 
 def _verification_gap(files: _RepoFiles) -> str:
     if _verification_status(files) is CapabilityStatus.PASS:
-        return "Verification is enforced when commands are configured; profile-native verification command wiring remains future work."
+        return (
+            "Verification is enforced when commands are configured; runs without required verification commands "
+            "still rely on the agent completion marker."
+        )
     return "helper exists but not wired into the main DONE transition path."
+
+
+def _profile_native_verification_status(files: _RepoFiles) -> CapabilityStatus:
+    required_signals = (
+        files.contains("whilly/project_config/models.py", "verification_commands"),
+        files.contains("whilly/core/models.py", "verification_commands"),
+        files.contains("whilly/pipeline/verification.py", "resolve_verification_specs"),
+        files.contains("whilly/cli/run.py", "profile_commands=plan.verification_commands"),
+        files.contains("whilly/cli/worker.py", "client.get_plan(plan_id)"),
+        files.contains("whilly/cli/worker.py", "profile_commands=plan.verification_commands"),
+    )
+    if all(required_signals):
+        return CapabilityStatus.PASS
+    if any(required_signals):
+        return CapabilityStatus.PARTIAL
+    return CapabilityStatus.FAIL
+
+
+def _profile_native_verification_evidence(files: _RepoFiles) -> str:
+    if _profile_native_verification_status(files) is CapabilityStatus.PASS:
+        return (
+            "ProjectConfig.verification_commands are emitted into Plan.verification_commands; "
+            "resolve_verification_specs orders profile commands before explicit CLI commands; "
+            "local and remote worker composition use plan metadata, including remote plan metadata fetched by "
+            "RemoteWorkerClient.get_plan."
+        )
+    return (
+        "Project profile verification metadata exists in partial form, but configured profile commands do not yet "
+        "feed runtime verification consistently."
+    )
+
+
+def _profile_native_verification_gap(files: _RepoFiles) -> str:
+    if _profile_native_verification_status(files) is CapabilityStatus.PASS:
+        return (
+            "Configured profile commands feed runtime verification; this is wiring evidence, not a claim that "
+            "project profiles define complete test coverage."
+        )
+    return "Configured profile commands do not yet feed local and remote runtime verification consistently."
+
+
+def _profile_native_verification_action(files: _RepoFiles) -> str:
+    if _profile_native_verification_status(files) is CapabilityStatus.PASS:
+        return (
+            "Keep profile command generation, transport metadata, and worker verification runner tests aligned as "
+            "profile presets evolve."
+        )
+    return "Wire configured profile commands through generated plan metadata, transport metadata, and worker execution."
 
 
 def _pipeline_stage_status(files: _RepoFiles) -> CapabilityStatus:
