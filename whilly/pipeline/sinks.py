@@ -9,7 +9,9 @@ from typing import Any
 from whilly.pipeline.human_review import requires_human_review
 
 GITHUB_PR_SINK_TYPE = "github_pr"
+CI_STATUS_SINK_TYPE = "ci_status"
 CONFIGURED_GITHUB_PR_SINK_REQUIREMENT_PREFIX = "Configured github_pr sink stage:"
+CONFIGURED_CI_STATUS_SINK_REQUIREMENT_PREFIX = "Configured ci_status sink stage:"
 PROFILE_APPROVED_PR_SINK_MARKER = "PROFILE-APPROVED EXTERNAL ACTION: github_pr"
 
 
@@ -142,6 +144,8 @@ def _string_items(value: Any) -> tuple[str, ...]:
 
 __all__ = [
     "CONFIGURED_GITHUB_PR_SINK_REQUIREMENT_PREFIX",
+    "CONFIGURED_CI_STATUS_SINK_REQUIREMENT_PREFIX",
+    "CI_STATUS_SINK_TYPE",
     "GITHUB_PR_SINK_TYPE",
     "PROFILE_APPROVED_PR_SINK_MARKER",
     "PRGateDecision",

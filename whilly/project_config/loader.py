@@ -43,8 +43,9 @@ SUPPORTED_TASK_SOURCE_KINDS = frozenset(
         "manual_prd",
     }
 )
-SUPPORTED_SINK_TYPES = frozenset({"github_pr", "github_issue_comment", "jira_comment", "jsonl", "dashboard"})
+SUPPORTED_SINK_TYPES = frozenset({"github_pr", "ci_status", "github_issue_comment", "jira_comment", "jsonl", "dashboard"})
 SUPPORTED_RUNNERS = frozenset({"claude_cli", "opencode", "handoff"})
+SUPPORTED_VERIFICATION_SOURCES = frozenset({"profile", "ci"})
 
 
 def load_project_config(path: str | Path) -> ProjectConfig:
@@ -182,9 +183,19 @@ def _validate_configured_sinks(
     config: ProjectConfig, *, source: str, repo_by_role: dict[str, RepositoryConfig]
 ) -> None:
     for sink in config.sinks:
+        sink_config = sink.config or {}
+        if sink.type == "ci_status":
+            target = _ci_status_sink_target(sink_config)
+            if not target.startswith("ci://"):
+                raise ProjectConfigError(f"{source}: ci_status sink requires target to start with ci://")
+            _sink_non_negative_int(
+                sink_config.get("repair_max_attempts", 0),
+                source=source,
+                field="ci_status.repair_max_attempts",
+            )
+            continue
         if sink.type != "github_pr":
             continue
-        sink_config = sink.config or {}
         repo_role = _optional_string(sink_config.get("repo_role", "")).lower()
         if repo_role and repo_role not in repo_by_role:
             raise ProjectConfigError(f"{source}: github_pr sink references unknown repo_role {repo_role!r}")
@@ -304,15 +315,32 @@ def _verification_command(data: Any, *, source: str, index: int) -> Verification
     command_source = f"{source}: verification.commands[{index}]"
     name = _required_string(item, "name", command_source)
     command = _required_string(item, "command", command_source)
-    scan = scan_command(command)
-    if scan.blocked:
+    verification_source = (_optional_string(item.get("source", "profile")) or "profile").lower()
+    if verification_source not in SUPPORTED_VERIFICATION_SOURCES:
         raise ProjectConfigError(
-            f"{source}: unsafe verification command {name!r} blocked by {scan.pattern_matched or 'shell policy'}"
+            f"{source}: verification command {name!r} has unsupported source {verification_source!r}; "
+            f"expected one of {sorted(SUPPORTED_VERIFICATION_SOURCES)}"
         )
+    repair_max_attempts = _non_negative_int(
+        item.get("repair_max_attempts", 0),
+        source=source,
+        field=f"verification.commands[{index}].repair_max_attempts",
+    )
+    if verification_source == "ci":
+        if not command.startswith("ci://"):
+            raise ProjectConfigError(f"{source}: ci verification command {name!r} must start with ci://")
+    else:
+        scan = scan_command(command)
+        if scan.blocked:
+            raise ProjectConfigError(
+                f"{source}: unsafe verification command {name!r} blocked by {scan.pattern_matched or 'shell policy'}"
+            )
     return VerificationCommandConfig(
         name=name,
         command=command,
         required=bool(item.get("required", True)),
+        source=verification_source,
+        repair_max_attempts=repair_max_attempts,
     )
 
 
@@ -395,3 +423,27 @@ def _string_dict(data: Any, *, source: str, field: str) -> dict[str, str]:
             raise ProjectConfigError(f"{source}: {field} keys must be strings")
         out[key] = str(value)
     return out
+
+
+def _non_negative_int(value: Any, *, source: str, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ProjectConfigError(f"{source}: {field} must be a non-negative integer")
+    return value
+
+
+def _sink_non_negative_int(value: Any, *, source: str, field: str) -> int:
+    if isinstance(value, bool):
+        raise ProjectConfigError(f"{source}: {field} must be a non-negative integer")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdecimal():
+        parsed = int(value.strip())
+    else:
+        raise ProjectConfigError(f"{source}: {field} must be a non-negative integer")
+    if parsed < 0:
+        raise ProjectConfigError(f"{source}: {field} must be a non-negative integer")
+    return parsed
+
+
+def _ci_status_sink_target(config: dict[str, str]) -> str:
+    return _optional_string(config.get("target", config.get("command", config.get("ci_target", ""))))
