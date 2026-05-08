@@ -403,7 +403,7 @@ def _call_claude(prompt: str, model: str) -> str:
     # The PRD-wizard caller (whilly init) holds Postgres / httpx
     # connections in this same parent process when the import phase
     # runs; we mustn't route those through the Claude proxy.
-    child_env = proxy.spawn_env_for_claude()
+    child_env = proxy.spawn_env_for_claude(model=model)
 
     try:
         proc = subprocess.Popen(
