@@ -78,6 +78,7 @@ class ReviewGap:
     stage_id: str = ""
     reviewer: str | None = None
     approval_channel: str = ""
+    actionable: bool = False
 
 
 @dataclass(frozen=True)
@@ -325,6 +326,7 @@ def _review_gaps(tasks: Sequence[OperatorTaskRow]) -> tuple[ReviewGap, ...]:
                     stage_id=task.human_review.stage_id,
                     reviewer=task.human_review.reviewer,
                     approval_channel=task.human_review.approval_channel,
+                    actionable=True,
                 )
             )
         elif _mentions_human_review(task) and task.status != "DONE":

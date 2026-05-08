@@ -136,6 +136,7 @@ def test_human_review_required_event_opens_gap_until_approved() -> None:
             plan_id="P-release",
             reason="awaiting human review",
             stage_id="release_review",
+            actionable=True,
         ),
     )
 
@@ -156,6 +157,89 @@ def test_human_review_required_event_opens_gap_until_approved() -> None:
     closed = build_operator_snapshot(tasks=[task], workers=[], events=[required, approved], rendered_at=now)
 
     assert closed.review_gaps == ()
+
+
+def test_human_review_rejected_and_changes_requested_keep_actionable_gaps() -> None:
+    now = datetime(2026, 5, 7, 9, 0, tzinfo=UTC)
+    task = {
+        "id": "T-release",
+        "plan_id": "P-release",
+        "status": "IN_PROGRESS",
+        "priority": "critical",
+        "claimed_by": "worker-release",
+        "claimed_at": now,
+        "updated_at": now,
+        "acceptance_criteria": ["release evidence attached"],
+        "test_steps": ["pytest -q"],
+    }
+    required = {
+        "id": 1,
+        "task_id": "T-release",
+        "plan_id": "P-release",
+        "event_type": "human_review.required",
+        "created_at": now,
+        "payload": {
+            "task_id": "T-release",
+            "plan_id": "P-release",
+            "stage_id": "release_review",
+            "reason": "stage_human_gate",
+        },
+    }
+    rejected = {
+        "id": 2,
+        "task_id": "T-release",
+        "plan_id": "P-release",
+        "event_type": "human_review.rejected",
+        "created_at": now,
+        "payload": {
+            "task_id": "T-release",
+            "plan_id": "P-release",
+            "stage_id": "release_review",
+            "reviewer": "lead@example.com",
+        },
+    }
+    changes_requested = {
+        "id": 3,
+        "task_id": "T-release",
+        "plan_id": "P-release",
+        "event_type": "human_review.changes_requested",
+        "created_at": now,
+        "payload": {
+            "task_id": "T-release",
+            "plan_id": "P-release",
+            "stage_id": "release_review",
+            "reviewer": "lead@example.com",
+        },
+    }
+
+    rejected_snapshot = build_operator_snapshot(tasks=[task], workers=[], events=[required, rejected], rendered_at=now)
+    changes_snapshot = build_operator_snapshot(
+        tasks=[task],
+        workers=[],
+        events=[required, changes_requested],
+        rendered_at=now,
+    )
+
+    assert rejected_snapshot.review_gaps == (
+        ReviewGap(
+            task_id="T-release",
+            plan_id="P-release",
+            reason="human review rejected",
+            stage_id="release_review",
+            reviewer="lead@example.com",
+            actionable=True,
+        ),
+    )
+    assert changes_snapshot.review_gaps == (
+        ReviewGap(
+            task_id="T-release",
+            plan_id="P-release",
+            reason="human review changes requested",
+            stage_id="release_review",
+            reviewer="lead@example.com",
+            actionable=True,
+        ),
+    )
 
 
 def test_filter_snapshot_keeps_matching_rows_across_surfaces() -> None:

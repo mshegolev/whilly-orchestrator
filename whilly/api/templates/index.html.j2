@@ -67,7 +67,7 @@
     }
     .operator-controls {
       display: grid;
-      grid-template-columns: minmax(12rem, 20rem) auto;
+      grid-template-columns: minmax(12rem, 18rem) minmax(12rem, 18rem) minmax(12rem, 18rem) auto;
       gap: 8px;
       align-items: center;
     }
@@ -166,6 +166,7 @@
       font-size: 0.72rem;
     }
     tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+    tbody tr.review-row-selected { outline: 2px solid var(--accent); outline-offset: -2px; }
     .status, .priority, .review {
       display: inline-block;
       padding: 0;
@@ -185,6 +186,32 @@
     .review-approved { color: var(--ok); }
     .review-pending, .review-changes_requested { color: var(--warn); }
     .review-rejected { color: var(--danger); }
+    .review-actions {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .review-actions button {
+      min-width: 2rem;
+      min-height: 1.75rem;
+      padding: 2px 6px;
+      border: 1px solid var(--line-strong);
+      border-radius: 2px;
+      color: var(--text);
+      background: var(--surface);
+      font: inherit;
+      cursor: pointer;
+    }
+    .review-actions button:hover,
+    .review-actions button:focus-visible {
+      color: var(--surface);
+      background: var(--text);
+      outline: none;
+    }
+    .review-actions button[data-review-decision="approved"] { border-color: var(--ok); }
+    .review-actions button[data-review-decision="rejected"] { border-color: var(--danger); }
+    .review-actions button[data-review-decision="changes_requested"] { border-color: var(--warn); }
     .empty-state { opacity: 0.65; }
     .hotkeys, .polling-state { opacity: 0.72; }
     .hotkeys {
@@ -240,6 +267,10 @@
           <span>1-5=switch</span>
           <span>/=filter</span>
           <span>p=pause</span>
+          <span>j/k=select</span>
+          <span>a=approve</span>
+          <span>x=reject</span>
+          <span>c=changes</span>
         </p>
       </hgroup>
       <div class="operator-controls">
@@ -248,6 +279,16 @@
                autocomplete="off"
                placeholder="Filter tasks, workers, events"
                aria-label="Filter dashboard rows">
+        <input id="dashboard-admin-token"
+               type="password"
+               autocomplete="off"
+               placeholder="Admin bearer"
+               aria-label="Admin bearer token for review actions">
+        <input id="dashboard-reviewer"
+               type="email"
+               autocomplete="email"
+               placeholder="Reviewer email"
+               aria-label="Reviewer identity for review actions">
         <small id="polling-state" class="polling-state" aria-live="polite">Live</small>
       </div>
     </header>
@@ -280,7 +321,7 @@
       <section class="metric-strip"
                id="summary"
                hx-get="/"
-               hx-trigger="every 5s, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-trigger="every 5s, whilly:reviewDecision from:body, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
                hx-select="#summary"
                hx-target="#summary"
                hx-swap="outerHTML">
@@ -323,7 +364,7 @@
         <table id="review-gaps"
                role="grid"
                hx-get="/"
-               hx-trigger="sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-trigger="whilly:reviewDecision from:body, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
                hx-select="#review-gaps"
                hx-target="#review-gaps"
                hx-swap="outerHTML">
@@ -334,23 +375,45 @@
               <th scope="col">Reason</th>
               <th scope="col">Stage</th>
               <th scope="col">Reviewer</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>
             {% if review_gaps %}
               {% for gap in review_gaps %}
                 <tr id="review-gap-{{ gap.task_id }}"
-                    data-filter-text="{{ gap.task_id }} {{ gap.plan_id }} {{ gap.reason }} {{ gap.stage_id }} {{ gap.reviewer or '' }} {{ gap.approval_channel }}">
+                    data-filter-text="{{ gap.task_id }} {{ gap.plan_id }} {{ gap.reason }} {{ gap.stage_id }} {{ gap.reviewer or '' }} {{ gap.approval_channel }}"
+                    data-review-task="{{ gap.task_id }}"
+                    data-review-stage="{{ gap.stage_id }}"
+                    data-review-actionable="{{ 'true' if gap.actionable else 'false' }}"
+                    aria-selected="false">
                   <td><code>{{ gap.task_id }}</code></td>
                   <td>{{ gap.plan_id }}</td>
                   <td>{{ gap.reason }}</td>
                   <td>{{ gap.stage_id if gap.stage_id else "—" }}</td>
                   <td>{{ gap.reviewer if gap.reviewer else "—" }}</td>
+                  <td>
+                    {% if gap.actionable %}
+                      <span class="review-actions" aria-label="Human review actions">
+                        <button type="button"
+                                data-review-decision="approved"
+                                title="Approve selected review gap (a)">A</button>
+                        <button type="button"
+                                data-review-decision="rejected"
+                                title="Reject selected review gap (x)">X</button>
+                        <button type="button"
+                                data-review-decision="changes_requested"
+                                title="Request changes for selected review gap (c)">C</button>
+                      </span>
+                    {% else %}
+                      <span class="empty-state">read-only</span>
+                    {% endif %}
+                  </td>
                 </tr>
               {% endfor %}
             {% else %}
               <tr id="review-gaps-empty">
-                <td colspan="5"><em class="empty-state">No human review or verification gaps.</em></td>
+                <td colspan="6"><em class="empty-state">No human review or verification gaps.</em></td>
               </tr>
             {% endif %}
           </tbody>
@@ -419,6 +482,7 @@
       let pollingPaused = false;
       let dashboardStopped = false;
       let manualRefreshRequested = false;
+      let selectedReviewIndex = 0;
       const manualLiveRequests = new WeakSet();
       const liveStreams = new Set();
 
@@ -442,6 +506,7 @@
         document.querySelectorAll("tbody tr[data-filter-text]").forEach((row) => {
           row.hidden = Boolean(needle) && !row.dataset.filterText.toLowerCase().includes(needle);
         });
+        selectReviewRow(selectedReviewIndex);
       }
 
       function refreshDashboard() {
@@ -458,7 +523,7 @@
         if (dashboardStopped) return;
         pollingPaused = !pollingPaused;
         document.documentElement.dataset.pollingPaused = String(pollingPaused);
-        if (pollingState) pollingState.textContent = pollingPaused ? "Paused" : "Live";
+        setPollingStatus(pollingPaused ? "Paused" : "Live");
       }
 
       function closeLiveStreams() {
@@ -475,7 +540,108 @@
         closeLiveStreams();
         document.body.dataset.dashboardState = "stopped";
         document.documentElement.dataset.pollingPaused = "true";
-        if (pollingState) pollingState.textContent = "Stopped";
+        setPollingStatus("Stopped", true);
+      }
+
+      function setPollingStatus(text, isError = false) {
+        if (!pollingState) return;
+        pollingState.textContent = text;
+        pollingState.dataset.state = isError ? "error" : "ok";
+      }
+
+      function actionableReviewRows() {
+        return Array.from(document.querySelectorAll('#review-gaps tbody tr[data-review-actionable="true"]'))
+          .filter((row) => !row.hidden);
+      }
+
+      function selectReviewRow(index) {
+        const rows = actionableReviewRows();
+        document.querySelectorAll("#review-gaps tbody tr[data-review-task]").forEach((row) => {
+          row.classList.remove("review-row-selected");
+          row.setAttribute("aria-selected", "false");
+        });
+        if (!rows.length) {
+          selectedReviewIndex = 0;
+          return null;
+        }
+        selectedReviewIndex = Math.max(0, Math.min(index, rows.length - 1));
+        const selected = rows[selectedReviewIndex];
+        selected.classList.add("review-row-selected");
+        selected.setAttribute("aria-selected", "true");
+        return selected;
+      }
+
+      function selectedReviewRow() {
+        return selectReviewRow(selectedReviewIndex);
+      }
+
+      function refreshReviewFragments() {
+        if (window.htmx) {
+          manualRefreshRequested = true;
+          window.htmx.trigger(document.body, "whilly:reviewDecision");
+          return;
+        }
+        refreshDashboard();
+      }
+
+      async function submitReviewDecision(row, decision) {
+        if (!row) {
+          setPollingStatus("No review row", true);
+          return;
+        }
+        const adminToken = document.getElementById("dashboard-admin-token");
+        const reviewerInput = document.getElementById("dashboard-reviewer");
+        const token = (adminToken?.value || "").trim();
+        const reviewer = (reviewerInput?.value || "").trim();
+        if (!token) {
+          setPollingStatus("Admin token required", true);
+          adminToken?.focus();
+          return;
+        }
+        if (!reviewer) {
+          setPollingStatus("Reviewer required", true);
+          reviewerInput?.focus();
+          return;
+        }
+        const taskId = row.dataset.reviewTask || "";
+        const payload = { decision, reviewer };
+        if (row.dataset.reviewStage) payload.stage_id = row.dataset.reviewStage;
+        if (decision === "rejected") {
+          const comment = window.prompt("Review comment", "");
+          if (comment === null) return;
+          if (comment.trim()) payload.comment = comment.trim();
+        }
+        if (decision === "changes_requested") {
+          const requested = window.prompt("Requested changes", "");
+          if (requested === null) return;
+          if (requested.trim()) payload.requested_changes = [requested.trim()];
+        }
+        setPollingStatus("Recording");
+        try {
+          const response = await fetch(`/api/v1/tasks/${encodeURIComponent(taskId)}/human-review`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            let detail = response.statusText;
+            try {
+              const body = await response.json();
+              detail = body.detail || body.error || detail;
+            } catch {
+              detail = response.statusText;
+            }
+            setPollingStatus(`Review ${response.status}: ${detail}`, true);
+            return;
+          }
+          setPollingStatus("Recorded");
+          refreshReviewFragments();
+        } catch (error) {
+          setPollingStatus(`Review error: ${error}`, true);
+        }
       }
 
       function requestKeys(event) {
@@ -513,6 +679,21 @@
       document.querySelectorAll("[data-surface-tab]").forEach((button) => {
         button.addEventListener("click", () => setSurface(button.dataset.surfaceTab));
       });
+      document.body.addEventListener("click", (event) => {
+        const actionButton = event.target.closest?.("[data-review-decision]");
+        if (actionButton) {
+          const row = actionButton.closest("tr[data-review-task]");
+          event.preventDefault();
+          submitReviewDecision(row, actionButton.dataset.reviewDecision);
+          return;
+        }
+        const reviewRow = event.target.closest?.("#review-gaps tbody tr[data-review-actionable='true']");
+        if (reviewRow) {
+          const rows = actionableReviewRows();
+          selectedReviewIndex = Math.max(0, rows.indexOf(reviewRow));
+          selectReviewRow(selectedReviewIndex);
+        }
+      });
       document.body.addEventListener("htmx:sseOpen", (event) => {
         const source = event.detail?.source || event.detail?.eventSource;
         if (source) liveStreams.add(source);
@@ -535,6 +716,7 @@
       });
       document.body.addEventListener("htmx:afterSwap", () => {
         applyFilter();
+        selectReviewRow(selectedReviewIndex);
       });
       document.body.addEventListener("htmx:beforeSwap", (event) => {
         if (!shouldBlockLiveSwap(event)) return;
@@ -552,6 +734,21 @@
         } else if (event.key === "p" || event.key === "P") {
           event.preventDefault();
           togglePolling();
+        } else if (event.key === "j" || event.key === "J") {
+          event.preventDefault();
+          selectReviewRow(selectedReviewIndex + 1);
+        } else if (event.key === "k" || event.key === "K") {
+          event.preventDefault();
+          selectReviewRow(selectedReviewIndex - 1);
+        } else if (event.key === "a" || event.key === "A") {
+          event.preventDefault();
+          submitReviewDecision(selectedReviewRow(), "approved");
+        } else if (event.key === "x" || event.key === "X") {
+          event.preventDefault();
+          submitReviewDecision(selectedReviewRow(), "rejected");
+        } else if (event.key === "c" || event.key === "C") {
+          event.preventDefault();
+          submitReviewDecision(selectedReviewRow(), "changes_requested");
         } else if (event.key === "/") {
           event.preventDefault();
           filter?.focus();
@@ -561,6 +758,7 @@
         }
       });
       setSurface("overview");
+      selectReviewRow(0);
     })();
   </script>
 </body>
