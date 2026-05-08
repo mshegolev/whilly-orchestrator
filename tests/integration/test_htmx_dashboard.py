@@ -253,6 +253,40 @@ async def test_dashboard_mobile_responsive_block(client: AsyncClient) -> None:
     assert "@media (max-width: 900px)" in body, "mobile-responsive media query missing"
 
 
+async def test_dashboard_mobile_table_css_contract(client: AsyncClient) -> None:
+    response = await client.get("/")
+    body = response.text
+
+    media_index = body.index("@media (max-width: 900px)")
+    assert ".table-wrapper { overflow-x: auto; }" in body[:media_index]
+    mobile_css = body[media_index:]
+
+    for selector in (
+        "#review-gaps tbody tr[data-filter-text]",
+        "#tasks tbody tr[data-filter-text]",
+        "#workers tbody tr[data-filter-text]",
+        "#events tbody tr[data-filter-text]",
+    ):
+        assert selector in mobile_css
+
+    for contract in (
+        "grid-template-columns: minmax(84px, 32%) minmax(0, 1fr);",
+        "content: attr(data-mobile-label);",
+        "white-space: normal;",
+        "overflow-wrap: anywhere;",
+        "border-radius: 4px;",
+        "gap: 8px;",
+        "min-width: 44px;",
+        "min-height: 44px;",
+        "padding: 8px;",
+    ):
+        assert contract in mobile_css
+
+    assert "tr[data-filter-text][hidden]" in mobile_css
+    assert '#review-gaps td[data-mobile-label="Actions"]' in mobile_css
+    assert "#review-gaps .review-actions button" in mobile_css
+
+
 async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
