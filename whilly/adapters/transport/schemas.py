@@ -432,6 +432,22 @@ class HumanReviewDecisionRequest(_FrozenModel):
     requested_changes: list[NonEmptyShortStr] = Field(default_factory=list)
 
 
+class ControlPauseRequest(_FrozenModel):
+    """Admin-only request body for ``POST /api/v1/admin/workers/pause``."""
+
+    reason: Annotated[str, Field(max_length=MAX_REASON_LEN)] = ""
+
+
+class ControlStateResponse(_FrozenModel):
+    """Global worker pause state returned by admin control endpoints."""
+
+    paused: bool
+    pause_reason: str | None = None
+    paused_by: str | None = None
+    paused_at: datetime | None = None
+    updated_at: datetime
+
+
 # ---------------------------------------------------------------------------
 # Fail
 # ---------------------------------------------------------------------------
@@ -579,6 +595,8 @@ __all__ = [
     "ClaimResponse",
     "CompleteRequest",
     "CompleteResponse",
+    "ControlPauseRequest",
+    "ControlStateResponse",
     "ErrorResponse",
     "FailRequest",
     "FailResponse",
