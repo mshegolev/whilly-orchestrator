@@ -242,6 +242,8 @@ from whilly.adapters.transport.schemas import (
     ClaimResponse,
     CompleteRequest,
     CompleteResponse,
+    ControlPauseRequest,
+    ControlStateResponse,
     ErrorResponse,
     FailRequest,
     FailResponse,
@@ -470,6 +472,16 @@ def _read_preview(path: Path | None, *, raw_jsonl: bool = False) -> tuple[str, s
     if len(text) > LLM_OPS_UI_MAX_PREVIEW_CHARS:
         return str(path), text[:LLM_OPS_UI_MAX_PREVIEW_CHARS] + "\n\n... truncated ..."
     return str(path), text
+
+
+def _control_state_response(state: Any) -> ControlStateResponse:
+    return ControlStateResponse(
+        paused=bool(state.paused),
+        pause_reason=state.pause_reason,
+        paused_by=state.paused_by,
+        paused_at=state.paused_at,
+        updated_at=state.updated_at,
+    )
 
 
 async def _visibility_sweep_loop(
@@ -2064,6 +2076,38 @@ def create_app(
     async def admin_health(request: Request) -> JSONResponse:
         owner = getattr(request.state, "bootstrap_owner_email", None)
         return JSONResponse({"status": "ok", "owner": owner})
+
+    @app.get(
+        "/api/v1/admin/workers/control-state",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(admin_dep)],
+    )
+    async def get_workers_control_state(request: Request) -> ControlStateResponse:
+        """Return the global worker pause/resume state."""
+
+        return _control_state_response(await repo.get_control_state())
+
+    @app.post(
+        "/api/v1/admin/workers/pause",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(admin_dep)],
+    )
+    async def pause_workers(request: Request, payload: ControlPauseRequest) -> ControlStateResponse:
+        """Activate the soft global worker stop-crane."""
+
+        operator = getattr(request.state, "bootstrap_owner_email", None)
+        return _control_state_response(await repo.pause_workers(reason=payload.reason, operator=operator))
+
+    @app.post(
+        "/api/v1/admin/workers/resume",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(admin_dep)],
+    )
+    async def resume_workers(request: Request) -> ControlStateResponse:
+        """Clear the soft global worker stop-crane."""
+
+        operator = getattr(request.state, "bootstrap_owner_email", None)
+        return _control_state_response(await repo.resume_workers(operator=operator))
 
     @app.get(
         "/api/v1/tasks",

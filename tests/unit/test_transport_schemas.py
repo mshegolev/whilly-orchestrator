@@ -30,6 +30,8 @@ from whilly.adapters.transport.schemas import (
     ClaimResponse,
     CompleteRequest,
     CompleteResponse,
+    ControlPauseRequest,
+    ControlStateResponse,
     ErrorResponse,
     FailRequest,
     FailResponse,
@@ -227,6 +229,24 @@ def test_human_review_decision_request_pins_admin_payload_shape() -> None:
     assert request.reviewer == "lead@example.com"
     with pytest.raises(ValidationError):
         HumanReviewDecisionRequest(decision="maybe", reviewer="lead@example.com")
+
+
+def test_control_state_schemas_pin_pause_resume_payload_shape() -> None:
+    pause = ControlPauseRequest(reason="deploy gate")
+    state = ControlStateResponse(
+        paused=True,
+        pause_reason="deploy gate",
+        paused_by="lead@example.com",
+        paused_at=datetime(2026, 5, 8, 10, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 8, 10, 1, tzinfo=UTC),
+    )
+
+    assert pause.reason == "deploy gate"
+    assert state.paused is True
+    assert state.pause_reason == "deploy gate"
+    assert state.paused_by == "lead@example.com"
+    with pytest.raises(ValidationError):
+        ControlPauseRequest(reason="x", unexpected=True)
 
 
 def test_error_response_carries_version_conflict_fields() -> None:
