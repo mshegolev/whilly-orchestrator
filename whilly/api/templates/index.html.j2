@@ -437,12 +437,9 @@
                hx-swap="outerHTML">
           <thead>
             <tr>
-              <th scope="col">Task</th>
-              <th scope="col">Plan</th>
-              <th scope="col">Reason</th>
-              <th scope="col">Stage</th>
-              <th scope="col">Reviewer</th>
-              <th scope="col">Actions</th>
+              {% for column in table_columns.review_gaps %}
+                <th scope="col">{{ column.label_for("wui") }}</th>
+              {% endfor %}
             </tr>
           </thead>
           <tbody>
@@ -480,7 +477,7 @@
               {% endfor %}
             {% else %}
               <tr id="review-gaps-empty">
-                <td colspan="6"><em class="empty-state">No human review or verification gaps.</em></td>
+                <td colspan="{{ table_columns.review_gaps|length }}"><em class="empty-state">No human review or verification gaps.</em></td>
               </tr>
             {% endif %}
           </tbody>
@@ -508,11 +505,9 @@
         <table id="events" role="grid">
           <thead>
             <tr>
-              <th scope="col">Id</th>
-              <th scope="col">Task</th>
-              <th scope="col">Plan</th>
-              <th scope="col">Type</th>
-              <th scope="col">At</th>
+              {% for column in table_columns.events %}
+                <th scope="col">{{ column.label_for("wui") }}</th>
+              {% endfor %}
             </tr>
           </thead>
           <tbody>
@@ -529,7 +524,7 @@
               {% endfor %}
             {% else %}
               <tr id="events-empty">
-                <td colspan="5"><em class="empty-state">No events recorded.</em></td>
+                <td colspan="{{ table_columns.events|length }}"><em class="empty-state">No events recorded.</em></td>
               </tr>
             {% endif %}
           </tbody>
