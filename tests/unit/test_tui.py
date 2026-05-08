@@ -291,6 +291,32 @@ async def test_apply_pending_review_action_requires_reviewer(monkeypatch: pytest
     assert "reviewer required" in (state.last_error or "")
 
 
+@pytest.mark.asyncio
+async def test_record_human_review_decision_uses_shared_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[Any] = []
+
+    async def fake_record(repo: Any, command: Any) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr(tui_module, "record_review_decision", fake_record)
+
+    await tui_module._record_human_review_decision(
+        object(),
+        _snapshot().review_gaps[0],
+        "changes_requested",
+        "lead@example.com",
+    )
+
+    assert len(commands) == 1
+    command = commands[0]
+    assert command.task_id == "T-human"
+    assert command.decision == "changes_requested"
+    assert command.reviewer == "lead@example.com"
+    assert command.source == "tui"
+    assert command.stage_id == "release_review"
+    assert command.requested_changes == ("Requested from TUI operator controls.",)
+
+
 def test_run_tui_command_without_database_url_returns_exit_2(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

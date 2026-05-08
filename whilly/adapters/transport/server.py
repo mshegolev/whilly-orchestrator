@@ -261,10 +261,11 @@ from whilly.adapters.transport.schemas import (
     TaskPayload,
 )
 from whilly.pipeline.human_review import (
-    HUMAN_REVIEW_APPROVED,
-    HUMAN_REVIEW_CHANGES_REQUESTED,
-    HUMAN_REVIEW_REJECTED,
     HUMAN_REVIEW_REQUIRED,
+)
+from whilly.pipeline.human_review_decisions import (
+    HumanReviewDecisionCommand,
+    record_human_review_decision as record_review_decision,
 )
 
 __all__ = [
@@ -366,11 +367,6 @@ DIAGNOSTIC_EVENT_PREFIXES: Final[tuple[str, ...]] = (
     "human_review.",
 )
 WORKER_HUMAN_REVIEW_EVENT_TYPES: Final[frozenset[str]] = frozenset({HUMAN_REVIEW_REQUIRED})
-HUMAN_REVIEW_DECISION_EVENT_TYPES: Final[dict[str, str]] = {
-    "approved": HUMAN_REVIEW_APPROVED,
-    "rejected": HUMAN_REVIEW_REJECTED,
-    "changes_requested": HUMAN_REVIEW_CHANGES_REQUESTED,
-}
 
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
@@ -1671,23 +1667,22 @@ def create_app(
     ) -> TaskEventResponse | JSONResponse:
         """Append an admin-authorised human-review decision event."""
 
-        event_type = HUMAN_REVIEW_DECISION_EVENT_TYPES[payload.decision]
-        event_payload: dict[str, Any] = {
-            "task_id": task_id,
-            "decision": payload.decision,
-            "reviewer": payload.reviewer,
-            "source": "admin_api",
-        }
-        _put_if_non_empty(event_payload, "stage_id", payload.stage_id)
-        _put_if_non_empty(event_payload, "comment", payload.comment)
         operator = getattr(request.state, "bootstrap_owner_email", None)
-        _put_if_non_empty(event_payload, "operator", operator)
-        if payload.evidence:
-            event_payload["evidence"] = payload.evidence
-        if payload.requested_changes:
-            event_payload["requested_changes"] = payload.requested_changes
         try:
-            await repo.record_task_event(task_id, event_type, event_payload)
+            await record_review_decision(
+                repo,
+                HumanReviewDecisionCommand(
+                    task_id=task_id,
+                    decision=payload.decision,
+                    reviewer=payload.reviewer,
+                    source="admin_api",
+                    stage_id=payload.stage_id or "",
+                    comment=payload.comment,
+                    evidence=payload.evidence,
+                    requested_changes=tuple(payload.requested_changes),
+                    operator=operator or "",
+                ),
+            )
         except ValueError:
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
