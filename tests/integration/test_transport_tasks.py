@@ -850,9 +850,9 @@ async def test_remote_repair_request_inserts_dependency_free_repair_task(
     assert task_row is not None
     assert task_row["plan_id"] == plan_id
     assert task_row["status"] == "PENDING"
-    dependencies = json.loads(task_row["dependencies"]) if isinstance(task_row["dependencies"], str) else task_row[
-        "dependencies"
-    ]
+    dependencies = (
+        json.loads(task_row["dependencies"]) if isinstance(task_row["dependencies"], str) else task_row["dependencies"]
+    )
     assert dependencies == []
     assert task_row["priority"] == "high"
     assert task_row["description"] == "Repair required CI failure."

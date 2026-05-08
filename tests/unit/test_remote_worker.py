@@ -742,7 +742,11 @@ async def test_remote_worker_ci_started_event_includes_original_poll_budget(fake
         verification_runner=verification_runner,
     )
 
-    started = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == CI_POLL_STARTED_EVENT)
+    started = next(
+        payload
+        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
+        if event_type == CI_POLL_STARTED_EVENT
+    )
     assert started["provider"] == "github"
     assert started["target"] == "ci://github/example/repo/pull/42"
     assert started["timeout_s"] == 90.0
@@ -855,7 +859,11 @@ async def test_remote_worker_escalates_when_repair_budget_exhausted(fake_sleep: 
     )
 
     assert client.request_repair_calls == []
-    escalated = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == REPAIR_ESCALATED_EVENT)
+    escalated = next(
+        payload
+        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
+        if event_type == REPAIR_ESCALATED_EVENT
+    )
     assert escalated["reason"] == "repair_budget_exhausted"
     assert escalated["last_repair_task_id"] == "T-exhausted-repair-1"
     assert escalated["attempts"] == 1
@@ -889,7 +897,11 @@ async def test_remote_worker_records_repair_attempt_completed_on_done(fake_sleep
         max_iterations=1,
     )
 
-    completed = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT)
+    completed = next(
+        payload
+        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
+        if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT
+    )
     assert completed["task_id"] == "T-original-repair-1"
     assert completed["orig_task_id"] == "T-original"
     assert completed["terminal_status"] == "DONE"
@@ -926,7 +938,11 @@ async def test_remote_worker_records_repair_attempt_completed_on_failed(fake_sle
         max_iterations=1,
     )
 
-    completed = next(payload for _task_id, _worker_id, event_type, payload, _detail in client.event_calls if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT)
+    completed = next(
+        payload
+        for _task_id, _worker_id, event_type, payload, _detail in client.event_calls
+        if event_type == REPAIR_ATTEMPT_COMPLETED_EVENT
+    )
     assert completed["task_id"] == "T-original-repair-2"
     assert completed["orig_task_id"] == "T-original"
     assert completed["terminal_status"] == "FAILED"
