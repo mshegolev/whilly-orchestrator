@@ -17,7 +17,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 6: Mobile WUI row actions** - Mobile tables expose row details and actions without cramped horizontal scroll.
 - [x] **Phase 7: Review action affordances** - Reject/request-changes paths become clearer and safer.
 - [x] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
-- [ ] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
+- [x] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
 - [ ] **Phase 10: Rollback safety net** - Backup tags, branch preflight, and explicit rollback CLI are operator-ready.
 - [ ] **Phase 11: CI polling and bounded repair** - CI/PR feedback can create bounded auditable repair loops.
 - [ ] **Phase 12: Governance and semantic-memory decision** - Risk policy and semantic-memory scope are explicit.
@@ -153,7 +153,7 @@ Plans:
   1. Profile verification commands flow into worker execution without replacing explicit CLI verification commands.
   2. Required verification failures block normal `DONE`.
   3. Compliance report can distinguish profile-native verification from ad hoc CLI verification.
-**Plans**: Ready to plan
+**Plans**: 4 plans complete
 
 Plans:
 - [ ] 09-01: Wire profile verification commands into runtime and compliance evidence.
@@ -216,7 +216,7 @@ GSD initialization and are now tracked here as completed history.
 | 6. Mobile WUI row actions | 1/1 | Complete | 2026-05-08 |
 | 7. Review action affordances | 1/1 | Complete | 2026-05-08 |
 | 8. Sandbox and secrets hardening | 4/4 | Complete | 2026-05-08 |
-| 9. Profile-native verification wiring | 3/4 | In Progress | - |
+| 9. Profile-native verification wiring | 4/4 | Complete | 2026-05-08 |
 | 10. Rollback safety net | 0/1 | Not started | - |
 | 11. CI polling and bounded repair | 0/1 | Not started | - |
 | 12. Governance and semantic-memory decision | 0/1 | Not started | - |
