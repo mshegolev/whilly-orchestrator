@@ -227,6 +227,7 @@ class VerificationCommandPayload(_FrozenModel):
     command: Annotated[str, Field(min_length=1, max_length=MAX_DESCRIPTION_LEN)]
     required: bool = True
     source: NonEmptyShortStr = "profile"
+    repair_max_attempts: NonNegativeVersion = 0
 
     @classmethod
     def from_verification_command(cls, command: VerificationCommand) -> VerificationCommandPayload:
@@ -236,6 +237,7 @@ class VerificationCommandPayload(_FrozenModel):
             command=command.command,
             required=command.required,
             source=command.source,
+            repair_max_attempts=command.repair_max_attempts,
         )
 
     def to_verification_command(self) -> VerificationCommand:
@@ -245,6 +247,7 @@ class VerificationCommandPayload(_FrozenModel):
             command=self.command,
             required=self.required,
             source=self.source,
+            repair_max_attempts=self.repair_max_attempts,
         )
 
 

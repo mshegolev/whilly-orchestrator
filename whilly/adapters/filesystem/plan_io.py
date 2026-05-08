@@ -377,6 +377,11 @@ def _verification_commands_from_dict(raw: Any, *, source: str) -> tuple[Verifica
                 command=command,
                 required=required,
                 source=command_source,
+                repair_max_attempts=_optional_non_negative_int(
+                    item.get("repair_max_attempts", 0),
+                    source=source,
+                    field=f"{field}.repair_max_attempts",
+                ),
             )
         )
     return tuple(commands)
@@ -388,6 +393,13 @@ def _optional_string(value: Any, *, source: str, field: str) -> str:
         return ""
     if not isinstance(value, str):
         raise PlanParseError(f"{source}: {field!r} must be a string when provided")
+    return value
+
+
+def _optional_non_negative_int(value: Any, *, source: str, field: str) -> int:
+    """Validate optional non-negative integer metadata fields."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise PlanParseError(f"{source}: {field} must be a non-negative integer when provided")
     return value
 
 
@@ -543,6 +555,7 @@ def _verification_command_to_dict(command: VerificationCommand) -> dict[str, Any
         "command": command.command,
         "required": command.required,
         "source": command.source,
+        "repair_max_attempts": command.repair_max_attempts,
     }
 
 

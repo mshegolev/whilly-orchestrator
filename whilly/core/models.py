@@ -91,6 +91,7 @@ class VerificationCommand:
     command: str
     required: bool = True
     source: str = "profile"
+    repair_max_attempts: int = 0
 
 
 @dataclass(frozen=True)
