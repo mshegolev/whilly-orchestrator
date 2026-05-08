@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 
 DEFAULT_DOC_ROOT = Path(__file__).resolve().parents[2] / "docs" / "target"
+_BOUNDED_CI_REPAIR_SCOPE = "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed."
 
 
 class CapabilityStatus(str, Enum):
@@ -245,6 +246,13 @@ def build_compliance_report(
             "pr-feedback CLI and GitHub PR feedback source exist.",
             "Polling is a separate command/timer surface, not an always-on autonomous repair loop.",
             "Document polling requirements and avoid claiming automatic continuous review remediation.",
+        ),
+        _cap(
+            "Bounded CI polling and repair",
+            _bounded_ci_repair_status(files),
+            _bounded_ci_repair_evidence(files),
+            _bounded_ci_repair_gap(files),
+            _bounded_ci_repair_action(files),
         ),
         _cap(
             "Multi-repo task execution",
@@ -619,6 +627,120 @@ def _git_rollback_signals(files: _RepoFiles) -> tuple[bool, ...]:
         files.contains("tests/unit/test_rollback.py", "test_restore_refuses_dirty_worktree"),
         files.contains("tests/unit/test_rollback.py", "test_restore_requires_exact_confirmation"),
     )
+
+
+def _bounded_ci_repair_status(files: _RepoFiles) -> CapabilityStatus:
+    signals = _bounded_ci_repair_signals(files)
+    if all(signals.values()):
+        return CapabilityStatus.PASS
+    if any(signals.values()):
+        return CapabilityStatus.PARTIAL
+    return CapabilityStatus.FAIL
+
+
+def _bounded_ci_repair_evidence(files: _RepoFiles) -> str:
+    if _bounded_ci_repair_status(files) is CapabilityStatus.PASS:
+        return (
+            "whilly/ci/verification.py, whilly/repair/policy.py, local and remote worker runtime wiring, "
+            "transport diagnostic prefixes, and focused runtime tests provide explicit configured CI polling, "
+            "bounded repair attempts, repair.escalated evidence, and terminal repair.attempt.completed evidence."
+        )
+    return "CI polling and repair primitives or runtime wiring are present, but concrete local and remote evidence is incomplete."
+
+
+def _bounded_ci_repair_gap(files: _RepoFiles) -> str:
+    missing = [label for label, present in _bounded_ci_repair_signals(files).items() if not present]
+    if not missing:
+        return _BOUNDED_CI_REPAIR_SCOPE
+    return f"Missing runtime evidence: {', '.join(missing)}. {_BOUNDED_CI_REPAIR_SCOPE}"
+
+
+def _bounded_ci_repair_action(files: _RepoFiles) -> str:
+    if _bounded_ci_repair_status(files) is CapabilityStatus.PASS:
+        return "Keep configured CI status, bounded repair budgets, escalation, and terminal repair evidence tests aligned."
+    return "Complete the missing CI/repair runtime evidence before reporting this capability as PASS."
+
+
+def _bounded_ci_repair_signals(files: _RepoFiles) -> dict[str, bool]:
+    return {
+        "CI verification primitive": files.exists("whilly/ci/verification.py"),
+        "bounded repair policy primitive": files.exists("whilly/repair/policy.py"),
+        "local worker ci.poll.result": _contains_any(
+            files,
+            "whilly/worker/local.py",
+            ("ci.poll.result", "make_ci_poll_result_event"),
+        ),
+        "local worker repair.escalated": _contains_any(
+            files,
+            "whilly/worker/local.py",
+            ("repair.escalated", "make_repair_escalated_event"),
+        ),
+        "local worker repair.attempt.completed": _contains_any(
+            files,
+            "whilly/worker/local.py",
+            ("repair.attempt.completed", "make_repair_attempt_completed_event"),
+        ),
+        "remote worker ci.poll.result": _contains_any(
+            files,
+            "whilly/worker/remote.py",
+            ("ci.poll.result", "make_ci_poll_result_event"),
+        ),
+        "remote worker repair.escalated": _contains_any(
+            files,
+            "whilly/worker/remote.py",
+            ("repair.escalated", "make_repair_escalated_event"),
+        ),
+        "remote worker repair.attempt.completed": _contains_any(
+            files,
+            "whilly/worker/remote.py",
+            ("repair.attempt.completed", "make_repair_attempt_completed_event"),
+        ),
+        "transport ci. diagnostics": files.contains("whilly/adapters/transport/server.py", "ci."),
+        "transport repair. diagnostics": files.contains("whilly/adapters/transport/server.py", "repair."),
+        "focused local worker CI tests": _contains_all(
+            files,
+            "tests/unit/test_local_worker.py",
+            (
+                "test_local_worker_records_ci_poll_events_before_verification_failure",
+                "test_local_worker_configured_ci_status_stage_emits_ci_poll_events",
+            ),
+        ),
+        "focused local worker repair tests": _contains_all(
+            files,
+            "tests/unit/test_local_worker.py",
+            (
+                "test_local_worker_requests_repair_task_with_budget_remaining",
+                "test_local_worker_escalates_when_repair_budget_exhausted",
+                "test_local_worker_records_repair_attempt_completed_on_done",
+            ),
+        ),
+        "focused remote worker CI tests": _contains_all(
+            files,
+            "tests/unit/test_remote_worker.py",
+            (
+                "test_remote_worker_records_ci_poll_events_before_verification_failure",
+                "test_remote_worker_configured_ci_status_stage_emits_ci_poll_events",
+            ),
+        ),
+        "focused remote worker repair tests": _contains_all(
+            files,
+            "tests/unit/test_remote_worker.py",
+            (
+                "test_remote_worker_requests_repair_without_release_retry",
+                "test_remote_worker_escalates_when_repair_budget_exhausted",
+                "test_remote_worker_records_repair_attempt_completed_on_done",
+            ),
+        ),
+    }
+
+
+def _contains_any(files: _RepoFiles, path: str, needles: tuple[str, ...]) -> bool:
+    return any(files.contains(path, needle) for needle in needles)
+
+
+def _contains_all(files: _RepoFiles, path: str, needles: tuple[str, ...]) -> bool:
+    text = files.read(path)
+    return all(needle in text for needle in needles)
 
 
 def _overall_status(matrix: tuple[CapabilityFinding, ...]) -> CapabilityStatus:
