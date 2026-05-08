@@ -531,6 +531,15 @@
         });
       }
 
+      function currentSurface() {
+        const selected = document.querySelector("[data-surface-tab][aria-selected='true']");
+        return selected?.dataset.surfaceTab || "overview";
+      }
+
+      function isComplianceSurface() {
+        return currentSurface() === "compliance";
+      }
+
       function applyFilter() {
         const needle = (filter?.value || "").trim().toLowerCase();
         document.querySelectorAll("tbody tr[data-filter-text]").forEach((row) => {
@@ -787,19 +796,19 @@
         } else if (event.key === "p" || event.key === "P") {
           event.preventDefault();
           submitControlAction("pause");
-        } else if (event.key === "j" || event.key === "J") {
+        } else if (isComplianceSurface() && (event.key === "j" || event.key === "J")) {
           event.preventDefault();
           selectReviewRow(selectedReviewIndex + 1);
-        } else if (event.key === "k" || event.key === "K") {
+        } else if (isComplianceSurface() && (event.key === "k" || event.key === "K")) {
           event.preventDefault();
           selectReviewRow(selectedReviewIndex - 1);
-        } else if (event.key === "a" || event.key === "A") {
+        } else if (isComplianceSurface() && (event.key === "a" || event.key === "A")) {
           event.preventDefault();
           submitReviewDecision(selectedReviewRow(), "approved");
-        } else if (event.key === "x" || event.key === "X") {
+        } else if (isComplianceSurface() && (event.key === "x" || event.key === "X")) {
           event.preventDefault();
           submitReviewDecision(selectedReviewRow(), "rejected");
-        } else if (event.key === "c" || event.key === "C") {
+        } else if (isComplianceSurface() && (event.key === "c" || event.key === "C")) {
           event.preventDefault();
           submitReviewDecision(selectedReviewRow(), "changes_requested");
         } else if (event.key === "/") {
