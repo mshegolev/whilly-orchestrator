@@ -43,7 +43,7 @@ def build_plan_payload(config: ProjectConfig, *, plan_id: str | None = None) -> 
 
     tasks.extend(_sink_tasks(config, step_task_ids=step_task_ids, repo_by_role=repo_by_role))
 
-    return {
+    payload: dict[str, Any] = {
         "plan_id": resolved_plan_id,
         "project": config.name,
         "origin": {
@@ -55,6 +55,17 @@ def build_plan_payload(config: ProjectConfig, *, plan_id: str | None = None) -> 
         "repo_targets": repo_targets,
         "tasks": tasks,
     }
+    if config.verification_commands:
+        payload["verification_commands"] = [
+            {
+                "name": command.name,
+                "command": command.command,
+                "required": command.required,
+                "source": "profile",
+            }
+            for command in config.verification_commands
+        ]
+    return payload
 
 
 def _sink_tasks(

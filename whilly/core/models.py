@@ -84,6 +84,16 @@ class RepoTarget:
 
 
 @dataclass(frozen=True)
+class VerificationCommand:
+    """Plan-level verification command metadata."""
+
+    name: str
+    command: str
+    required: bool = True
+    source: str = "profile"
+
+
+@dataclass(frozen=True)
 class Task:
     """A single unit of work in a plan.
 
@@ -118,6 +128,7 @@ class Plan:
     tasks: tuple[Task, ...] = ()
     origin: PlanOrigin | None = None
     repo_targets: tuple[RepoTarget, ...] = ()
+    verification_commands: tuple[VerificationCommand, ...] = ()
 
 
 @dataclass(frozen=True)
