@@ -9,11 +9,15 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from whilly.ci.models import CI_VERIFICATION_SOURCE, CIPollEvidence
 from whilly.core.agent_runner import scan_command
 from whilly.pipeline.events import PipelineTaskEvent
 from whilly.security.secret_lint import redact_secrets
+
+if TYPE_CHECKING:
+    from whilly.ci.verification import CIPollRunner
 
 VERIFICATION_STARTED_EVENT = "verification.started"
 VERIFICATION_SUCCEEDED_EVENT = "verification.succeeded"
@@ -70,6 +74,7 @@ class VerificationRunOutcome:
     """Aggregate verification outcome across all configured commands."""
 
     results: tuple[VerificationCommandResult, ...]
+    ci_polls: tuple[CIPollEvidence, ...] = ()
 
     @property
     def succeeded(self) -> bool:
@@ -141,6 +146,7 @@ async def run_verification_commands(
     timeout_s: float = DEFAULT_TIMEOUT_S,
     env_allowlist: tuple[str, ...] = (),
     output_limit: int = DEFAULT_OUTPUT_LIMIT,
+    ci_poll_runner: "CIPollRunner | None" = None,
 ) -> VerificationRunOutcome:
     """Run verification commands sequentially and return structured outcomes.
 
@@ -152,9 +158,17 @@ async def run_verification_commands(
     cwd_path = Path(cwd)
     env = _allowed_env(env_allowlist)
     results = []
+    ci_polls = []
     for spec in command_specs:
+        if spec.source == CI_VERIFICATION_SOURCE:
+            from whilly.ci.verification import run_ci_verification  # noqa: PLC0415
+
+            ci_evidence, ci_result = await run_ci_verification(spec, runner=ci_poll_runner)
+            ci_polls.append(ci_evidence)
+            results.append(ci_result)
+            continue
         results.append(await _run_one(spec, cwd=cwd_path, timeout_s=timeout_s, env=env, output_limit=output_limit))
-    return VerificationRunOutcome(results=tuple(results))
+    return VerificationRunOutcome(results=tuple(results), ci_polls=tuple(ci_polls))
 
 
 def resolve_verification_specs(
@@ -346,6 +360,7 @@ def _decode_and_cap(payload: bytes, output_limit: int) -> tuple[str, bool]:
 __all__ = [
     "DEFAULT_OUTPUT_LIMIT",
     "DEFAULT_TIMEOUT_S",
+    "CI_VERIFICATION_SOURCE",
     "CLI_VERIFICATION_SOURCE",
     "PROFILE_VERIFICATION_SOURCE",
     "VERIFICATION_FAILED_EVENT",
