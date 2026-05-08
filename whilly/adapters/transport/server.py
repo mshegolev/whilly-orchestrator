@@ -1806,7 +1806,7 @@ def create_app(
                     error="invalid_event_type",
                     detail=(
                         "diagnostic endpoint accepts only llm.*, pipeline.stage.*, "
-                        "verification.*, and human_review.* event types"
+                        "verification.*, ci.*, repair.*, and human_review.* event types"
                     ),
                 ).model_dump(exclude_none=True),
             )

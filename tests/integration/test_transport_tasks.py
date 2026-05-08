@@ -670,6 +670,8 @@ async def test_record_task_event_accepts_pipeline_verification_and_human_review_
     )
     assert rejected.status_code == 400
     assert "diagnostic endpoint accepts only" in rejected.json()["detail"]
+    assert "ci.*" in rejected.json()["detail"]
+    assert "repair.*" in rejected.json()["detail"]
 
     admin_token = "admin-review-token"
     await TaskRepository(db_pool).mint_bootstrap_token(
