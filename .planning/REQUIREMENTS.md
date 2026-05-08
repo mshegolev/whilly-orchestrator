@@ -25,7 +25,7 @@
 
 ### Runtime Verification And Safety
 
-- [ ] **VER-01**: Project-profile verification commands are wired into generated plans and worker execution.
+- [x] **VER-01**: Project-profile verification commands are wired into generated plans and worker execution.
 - [x] **SEC-01**: Secret linting covers task descriptions, comments, config values, runner prompts, and external feedback.
 - [x] **SEC-02**: Runner environments are scrubbed to an explicit allowlist plus configured required tokens.
 - [x] **SEC-03**: Command and prompt guard failures emit auditable reasons.
@@ -76,7 +76,7 @@
 | SEC-01 | Phase 8 | Complete |
 | SEC-02 | Phase 8 | Complete |
 | SEC-03 | Phase 8 | Complete |
-| VER-01 | Phase 9 | Pending |
+| VER-01 | Phase 9 | Complete |
 | ROLL-01 | Phase 10 | Pending |
 | ROLL-02 | Phase 10 | Pending |
 | ROLL-03 | Phase 10 | Pending |
