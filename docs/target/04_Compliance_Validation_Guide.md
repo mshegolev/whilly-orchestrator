@@ -17,21 +17,24 @@ The agent must not assume a capability is implemented just because a helper modu
 | Postgres task state | Yes | Implemented | Validate transactional behavior |
 | Dependency/cycle checks | Yes | Implemented | Validate edge cases |
 | Decision gates | Yes | Implemented | Validate strict/default behavior |
+| Governance risk policy | Yes | Implemented: deterministic governance risk policy covers `migration`, `auth`, `infrastructure`, `dependencies`, `release`, and `external_pr` with inspectable reasons and operator approval boundaries | Validate pure policy evidence and do not claim autonomous production release or default auto-merge |
 | Worker claim with SKIP LOCKED | Yes | Implemented | Validate ordering and concurrency safety |
 | Prompt injection guard | Yes | Implemented basic guard | Validate coverage and false positives |
 | Dangerous command guard | Yes | Implemented basic deny-list | Validate placement before runner |
 | Runner abstraction | Yes | Implemented | Validate result contract |
 | Completion marker parsing | Yes | Implemented | Validate marker semantics |
-| Required verification before DONE | Yes for target | Missing or partial | Implement or model verification state |
-| Project profiles | Yes for target | Missing | Implement MVP |
-| Configurable pipeline stages | Yes for target | Missing or partial | Implement MVP hooks |
-| Human review checkpoint model | Yes for target | Partial | Integrate into profile/pipeline model |
+| Required verification before DONE | Yes for target | Implemented when required verification commands are configured | Validate marker-only fallback wording |
+| Profile-native verification commands | Yes for target | Implemented: profile-native verification commands feed runtime verification | Validate plan metadata and worker runner wiring |
+| Project profiles | Yes for target | Implemented | Validate presets and generated plan metadata |
+| Configurable pipeline stages | Yes for target | Implemented as audit-event stage lifecycle | Validate runtime event evidence |
+| Human review checkpoint model | Yes for target | Implemented dashboard/TUI operator decisions and release-hold enforcement | Validate admin-token handling and audit trail |
 | Automatic PR creation after DONE | Optional | Helper exists, not core loop | Do not claim automatic behavior |
 | PR review feedback loop | Future | Missing | Document out of scope |
+| Bounded CI polling and repair | Yes for target | Implemented: explicit configured CI polling, bounded repair attempts, and `repair.escalated`; No continuous polling, auto-merge, production recovery, or unbounded repair is claimed. | Validate local/remote runtime evidence and retry budgets |
 | Multi-repo task execution | Future | Missing | Document out of scope |
-| Sandbox/VM isolation | Future/hardening | Missing or partial | Document risk |
-| Semantic memory | Future | Missing | Document out of scope |
-| Git rollback | Future/hardening | Partial | Document limitation |
+| Sandbox/VM isolation | Future/hardening | Partial: prompt, shell, secret, and runner-env guards exist; no full per-task VM/container isolation | Document residual risk |
+| Semantic memory | Future target | Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative. | Keep semantic recall out of current-capability claims until runtime wiring exists |
+| Git rollback | Future/hardening | Implemented as operator-triggered rollback; no autonomous recovery | Document limitation |
 | Observability | Yes | Implemented | Validate events, SSE, metrics |
 
 ## Validation Report Format

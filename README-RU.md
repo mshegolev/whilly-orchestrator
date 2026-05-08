@@ -59,16 +59,22 @@ not magically make agent output correct. Его ценность — controlled 
 - controlled local/remote worker execution;
 - observability of task lifecycle.
 
+Текущий scoped status: profile-native verification commands feed runtime verification; operator-triggered rollback; explicit configured CI polling; bounded repair attempts; deterministic governance risk policy.
+
+Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, and verification logs remain authoritative.
+
+No continuous polling, auto-merge, production recovery, or unbounded repair is claimed.
+
 ## Честные Ограничения
 
 Core worker loop пока не нужно описывать как:
 
 - полноценное multi-repo execution;
 - автоматический PR review feedback loop;
-- обязательный CI/lint verification;
+- обязательный CI/lint verification без настроенных verification commands;
 - полноценную sandbox/VM isolation;
-- semantic long-term memory;
-- надёжный git rollback;
+- autonomous rollback/recovery;
+- automatic merge;
 - автономный production release без человека.
 
 Эти возможности могут развиваться поверх архитектуры, но они не являются
