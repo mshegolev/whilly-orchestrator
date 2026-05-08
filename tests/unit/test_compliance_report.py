@@ -6,6 +6,18 @@ from pathlib import Path
 from whilly.cli.compliance import run_compliance_command
 from whilly.compliance import CapabilityStatus, build_compliance_report, render_markdown
 
+SEMANTIC_MEMORY_DEFERRAL = (
+    "Semantic memory is explicitly deferred from current scope; deterministic events, task history, PR evidence, "
+    "and verification logs remain authoritative."
+)
+BOUNDED_CI_SCOPE = "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed."
+USER_FACING_SCOPE_DOCS = (
+    "README.md",
+    "README-RU.md",
+    "docs/index.md",
+    "docs/Project-Description.md",
+)
+
 
 def _write_repo_file(repo: Path, relative_path: str, content: str) -> None:
     path = repo / relative_path
@@ -215,6 +227,69 @@ def test_doc_mismatch_scan_allows_explicit_semantic_memory_deferral(tmp_path: Pa
     report = build_compliance_report(repo_root=repo, doc_root=docs)
 
     assert not any("claims semantic long-term memory" in item for item in report.doc_mismatches)
+
+
+def test_current_vs_target_docs_are_synchronized_with_compliance_scope() -> None:
+    current = Path("docs/Current-vs-Target.md").read_text(encoding="utf-8")
+    report_markdown = render_markdown(build_compliance_report(repo_root=Path.cwd()))
+
+    for phrase in (
+        "profile-native verification commands feed runtime verification",
+        "operator-triggered rollback",
+        "explicit configured CI polling",
+        "bounded repair attempts",
+        "deterministic governance risk policy",
+        SEMANTIC_MEMORY_DEFERRAL,
+        BOUNDED_CI_SCOPE,
+    ):
+        assert phrase in current
+
+    for phrase in (
+        "operator-triggered rollback",
+        "explicit configured CI polling",
+        "bounded repair attempts",
+        "deterministic governance risk policy",
+        SEMANTIC_MEMORY_DEFERRAL,
+        BOUNDED_CI_SCOPE,
+    ):
+        assert phrase in report_markdown
+
+
+def test_user_facing_docs_do_not_claim_deferred_capabilities() -> None:
+    forbidden_current_claims = (
+        "semantic long-term memory",
+        "default auto-merge",
+        "continuous autonomous repair",
+        "autonomous production release",
+        "autonomous production recovery",
+        "full sandbox/VM isolation is implemented",
+    )
+
+    for relative in USER_FACING_SCOPE_DOCS:
+        text = Path(relative).read_text(encoding="utf-8")
+        lowered = text.lower()
+        assert "control plane" in lowered
+        assert "operator-triggered rollback" in text
+        assert "explicit configured CI polling" in text
+        assert "bounded repair attempts" in text
+        assert "deterministic governance risk policy" in text
+        assert SEMANTIC_MEMORY_DEFERRAL in text
+        assert BOUNDED_CI_SCOPE in text
+        for forbidden in forbidden_current_claims:
+            assert forbidden not in lowered
+
+
+def test_target_docs_keep_semantic_memory_future_scope() -> None:
+    target_guide = Path("docs/target/04_Compliance_Validation_Guide.md").read_text(encoding="utf-8")
+    target_roadmap = Path("docs/target/06_Autonomous_Developer_Roadmap.md").read_text(encoding="utf-8")
+    combined = f"{target_guide}\n{target_roadmap}"
+
+    assert SEMANTIC_MEMORY_DEFERRAL in target_guide
+    assert "Semantic memory | Future target" in target_guide
+    assert "future target architecture" in target_roadmap
+    assert "deterministic events, task history, PR evidence, and verification logs remain authoritative" in combined
+    assert "semantic memory is implemented" not in combined.lower()
+    assert "provides semantic long-term memory" not in combined.lower()
 
 
 def test_sandbox_compliance_reports_guard_evidence_without_overclaiming_isolation() -> None:
