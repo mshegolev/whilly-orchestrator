@@ -657,7 +657,9 @@ def _bounded_ci_repair_gap(files: _RepoFiles) -> str:
 
 def _bounded_ci_repair_action(files: _RepoFiles) -> str:
     if _bounded_ci_repair_status(files) is CapabilityStatus.PASS:
-        return "Keep configured CI status, bounded repair budgets, escalation, and terminal repair evidence tests aligned."
+        return (
+            "Keep configured CI status, bounded repair budgets, escalation, and terminal repair evidence tests aligned."
+        )
     return "Complete the missing CI/repair runtime evidence before reporting this capability as PASS."
 
 
