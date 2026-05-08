@@ -274,12 +274,10 @@ def build_compliance_report(
         ),
         _cap(
             "Git rollback",
-            CapabilityStatus.PARTIAL
-            if files.contains("whilly/verifier.py", "revert_on_fail")
-            else CapabilityStatus.FAIL,
-            "verify_task can revert on verification failure with guard checks.",
-            "Rollback is tied to verifier helper behavior, not a general smart rollback system in the worker path.",
-            "Document limitation and avoid claiming robust smart rollback.",
+            _git_rollback_status(files),
+            _git_rollback_evidence(files),
+            _git_rollback_gap(files),
+            _git_rollback_action(files),
         ),
         _cap(
             "Observability",
@@ -568,6 +566,59 @@ def _automatic_pr_status(files: _RepoFiles) -> CapabilityStatus:
     ):
         return CapabilityStatus.PARTIAL
     return CapabilityStatus.UNKNOWN
+
+
+def _git_rollback_status(files: _RepoFiles) -> CapabilityStatus:
+    signals = _git_rollback_signals(files)
+    if all(signals):
+        return CapabilityStatus.PASS
+    if files.contains("whilly/verifier.py", "revert_on_fail") or any(signals):
+        return CapabilityStatus.PARTIAL
+    return CapabilityStatus.FAIL
+
+
+def _git_rollback_evidence(files: _RepoFiles) -> str:
+    if _git_rollback_status(files) is CapabilityStatus.PASS:
+        return (
+            "whilly.rollback and whilly rollback provide backup tags, preflight reports, "
+            "confirmation-gated restore, and PR push preflight before git push."
+        )
+    if files.contains("whilly/verifier.py", "revert_on_fail"):
+        return "verify_task can revert on verification failure with guard checks."
+    return "Some rollback safety-net signals exist, but service, CLI, PR preflight, and tests are incomplete."
+
+
+def _git_rollback_gap(files: _RepoFiles) -> str:
+    if _git_rollback_status(files) is CapabilityStatus.PASS:
+        return "Git rollback is operator-triggered only; no autonomous recovery."
+    if files.contains("whilly/verifier.py", "revert_on_fail"):
+        return "Rollback is tied to verifier helper behavior, not the Phase 10 safety-net surface."
+    return "Rollback safety-net evidence is incomplete."
+
+
+def _git_rollback_action(files: _RepoFiles) -> str:
+    if _git_rollback_status(files) is CapabilityStatus.PASS:
+        return (
+            "Keep scope explicit: operator-triggered only; no autonomous recovery; continue covering backup tags, "
+            "preflight reports, confirmation-gated restore, and PR push preflight."
+        )
+    return (
+        "Complete rollback service, CLI, PR push preflight, and refusal-first restore coverage before broader claims."
+    )
+
+
+def _git_rollback_signals(files: _RepoFiles) -> tuple[bool, ...]:
+    return (
+        files.exists("whilly/rollback/service.py", "whilly/cli/rollback.py"),
+        files.contains("whilly/rollback/service.py", "create_rollback_point"),
+        files.contains("whilly/rollback/service.py", "build_preflight_report"),
+        files.contains("whilly/rollback/service.py", "restore_to_ref"),
+        files.contains("whilly/cli/rollback.py", "run_rollback_command"),
+        files.contains("whilly/sinks/github_pr.py", "build_preflight_report"),
+        files.contains("whilly/sinks/github_pr.py", "rollback_preflight_failed"),
+        files.contains("tests/unit/test_rollback.py", "test_restore_refuses_dirty_worktree"),
+        files.contains("tests/unit/test_rollback.py", "test_restore_requires_exact_confirmation"),
+    )
 
 
 def _overall_status(matrix: tuple[CapabilityFinding, ...]) -> CapabilityStatus:
