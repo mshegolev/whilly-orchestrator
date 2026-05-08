@@ -66,13 +66,20 @@
       border-bottom: 1px solid var(--line-strong);
     }
     .operator-controls {
-      display: grid;
-      grid-template-columns: minmax(12rem, 18rem) minmax(11rem, 16rem) minmax(11rem, 16rem) auto auto auto auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .operator-primary-controls {
+      display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       align-items: center;
     }
     .operator-controls input,
-    .operator-controls button {
+    .operator-controls button,
+    .operator-identity-panel summary {
       min-height: 32px;
       margin: 0;
       padding: 4px 8px;
@@ -83,14 +90,36 @@
       font: inherit;
       white-space: nowrap;
     }
-    .operator-controls button {
+    .operator-controls button,
+    .operator-identity-panel summary {
       cursor: pointer;
     }
     .operator-controls button:hover,
-    .operator-controls button:focus-visible {
+    .operator-controls button:focus-visible,
+    .operator-identity-panel summary:hover,
+    .operator-identity-panel summary:focus-visible {
       color: var(--surface);
       background: var(--text);
       outline: none;
+    }
+    .operator-identity-panel {
+      min-width: min(100%, 18rem);
+      margin: 0;
+    }
+    .operator-identity-panel summary {
+      list-style-position: inside;
+      background: var(--surface-strong);
+    }
+    .operator-identity-fields {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+    }
+    .operator-identity-fields input {
+      width: 100%;
     }
     .surface-tabs {
       display: flex;
@@ -297,30 +326,37 @@
         </p>
       </hgroup>
       <div class="operator-controls">
-        <input id="dashboard-filter"
-               type="search"
-               autocomplete="off"
-               placeholder="Filter tasks, workers, events"
-               aria-label="Filter dashboard rows">
-        <input id="dashboard-admin-token"
-               type="password"
-               autocomplete="off"
-               placeholder="Admin bearer"
-               aria-label="Admin bearer token for review actions">
-        <input id="dashboard-reviewer"
-               type="email"
-               autocomplete="email"
-               placeholder="Reviewer email"
-               aria-label="Reviewer identity for review actions">
-        <button id="dashboard-pause-workers" type="button" data-control-action="pause">Pause workers</button>
-        <button id="dashboard-resume-workers" type="button" data-control-action="resume">Resume workers</button>
-        <small id="polling-state" class="polling-state" aria-live="polite">Live</small>
-        <small id="worker-control-state"
-               class="control-state"
-               data-workers-paused="{{ 'true' if control_state.paused else 'false' }}"
-               aria-live="polite">
-          {{ "Workers paused" if control_state.paused else "Workers running" }}
-        </small>
+        <div class="operator-primary-controls">
+          <input id="dashboard-filter"
+                 type="search"
+                 autocomplete="off"
+                 placeholder="Filter tasks, workers, events"
+                 aria-label="Filter dashboard rows">
+          <button id="dashboard-pause-workers" type="button" data-control-action="pause">Pause workers</button>
+          <button id="dashboard-resume-workers" type="button" data-control-action="resume">Resume workers</button>
+          <small id="polling-state" class="polling-state" aria-live="polite">Live</small>
+          <small id="worker-control-state"
+                 class="control-state"
+                 data-workers-paused="{{ 'true' if control_state.paused else 'false' }}"
+                 aria-live="polite">
+            {{ "Workers paused" if control_state.paused else "Workers running" }}
+          </small>
+        </div>
+        <details id="operator-identity-panel" class="operator-identity-panel">
+          <summary>Operator identity</summary>
+          <div class="operator-identity-fields">
+            <input id="dashboard-admin-token"
+                   type="password"
+                   autocomplete="off"
+                   placeholder="Admin bearer"
+                   aria-label="Admin bearer token for review actions">
+            <input id="dashboard-reviewer"
+                   type="email"
+                   autocomplete="email"
+                   placeholder="Reviewer email"
+                   aria-label="Reviewer identity for review actions">
+          </div>
+        </details>
       </div>
     </header>
 
@@ -559,6 +595,8 @@
       function restoreDashboardFocus(focusId) {
         if (!focusId || !restorableFocusIds.has(focusId)) return;
         const target = document.getElementById(focusId);
+        const panel = target?.closest("details");
+        if (panel) panel.open = true;
         if (target && typeof target.focus === "function") target.focus();
       }
 

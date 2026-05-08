@@ -285,6 +285,21 @@ async def test_dashboard_preserves_local_state_across_refresh_and_sse_swaps(clie
     assert "htmx:afterSwap" in body
 
 
+async def test_dashboard_uses_compact_operator_identity_panel(client: AsyncClient) -> None:
+    response = await client.get("/")
+    body = response.text
+
+    assert '<div class="operator-primary-controls">' in body
+    assert '<details id="operator-identity-panel"' in body
+    assert "<summary>Operator identity</summary>" in body
+    assert body.index('id="operator-identity-panel"') < body.index('id="dashboard-admin-token"')
+    assert body.index('id="operator-identity-panel"') < body.index('id="dashboard-reviewer"')
+    assert body.index('id="dashboard-pause-workers"') < body.index('id="operator-identity-panel"')
+    assert body.index('id="dashboard-resume-workers"') < body.index('id="operator-identity-panel"')
+    assert "closest(\"details\")" in body
+    assert "panel.open = true" in body
+
+
 async def test_dashboard_queue_health_is_persistent_outside_active_surface(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
