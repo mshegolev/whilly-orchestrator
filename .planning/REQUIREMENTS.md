@@ -29,9 +29,9 @@
 - [x] **SEC-01**: Secret linting covers task descriptions, comments, config values, runner prompts, and external feedback.
 - [x] **SEC-02**: Runner environments are scrubbed to an explicit allowlist plus configured required tokens.
 - [x] **SEC-03**: Command and prompt guard failures emit auditable reasons.
-- [ ] **ROLL-01**: Operators can create backup tags before risky branch mutation.
-- [ ] **ROLL-02**: Branch protection/preflight checks run before push, merge, or restore operations.
-- [ ] **ROLL-03**: Rollback restore is explicit, auditable, and confirmation-gated.
+- [x] **ROLL-01**: Operators can create backup tags before risky branch mutation.
+- [x] **ROLL-02**: Branch protection/preflight checks run before push, merge, or restore operations.
+- [x] **ROLL-03**: Rollback restore is explicit, auditable, and confirmation-gated.
 
 ### Repair And Governance
 
@@ -77,9 +77,9 @@
 | SEC-02 | Phase 8 | Complete |
 | SEC-03 | Phase 8 | Complete |
 | VER-01 | Phase 9 | Complete |
-| ROLL-01 | Phase 10 | Pending |
-| ROLL-02 | Phase 10 | Pending |
-| ROLL-03 | Phase 10 | Pending |
+| ROLL-01 | Phase 10 | Complete |
+| ROLL-02 | Phase 10 | Complete |
+| ROLL-03 | Phase 10 | Complete |
 | CI-01 | Phase 11 | Pending |
 | CI-02 | Phase 11 | Pending |
 | GOV-01 | Phase 12 | Pending |

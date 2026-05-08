@@ -219,6 +219,6 @@ GSD initialization and are now tracked here as completed history.
 | 7. Review action affordances | 1/1 | Complete | 2026-05-08 |
 | 8. Sandbox and secrets hardening | 4/4 | Complete | 2026-05-08 |
 | 9. Profile-native verification wiring | 4/4 | Complete | 2026-05-08 |
-| 10. Rollback safety net | 1/3 | In Progress | - |
+| 10. Rollback safety net | 2/3 | In Progress | - |
 | 11. CI polling and bounded repair | 0/1 | Not started | - |
 | 12. Governance and semantic-memory decision | 0/1 | Not started | - |
