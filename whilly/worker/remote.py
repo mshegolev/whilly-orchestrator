@@ -115,7 +115,12 @@ from typing import Final
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import HTTPClientError, RemoteWorkerClient, VersionConflictError
-from whilly.core.agent_runner import SHELL_COMMAND_FAIL_REASON, scan_task_command_surface
+from whilly.core.agent_runner import (
+    SECRET_LINT_FAIL_REASON,
+    SHELL_COMMAND_FAIL_REASON,
+    scan_task_command_surface,
+    scan_task_secret_surface,
+)
 from whilly.core.models import Plan, Task, TaskStatus, WorkerId
 from whilly.core.prompts import PROMPT_INJECTION_FAIL_REASON, PromptInjectionBlocked, build_task_prompt
 from whilly.llm_ops import (
@@ -630,6 +635,41 @@ async def run_remote_worker(
                 claimed.id,
                 PROMPT_INJECTION_FAIL_REASON,
                 exc.match.matched_marker,
+            )
+            continue
+
+        secret_finding = scan_task_secret_surface(claimed, prompt=prompt)
+        if secret_finding is not None:
+            detail = secret_finding.event_payload(task_id=claimed.id, plan_id=plan.id)
+            try:
+                await _record_pipeline_event(
+                    client,
+                    worker_id,
+                    make_stage_failed_event(stage_context, reason=SECRET_LINT_FAIL_REASON, detail=detail),
+                )
+                await client.fail(
+                    claimed.id,
+                    worker_id,
+                    claimed.version,
+                    SECRET_LINT_FAIL_REASON,
+                    detail=detail,
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "remote secret guard fail lost the race: task=%s expected_version=%d actual_version=%s actual_status=%s",
+                    claimed.id,
+                    claimed.version,
+                    conflict.actual_version,
+                    conflict.actual_status.value if conflict.actual_status else None,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "remote worker=%s task=%s → FAILED (%s pattern_id=%r)",
+                worker_id,
+                claimed.id,
+                SECRET_LINT_FAIL_REASON,
+                secret_finding.pattern_id,
             )
             continue
 

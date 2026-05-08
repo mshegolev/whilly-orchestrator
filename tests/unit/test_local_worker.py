@@ -831,7 +831,15 @@ def test_scan_task_secret_surface_checks_task_fields_and_prompt() -> None:
 
 async def test_secret_lint_blocks_before_runner_and_emits_prelude_event(fake_sleep: list[float]) -> None:
     repo = FakeRepo()
-    plan = _make_plan()
+    plan = Plan(
+        id=PLAN_ID,
+        name="Configured Plan",
+        origin=PlanOrigin(
+            system="project_config",
+            ref="security-profile",
+            decomposition_mode="configured:documentation",
+        ),
+    )
     fake_secret = "sk-ant-" + "A" * 32
 
     claimed = _make_task("T-secret", status=TaskStatus.CLAIMED, version=1)
@@ -840,6 +848,7 @@ async def test_secret_lint_blocks_before_runner_and_emits_prelude_event(fake_sle
         status=TaskStatus.IN_PROGRESS,
         version=2,
         description="Use token " + fake_secret,
+        prd_requirement="Configured documentation pipeline step: implementation",
     )
     failed = replace(running, status=TaskStatus.FAILED, version=3)
 
