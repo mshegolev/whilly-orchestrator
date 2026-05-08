@@ -28,11 +28,11 @@ and verification before claiming success.
 
 ### Active
 
-- [ ] WUI mobile table layouts provide row-detail/action ergonomics instead of cramped horizontal scroll.
 - [ ] WUI and TUI share an explicit operator table-column contract.
+- [ ] WUI mobile table layouts provide row-detail/action ergonomics instead of cramped horizontal scroll.
 - [ ] Review actions provide clearer affordances for reject/request-changes paths.
-- [ ] Project-profile verification commands are wired into runtime worker verification.
 - [ ] Sandbox/secrets hardening closes the `a3-a4` v6 mission scope without overclaiming VM isolation.
+- [ ] Project-profile verification commands are wired into runtime worker verification.
 - [ ] Rollback and branch-protection tooling gives operators an explicit safety net.
 - [ ] CI polling and bounded repair loops are auditable and budgeted.
 - [ ] Governance and semantic-memory scope are explicit, deterministic, and documented.
@@ -75,8 +75,10 @@ and verification before claiming success.
 |----------|-----------|---------|
 | Treat Whilly as a control plane, not a fully autonomous developer | Matches current implementation and avoids overclaiming target-pack features | Good |
 | Keep superpowers artifacts as evidence instead of copying every detail into GSD | GSD stays readable while detailed plans remain linked | Good |
-| Start the GSD roadmap at current UI backlog, then continue into doc-pack hardening | Matches the user's active work stream while preserving the larger roadmap | Pending |
+| Start the GSD roadmap at current UI backlog, then continue into doc-pack hardening | Matches the user's active work stream while preserving the larger roadmap | Good |
+| Put the shared table contract before mobile row actions | Mobile layout should use stable shared labels and field mapping instead of inventing a second contract | Pending |
+| Put `a3-a4` sandbox/secrets before profile-native verification wiring | Matches `docs/CODEX-MISSION.md` and hardens command/env handling before more commands flow from profiles | Pending |
 | Store only local WUI view state in browser storage | Worker pause/resume and review decisions must remain backend/audit state | Good |
 
 ---
-*Last updated: 2026-05-08 after migrating superpowers artifacts into GSD*
+*Last updated: 2026-05-08 after roadmap replan against implemented work*
