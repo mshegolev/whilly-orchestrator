@@ -70,6 +70,22 @@ def test_profile_native_verification_compliance_reports_separate_honest_capabili
     assert "every profile" not in wording
 
 
+def test_git_rollback_compliance_reports_phase10_safety_net_without_overclaiming() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    git_rollback = report.capability("Git rollback")
+
+    assert git_rollback.status is CapabilityStatus.PASS
+    assert "backup tags" in git_rollback.evidence
+    assert "preflight reports" in git_rollback.evidence
+    assert "confirmation-gated restore" in git_rollback.evidence
+    assert "PR push preflight" in git_rollback.evidence
+    wording = f"{git_rollback.evidence} {git_rollback.gap} {git_rollback.recommended_action}"
+    assert "operator-triggered only; no autonomous recovery" in wording
+    assert "auto-merge" not in wording.lower()
+    assert "automatic production recovery" not in wording.lower()
+
+
 def test_sandbox_compliance_reports_guard_evidence_without_overclaiming_isolation() -> None:
     report = build_compliance_report(repo_root=Path.cwd())
 
