@@ -227,6 +227,27 @@ def test_forge_intake_redacts_secrets_in_title_body_comments():
     assert "sk-" + "Y" * 40 not in out
 
 
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "sk-ant-" + "A" * 40,
+        "gsk_" + "B" * 40,
+        "Authorization: Bearer " + "C" * 40,
+        "-----BEGIN PRIVATE KEY-----",
+        "postgres://user:password@example.test/db",
+    ],
+)
+def test_review_followup_description_redacts_extended_secret_patterns(secret: str):
+    from whilly.workflow.pr_iterate import build_followup_description
+
+    out = build_followup_description([{"body": "review leaked " + secret}])
+
+    assert out.startswith("<UNTRUSTED kind=pr_review_comment>")
+    assert out.endswith("</UNTRUSTED>")
+    assert secret not in out
+    assert "[REDACTED:" in out
+
+
 # ── VAL-SEC-011 / VAL-SEC-033: GitHub issue → Task fences description /
 #                                acceptance / test_steps ────────────────────
 
