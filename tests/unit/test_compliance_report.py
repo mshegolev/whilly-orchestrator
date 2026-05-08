@@ -150,6 +150,72 @@ def test_bounded_ci_polling_and_repair_compliance_does_not_overclaim_autonomy() 
         assert forbidden_claim not in wording_without_scope_boundary
 
 
+def test_governance_policy_compliance_reports_required_categories() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    finding = report.capability("Governance risk policy")
+
+    assert finding.status is CapabilityStatus.PASS
+    assert finding.evidence == (
+        "Deterministic governance policy covers migration, auth, infrastructure, dependencies, release, "
+        "and external_pr risk categories with inspectable reasons and operator approval boundaries."
+    )
+    assert (
+        "Governance policy recommends or requires gates; it does not claim autonomous production release "
+        "or default auto-merge."
+    ) in f"{finding.gap} {finding.recommended_action}"
+
+
+def test_governance_policy_compliance_requires_code_and_tests(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _write_repo_file(
+        repo,
+        "whilly/core/governance.py",
+        'REQUIRED_GOVERNANCE_CATEGORIES = ("migration", "auth", "infrastructure")\n',
+    )
+
+    finding = build_compliance_report(repo_root=repo, doc_root=repo / "docs").capability("Governance risk policy")
+
+    assert finding.status is not CapabilityStatus.PASS
+    assert "missing governance evidence" in finding.gap.lower()
+    assert "tests/unit/core/test_governance_policy.py" in finding.gap
+
+
+def test_semantic_memory_compliance_is_explicit_deferral_not_implemented_claim() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    finding = report.capability("Semantic memory")
+
+    assert finding.status is CapabilityStatus.PARTIAL
+    assert finding.evidence == (
+        "Semantic memory is explicitly deferred from current scope; deterministic events, task history, "
+        "PR evidence, and verification logs remain authoritative."
+    )
+    assert finding.gap == "No deterministic semantic-memory runtime module is wired into worker task planning or completion."
+    assert finding.recommended_action == (
+        "Keep semantic recall out of current-capability claims until it is deterministic, evidence-backed, "
+        "and wired into planning or completion."
+    )
+    assert "semantic memory is implemented" not in render_markdown(report).lower()
+
+
+def test_doc_mismatch_scan_allows_explicit_semantic_memory_deferral(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (repo / "README.md").write_text(
+        "Semantic long-term memory is explicitly deferred from current scope; deterministic events, "
+        "task history, PR evidence, and verification logs remain authoritative.\n",
+        encoding="utf-8",
+    )
+    for relative in ("Whilly-v4-Architecture.md", "Whilly-Usage.md", "CODEX-MISSION.md"):
+        (docs / relative).write_text("Current capability boundaries are documented here.\n", encoding="utf-8")
+
+    report = build_compliance_report(repo_root=repo, doc_root=docs)
+
+    assert not any("claims semantic long-term memory" in item for item in report.doc_mismatches)
+
+
 def test_sandbox_compliance_reports_guard_evidence_without_overclaiming_isolation() -> None:
     report = build_compliance_report(repo_root=Path.cwd())
 
