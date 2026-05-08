@@ -12,8 +12,8 @@
 - [x] **OPUI-03**: TUI and WUI human-review decisions use one shared review-decision command path.
 - [x] **OPUI-04**: WUI preserves active surface, filter text, selected review row, and dashboard input focus across refresh/SSE swaps.
 - [x] **OPUI-05**: WUI admin bearer and reviewer inputs are available without permanently occupying topbar space.
-- [ ] **OPUI-06**: WUI mobile table layouts expose row details/actions without cramped horizontal scrolling.
 - [ ] **OPUI-07**: TUI and WUI table columns follow a shared operator contract or document intentional differences.
+- [ ] **OPUI-06**: WUI mobile table layouts expose row details/actions without cramped horizontal scrolling.
 - [ ] **OPUI-08**: Reject and request-changes actions have clearer labels, tooltips, and recovery affordances.
 
 ### Documentation Pack Alignment
@@ -66,17 +66,17 @@
 | OPUI-03 | Phase 2 | Complete |
 | OPUI-04 | Phase 3 | Complete |
 | OPUI-05 | Phase 4 | Complete |
-| OPUI-06 | Phase 5 | Pending |
-| OPUI-07 | Phase 6 | Pending |
+| OPUI-07 | Phase 5 | Pending |
+| OPUI-06 | Phase 6 | Pending |
 | OPUI-08 | Phase 7 | Pending |
 | DOC-01 | Phase 1 | Complete |
 | DOC-02 | Phase 1 | Complete |
 | DOC-03 | Phase 1 | Complete |
 | DOC-04 | Phase 12 | Pending |
-| VER-01 | Phase 8 | Pending |
-| SEC-01 | Phase 9 | Pending |
-| SEC-02 | Phase 9 | Pending |
-| SEC-03 | Phase 9 | Pending |
+| SEC-01 | Phase 8 | Pending |
+| SEC-02 | Phase 8 | Pending |
+| SEC-03 | Phase 8 | Pending |
+| VER-01 | Phase 9 | Pending |
 | ROLL-01 | Phase 10 | Pending |
 | ROLL-02 | Phase 10 | Pending |
 | ROLL-03 | Phase 10 | Pending |
@@ -92,4 +92,4 @@
 
 ---
 *Requirements defined: 2026-05-08*
-*Last updated: 2026-05-08 after migrating superpowers artifacts into GSD*
+*Last updated: 2026-05-08 after roadmap replan against implemented work*
