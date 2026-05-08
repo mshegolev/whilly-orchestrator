@@ -167,10 +167,12 @@ Plans:
   1. Operators can create and list rollback points before risky branch mutation.
   2. Push/merge/restore preflight checks are explicit and auditable.
   3. Restore operations are confirmation-gated and do not silently destroy unrelated work.
-**Plans**: Ready to plan
+**Plans**: 3 plans
 
 Plans:
-- [ ] 10-01: Implement backup tag, branch preflight, and rollback CLI safety net.
+- [ ] 10-01-PLAN.md - Add rollback typed models, Git adapter, service logic, and unit tests.
+- [ ] 10-02-PLAN.md - Add `whilly rollback` CLI surface, lazy dispatch, and CLI integration tests.
+- [ ] 10-03-PLAN.md - Wire PR push preflight and update rollback compliance evidence/tests.
 
 ### Phase 11: CI polling and bounded repair
 **Goal**: Model `execute -> verify/CI -> repair attempt N -> verify/CI -> escalate` as an auditable loop.
