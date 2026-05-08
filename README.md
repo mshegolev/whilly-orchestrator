@@ -64,6 +64,18 @@ browserless TUI from the running control-plane container:
 docker-compose -f docker-compose.demo.yml exec control-plane whilly dashboard --plan parallel
 ```
 
+GitHub Project workflow demo:
+
+![Whilly GitHub Project demo: Project task to main commit to Done](docs/assets/whilly-github-project-demo.gif)
+
+The Project workflow uses the safe existing-Issue sync path:
+
+```bash
+whilly github-projects sync-todo "https://github.com/users/mshegolev/projects/4" \
+  --repo mshegolev/whilly-orchestrator \
+  --existing-only
+```
+
 ## What Whilly Does
 
 - Accepts work from JSON plans, GitHub Issues, GitHub Projects, Jira, and
