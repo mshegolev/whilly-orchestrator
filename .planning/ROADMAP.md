@@ -14,7 +14,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 3: WUI state-preserving refresh** - WUI retains local operator state across refresh/SSE swaps.
 - [x] **Phase 4: Compact operator identity panel** - Admin bearer and reviewer inputs move out of the permanent topbar.
 - [x] **Phase 5: Shared operator table contract** - TUI and WUI table columns follow an explicit shared contract.
-- [ ] **Phase 6: Mobile WUI row actions** - Mobile tables expose row details and actions without cramped horizontal scroll.
+- [x] **Phase 6: Mobile WUI row actions** - Mobile tables expose row details and actions without cramped horizontal scroll.
 - [ ] **Phase 7: Review action affordances** - Reject/request-changes paths become clearer and safer.
 - [ ] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
 - [ ] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
@@ -108,10 +108,10 @@ Plans:
   3. Critical action buttons do not overlap row text or require precise horizontal scrolling.
   4. Existing desktop table behavior remains unchanged.
   5. Phase 5 table-contract labels are preserved or intentionally adapted for mobile display.
-**Plans**: Ready to plan
+**Plans**: Complete
 
 Plans:
-- [ ] 06-01: Design and implement mobile row-detail/action layout for WUI tables.
+- [x] 06-01: Design and implement mobile row-detail/action layout for WUI tables.
 
 ### Phase 7: Review action affordances
 **Goal**: Make reject and request-changes actions clearer and safer without slowing expert hotkeys.
@@ -211,7 +211,7 @@ GSD initialization and are now tracked here as completed history.
 | 3. WUI state-preserving refresh | 1/1 | Complete | 2026-05-08 |
 | 4. Compact operator identity panel | 1/1 | Complete | 2026-05-08 |
 | 5. Shared operator table contract | 1/1 | Complete | 2026-05-08 |
-| 6. Mobile WUI row actions | 0/1 | Not started | - |
+| 6. Mobile WUI row actions | 1/1 | Complete | 2026-05-08 |
 | 7. Review action affordances | 0/1 | Not started | - |
 | 8. Sandbox and secrets hardening | 0/1 | Not started | - |
 | 9. Profile-native verification wiring | 0/1 | Not started | - |
