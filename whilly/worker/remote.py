@@ -179,6 +179,10 @@ _FAIL_REASON_OUTPUT_CAP: Final[int] = 500
 RemoteRunnerCallable = Callable[[Task, str], Awaitable[AgentResult]]
 
 RemoteVerificationRunnerCallable = Callable[[Task], Awaitable[VerificationRunOutcome]]
+RemoteSessionContextFactory = Callable[
+    [RemoteWorkerClient],
+    Awaitable[tuple[Plan, RemoteVerificationRunnerCallable | None]],
+]
 
 # Reason string written into the RELEASE event payload when the worker
 # releases an in-flight task because of SIGTERM / SIGINT (TASK-022b3).
@@ -1553,6 +1557,7 @@ async def run_remote_worker_with_url_rotation(
     install_signal_handlers: bool = True,
     stop: asyncio.Event | None = None,
     verification_runner: RemoteVerificationRunnerCallable | None = None,
+    session_context_factory: RemoteSessionContextFactory | None = None,
 ) -> RotationStats:
     """Run :func:`run_remote_worker_with_heartbeat` across funnel-URL rotations.
 
@@ -1603,17 +1608,21 @@ async def run_remote_worker_with_url_rotation(
         async def _run_inner() -> RemoteWorkerStats:
             try:
                 async with client_factory(current_url) as client:
+                    session_plan = plan
+                    session_verification_runner = verification_runner
+                    if session_context_factory is not None:
+                        session_plan, session_verification_runner = await session_context_factory(client)
                     return await run_remote_worker_with_heartbeat(
                         client,
                         runner,
-                        plan,
+                        session_plan,
                         worker_id,
                         heartbeat_interval=heartbeat_interval,
                         max_iterations=max_iterations,
                         max_processed=max_processed,
                         install_signal_handlers=install_signal_handlers,
                         stop=inner_stop,
-                        verification_runner=verification_runner,
+                        verification_runner=session_verification_runner,
                     )
             finally:
                 inner_stop.set()
@@ -1701,6 +1710,7 @@ __all__ = [
     "WORKER_RECONNECT_URL_REASON",
     "RemoteClientFactory",
     "RemoteRunnerCallable",
+    "RemoteSessionContextFactory",
     "RemoteVerificationRunnerCallable",
     "RemoteWorkerStats",
     "RotationStats",
