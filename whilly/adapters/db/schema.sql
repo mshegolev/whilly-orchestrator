@@ -93,6 +93,8 @@ CREATE TABLE plans (
     -- is True") at the plan-row level — a stable point-in-time
     -- fact that does not depend on the events log retention policy.
     prd_file TEXT,
+    -- Stores ordered plan-level profile verification metadata.
+    verification_commands JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
