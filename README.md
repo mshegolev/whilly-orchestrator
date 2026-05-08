@@ -337,7 +337,9 @@ whilly dashboard --plan "$PLAN_ID"    # Rich Live TUI over the tasks table
 ```
 
 ```bash
-# Run in a second terminal — long-running web dashboard + control plane:
+# Run in a second terminal — long-running:
+# Web dashboard + control plane
+# `whilly server` starts the uvicorn-backed FastAPI control plane.
 whilly server --host 127.0.0.1 --port 8000
 # then open http://127.0.0.1:8000/
 ```
