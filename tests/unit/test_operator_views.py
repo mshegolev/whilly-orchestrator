@@ -7,12 +7,125 @@ from whilly.operator_views import (
     EventRow,
     OperatorSnapshot,
     OperatorSurface,
+    OperatorTable,
     OperatorTaskRow,
     ReviewGap,
     WorkerRow,
     build_operator_snapshot,
     filter_snapshot,
+    operator_surface_items,
+    operator_table_columns,
+    operator_table_labels,
 )
+
+
+def test_operator_surface_items_pin_shared_order_and_labels() -> None:
+    assert operator_surface_items() == (
+        (OperatorSurface.OVERVIEW, "Overview"),
+        (OperatorSurface.COMPLIANCE, "Compliance"),
+        (OperatorSurface.PLANS_TASKS, "Plans/Tasks"),
+        (OperatorSurface.WORKERS, "Workers"),
+        (OperatorSurface.EVENTS, "Events"),
+    )
+
+
+def test_operator_task_table_contract_pins_medium_specific_columns() -> None:
+    assert tuple(column.field_key for column in operator_table_columns(OperatorTable.TASKS, "wui")) == (
+        "task_id",
+        "plan_id",
+        "status",
+        "priority",
+        "claimed_by",
+        "human_review",
+        "updated_at",
+    )
+    assert operator_table_labels("tasks", "wui") == (
+        "Task",
+        "Plan",
+        "Status",
+        "Priority",
+        "Worker",
+        "Review",
+        "Updated",
+    )
+    assert tuple(column.field_key for column in operator_table_columns("tasks", "tui")) == (
+        "task_id",
+        "plan_id",
+        "status",
+        "priority",
+        "claimed_by",
+        "human_review",
+    )
+    assert operator_table_labels(OperatorTable.TASKS, "tui") == (
+        "Task",
+        "Plan",
+        "Status",
+        "Priority",
+        "Worker",
+        "Review",
+    )
+    updated_column = next(column for column in operator_table_columns("tasks", "wui") if column.field_key == "updated_at")
+    assert updated_column.medium_note
+
+
+def test_operator_worker_table_contract_pins_shared_field_order_and_labels() -> None:
+    expected_fields = ("worker_id", "hostname", "owner_email", "status", "last_heartbeat")
+
+    assert tuple(column.field_key for column in operator_table_columns("workers", "wui")) == expected_fields
+    assert tuple(column.field_key for column in operator_table_columns("workers", "tui")) == expected_fields
+    assert operator_table_labels("workers", "wui") == ("Worker", "Hostname", "Owner", "Status", "Last heartbeat")
+    assert operator_table_labels("workers", "tui") == ("Worker", "Host", "Owner", "Status", "Heartbeat")
+
+
+def test_operator_review_table_contract_pins_selection_difference() -> None:
+    assert tuple(column.field_key for column in operator_table_columns("review_gaps", "wui")) == (
+        "task_id",
+        "plan_id",
+        "reason",
+        "stage_id",
+        "reviewer",
+        "actions",
+    )
+    assert operator_table_labels("review_gaps", "wui") == (
+        "Task",
+        "Plan",
+        "Reason",
+        "Stage",
+        "Reviewer",
+        "Actions",
+    )
+    assert tuple(column.field_key for column in operator_table_columns("review_gaps", "tui")) == (
+        "selected",
+        "task_id",
+        "plan_id",
+        "reason",
+        "stage_id",
+        "reviewer",
+        "actions",
+    )
+    assert operator_table_labels("review_gaps", "tui") == (
+        "Sel",
+        "Task",
+        "Plan",
+        "Reason",
+        "Stage",
+        "Reviewer",
+        "Actions",
+    )
+    selected_column = next(
+        column for column in operator_table_columns("review_gaps", "tui") if column.field_key == "selected"
+    )
+    assert selected_column.medium_note
+
+
+def test_operator_event_table_contract_pins_labels_for_both_media() -> None:
+    expected_fields = ("event_id", "task_id", "plan_id", "event_type", "created_at")
+    expected_labels = ("Id", "Task", "Plan", "Type", "At")
+
+    assert tuple(column.field_key for column in operator_table_columns("events", "wui")) == expected_fields
+    assert tuple(column.field_key for column in operator_table_columns("events", "tui")) == expected_fields
+    assert operator_table_labels("events", "wui") == expected_labels
+    assert operator_table_labels("events", "tui") == expected_labels
 
 
 def test_build_operator_snapshot_summarizes_operator_surfaces() -> None:
