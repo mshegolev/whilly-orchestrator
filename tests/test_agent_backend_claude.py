@@ -312,6 +312,39 @@ class TestRun:
         assert res.exit_code == 1
         assert "boom" in res.result_text
 
+    def test_passes_scrubbed_env_to_subprocess_run(self):
+        payload = _claude_payload(f"all good {COMPLETION_MARKER}", cost=0.1)
+        captured: dict = {}
+
+        def fake_run(*_args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _Proc(0, payload)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "PATH": "/usr/bin",
+                    "CLAUDE_BIN": "/opt/claude",
+                    "ANTHROPIC_API_KEY": "sk-ant-test",
+                    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+                    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+                    "GH_TOKEN": "hidden-github-token",
+                    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+                },
+                clear=True,
+            ),
+            patch("whilly.agents.claude.subprocess.run", side_effect=fake_run),
+        ):
+            res = ClaudeBackend().run("anything", model="claude-sonnet-4-5")
+
+        assert res.exit_code == 0
+        assert captured["env"] == {
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "CLAUDE_BIN": "/opt/claude",
+            "PATH": "/usr/bin",
+        }
+
 
 # ── collect_result_from_file ─────────────────────────────────────────────────
 
@@ -351,6 +384,38 @@ class TestRunAsyncPreamble:
         assert "whilly agent preamble" in content
         assert "backend   : claude" in content
         popen_mock.assert_called_once()
+
+    def test_passes_scrubbed_env_to_popen(self, tmp_path: Path):
+        log = tmp_path / "log.txt"
+        captured: dict = {}
+
+        def fake_popen(*_args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return object()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "PATH": "/usr/bin",
+                    "CLAUDE_BIN": "/opt/claude",
+                    "ANTHROPIC_API_KEY": "sk-ant-test",
+                    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+                    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+                    "GH_TOKEN": "hidden-github-token",
+                    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+                },
+                clear=True,
+            ),
+            patch("whilly.agents.claude.subprocess.Popen", side_effect=fake_popen),
+        ):
+            ClaudeBackend().run_async("hello prompt", model="claude-sonnet-4-5", log_file=log)
+
+        assert captured["env"] == {
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "CLAUDE_BIN": "/opt/claude",
+            "PATH": "/usr/bin",
+        }
 
 
 # ── EAGAIN retry on Popen ──────────────────────────────────────────────────

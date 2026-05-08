@@ -135,34 +135,56 @@ def test_no_proxy_default_argument_overrides_global_default() -> None:
 # ─── build_subprocess_env (FR-2, FR-5) ────────────────────────────────────
 
 
-def test_build_env_inactive_returns_unchanged_copy() -> None:
-    """When proxy is off, the function is a no-op except for the dict copy."""
-    parent = {"PATH": "/usr/bin", "HOME": "/home/user"}
+def test_build_env_inactive_uses_scrubbed_runner_env() -> None:
+    """When proxy is off, the child still receives only runner-allowed names."""
+    parent = {
+        "PATH": "/usr/bin",
+        "HOME": "/home/user",
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+        "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+        "GH_TOKEN": "hidden-github-token",
+        "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+    }
     settings = ProxySettings(url=None)
 
-    result = build_subprocess_env(parent, settings)
+    result = build_subprocess_env(parent, settings, model="claude-opus-4-6[1m]")
 
-    assert result == parent
+    assert result == {
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "HOME": "/home/user",
+        "PATH": "/usr/bin",
+    }
     assert result is not parent  # always a fresh dict
     assert "HTTPS_PROXY" not in result
     assert "NO_PROXY" not in result
+    assert "WHILLY_DATABASE_URL" not in result
+    assert "WHILLY_WORKER_TOKEN" not in result
+    assert "GH_TOKEN" not in result
+    assert "SLACK_ACCESS_TOKEN" not in result
 
 
 def test_build_env_active_injects_https_proxy_and_no_proxy() -> None:
-    """When proxy is on, both HTTPS_PROXY and NO_PROXY are set on the diff."""
-    parent = {"PATH": "/usr/bin"}
+    """When proxy is on, HTTPS_PROXY and NO_PROXY layer over the scrubbed env."""
+    parent = {
+        "PATH": "/usr/bin",
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+    }
     settings = ProxySettings(url="http://127.0.0.1:11112", no_proxy="localhost,::1")
 
-    result = build_subprocess_env(parent, settings)
+    result = build_subprocess_env(parent, settings, model="claude-opus-4-6[1m]")
 
+    assert result["ANTHROPIC_API_KEY"] == "sk-ant-test"
     assert result["PATH"] == "/usr/bin"
     assert result["HTTPS_PROXY"] == "http://127.0.0.1:11112"
     assert result["NO_PROXY"] == "localhost,::1"
+    assert "WHILLY_DATABASE_URL" not in result
 
 
 def test_build_env_overrides_existing_https_proxy() -> None:
     """Settings always win over whatever the parent env had inherited."""
-    parent = {"HTTPS_PROXY": "http://stale:1", "NO_PROXY": "stale"}
+    parent = {"PATH": "/usr/bin", "HTTPS_PROXY": "http://stale:1", "NO_PROXY": "stale"}
     settings = ProxySettings(url="http://fresh:2", no_proxy="fresh-no-proxy")
 
     result = build_subprocess_env(parent, settings)
