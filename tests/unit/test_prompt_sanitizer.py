@@ -71,6 +71,19 @@ def test_short_input_round_trips_inside_fence() -> None:
         "xoxs-" + "1234567890",
         # OpenAI sk- key
         "sk-" + "A" * 40,
+        # OpenAI project key
+        "sk-proj-" + "P" * 40,
+        # Anthropic key
+        "sk-ant-" + "B" * 40,
+        # Groq key
+        "gsk_" + "C" * 40,
+        # Private key header
+        "-----BEGIN PRIVATE KEY-----",
+        # Authorization headers
+        "Authorization: Bearer " + "D" * 40,
+        "Proxy-Authorization: Basic " + "E" * 40,
+        # Credential-bearing database URL
+        "postgres://user:password@example.test/db",
     ],
 )
 def test_secret_pattern_redacted(secret: str) -> None:
