@@ -16,7 +16,7 @@ larger documentation-pack and v6 hardening backlog.
 - [x] **Phase 5: Shared operator table contract** - TUI and WUI table columns follow an explicit shared contract.
 - [x] **Phase 6: Mobile WUI row actions** - Mobile tables expose row details and actions without cramped horizontal scroll.
 - [x] **Phase 7: Review action affordances** - Reject/request-changes paths become clearer and safer.
-- [ ] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
+- [x] **Phase 8: Sandbox and secrets hardening** - `a3-a4` security scope gets concrete guards and honest residual-risk docs.
 - [ ] **Phase 9: Profile-native verification wiring** - Project profile verification commands run through worker execution.
 - [ ] **Phase 10: Rollback safety net** - Backup tags, branch preflight, and explicit rollback CLI are operator-ready.
 - [ ] **Phase 11: CI polling and bounded repair** - CI/PR feedback can create bounded auditable repair loops.
@@ -215,7 +215,7 @@ GSD initialization and are now tracked here as completed history.
 | 5. Shared operator table contract | 1/1 | Complete | 2026-05-08 |
 | 6. Mobile WUI row actions | 1/1 | Complete | 2026-05-08 |
 | 7. Review action affordances | 1/1 | Complete | 2026-05-08 |
-| 8. Sandbox and secrets hardening | 0/1 | Not started | - |
+| 8. Sandbox and secrets hardening | 4/4 | Complete | 2026-05-08 |
 | 9. Profile-native verification wiring | 0/1 | Not started | - |
 | 10. Rollback safety net | 0/1 | Not started | - |
 | 11. CI polling and bounded repair | 0/1 | Not started | - |

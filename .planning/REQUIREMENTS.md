@@ -26,9 +26,9 @@
 ### Runtime Verification And Safety
 
 - [ ] **VER-01**: Project-profile verification commands are wired into generated plans and worker execution.
-- [ ] **SEC-01**: Secret linting covers task descriptions, comments, config values, runner prompts, and external feedback.
-- [ ] **SEC-02**: Runner environments are scrubbed to an explicit allowlist plus configured required tokens.
-- [ ] **SEC-03**: Command and prompt guard failures emit auditable reasons.
+- [x] **SEC-01**: Secret linting covers task descriptions, comments, config values, runner prompts, and external feedback.
+- [x] **SEC-02**: Runner environments are scrubbed to an explicit allowlist plus configured required tokens.
+- [x] **SEC-03**: Command and prompt guard failures emit auditable reasons.
 - [ ] **ROLL-01**: Operators can create backup tags before risky branch mutation.
 - [ ] **ROLL-02**: Branch protection/preflight checks run before push, merge, or restore operations.
 - [ ] **ROLL-03**: Rollback restore is explicit, auditable, and confirmation-gated.
@@ -73,9 +73,9 @@
 | DOC-02 | Phase 1 | Complete |
 | DOC-03 | Phase 1 | Complete |
 | DOC-04 | Phase 12 | Pending |
-| SEC-01 | Phase 8 | Pending |
-| SEC-02 | Phase 8 | Pending |
-| SEC-03 | Phase 8 | Pending |
+| SEC-01 | Phase 8 | Complete |
+| SEC-02 | Phase 8 | Complete |
+| SEC-03 | Phase 8 | Complete |
 | VER-01 | Phase 9 | Pending |
 | ROLL-01 | Phase 10 | Pending |
 | ROLL-02 | Phase 10 | Pending |
@@ -92,4 +92,4 @@
 
 ---
 *Requirements defined: 2026-05-08*
-*Last updated: 2026-05-08 after completing OPUI-08 in Phase 7*
+*Last updated: 2026-05-08 after completing SEC-01, SEC-02, and SEC-03 in Phase 8*

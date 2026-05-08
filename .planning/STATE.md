@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-05-08T12:42:35.530Z"
-last_activity: 2026-05-08 - Completed Phase 7 review action affordances.
+stopped_at: Phase 8 complete; ready to plan Phase 9.
+last_updated: "2026-05-08T14:50:37Z"
+last_activity: 2026-05-08 - Completed Phase 8 sandbox and secrets hardening.
 progress:
   total_phases: 12
-  completed_phases: 7
-  total_plans: 7
-  completed_plans: 7
-  percent: 58
+  completed_phases: 8
+  total_plans: 11
+  completed_plans: 11
+  percent: 67
 ---
 
 # Project State
@@ -21,21 +21,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-08)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state, human control, and verification before claiming success.
-**Current focus:** Phase 8: Sandbox and secrets hardening
+**Current focus:** Phase 9: Profile-native verification wiring
 
 ## Current Position
 
-Phase: 8 of 12 (Sandbox and secrets hardening)
+Phase: 9 of 12 (Profile-native verification wiring)
 Plan: 0 of 1 in current phase
 Status: Ready to plan
-Last activity: 2026-05-08 - Completed Phase 7 review action affordances.
+Last activity: 2026-05-08 - Completed Phase 8 sandbox and secrets hardening.
 
-Progress: [######----] 58%
+Progress: [#######---] 67%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 11
 - Average duration: 6 min for tracked GSD execution
 - Total execution time: 17 min tracked after GSD initialization
 
@@ -50,9 +50,10 @@ Progress: [######----] 58%
 | 5. Shared operator table contract | 1 complete | 1 | 7 min |
 | 6. Mobile WUI row actions | 1 complete | 1 | 5 min |
 | 7. Review action affordances | 1 complete | 1 | 5 min |
+| 8. Sandbox and secrets hardening | 4 complete | 4 | 6 min |
 
 **Recent Trend:**
-- Last 5 plans: phases 3-7 complete; Phases 5-7 tracked through GSD
+- Last 5 plans: Phase 7 plus Phase 8 plans 01-04 complete; Phases 5-8 tracked through GSD
 - Trend: Stable
 
 ## Accumulated Context
@@ -75,10 +76,11 @@ Recent decisions affecting current work:
 - [Phase 06-mobile-wui-row-actions]: Stacked-row CSS is confined to the existing 900px mobile media query and scoped to the four operator data tables.
 - [Phase 07-review-action-affordances]: Review action affordance work remains UI-only: backend review endpoint, decision literals, and shared service path were preserved.
 - [Phase 07-review-action-affordances]: Reject and request-changes WUI prompts require non-empty trimmed input and return before fetch on cancel or blank input.
+- [Phase 08-sandbox-and-secrets-hardening]: Secret linting, runner env allowlists, guard audit payloads, verification redaction, and residual-risk docs are complete without claiming full VM/container isolation.
 
 ### Pending Todos
 
-- Plan Phase 8 with `$gsd-discuss-phase 8` or `$gsd-plan-phase 8`.
+- Plan Phase 9 with `$gsd-discuss-phase 9` or `$gsd-plan-phase 9`.
 - Keep `docs/superpowers/plans/` and `docs/superpowers/reviews/` as detailed history.
 - Use `.planning/ROADMAP-ANALYSIS.md` as the short rationale for the updated phase order.
 
@@ -90,6 +92,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-08T12:35:23.970Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-05-08T14:50:37Z
+Stopped at: Phase 8 complete; ready to plan Phase 9.
 Resume file: None
