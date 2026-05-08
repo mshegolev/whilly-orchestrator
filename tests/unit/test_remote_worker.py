@@ -553,11 +553,12 @@ async def test_remote_required_verification_failure_blocks_complete_and_records_
 
     async def verification_runner(task: Task) -> VerificationRunOutcome:
         assert task.id == "CFG-R-VERIFY"
+        secret = "sk-ant-" + "R" * 32
         return VerificationRunOutcome(
             results=(
                 VerificationCommandResult(
-                    name="smoke",
-                    command="pytest -q tests/smoke",
+                    name="profile-smoke",
+                    command=f"pytest -q tests/smoke --token {secret}",
                     required=True,
                     succeeded=False,
                     warning=False,
@@ -566,6 +567,7 @@ async def test_remote_required_verification_failure_blocks_complete_and_records_
                     stdout="failed",
                     stderr="trace",
                     duration_s=0.4,
+                    source="profile",
                 ),
             )
         )
@@ -583,6 +585,20 @@ async def test_remote_required_verification_failure_blocks_complete_and_records_
     assert stats.failed == 1
     assert client.complete_calls == []
     assert client.fail_calls == [("CFG-R-VERIFY", WORKER_ID, 4, "verification_failed")]
+    assert client.fail_details[0] == {
+        "reason": "verification_failed",
+        "failed_results": [
+            {
+                "name": "profile-smoke",
+                "command": "pytest -q tests/smoke --token [REDACTED:anthropic-api-key]",
+                "source": "profile",
+                "returncode": 1,
+                "timed_out": False,
+                "blocked": False,
+                "pattern_matched": None,
+            }
+        ],
+    }
     event_types = [event_type for _task_id, _worker_id, event_type, _payload, _detail in client.event_calls]
     assert VERIFICATION_STARTED_EVENT in event_types
     assert VERIFICATION_FAILED_EVENT in event_types
@@ -592,7 +608,8 @@ async def test_remote_required_verification_failure_blocks_complete_and_records_
         for _task_id, _worker_id, event_type, payload, detail in client.event_calls
         if event_type == VERIFICATION_FAILED_EVENT
     )
-    assert verification_failed[0]["name"] == "smoke"
+    assert verification_failed[0]["name"] == "profile-smoke"
+    assert verification_failed[0]["source"] == "profile"
     assert verification_failed[1] == {"stdout": "failed", "stderr": "trace"}
 
 

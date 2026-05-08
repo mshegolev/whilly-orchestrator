@@ -25,6 +25,7 @@ def test_report_model_classifies_capabilities_and_partial_helper_evidence() -> N
     assert required_verification.status is CapabilityStatus.PASS
     assert "verification_failed" in required_verification.evidence
     assert "when commands are configured" in required_verification.gap.lower()
+    assert "profile-native verification command wiring remains future work" not in required_verification.gap.lower()
 
     payload = report.to_dict()
     assert set(payload) >= {
@@ -50,6 +51,23 @@ def test_human_review_compliance_reports_admin_controls_and_remaining_ui_gap() -
     assert "dashboard/tui operator controls" in finding.evidence.lower()
     assert "dashboard/tui operator controls" not in finding.gap.lower()
     assert "approval capture/enforcement is not yet" not in finding.gap.lower()
+
+
+def test_profile_native_verification_compliance_reports_separate_honest_capability() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    profile_native = report.capability("Profile-native verification commands")
+
+    assert profile_native.status is CapabilityStatus.PASS
+    evidence = profile_native.evidence
+    assert "ProjectConfig.verification_commands" in evidence
+    assert "Plan.verification_commands" in evidence
+    assert "resolve_verification_specs" in evidence
+    assert "remote plan metadata" in evidence
+    wording = f"{profile_native.evidence} {profile_native.gap} {profile_native.recommended_action}".lower()
+    assert "configured profile commands feed runtime verification" in wording
+    assert "exhaustive" not in wording
+    assert "every profile" not in wording
 
 
 def test_sandbox_compliance_reports_guard_evidence_without_overclaiming_isolation() -> None:
