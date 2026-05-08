@@ -183,12 +183,15 @@ Plans:
   1. CI polling can run as a configured verification or sink stage.
   2. Repair attempts have explicit retry budgets and stop conditions.
   3. Escalation events make exhausted repair loops visible to operators.
-**Plans**: 3 plans
+**Plans**: 6 plans
 
 Plans:
 - [ ] 11-01-PLAN.md - Add CI polling primitives and `source="ci"` verification dispatch.
 - [ ] 11-02-PLAN.md - Add bounded repair policy, events, and deterministic repair task primitives.
-- [ ] 11-03-PLAN.md - Wire CI/repair metadata, local/remote runtime evidence, transport, and compliance.
+- [ ] 11-03-PLAN.md - Preserve CI/repair metadata and generate executable ci_status verification commands.
+- [ ] 11-04-PLAN.md - Wire local CI evidence, repair task insertion, and repair completion events.
+- [ ] 11-05-PLAN.md - Wire remote transport, remote CI evidence, and bounded repair runtime.
+- [ ] 11-06-PLAN.md - Add scoped compliance wording and report tests.
 
 ### Phase 12: Governance and semantic-memory decision
 **Goal**: Make governance policy and semantic-memory scope explicit in code and docs.
@@ -222,5 +225,5 @@ GSD initialization and are now tracked here as completed history.
 | 8. Sandbox and secrets hardening | 4/4 | Complete | 2026-05-08 |
 | 9. Profile-native verification wiring | 4/4 | Complete | 2026-05-08 |
 | 10. Rollback safety net | 3/3 | Complete | 2026-05-08 |
-| 11. CI polling and bounded repair | 0/3 | Not started | - |
+| 11. CI polling and bounded repair | 0/6 | Not started | - |
 | 12. Governance and semantic-memory decision | 0/1 | Not started | - |
