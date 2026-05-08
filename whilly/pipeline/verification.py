@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from whilly.core.agent_runner import scan_command
 from whilly.pipeline.events import PipelineTaskEvent
+from whilly.security.secret_lint import redact_secrets
 
 VERIFICATION_STARTED_EVENT = "verification.started"
 VERIFICATION_SUCCEEDED_EVENT = "verification.succeeded"
@@ -101,7 +102,7 @@ def make_verification_result_event(
     payload: dict[str, Any] = {
         "task_id": task_id,
         "name": result.name,
-        "command": result.command,
+        "command": redact_secrets(result.command),
         "required": result.required,
         "succeeded": result.succeeded,
         "warning": result.warning,
@@ -122,7 +123,7 @@ def make_verification_result_event(
         task_id=task_id,
         event_type=result.event_name,
         payload=payload,
-        detail={"stdout": result.stdout, "stderr": result.stderr},
+        detail={"stdout": redact_secrets(result.stdout), "stderr": redact_secrets(result.stderr)},
     )
 
 
@@ -186,6 +187,8 @@ async def _run_one(
 
     stdout, stdout_truncated = _decode_and_cap(stdout_bytes, output_limit)
     stderr, stderr_truncated = _decode_and_cap(stderr_bytes, output_limit)
+    stdout = redact_secrets(stdout)
+    stderr = redact_secrets(stderr)
     succeeded = proc.returncode == 0
     warning = not spec.required and not succeeded
     event_name = _event_name(required=spec.required, succeeded=succeeded, warning=warning)

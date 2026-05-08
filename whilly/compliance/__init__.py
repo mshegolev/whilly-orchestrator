@@ -254,7 +254,7 @@ def build_compliance_report(
             CapabilityStatus.PARTIAL
             if files.contains("whilly/adapters/runner/claude_cli.py", "--disallowedTools")
             else CapabilityStatus.FAIL,
-            "Agent tools default to restricted CLI flags and shell commands are scanned.",
+            "Agent tools default to restricted CLI flags; prompt, shell, secret, and runner-env guards are wired.",
             "No per-task VM/container sandbox isolation is enforced by the worker runtime.",
             "Document residual risk and add isolation only in a hardening slice.",
         ),
@@ -289,7 +289,7 @@ def build_compliance_report(
     findings = _critical_findings(matrix)
     gaps = tuple(item.gap for item in matrix if item.gap)
     security_risks = (
-        "No per-task VM/container sandbox isolation; command guards reduce but do not eliminate agent execution risk.",
+        "No per-task VM/container sandbox isolation; prompt, shell, secret, and runner-env guards reduce but do not eliminate agent execution risk.",
         "DONE can still mean agent marker success when no required verification commands are configured for the run.",
         "Opt-in PR opening depends on local git/gh credentials and should remain explicitly configured.",
     )
