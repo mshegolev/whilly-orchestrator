@@ -67,11 +67,12 @@
     }
     .operator-controls {
       display: grid;
-      grid-template-columns: minmax(12rem, 18rem) minmax(12rem, 18rem) minmax(12rem, 18rem) auto;
+      grid-template-columns: minmax(12rem, 18rem) minmax(11rem, 16rem) minmax(11rem, 16rem) auto auto auto auto;
       gap: 8px;
       align-items: center;
     }
-    .operator-controls input {
+    .operator-controls input,
+    .operator-controls button {
       min-height: 32px;
       margin: 0;
       padding: 4px 8px;
@@ -80,6 +81,16 @@
       border: 1px solid var(--line-strong);
       border-radius: 2px;
       font: inherit;
+      white-space: nowrap;
+    }
+    .operator-controls button {
+      cursor: pointer;
+    }
+    .operator-controls button:hover,
+    .operator-controls button:focus-visible {
+      color: var(--surface);
+      background: var(--text);
+      outline: none;
     }
     .surface-tabs {
       display: flex;
@@ -213,7 +224,7 @@
     .review-actions button[data-review-decision="rejected"] { border-color: var(--danger); }
     .review-actions button[data-review-decision="changes_requested"] { border-color: var(--warn); }
     .empty-state { opacity: 0.65; }
-    .hotkeys, .polling-state { opacity: 0.72; }
+    .hotkeys, .polling-state, .control-state { opacity: 0.72; }
     .hotkeys {
       display: flex;
       flex-wrap: wrap;
@@ -225,6 +236,17 @@
       border: 1px solid var(--line-strong);
       background: var(--surface);
       text-align: center;
+    }
+    .control-state[aria-live] {
+      min-width: 8rem;
+      padding: 5px 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      text-align: center;
+    }
+    .control-state[data-workers-paused="true"] {
+      color: var(--warn);
+      border-color: var(--warn);
     }
     body[data-dashboard-state="stopped"] .polling-state {
       color: var(--danger);
@@ -264,9 +286,10 @@
         <p class="hotkeys">
           <span>q=quit</span>
           <span>r=refresh</span>
+          <span>R=resume workers</span>
           <span>1-5=switch</span>
           <span>/=filter</span>
-          <span>p=pause</span>
+          <span>p=pause workers</span>
           <span>j/k=select</span>
           <span>a=approve</span>
           <span>x=reject</span>
@@ -289,7 +312,15 @@
                autocomplete="email"
                placeholder="Reviewer email"
                aria-label="Reviewer identity for review actions">
+        <button id="dashboard-pause-workers" type="button" data-control-action="pause">Pause workers</button>
+        <button id="dashboard-resume-workers" type="button" data-control-action="resume">Resume workers</button>
         <small id="polling-state" class="polling-state" aria-live="polite">Live</small>
+        <small id="worker-control-state"
+               class="control-state"
+               data-workers-paused="{{ 'true' if control_state.paused else 'false' }}"
+               aria-live="polite">
+          {{ "Workers paused" if control_state.paused else "Workers running" }}
+        </small>
       </div>
     </header>
 
@@ -479,11 +510,10 @@
       const surfaceOrder = ["overview", "compliance", "plans_tasks", "workers", "events"];
       const filter = document.getElementById("dashboard-filter");
       const pollingState = document.getElementById("polling-state");
-      let pollingPaused = false;
+      const workerControlState = document.getElementById("worker-control-state");
       let dashboardStopped = false;
       let manualRefreshRequested = false;
       let selectedReviewIndex = 0;
-      const manualLiveRequests = new WeakSet();
       const liveStreams = new Set();
 
       function isEditableTarget(target) {
@@ -519,13 +549,6 @@
         window.location.reload();
       }
 
-      function togglePolling() {
-        if (dashboardStopped) return;
-        pollingPaused = !pollingPaused;
-        document.documentElement.dataset.pollingPaused = String(pollingPaused);
-        setPollingStatus(pollingPaused ? "Paused" : "Live");
-      }
-
       function closeLiveStreams() {
         liveStreams.forEach((source) => {
           if (source && typeof source.close === "function") source.close();
@@ -536,10 +559,8 @@
 
       function quitDashboard() {
         dashboardStopped = true;
-        pollingPaused = true;
         closeLiveStreams();
         document.body.dataset.dashboardState = "stopped";
-        document.documentElement.dataset.pollingPaused = "true";
         setPollingStatus("Stopped", true);
       }
 
@@ -547,6 +568,12 @@
         if (!pollingState) return;
         pollingState.textContent = text;
         pollingState.dataset.state = isError ? "error" : "ok";
+      }
+
+      function setWorkerControlStatus(paused) {
+        if (!workerControlState) return;
+        workerControlState.dataset.workersPaused = String(paused);
+        workerControlState.textContent = paused ? "Workers paused" : "Workers running";
       }
 
       function actionableReviewRows() {
@@ -582,6 +609,51 @@
           return;
         }
         refreshDashboard();
+      }
+
+      async function submitControlAction(action) {
+        if (dashboardStopped) return;
+        const adminToken = document.getElementById("dashboard-admin-token");
+        const token = (adminToken?.value || "").trim();
+        if (!token) {
+          setPollingStatus("Admin token required", true);
+          adminToken?.focus();
+          return;
+        }
+        const payload = {};
+        if (action === "pause") {
+          const reason = window.prompt("Pause reason", "");
+          if (reason === null) return;
+          if (reason.trim()) payload.reason = reason.trim();
+        }
+        setPollingStatus(action === "pause" ? "Pausing" : "Resuming");
+        try {
+          const response = await fetch(`/api/v1/admin/workers/${action}`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            let detail = response.statusText;
+            try {
+              const body = await response.json();
+              detail = body.detail || body.error || detail;
+            } catch {
+              detail = response.statusText;
+            }
+            setPollingStatus(`Control ${response.status}: ${detail}`, true);
+            return;
+          }
+          const state = await response.json();
+          setWorkerControlStatus(Boolean(state.paused));
+          setPollingStatus(state.paused ? "Workers paused" : "Workers resumed");
+          refreshDashboard();
+        } catch (error) {
+          setPollingStatus(`Control error: ${error}`, true);
+        }
       }
 
       async function submitReviewDecision(row, decision) {
@@ -644,35 +716,13 @@
         }
       }
 
-      function requestKeys(event) {
-        return [event?.detail?.xhr, event?.detail?.requestConfig].filter(Boolean);
-      }
-
       function isManualLiveIntent(event, triggerType = "") {
         const type = triggerType || event?.detail?.requestConfig?.triggeringEvent?.type || "";
         return manualRefreshRequested || type === "click";
       }
 
       function markManualLiveRequest(event) {
-        requestKeys(event).forEach((key) => manualLiveRequests.add(key));
         manualRefreshRequested = false;
-      }
-
-      function isManualLiveRequest(event) {
-        return requestKeys(event).some((key) => manualLiveRequests.has(key));
-      }
-
-      function shouldBlockLiveRequest(path, triggerType) {
-        if (dashboardStopped) return true;
-        if (!pollingPaused) return false;
-        return !isManualLiveIntent(null, triggerType);
-      }
-
-      function shouldBlockLiveSwap(event) {
-        if (dashboardStopped) return true;
-        if (!pollingPaused || isManualLiveRequest(event)) return false;
-        const target = event.detail?.target;
-        return Boolean(target === document.body || target?.closest?.("[hx-get], [data-surface], #summary, #review-gaps"));
       }
 
       filter?.addEventListener("input", applyFilter);
@@ -680,6 +730,12 @@
         button.addEventListener("click", () => setSurface(button.dataset.surfaceTab));
       });
       document.body.addEventListener("click", (event) => {
+        const controlButton = event.target.closest?.("[data-control-action]");
+        if (controlButton) {
+          event.preventDefault();
+          submitControlAction(controlButton.dataset.controlAction);
+          return;
+        }
         const actionButton = event.target.closest?.("[data-review-decision]");
         if (actionButton) {
           const row = actionButton.closest("tr[data-review-task]");
@@ -699,9 +755,8 @@
         if (source) liveStreams.add(source);
       });
       document.body.addEventListener("htmx:beforeRequest", (event) => {
-        const path = event.detail?.pathInfo?.requestPath || "";
         const triggerType = event.detail?.requestConfig?.triggeringEvent?.type || "";
-        if (shouldBlockLiveRequest(path, triggerType)) {
+        if (dashboardStopped) {
           manualRefreshRequested = false;
           event.preventDefault();
           return;
@@ -718,22 +773,20 @@
         applyFilter();
         selectReviewRow(selectedReviewIndex);
       });
-      document.body.addEventListener("htmx:beforeSwap", (event) => {
-        if (!shouldBlockLiveSwap(event)) return;
-        event.detail.shouldSwap = false;
-        event.preventDefault();
-      });
       document.addEventListener("keydown", (event) => {
         if (isEditableTarget(event.target)) return;
         if (event.key === "q" || event.key === "Q") {
           event.preventDefault();
           quitDashboard();
-        } else if (event.key === "r" || event.key === "R") {
+        } else if (event.key === "r") {
           event.preventDefault();
           refreshDashboard();
+        } else if (event.key === "R") {
+          event.preventDefault();
+          submitControlAction("resume");
         } else if (event.key === "p" || event.key === "P") {
           event.preventDefault();
-          togglePolling();
+          submitControlAction("pause");
         } else if (event.key === "j" || event.key === "J") {
           event.preventDefault();
           selectReviewRow(selectedReviewIndex + 1);
