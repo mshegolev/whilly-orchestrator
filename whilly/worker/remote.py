@@ -1092,7 +1092,9 @@ async def run_remote_worker(
                         make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
                     )
                     try:
-                        await _record_repair_attempt_completed(client, worker_id, claimed, plan, terminal_status="FAILED")
+                        await _record_repair_attempt_completed(
+                            client, worker_id, claimed, plan, terminal_status="FAILED"
+                        )
                         await client.fail(claimed.id, worker_id, claimed.version, "verification_failed", detail=detail)
                     except VersionConflictError as conflict:
                         log.warning(
@@ -1177,7 +1179,9 @@ async def run_remote_worker(
                             worker_id,
                             make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
                         )
-                        await _record_repair_attempt_completed(client, worker_id, claimed, plan, terminal_status="FAILED")
+                        await _record_repair_attempt_completed(
+                            client, worker_id, claimed, plan, terminal_status="FAILED"
+                        )
                         await client.fail(
                             claimed.id,
                             worker_id,
