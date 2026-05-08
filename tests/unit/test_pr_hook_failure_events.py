@@ -34,6 +34,7 @@ from whilly.adapters.db.repository import (
     PR_OPENED_EVENT_TYPE,
 )
 from whilly.pipeline.sinks import CONFIGURED_GITHUB_PR_SINK_REQUIREMENT_PREFIX, PROFILE_APPROVED_PR_SINK_MARKER
+from whilly.rollback.models import PreflightReport, ProtectionSignal, WorktreeState
 from whilly.sinks import github_pr as gp
 from whilly.sinks.github_pr import PRResult
 from whilly.sinks.github_pr import open_pr_for_task
@@ -136,6 +137,28 @@ class _Proc:
         self.stderr = stderr
 
 
+def _clean_preflight(repo: Path, **_kwargs: Any) -> PreflightReport:
+    return PreflightReport(
+        operation="push",
+        worktree=WorktreeState(
+            repo_root=repo,
+            branch="main",
+            head_sha="abc123",
+            upstream=None,
+            dirty=False,
+            dirty_entries=(),
+        ),
+        backup_points=(),
+        protection=ProtectionSignal(status="unknown", reason="not requested"),
+        blockers=(),
+        warnings=("no rollback point at current HEAD",),
+    )
+
+
+def _open_with_clean_preflight(**kwargs: Any) -> PRResult:
+    return open_pr_for_task(**kwargs, preflight_builder=_clean_preflight)
+
+
 # ---------------------------------------------------------------------------
 # git push failure → short-circuit, no gh pr create, single failure event
 # ---------------------------------------------------------------------------
@@ -158,7 +181,7 @@ def test_git_push_failure_short_circuits_hook(tmp_path: Path, monkeypatch: pytes
                 plan_id=PLAN_ID,
                 task=_make_task(),
                 worktree_path=tmp_path,
-                opener=open_pr_for_task,
+                opener=_open_with_clean_preflight,
             )
         )
 
@@ -199,7 +222,7 @@ def test_gh_pr_create_failure_emits_warning_event(tmp_path: Path, monkeypatch: p
                 plan_id=PLAN_ID,
                 task=_make_task(),
                 worktree_path=tmp_path,
-                opener=open_pr_for_task,
+                opener=_open_with_clean_preflight,
             )
         )
 
@@ -239,7 +262,7 @@ def test_gh_pr_create_timeout_emits_warning_event(
                 plan_id=PLAN_ID,
                 task=_make_task(),
                 worktree_path=tmp_path,
-                opener=open_pr_for_task,
+                opener=_open_with_clean_preflight,
             )
         )
 
@@ -307,6 +330,45 @@ def test_hook_skipped_when_env_var_zero(tmp_path: Path, monkeypatch: pytest.Monk
     assert repo.events == []
 
 
+def test_rollback_preflight_failure_emits_open_failed_without_opened(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WHILLY_AUTO_OPEN_PR", "1")
+    repo = _FakeRepo()
+
+    def opener(**_kwargs: Any) -> PRResult:
+        return PRResult(
+            ok=False,
+            branch="whilly/T-PR-HOOK-FAIL-1",
+            reason="rollback preflight failed: dirty worktree",
+            failure_mode="rollback_preflight_failed",
+        )
+
+    result = asyncio.run(
+        run_post_complete_pr_hook(
+            repo,
+            plan_id=PLAN_ID,
+            task=_make_task(),
+            worktree_path=tmp_path,
+            opener=opener,
+        )
+    )
+
+    assert result is not None
+    assert result.ok is False
+    assert repo.pull_requests == []
+    failure_events = [e for e in repo.events if e["event_type"] == PR_OPEN_FAILED_EVENT_TYPE]
+    success_events = [e for e in repo.events if e["event_type"] == PR_OPENED_EVENT_TYPE]
+    assert len(failure_events) == 1
+    assert success_events == []
+    payload = failure_events[0]["payload"]
+    assert payload["task_id"] == "T-PR-HOOK-FAIL-1"
+    assert payload["branch"] == "whilly/T-PR-HOOK-FAIL-1"
+    assert payload["reason"] == "rollback preflight failed: dirty worktree"
+    assert payload["failure_mode"] == "rollback_preflight_failed"
+
+
 # ---------------------------------------------------------------------------
 # github_issue_ref NULL → hook skipped, no warning event
 # ---------------------------------------------------------------------------
@@ -360,7 +422,7 @@ def test_hook_uses_task_repo_target_when_plan_has_no_issue_ref(
                 plan_id=PLAN_ID,
                 task=_make_task(repo_target_id="github:foo/bar"),
                 worktree_path=tmp_path,
-                opener=open_pr_for_task,
+                opener=_open_with_clean_preflight,
             )
         )
 
@@ -516,7 +578,7 @@ def test_hook_success_persists_row_and_emits_pr_opened(
                 plan_id=PLAN_ID,
                 task=_make_task(),
                 worktree_path=tmp_path,
-                opener=open_pr_for_task,
+                opener=_open_with_clean_preflight,
             )
         )
 
