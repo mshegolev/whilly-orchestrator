@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol
 
 from whilly.ci.models import CI_VERIFICATION_SOURCE, CIPollEvidence, CIPollResult, CIPollSpec
@@ -72,7 +73,10 @@ async def run_ci_verification(
     ci_spec = ci_spec_from_verification_spec(spec)
     ci_result = await runner(ci_spec) if runner is not None else _runner_not_configured_result(ci_spec)
     evidence = CIPollEvidence(spec=ci_spec, result=ci_result)
-    return evidence, ci_result_to_verification_result(ci_result)
+    return evidence, replace(
+        ci_result_to_verification_result(ci_result),
+        repair_max_attempts=spec.repair_max_attempts,
+    )
 
 
 def _provider_from_target(target: str) -> str:

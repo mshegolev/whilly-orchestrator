@@ -1109,6 +1109,7 @@ def _verification_command_to_dict(command: VerificationCommand) -> dict[str, obj
         "command": command.command,
         "required": command.required,
         "source": command.source,
+        "repair_max_attempts": command.repair_max_attempts,
     }
 
 

@@ -300,12 +300,14 @@ def test_import_export_preserves_profile_verification_commands(
             "command": ".venv/bin/python -m pytest -q tests/unit",
             "required": True,
             "source": "profile",
+            "repair_max_attempts": 0,
         },
         {
             "name": "profile-optional",
             "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
             "required": False,
             "source": "profile",
+            "repair_max_attempts": 0,
         },
     ]
     plan_file.write_text(
