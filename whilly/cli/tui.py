@@ -66,6 +66,7 @@ _SURFACE_BY_KEY: Final[dict[str, OperatorSurface]] = {
     "5": OperatorSurface.EVENTS,
 }
 
+
 @dataclass
 class TuiState:
     surface: OperatorSurface = OperatorSurface.OVERVIEW

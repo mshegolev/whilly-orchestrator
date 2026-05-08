@@ -64,7 +64,9 @@ def test_operator_task_table_contract_pins_medium_specific_columns() -> None:
         "Worker",
         "Review",
     )
-    updated_column = next(column for column in operator_table_columns("tasks", "wui") if column.field_key == "updated_at")
+    updated_column = next(
+        column for column in operator_table_columns("tasks", "wui") if column.field_key == "updated_at"
+    )
     assert updated_column.medium_note
 
 
