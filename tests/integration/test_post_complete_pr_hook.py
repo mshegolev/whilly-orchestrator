@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -59,16 +60,33 @@ def whilly_log_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 @pytest.fixture
 def fake_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Create a directory the hook will treat as the worktree.
+    """Create a clean tiny Git repository the hook will treat as the worktree.
 
     The hook in :mod:`whilly.cli.run` resolves ``Path.cwd()`` at
     construction time, so we change the process CWD to the temporary
-    worktree before invoking the CLI. ``open_pr_for_task`` only checks
-    that the directory exists; the subprocess calls are mocked so no
-    real git state is needed.
+    worktree before invoking the CLI. PR push / create subprocess calls
+    are mocked, but rollback preflight inspects real local Git state.
     """
     worktree = tmp_path / "worktree"
     worktree.mkdir()
+    subprocess.run(["git", "init"], cwd=worktree, check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "config", "user.email", "whilly-test@example.invalid"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Whilly Test"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (worktree / "README.md").write_text("test repo\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=worktree, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=worktree, check=True, capture_output=True, text=True)
     monkeypatch.chdir(worktree)
     return worktree
 
