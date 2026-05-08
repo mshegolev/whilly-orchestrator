@@ -204,7 +204,10 @@ def test_semantic_memory_compliance_is_explicit_deferral_not_implemented_claim()
         "Semantic memory is explicitly deferred from current scope; deterministic events, task history, "
         "PR evidence, and verification logs remain authoritative."
     )
-    assert finding.gap == "No deterministic semantic-memory runtime module is wired into worker task planning or completion."
+    assert (
+        finding.gap
+        == "No deterministic semantic-memory runtime module is wired into worker task planning or completion."
+    )
     assert finding.recommended_action == (
         "Keep semantic recall out of current-capability claims until it is deterministic, evidence-backed, "
         "and wired into planning or completion."

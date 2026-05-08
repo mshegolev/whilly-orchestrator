@@ -633,8 +633,7 @@ def _governance_policy_signals(files: _RepoFiles) -> dict[str, bool]:
     tests = files.read("tests/unit/core/test_governance_policy.py")
     return {
         "whilly/core/governance.py": files.exists("whilly/core/governance.py"),
-        "REQUIRED_GOVERNANCE_CATEGORIES": "REQUIRED_GOVERNANCE_CATEGORIES" in code
-        and _all_categories_present(code),
+        "REQUIRED_GOVERNANCE_CATEGORIES": "REQUIRED_GOVERNANCE_CATEGORIES" in code and _all_categories_present(code),
         "assess_governance_risk": "def assess_governance_risk" in code,
         "inspectable finding fields": all(
             signal in code for signal in ("category", "score", "reason", "matched_signal", "approval_boundary")
