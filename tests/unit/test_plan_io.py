@@ -302,7 +302,22 @@ def test_plan_verification_commands_parse_and_serialize_round_trip(tmp_path: Pat
     )
 
     encoded = serialize_plan(plan, tasks)
-    assert encoded["verification_commands"] == payload["verification_commands"]
+    assert encoded["verification_commands"] == [
+        {
+            "name": "unit",
+            "command": "pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+        {
+            "name": "lint",
+            "command": "ruff check whilly tests",
+            "required": False,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+    ]
 
     round_trip = tmp_path / "round-trip.json"
     round_trip.write_text(json.dumps(encoded), encoding="utf-8")
@@ -364,7 +379,13 @@ def test_plan_verification_commands_default_required_and_source(tmp_path: Path) 
         VerificationCommand(name="unit", command="pytest -q", required=True, source="profile"),
     )
     assert serialize_plan(plan, tasks)["verification_commands"] == [
-        {"name": "unit", "command": "pytest -q", "required": True, "source": "profile"},
+        {
+            "name": "unit",
+            "command": "pytest -q",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
     ]
 
 

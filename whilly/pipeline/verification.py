@@ -6,7 +6,7 @@ import asyncio
 import os
 import signal
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -45,6 +45,7 @@ class VerificationCommandSpec:
     command: str
     required: bool = True
     source: str = CLI_VERIFICATION_SOURCE
+    repair_max_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class VerificationCommandResult:
     stderr: str
     duration_s: float
     source: str = CLI_VERIFICATION_SOURCE
+    repair_max_attempts: int = 0
     timed_out: bool = False
     blocked: bool = False
     pattern_matched: str | None = None
@@ -181,10 +183,11 @@ def resolve_verification_specs(
 
     specs: list[VerificationCommandSpec] = [
         VerificationCommandSpec(
-            name=command.name,
-            command=command.command,
-            required=command.required,
-            source=PROFILE_VERIFICATION_SOURCE,
+            name=_command_like_field(command, "name"),
+            command=_command_like_field(command, "command"),
+            required=_command_like_field(command, "required", True),
+            source=_command_like_field(command, "source", PROFILE_VERIFICATION_SOURCE),
+            repair_max_attempts=_command_like_field(command, "repair_max_attempts", 0),
         )
         for command in profile_commands
     ]
@@ -213,11 +216,18 @@ def resolve_verification_specs(
 
 def _command_like_to_spec(command: VerificationCommandLike) -> VerificationCommandSpec:
     return VerificationCommandSpec(
-        name=command.name,
-        command=command.command,
-        required=command.required,
-        source=getattr(command, "source", CLI_VERIFICATION_SOURCE),
+        name=_command_like_field(command, "name"),
+        command=_command_like_field(command, "command"),
+        required=_command_like_field(command, "required", True),
+        source=_command_like_field(command, "source", CLI_VERIFICATION_SOURCE),
+        repair_max_attempts=_command_like_field(command, "repair_max_attempts", 0),
     )
+
+
+def _command_like_field(command: VerificationCommandLike, field: str, default: Any = None) -> Any:
+    if isinstance(command, Mapping):
+        return command.get(field, default)
+    return getattr(command, field, default)
 
 
 async def _run_one(
@@ -271,6 +281,7 @@ async def _run_one(
         stderr=stderr,
         duration_s=time.monotonic() - started,
         source=spec.source,
+        repair_max_attempts=spec.repair_max_attempts,
         pattern_matched=scan.pattern_matched,
         stdout_truncated=stdout_truncated,
         stderr_truncated=stderr_truncated,
@@ -296,6 +307,7 @@ def _blocked_result(
         stderr=f"blocked by shell policy: {scan_pattern or 'unknown'}",
         duration_s=time.monotonic() - started,
         source=spec.source,
+        repair_max_attempts=spec.repair_max_attempts,
         blocked=True,
         pattern_matched=scan_pattern,
     )
@@ -320,6 +332,7 @@ def _timeout_result(
         stderr=f"timed out after {timeout_s:g}s",
         duration_s=time.monotonic() - started,
         source=spec.source,
+        repair_max_attempts=spec.repair_max_attempts,
         timed_out=True,
     )
 

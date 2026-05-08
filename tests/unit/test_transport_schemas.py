@@ -141,12 +141,14 @@ def test_plan_payload_from_plan_includes_ordered_verification_commands() -> None
             "command": ".venv/bin/python -m pytest -q tests/unit",
             "required": True,
             "source": "profile",
+            "repair_max_attempts": 0,
         },
         {
             "name": "profile-optional",
             "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
             "required": False,
             "source": "profile",
+            "repair_max_attempts": 0,
         },
     ]
     assert "tasks" not in payload.model_dump()
