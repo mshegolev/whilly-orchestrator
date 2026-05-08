@@ -39,6 +39,18 @@ def test_report_model_classifies_capabilities_and_partial_helper_evidence() -> N
     }
 
 
+def test_human_review_compliance_reports_admin_controls_and_remaining_ui_gap() -> None:
+    report = build_compliance_report(repo_root=Path.cwd())
+
+    finding = report.capability("Human review checkpoint model")
+
+    assert finding.status is CapabilityStatus.PARTIAL
+    assert "admin human-review decision endpoint" in finding.evidence.lower()
+    assert "release-hold enforcement" in finding.evidence.lower()
+    assert "dashboard/tui operator controls" in finding.gap.lower()
+    assert "approval capture/enforcement is not yet" not in finding.gap.lower()
+
+
 def test_markdown_renderer_includes_required_sections_and_matrix() -> None:
     report = build_compliance_report(repo_root=Path.cwd())
     markdown = render_markdown(report)
