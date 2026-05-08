@@ -127,6 +127,21 @@ from whilly.pipeline.verification import (
     make_verification_result_event,
     make_verification_started_event,
 )
+from whilly.repair.events import (
+    REPAIR_ATTEMPT_REQUESTED_EVENT,
+    make_repair_attempt_completed_event,
+    make_repair_attempt_requested_event,
+    make_repair_escalated_event,
+)
+from whilly.repair.models import RepairBudget, RepairTrigger
+from whilly.repair.policy import (
+    REPAIR_ACTION_ESCALATE,
+    REPAIR_ACTION_REQUEST,
+    current_repair_attempt,
+    decide_repair,
+    parse_repair_attempt,
+)
+from whilly.repair.tasks import build_repair_task
 from whilly.security.secret_lint import redact_secrets
 from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
@@ -262,8 +277,11 @@ async def _record_pipeline_event(repo: TaskRepository, event: PipelineTaskEvent 
 def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, object]:
     """Compact FAIL detail for required verification failures."""
 
-    failed_results = [
-        {
+    failed_results = []
+    for result in outcome.results:
+        if not result.required or result.succeeded:
+            continue
+        failed_result: dict[str, object] = {
             "name": result.name,
             "command": redact_secrets(result.command),
             "source": result.source,
@@ -272,9 +290,9 @@ def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, o
             "blocked": result.blocked,
             "pattern_matched": result.pattern_matched,
         }
-        for result in outcome.results
-        if result.required and not result.succeeded
-    ]
+        if result.repair_max_attempts > 0:
+            failed_result["repair_max_attempts"] = result.repair_max_attempts
+        failed_results.append(failed_result)
     return {"reason": "verification_failed", "failed_results": failed_results}
 
 
@@ -290,6 +308,133 @@ async def _record_ci_poll_evidence(
     for evidence in outcome.ci_polls:
         await _record_pipeline_event(repo, make_ci_poll_started_event(task_id, evidence.spec, plan_id=plan_id))
         await _record_pipeline_event(repo, make_ci_poll_result_event(task_id, evidence.result, plan_id=plan_id))
+
+
+def _repair_trigger_from_verification_failure(
+    running: Task,
+    plan: Plan,
+    verification_outcome: VerificationRunOutcome,
+) -> tuple[RepairTrigger, RepairBudget] | None:
+    """Return the first configured repair trigger from required verification failure."""
+
+    for result in verification_outcome.results:
+        if not result.required or result.succeeded or result.repair_max_attempts <= 0:
+            continue
+        parsed_attempt = parse_repair_attempt(running.id)
+        orig_task_id = parsed_attempt[0] if parsed_attempt is not None else running.id
+        current_attempt = current_repair_attempt(running.id)
+        trigger_type = "ci" if result.source == "ci" else "verification"
+        reason = result.stderr or result.pattern_matched or result.name or "verification_failed"
+        return (
+            RepairTrigger(
+                orig_task_id=orig_task_id,
+                plan_id=plan.id,
+                trigger_type=trigger_type,
+                trigger_event_type=result.event_name,
+                reason=reason,
+                current_attempt=current_attempt,
+                last_failure_event_type=result.event_name,
+                last_repair_task_id=running.id if current_attempt > 0 else "",
+            ),
+            RepairBudget(max_attempts=result.repair_max_attempts),
+        )
+    return None
+
+
+async def _handle_repair_from_verification_failure(
+    repo: TaskRepository,
+    running: Task,
+    plan: Plan,
+    verification_outcome: VerificationRunOutcome,
+) -> None:
+    """Request or escalate bounded repair for a failed required verification result."""
+
+    trigger_and_budget = _repair_trigger_from_verification_failure(running, plan, verification_outcome)
+    if trigger_and_budget is None:
+        return
+    trigger, budget = trigger_and_budget
+    decision = decide_repair(trigger, budget)
+    if decision.action == REPAIR_ACTION_REQUEST:
+        repair_task = build_repair_task(running, trigger, decision)
+        event = make_repair_attempt_requested_event(trigger, decision)
+        inserter = getattr(repo, "insert_repair_task", None)
+        if inserter is None:
+            log.warning("repair task insertion unavailable: task=%s repair_task=%s", running.id, repair_task.id)
+            return
+        try:
+            await inserter(running, repair_task, event)
+        except Exception:  # noqa: BLE001 - original verification failure still owns terminal state
+            log.warning(
+                "repair task insertion failed: task=%s repair_task=%s",
+                running.id,
+                repair_task.id,
+                exc_info=True,
+            )
+        return
+    if decision.action == REPAIR_ACTION_ESCALATE:
+        await _record_pipeline_event(repo, make_repair_escalated_event(trigger, decision))
+
+
+def _event_payload(event: dict[str, object]) -> dict[str, object]:
+    payload = event.get("payload", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+async def _repair_max_attempts_for_completion(
+    repo: TaskRepository, orig_task_id: str, repair_task_id: str
+) -> int | None:
+    lister = getattr(repo, "list_task_events", None)
+    if lister is None:
+        return None
+    try:
+        events = await lister(orig_task_id, event_prefix=REPAIR_ATTEMPT_REQUESTED_EVENT)
+    except Exception:  # noqa: BLE001 - completion evidence falls back to current attempt
+        log.warning(
+            "repair requested event lookup failed: orig_task=%s repair_task=%s",
+            orig_task_id,
+            repair_task_id,
+            exc_info=True,
+        )
+        return None
+    for event in reversed(tuple(events)):
+        payload = _event_payload(event)
+        if payload.get("repair_task_id") != repair_task_id:
+            continue
+        max_attempts = payload.get("max_attempts")
+        if isinstance(max_attempts, int):
+            return max_attempts
+        try:
+            return int(str(max_attempts))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+async def _record_repair_attempt_completed(
+    repo: TaskRepository,
+    running: Task,
+    plan: Plan,
+    *,
+    terminal_status: str,
+) -> None:
+    parsed_attempt = parse_repair_attempt(running.id)
+    if parsed_attempt is None:
+        return
+    orig_task_id, attempt = parsed_attempt
+    max_attempts = await _repair_max_attempts_for_completion(repo, orig_task_id, running.id)
+    if max_attempts is None:
+        max_attempts = attempt
+    await _record_pipeline_event(
+        repo,
+        make_repair_attempt_completed_event(
+            orig_task_id=orig_task_id,
+            repair_task_id=running.id,
+            plan_id=plan.id,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            terminal_status=terminal_status,
+        ),
+    )
 
 
 # Reason string written into the RELEASE event payload when the worker
@@ -576,6 +721,7 @@ async def run_local_worker(
                         detail=exc.event_payload,
                     ),
                 )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                 await repo.fail_task(
                     running.id,
                     running.version,
@@ -614,6 +760,7 @@ async def run_local_worker(
                         detail=payload,
                     ),
                 )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                 await repo.fail_task(
                     running.id,
                     running.version,
@@ -652,6 +799,7 @@ async def run_local_worker(
                         detail=payload,
                     ),
                 )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                 await repo.fail_task(
                     running.id,
                     running.version,
@@ -811,6 +959,7 @@ async def run_local_worker(
                         make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
                     )
                     try:
+                        await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                         await repo.fail_task(running.id, running.version, "verification_failed", detail=detail)
                     except VersionConflictError as conflict:
                         log.warning(
@@ -852,10 +1001,12 @@ async def run_local_worker(
                 if verification_outcome.required_failed:
                     detail = _verification_failure_detail(verification_outcome)
                     try:
+                        await _handle_repair_from_verification_failure(repo, running, plan, verification_outcome)
                         await _record_pipeline_event(
                             repo,
                             make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
                         )
+                        await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                         await repo.fail_task(running.id, running.version, "verification_failed", detail=detail)
                     except VersionConflictError as exc:
                         log.warning(
@@ -897,6 +1048,7 @@ async def run_local_worker(
                 # VAL-BUDGET-030). ``None`` / 0.0 (e.g. Claude CLI did
                 # not emit ``total_cost_usd``) is the documented
                 # no-op-spend path (VAL-BUDGET-032).
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="DONE")
                 await repo.complete_task(
                     running.id,
                     running.version,
@@ -932,6 +1084,7 @@ async def run_local_worker(
                     repo,
                     make_stage_failed_event(stage_context, reason=reason),
                 )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                 await repo.fail_task(running.id, running.version, reason)
             except VersionConflictError as exc:
                 log.warning(

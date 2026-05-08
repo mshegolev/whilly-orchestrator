@@ -75,6 +75,7 @@ import asyncpg
 
 from whilly.core.models import PlanId, Priority, RepoTarget, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
+from whilly.pipeline.events import PipelineTaskEvent
 from whilly.pipeline.sinks import PlanPRContext
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import to avoid import cycles.
@@ -610,6 +611,56 @@ VALUES ($1, $2, $3, $4::jsonb)
 _INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL: str = """
 INSERT INTO events (task_id, plan_id, event_type, payload, detail)
 VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+"""
+
+
+_INSERT_REPAIR_TASK_SQL: str = """
+INSERT INTO tasks (
+    id,
+    plan_id,
+    status,
+    dependencies,
+    key_files,
+    priority,
+    description,
+    acceptance_criteria,
+    test_steps,
+    prd_requirement,
+    version
+)
+VALUES (
+    $1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb, $10, $11
+)
+"""
+
+
+_UPSERT_REPAIR_TASK_REPO_TARGET_SQL: str = """
+INSERT INTO task_repo_targets (task_id, repo_target_id)
+VALUES ($1, $2)
+ON CONFLICT (task_id) DO UPDATE
+SET repo_target_id = EXCLUDED.repo_target_id
+"""
+
+
+_SELECT_TASK_WITH_REPO_TARGET_SQL: str = """
+SELECT
+    tasks.id,
+    tasks.status,
+    tasks.dependencies,
+    tasks.key_files,
+    tasks.priority,
+    tasks.description,
+    tasks.acceptance_criteria,
+    tasks.test_steps,
+    tasks.prd_requirement,
+    tasks.version,
+    (
+        SELECT trt.repo_target_id
+        FROM task_repo_targets trt
+        WHERE trt.task_id = tasks.id
+    ) AS repo_target_id
+FROM tasks
+WHERE tasks.id = $1
 """
 
 
@@ -1817,6 +1868,52 @@ class TaskRepository:
             }
             for row in rows
         )
+
+    async def insert_repair_task(self, orig_task: Task, repair_task: Task, event: PipelineTaskEvent) -> Task:
+        """Insert a deterministic repair task and its requested event atomically."""
+
+        event_payload = dict(event.payload)
+        event_detail_json = json.dumps(event.detail) if event.detail is not None else None
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                plan_row = await conn.fetchrow(_SELECT_TASK_PLAN_ID_SQL, orig_task.id)
+                if plan_row is None:
+                    raise ValueError(f"insert_repair_task: unknown orig_task_id={orig_task.id!r}")
+                plan_id = plan_row["plan_id"]
+                await conn.execute(
+                    _INSERT_REPAIR_TASK_SQL,
+                    repair_task.id,
+                    plan_id,
+                    repair_task.status.value,
+                    json.dumps(list(repair_task.dependencies)),
+                    json.dumps(list(repair_task.key_files)),
+                    repair_task.priority.value,
+                    repair_task.description,
+                    json.dumps(list(repair_task.acceptance_criteria)),
+                    json.dumps(list(repair_task.test_steps)),
+                    repair_task.prd_requirement,
+                    repair_task.version,
+                )
+                if repair_task.repo_target_id:
+                    await conn.execute(
+                        _UPSERT_REPAIR_TASK_REPO_TARGET_SQL,
+                        repair_task.id,
+                        repair_task.repo_target_id,
+                    )
+                await conn.execute(
+                    _INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL,
+                    event.task_id,
+                    plan_id,
+                    event.event_type,
+                    json.dumps(event_payload),
+                    event_detail_json,
+                )
+                row = await conn.fetchrow(_SELECT_TASK_WITH_REPO_TARGET_SQL, repair_task.id)
+                if row is None:  # pragma: no cover - insert above guarantees this unless FK cascade races
+                    raise RuntimeError(f"insert_repair_task: inserted task vanished: {repair_task.id!r}")
+                inserted = _row_to_task(row)
+        self._emit_jsonl(event.event_type, task_id=event.task_id, plan_id=plan_id, payload=event_payload)
+        return inserted
 
     async def task_claim_owner(self, task_id: TaskId) -> str | None:
         """Return the current ``claimed_by`` worker for ``task_id``."""
