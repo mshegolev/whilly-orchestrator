@@ -108,13 +108,12 @@ Each TDD task was committed atomically:
 ## Issues Encountered
 
 - Pre-existing untracked `.serena/` remained untouched.
-- `make lint` still fails outside this plan's write ownership:
-  `Would reformat: tests/unit/test_rollback.py`
-  `1 file would be reformatted, 434 files already formatted`
-  `make: *** [lint] Error 1`
-- `make test` was run and failed outside the Phase 10 targeted gate:
-  six failures in `tests/unit/test_pr_title_argv_sanitization.py` now receive `rollback preflight failed: not a git repository` because those tests still call `open_pr_for_task()` on a plain temporary directory without injecting clean preflight evidence, and one unrelated README quickstart failure remains in `tests/unit/test_readme_quickstart_extractable.py::test_long_running_block_is_segregated_in_readme`.
-  Final full-suite line: `7 failed, 2790 passed, 648 skipped, 10 warnings in 61.20s`.
+- Post-plan orchestration cleanup fixed Phase 10 fallout outside Plan 10-03's original write set:
+  `tests/unit/test_rollback.py` was Ruff-formatted, and
+  `tests/unit/test_pr_title_argv_sanitization.py` now injects clean rollback preflight evidence so the tests remain focused on PR title/body argv sanitization.
+- `make test` still has one unrelated README quickstart failure:
+  `tests/unit/test_readme_quickstart_extractable.py::test_long_running_block_is_segregated_in_readme`.
+  Final full-suite line after cleanup: `1 failed, 2796 passed, 648 skipped, 10 warnings in 65.61s`.
 
 ## Verification
 
@@ -125,8 +124,10 @@ Each TDD task was committed atomically:
 - `rg -n "Git rollback|backup tags|PR push preflight" out/compliance-report.md` - found upgraded PASS row
 - `.venv/bin/lint-imports --config .importlinter` - `2 kept, 0 broken`
 - `python3 -m ruff format --check whilly/compliance/__init__.py whilly/sinks/github_pr.py tests/test_github_pr_sink.py tests/unit/test_pr_hook_failure_events.py tests/integration/test_post_complete_pr_hook.py tests/unit/test_compliance_report.py` - `6 files already formatted`
-- `make lint` - failed only on out-of-scope `tests/unit/test_rollback.py` formatting drift, exact output documented above
-- `make test` - failed with 7 failures, exact summary documented above
+- `make lint` - `All checks passed`; `435 files already formatted`
+- `.venv/bin/python -m pytest -q tests/unit/test_pr_title_argv_sanitization.py --maxfail=1` - `6 passed`
+- `.venv/bin/python -m pytest -q tests/unit/test_rollback.py tests/integration/test_rollback_cli.py tests/test_github_pr_sink.py tests/unit/test_pr_hook_failure_events.py tests/integration/test_post_complete_pr_hook.py tests/unit/test_compliance_report.py --maxfail=1` - `65 passed, 3 skipped`
+- `make test` - failed only on the unrelated README quickstart test, exact summary documented above
 
 ## User Setup Required
 
@@ -134,7 +135,7 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 
-Phase 10 rollback safety-net behavior is complete for the targeted gate: rollback core, CLI, PR preflight, hook evidence, and compliance evidence are all wired and tested. Remaining broader-suite cleanup is outside this plan's write ownership and should be handled by a follow-up that can edit the unowned PR title argv tests, README quickstart docs, or upstream rollback formatting.
+Phase 10 rollback safety-net behavior is complete for the targeted gate: rollback core, CLI, PR preflight, hook evidence, compliance evidence, lint, and Phase 10 targeted tests are green. The remaining full-suite failure is the unrelated README quickstart extraction test documented above.
 
 ---
 *Phase: 10-rollback-safety-net*

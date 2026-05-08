@@ -313,9 +313,7 @@ def test_restore_dry_run_does_not_reset_head(tmp_path: Path) -> None:
     assert _head(repo) == second_sha
 
 
-def test_restore_never_calls_git_clean_stash_or_checkout_dot(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_restore_never_calls_git_clean_stash_or_checkout_dot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     repo, first_sha, _second_sha = _two_commit_repo(tmp_path / "repo")
     calls: list[tuple[str, ...]] = []
     original_run = GitClient.run

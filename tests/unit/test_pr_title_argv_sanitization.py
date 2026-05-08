@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from unittest.mock import patch
 
+from whilly.rollback.models import PreflightReport, ProtectionSignal, WorktreeState
 from whilly.sinks import github_pr as gp
 from whilly.sinks.github_pr import open_pr_for_task
 from whilly.task_manager import Task
@@ -57,6 +58,24 @@ def _make_task(description: str = "ok") -> Task:
     )
 
 
+def _clean_preflight(repo: Path, **_kwargs) -> PreflightReport:
+    return PreflightReport(
+        operation="push",
+        worktree=WorktreeState(
+            repo_root=repo,
+            branch="main",
+            head_sha="abc123",
+            upstream=None,
+            dirty=False,
+            dirty_entries=(),
+        ),
+        backup_points=(),
+        protection=ProtectionSignal(status="unknown", reason="not requested"),
+        blockers=(),
+        warnings=("no rollback point at current HEAD",),
+    )
+
+
 def _capture_argvs(tmp_path: Path, description: str) -> list[list[str]]:
     """Drive ``open_pr_for_task`` once and return both subprocess argvs."""
     push = _Proc(0, "")
@@ -68,7 +87,11 @@ def _capture_argvs(tmp_path: Path, description: str) -> list[list[str]]:
         return push if cmd[0] == "git" else pr
 
     with patch.object(gp, "_run", side_effect=fake_run):
-        result = open_pr_for_task(_make_task(description=description), worktree_path=tmp_path)
+        result = open_pr_for_task(
+            _make_task(description=description),
+            worktree_path=tmp_path,
+            preflight_builder=_clean_preflight,
+        )
 
     assert result.ok, f"sink reported failure: {result.reason!r}"
     return captured_argvs
