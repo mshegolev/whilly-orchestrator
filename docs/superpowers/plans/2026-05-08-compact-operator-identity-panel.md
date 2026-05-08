@@ -22,30 +22,32 @@
 
 ## Tasks
 
+Status: **implemented and verified on 2026-05-08**.
+
 ### Task 1: Static Contract Tests
 
 **Files:**
 - Modify: `tests/integration/test_htmx_dashboard.py`
 
-- [ ] Assert `operator-identity-panel` uses `<details>`.
-- [ ] Assert admin/reviewer inputs remain present but live inside the panel.
-- [ ] Assert worker pause/resume buttons remain outside the identity panel.
-- [ ] Assert focus restore can open the identity panel before focusing credentials.
+- [x] Assert `operator-identity-panel` uses `<details>`.
+- [x] Assert admin/reviewer inputs remain present but live inside the panel.
+- [x] Assert worker pause/resume buttons remain outside the identity panel.
+- [x] Assert focus restore can open the identity panel before focusing credentials.
 
 ### Task 2: Template And CSS
 
 **Files:**
 - Modify: `whilly/api/templates/index.html.j2`
 
-- [ ] Add compact identity panel markup.
-- [ ] Add restrained topbar/panel styling.
-- [ ] Preserve existing input ids and JS selectors.
-- [ ] Update `restoreDashboardFocus` to open containing details panel.
+- [x] Add compact identity panel markup.
+- [x] Add restrained topbar/panel styling.
+- [x] Preserve existing input ids and JS selectors.
+- [x] Update `restoreDashboardFocus` to open containing details panel.
 
 ### Task 3: Review Evidence
 
 **Files:**
 - Modify: `docs/superpowers/reviews/2026-05-08-whilly-operator-ui-review.md`
 
-- [ ] Mark identity panel finding as resolved.
-- [ ] Keep remaining findings focused on mobile table layout, table contract, and action affordances.
+- [x] Mark identity panel finding as resolved.
+- [x] Keep remaining findings focused on mobile table layout, table contract, and action affordances.
