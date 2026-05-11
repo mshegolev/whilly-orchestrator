@@ -261,9 +261,7 @@ def test_tui_covers_active_wui_navigation_and_excludes_noncanonical_fragments() 
         assert f"{index} {label}" in rendered
 
     nonactive_paths = {
-        artifact.path
-        for artifact in operator_wui_artifacts()
-        if artifact.status is not OperatorUiArtifactStatus.ACTIVE
+        artifact.path for artifact in operator_wui_artifacts() if artifact.status is not OperatorUiArtifactStatus.ACTIVE
     }
     assert nonactive_paths == {
         "whilly/api/templates/_logs.html",
