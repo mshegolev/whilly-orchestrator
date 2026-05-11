@@ -57,16 +57,19 @@ are only for public tunnel exposure with `--profile funnel`.
 
 ## 3. Generate Local Env Files
 
-Preferred path from a fresh clone:
-
-```bash
-python3 -m whilly.cli quick-setup --yes
-```
-
-If Whilly is already installed as a console command:
+Preferred path once Whilly is installed (pipx/venv with the console script on
+`$PATH`):
 
 ```bash
 whilly quick-setup --yes
+```
+
+If `whilly` is not yet on `$PATH` (fresh source checkout without an editable
+install, or a CI sandbox that skipped activation), the same command runs via
+the module entry point:
+
+```bash
+python3 -m whilly.cli quick-setup --yes
 ```
 
 The command generates `.env` and `.env.worker`, creates non-demo local secrets,
@@ -74,12 +77,13 @@ detects `docker compose` vs `docker-compose`, and prints the exact startup
 commands for this machine. It refuses to overwrite existing env files unless
 `--force` is passed.
 
-Useful variants:
+Useful variants (use the `whilly …` form; substitute
+`python3 -m whilly.cli …` if the console script isn't installed):
 
 ```bash
-python3 -m whilly.cli quick-setup --print-only
-python3 -m whilly.cli quick-setup --yes --docker-provider colima
-python3 -m whilly.cli quick-setup --yes --compose-command docker-compose
+whilly quick-setup --print-only
+whilly quick-setup --yes --docker-provider colima
+whilly quick-setup --yes --compose-command docker-compose
 ```
 
 After generation, edit `.env` only for real Jira credentials:

@@ -15,8 +15,11 @@ send it [`Agent-Local-Whilly-Setup.md`](./Agent-Local-Whilly-Setup.md).
 The fast path in that runbook is:
 
 ```bash
-python3 -m whilly.cli quick-setup --yes
+whilly quick-setup --yes
 ```
+
+(If `whilly` is not yet on `$PATH`, `python3 -m whilly.cli quick-setup --yes`
+runs the same command.)
 
 ---
 
