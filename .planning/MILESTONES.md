@@ -1,28 +1,33 @@
 # Milestones
 
-## v1.1 UI parity completion (Started: 2026-05-11)
+## v1.1 UI parity completion (Shipped: 2026-05-11)
 
-**Phases completed:** 7 phases, 12 plans
+**Phases completed:** 7 phases, 12 plans, 0 tasks
 
-**Goal:**
-Close the post-v1.0 WUI/TUI interface gap introduced by inactive WUI artifacts, stale routes, and
-missing UI methods so every active operator interface path is canonical, reachable, and verified.
-The milestone also tracks urgent operator-adoption follow-ups needed for real usage on another
-machine: update checks, feedback reporting, and Jira-driven work routing.
+**Key accomplishments:**
+- Shared TUI/WUI operator surface, hotkey, route, and action contracts now drive the active
+  dashboard and TUI behavior.
+- Stale WUI hotkeys, selectors, and worker routes were brought onto the canonical five-surface
+  contract with focused regression coverage.
+- Logs/admin/PRD fragments were classified so inactive UI artifacts are not silently treated as
+  active operator surfaces.
+- Version checks, manual update, and explicit automatic-update policy were added for classic
+  operator-controlled package lifecycle behavior.
+- `whilly feedback` now creates explicit GitHub bug/idea reports with runtime context and secret
+  redaction.
+- Jira intake can classify feature/bug/task/devops work, persist issue history, reread comments and
+  links, derive repo hints, and gate autonomous execution on code/test readiness.
 
-**Planned phases:**
-- Phase 13: Canonical UI parity contract.
-- Phase 13.1: Version update checks and manual/automatic update modes.
-- Phase 13.2: GitHub feedback issue reporter.
-- Phase 14: WUI method and fragment wiring.
-- Phase 15: TUI capability parity.
-- Phase 16: UI parity verification and docs.
-- Phase 17: Jira work classification and code readiness routing.
+**Archives:**
+- `.planning/milestones/v1.1-ROADMAP.md`
+- `.planning/milestones/v1.1-REQUIREMENTS.md`
+- `.planning/milestones/v1.1-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.1-RETROSPECTIVE.md`
 
-**Active artifacts:**
-- `.planning/ROADMAP.md`
-- `.planning/REQUIREMENTS.md`
-- `.planning/v1.1-MILESTONE-AUDIT.md`
+**Known deferred validation:**
+- Live authenticated Jira/GitLab smoke on a real operator machine.
+- Full Docker-backed Alembic chain run outside the focused static migration coverage.
+- Long-running Jira watcher/daemon wrapper around one-shot `whilly jira poll`.
 
 ---
 

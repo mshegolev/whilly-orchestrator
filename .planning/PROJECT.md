@@ -35,23 +35,21 @@ The shipped v1.0 scope includes:
 - Explicit configured CI polling and bounded repair attempts with escalation.
 - Deterministic governance policy and explicit semantic-memory deferral.
 
-## Current Milestone: v1.1 UI parity completion
+The shipped v1.1 scope includes:
 
-**Status:** Complete, pending archive/commit/tag.
-
-**Goal:** Close the post-v1.0 WUI/TUI interface gap introduced by inactive WUI artifacts, stale
-routes, and missing UI methods so every active operator interface path is canonical, reachable, and
-verified. The milestone also tracks urgent operator-adoption follow-ups for update checks, feedback
-reporting, and Jira-driven work routing.
-
-**Target features:**
 - One canonical TUI/WUI surface, hotkey, action, and route contract.
 - Active WUI static/template artifacts use current DOM selectors and supported API paths only.
 - Logs, admin, and PRD UI fragments are either fully wired with backend methods and TUI parity or
   explicitly quarantined from active UI scope.
 - Focused parity tests fail when a WUI/TUI surface, route, or hotkey drifts.
+- Operator-controlled version checks, manual update, and explicit automatic-update policy.
+- A GitHub feedback reporter for bug and idea issues.
 - Jira-driven work intake can classify incoming issues, persist task history, reread Jira/GitLab
   links, and gate autonomous execution on code/test readiness.
+
+## Current Milestone
+
+No active milestone. Start the next product slice with `$gsd-new-milestone`.
 
 ## Requirements
 
@@ -75,7 +73,7 @@ reporting, and Jira-driven work routing.
 - [x] CI polling and bounded repair loops are auditable and budgeted - v1.0.
 - [x] Governance and semantic-memory scope are explicit, deterministic, and documented - v1.0.
 
-### Active
+### Validated in v1.1
 
 - [x] Close stale WUI hotkey and route drift from the `feat(wui): adopt 90s/TUI design system`
   commit.
@@ -102,8 +100,8 @@ reporting, and Jira-driven work routing.
   `whilly/cli/tui.py`.
 - Superpowers artifacts remain as detailed evidence in `docs/superpowers/plans/` and
   `docs/superpowers/reviews/`.
-- v1.0 milestone archives live in `.planning/milestones/`.
-- v1.0 phase execution evidence remains in `.planning/phases/`.
+- v1.0 and v1.1 milestone archives live in `.planning/milestones/`.
+- Phase execution evidence remains in `.planning/phases/`.
 - `docs/CODEX-MISSION.md` remains the current Factory mission and boundary reference.
 
 ## Constraints
@@ -136,4 +134,4 @@ reporting, and Jira-driven work routing.
 | Gate autonomous Jira work on code/test readiness | Linked repos, GitLab refs, unit tests, and verification commands must be known before workers mutate code | Good |
 
 ---
-*Last updated: 2026-05-11 after completing v1.1 milestone audit*
+*Last updated: 2026-05-11 after archiving v1.1*
