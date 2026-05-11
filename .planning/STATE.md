@@ -2,11 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: UI parity completion
-current_phase: null
-current_phase_name: null
-current_plan: null
-status: milestone_complete
-last_updated: "2026-05-11T17:20:00Z"
+status: completed
+last_updated: "2026-05-11T16:47:42Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 7
@@ -24,33 +21,27 @@ See: `.planning/PROJECT.md` (updated 2026-05-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** v1.1 UI parity completion, with Jira-driven work routing captured as the next
-product-flow follow-up.
+**Current focus:** No active milestone. Start the next product slice with `$gsd-new-milestone`.
 
 ## Current Position
 
-Current Milestone: v1.1
+Current Milestone: none
 Phase: Complete
 Plan: None
 Status: Milestone complete
 Last Activity: 2026-05-11
-Last Activity Description: Completed Phase 17 and v1.1 milestone audit.
+Last Activity Description: Archived v1.1 milestone artifacts after a passing milestone audit.
 
 Progress: [##########] 100%
 
 ## Active Scope
 
-- Canonical surface, hotkey, action, selector, and route contract for TUI and WUI.
-- WUI static/template cleanup so active code uses current DOM selectors and supported API paths.
-- Logs/admin/PRD fragment decisions: fully wire with backend methods and TUI parity, or quarantine
-  from active UI scope.
-- Focused tests that prevent orphan WUI files or stale routes from drifting back in.
-- Version lifecycle controls so operators can check for a newer Whilly release, apply a manual
-  update, or opt into automatic update behavior without hidden environment mutation.
-- A fast GitHub feedback channel so operators testing Whilly on another computer can report bugs
-  or ideas directly from the CLI.
-- Jira-driven work routing that classifies incoming tasks, persists task history, rereads GitLab
-  links, and checks code/test readiness before autonomous worker execution.
+No active milestone scope. v1.1 evidence is archived in:
+
+- `.planning/milestones/v1.1-ROADMAP.md`
+- `.planning/milestones/v1.1-REQUIREMENTS.md`
+- `.planning/milestones/v1.1-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.1-RETROSPECTIVE.md`
 
 ## Recent Decisions
 
@@ -114,14 +105,19 @@ Progress: [##########] 100%
 | 16 | 01 | focused | 2 | 4 |
 | 17 | 01-05 | focused | 5 | 12 |
 
-## Previous Milestone
+## Previous Milestones
 
-v1.0 shipped and archived on 2026-05-08.
+- v1.0 shipped and archived on 2026-05-08.
+- v1.1 shipped and archived on 2026-05-11.
 
 Archives:
 - `.planning/milestones/v1.0-ROADMAP.md`
 - `.planning/milestones/v1.0-REQUIREMENTS.md`
 - `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.1-ROADMAP.md`
+- `.planning/milestones/v1.1-REQUIREMENTS.md`
+- `.planning/milestones/v1.1-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.1-RETROSPECTIVE.md`
 
 ## Deferred Items
 
@@ -131,4 +127,4 @@ Archives:
 
 ## Next Step
 
-Archive v1.1 with `$gsd-complete-milestone` after operator approval to commit/tag.
+Start the next milestone with `$gsd-new-milestone`.
