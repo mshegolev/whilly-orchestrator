@@ -38,6 +38,15 @@
   boundaries, including newer-version, up-to-date, network failure, manual dry-run, manual apply,
   and auto-update policy cases.
 
+### Feedback Reporting
+
+- [x] **FEED-01**: Operator can create a GitHub issue from Whilly for a bug or idea report using an
+  explicit CLI command.
+- [x] **FEED-02**: Feedback reports include Whilly/runtime context and redact known secret patterns
+  before they are sent to GitHub.
+- [x] **FEED-03**: Feedback issue creation supports dry-run output and is covered by unit tests with
+  mocked GitHub CLI execution.
+
 ### TUI Parity
 
 - [ ] **TUI-01**: Operator can access the same canonical user-interface capabilities from TUI that
@@ -79,6 +88,9 @@
 | UPD-02 | Phase 13.1 | Complete |
 | UPD-03 | Phase 13.1 | Complete |
 | UPD-04 | Phase 13.1 | Complete |
+| FEED-01 | Phase 13.2 | Complete |
+| FEED-02 | Phase 13.2 | Complete |
+| FEED-03 | Phase 13.2 | Complete |
 | WUI-01 | Phase 14 | Pending |
 | WUI-02 | Phase 14 | Pending |
 | WUI-03 | Phase 14 | Pending |
@@ -88,10 +100,10 @@
 | QA-02 | Phase 16 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 13 total
-- Mapped to phases: 13
+- v1.1 requirements: 16 total
+- Mapped to phases: 16
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-11*
-*Last updated: 2026-05-11 after completing Phase 13.1 update mechanism*
+*Last updated: 2026-05-11 after completing Phase 13.2 feedback reporter*

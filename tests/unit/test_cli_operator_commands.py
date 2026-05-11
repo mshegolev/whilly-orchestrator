@@ -46,3 +46,18 @@ def test_main_dispatches_update_command(monkeypatch) -> None:
 
     assert main(["update", "check"]) == 29
     assert called["argv"] == ["check"]
+
+
+def test_main_dispatches_feedback_command(monkeypatch) -> None:
+    import whilly.cli.feedback as feedback_cli
+
+    called: dict[str, list[str]] = {}
+
+    def fake_run(argv: list[str]) -> int:
+        called["argv"] = argv
+        return 31
+
+    monkeypatch.setattr(feedback_cli, "run_feedback_command", fake_run)
+
+    assert main(["feedback", "--title", "Broken"]) == 31
+    assert called["argv"] == ["--title", "Broken"]
