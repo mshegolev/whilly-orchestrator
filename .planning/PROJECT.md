@@ -34,6 +34,19 @@ The shipped v1.0 scope includes:
 - Explicit configured CI polling and bounded repair attempts with escalation.
 - Deterministic governance policy and explicit semantic-memory deferral.
 
+## Current Milestone: v1.1 UI parity completion
+
+**Goal:** Close the post-v1.0 WUI/TUI interface gap introduced by inactive WUI artifacts, stale
+routes, and missing UI methods so every active operator interface path is canonical, reachable, and
+verified.
+
+**Target features:**
+- One canonical TUI/WUI surface, hotkey, action, and route contract.
+- Active WUI static/template artifacts use current DOM selectors and supported API paths only.
+- Logs, admin, and PRD UI fragments are either fully wired with backend methods and TUI parity or
+  explicitly quarantined from active UI scope.
+- Focused parity tests fail when a WUI/TUI surface, route, or hotkey drifts.
+
 ## Requirements
 
 ### Validated
@@ -58,7 +71,12 @@ The shipped v1.0 scope includes:
 
 ### Active
 
-None. Define the next active requirements with `$gsd-new-milestone`.
+- [ ] Close stale WUI hotkey and route drift from the `feat(wui): adopt 90s/TUI design system`
+  commit.
+- [ ] Ensure every active WUI fragment/control has a supported server method and corresponding
+  TUI capability or an explicit documented exclusion.
+- [ ] Add tests that prevent orphan WUI partials/static files from drifting away from the canonical
+  operator UI contract.
 
 ### Out of Scope
 
@@ -108,4 +126,4 @@ None. Define the next active requirements with `$gsd-new-milestone`.
 | Defer semantic memory from current scope | Deterministic events, task history, PR evidence, and verification logs remain authoritative | Good |
 
 ---
-*Last updated: 2026-05-08 after v1.0 milestone*
+*Last updated: 2026-05-11 after starting v1.1 UI parity completion milestone*
