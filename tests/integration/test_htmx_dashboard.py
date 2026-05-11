@@ -36,7 +36,13 @@ from httpx import ASGITransport, AsyncClient
 
 from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.transport.server import create_app
-from whilly.operator_views import operator_surface_hotkey_help, operator_surface_items, operator_wui_route_prefixes
+from whilly.operator_views import (
+    OperatorUiArtifactStatus,
+    operator_surface_hotkey_help,
+    operator_surface_items,
+    operator_wui_artifacts,
+    operator_wui_route_prefixes,
+)
 
 pytestmark = DOCKER_REQUIRED
 
@@ -313,16 +319,22 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     surface_labels = [label for _surface, label in surface_items]
     route_prefixes = operator_wui_route_prefixes()
 
+    for pattern in ("1-7", "/^[1-7]$/", ".tabs [data-key]"):
+        assert pattern not in body
+    for regex in (r"(?<!/api/v1)/admin/workers/",):
+        assert re.search(regex, body) is None
     for index, label in enumerate(surface_labels, start=1):
         assert label in body
         assert f"{index} {label}" in body
     assert re.findall(r'data-surface-tab="([^"]+)"', body) == surface_values
     assert 'id="dashboard-filter"' in body
     for surface in surface_values:
+        assert f'data-surface-tab="{surface}"' in body
         assert f'data-surface="{surface}"' in body
     assert "q=quit" in body
     assert "r=refresh" in body
     assert "R=resume workers" in body
+    assert operator_surface_hotkey_help() == "1-5=switch"
     assert operator_surface_hotkey_help() in body
     assert "1-7" not in body
     assert "/=filter" in body
@@ -339,6 +351,8 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert "submitControlAction" in body
     assert "isComplianceSurface" in body
     assert f"const surfaceOrder = {json.dumps(surface_values)};" in body
+    assert route_prefixes["worker_control"] in body
+    assert route_prefixes["task_human_review"] in body
     assert f'const workerControlRoutePrefix = "{route_prefixes["worker_control"]}";' in body
     assert f'const taskHumanReviewRoutePrefix = "{route_prefixes["task_human_review"]}";' in body
     assert "fetch(`${workerControlRoutePrefix}${action}`, {" in body
@@ -819,6 +833,17 @@ async def test_tasks_fragment_returns_just_tasks_table(client: AsyncClient, db_p
     task_row = _row_block(tasks_table, "task-t-frag")
     assert _mobile_labels(task_row) == _header_labels(tasks_table)
     assert "<!DOCTYPE html>" not in body
+
+
+async def test_logs_fragment_is_routeable_noncanonical_artifact(client: AsyncClient) -> None:
+    artifacts_by_path = {artifact.path: artifact for artifact in operator_wui_artifacts()}
+    logs_artifact = artifacts_by_path["whilly/api/templates/_logs.html"]
+    assert logs_artifact.status is OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL
+
+    response = await client.get("/?fragment=logs")
+    assert response.status_code == 200
+    assert 'role="log"' in response.text
+    assert "<!DOCTYPE html>" not in response.text
 
 
 async def test_unknown_fragment_falls_back_to_full_page(
