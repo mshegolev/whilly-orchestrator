@@ -28,6 +28,8 @@ from whilly.operator_views import (
     OperatorTaskRow,
     ReviewGap,
     WorkerRow,
+    operator_surface_hotkey_help,
+    operator_surface_hotkeys,
 )
 
 
@@ -231,6 +233,20 @@ def test_handle_tui_key_switches_views_filter_pause_refresh_review_actions_and_q
 
     handle_tui_key(state, "q")
     assert state.stop is True
+
+
+def test_tui_surface_keys_derive_from_operator_contract() -> None:
+    assert tui_module.operator_surface_hotkeys is operator_surface_hotkeys
+    assert tui_module._SURFACE_BY_KEY == dict(operator_surface_hotkeys())
+
+    state = TuiState()
+    for key, surface in operator_surface_hotkeys():
+        handle_tui_key(state, key)
+        assert state.surface is surface
+
+    handle_tui_key(state, "6")
+    assert state.surface is OperatorSurface.EVENTS
+    assert operator_surface_hotkey_help() in tui_module.build_tui_parser().description
 
 
 @pytest.mark.asyncio
