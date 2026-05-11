@@ -52,8 +52,10 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -389,24 +391,182 @@ except ImportError:  # pragma: no cover — testcontainers is in [dev]; defensiv
     HAS_TESTCONTAINERS = False
 
 
+DOCKER_AUTOSTART_ENV = "WHILLY_TEST_DOCKER_AUTOSTART"
+_DOCKER_PROVIDER_START_ATTEMPTED = False
+_DOCKER_LAST_UNAVAILABLE_REASON = ""
+
+
+@dataclass(frozen=True)
+class DockerAvailability:
+    available: bool
+    reason: str = ""
+
+
 def docker_available() -> bool:
-    """Return True iff a Docker daemon is reachable.
+    """Return True iff a Docker daemon is reachable, after one safe provider bootstrap attempt."""
+
+    return docker_availability().available
+
+
+def docker_availability() -> DockerAvailability:
+    """Return Docker daemon reachability and a useful remediation message.
 
     ``shutil.which`` checks the binary; ``docker info`` is the
     authoritative daemon-reachable check (cheap; ~30ms on a warm CLI).
+    On macOS, a stopped Colima context is common enough that we try
+    ``colima start`` once before deciding Docker-backed tests must skip.
     """
+    global _DOCKER_LAST_UNAVAILABLE_REASON
+
+    initial = _docker_info_available()
+    if initial.available:
+        _DOCKER_LAST_UNAVAILABLE_REASON = ""
+        return initial
+
+    context_name = _active_docker_context()
+    docker_host = resolve_docker_host()
+    start_note = _try_start_docker_provider(context_name=context_name, docker_host=docker_host)
+    if start_note is not None:
+        retry = _docker_info_available()
+        if retry.available:
+            _DOCKER_LAST_UNAVAILABLE_REASON = ""
+            return retry
+        reason = f"{initial.reason} {start_note} Docker is still unreachable: {retry.reason}"
+    else:
+        reason = initial.reason
+
+    reason = _docker_unavailable_message(reason, context_name=context_name, docker_host=docker_host)
+    _DOCKER_LAST_UNAVAILABLE_REASON = reason
+    return DockerAvailability(False, reason)
+
+
+def _docker_info_available() -> DockerAvailability:
     if shutil.which("docker") is None:
-        return False
+        return DockerAvailability(
+            False,
+            "Docker CLI is not on PATH; install Docker Desktop, Colima, Rancher Desktop, or another Docker provider.",
+        )
     try:
         result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return DockerAvailability(False, "`docker info` timed out; the Docker daemon or socket is not responding.")
+    except OSError as exc:
+        return DockerAvailability(False, f"`docker info` could not run: {exc}.")
+    if result.returncode == 0:
+        return DockerAvailability(True)
+    detail = _compact_message(result.stderr or result.stdout or "")
+    suffix = f": {detail}" if detail else "."
+    return DockerAvailability(False, f"`docker info` failed{suffix}")
+
+
+def _active_docker_context() -> str | None:
+    if shutil.which("docker") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["docker", "context", "show"],
+            capture_output=True,
+            text=True,
             timeout=5,
             check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
-        return False
-    return result.returncode == 0
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _try_start_docker_provider(*, context_name: str | None, docker_host: str | None) -> str | None:
+    """Best-effort local Docker provider bootstrap.
+
+    Only Colima is started automatically: it is CLI-native, common in
+    this repo's macOS workflow, and does not require launching a GUI app.
+    Other providers are explained in the skip message instead.
+    """
+    global _DOCKER_PROVIDER_START_ATTEMPTED
+
+    if not _docker_autostart_enabled() or _DOCKER_PROVIDER_START_ATTEMPTED:
+        return None
+    if sys.platform != "darwin" or not _looks_like_colima(context_name, docker_host):
+        return None
+    if shutil.which("colima") is None:
+        return None
+
+    _DOCKER_PROVIDER_START_ATTEMPTED = True
+    try:
+        result = subprocess.run(
+            ["colima", "start"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "`colima start` timed out."
+    except OSError as exc:
+        return f"`colima start` could not run: {exc}."
+    if result.returncode == 0:
+        return "`colima start` completed."
+    detail = _compact_message(result.stderr or result.stdout or "")
+    suffix = f": {detail}" if detail else "."
+    return f"`colima start` failed{suffix}"
+
+
+def _docker_autostart_enabled() -> bool:
+    return os.environ.get(DOCKER_AUTOSTART_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _looks_like_colima(context_name: str | None, docker_host: str | None) -> bool:
+    haystack = " ".join(part for part in (context_name, docker_host) if part).lower()
+    return "colima" in haystack
+
+
+def _docker_unavailable_message(reason: str, *, context_name: str | None, docker_host: str | None) -> str:
+    hint = _docker_provider_hint(context_name=context_name, docker_host=docker_host)
+    parts = [reason]
+    if context_name:
+        parts.append(f"active Docker context: {context_name}")
+    if docker_host:
+        parts.append(f"Docker endpoint: {docker_host}")
+    parts.append(hint)
+    return ". ".join(part.rstrip(".") for part in parts if part) + "."
+
+
+def _compact_message(raw: str) -> str:
+    return " ".join(raw.split())
+
+
+def _docker_provider_hint(*, context_name: str | None, docker_host: str | None) -> str:
+    if sys.platform == "darwin":
+        if _looks_like_colima(context_name, docker_host):
+            return (
+                "On macOS with Colima, run `colima start` and then `docker ps`; "
+                "if the socket is wedged, run `colima restart`."
+            )
+        haystack = " ".join(part for part in (context_name, docker_host) if part).lower()
+        if "desktop" in haystack or ".docker/run/docker.sock" in haystack:
+            return "On macOS with Docker Desktop, run `open -a Docker`, wait for startup, then run `docker ps`."
+        if "rancher" in haystack or ".rd/" in haystack:
+            return "On macOS with Rancher Desktop, start Rancher Desktop, enable dockerd mode, then run `docker ps`."
+        return "Start your Docker provider, or switch context with `docker context use colima`, then run `docker ps`."
+    if sys.platform.startswith("linux"):
+        return "On Linux, start Docker with `sudo systemctl start docker` or `sudo service docker start`, then run `docker ps`."
+    if sys.platform.startswith("win"):
+        return "On Windows, start Docker Desktop and wait until `docker ps` succeeds."
+    return "Start a Docker-compatible daemon and verify it with `docker ps`."
+
+
+def docker_unavailable_reason() -> str:
+    if not HAS_TESTCONTAINERS:
+        return "testcontainers is not installed; install development dependencies with `pip install -e '.[dev]'`."
+    return _DOCKER_LAST_UNAVAILABLE_REASON or docker_availability().reason
 
 
 def resolve_docker_host() -> str | None:
@@ -448,7 +608,7 @@ def resolve_docker_host() -> str | None:
 # so module-level decoration is optional but makes the intent explicit.
 DOCKER_REQUIRED = pytest.mark.skipif(
     not (HAS_TESTCONTAINERS and docker_available()),
-    reason="Docker daemon not reachable; testcontainers cannot boot Postgres",
+    reason=docker_unavailable_reason(),
 )
 
 
@@ -488,8 +648,11 @@ def postgres_dsn() -> Iterator[str]:
     The container survives the entire pytest session; per-test
     isolation is provided by :func:`db_pool` truncating tables.
     """
-    if not (HAS_TESTCONTAINERS and docker_available()):
-        pytest.skip("Docker daemon not reachable; testcontainers cannot boot Postgres")
+    if not HAS_TESTCONTAINERS:
+        pytest.skip(docker_unavailable_reason())
+    availability = docker_availability()
+    if not availability.available:
+        pytest.skip(availability.reason)
 
     prior_docker_host = os.environ.get("DOCKER_HOST")
     if prior_docker_host is None:
