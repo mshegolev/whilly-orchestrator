@@ -41,9 +41,9 @@ created: 2026-05-11
 | 13-01-01 | 01 | 1 | UI-01 | unit | `.venv/bin/python -m pytest -q tests/unit/test_operator_views.py` | yes | pending |
 | 13-01-02 | 01 | 1 | UI-01 | unit | `.venv/bin/python -m pytest -q tests/unit/test_tui.py` | yes | pending |
 | 13-01-03 | 01 | 1 | UI-01 | unit | `.venv/bin/python -m pytest -q tests/unit/test_operator_ui_contract.py` | no - Wave 0 creates or folds into `test_operator_views.py` | pending |
-| 13-02-01 | 02 | 1 | UI-02 | unit static | `.venv/bin/python -m pytest -q tests/unit/test_wui_contract_static.py` | no - Wave 0 creates | pending |
-| 13-02-02 | 02 | 1 | UI-02 | integration/static | `.venv/bin/python -m pytest -q tests/integration/test_htmx_dashboard.py::test_dashboard_mirrors_operator_surfaces_and_hotkeys` | yes | pending |
-| 13-02-03 | 02 | 1 | UI-02 | integration | `.venv/bin/python -m pytest -q tests/integration/test_control_state_admin_api.py` | yes | pending |
+| 13-02-01 | 02 | 2 | UI-02 | unit static | `.venv/bin/python -m pytest -q tests/unit/test_wui_contract_static.py` | no - Wave 0 creates | pending |
+| 13-02-02 | 02 | 2 | UI-02 | integration/static | `.venv/bin/python -m pytest -q tests/integration/test_htmx_dashboard.py::test_dashboard_mirrors_operator_surfaces_and_hotkeys` | yes | pending |
+| 13-02-03 | 02 | 2 | UI-02 | integration | `.venv/bin/python -m pytest -q tests/integration/test_control_state_admin_api.py` | yes | pending |
 
 *Status: pending · green · red · flaky*
 
