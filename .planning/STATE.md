@@ -4,17 +4,16 @@ milestone: v1.1
 milestone_name: UI parity completion
 current_phase: "13"
 current_phase_name: Canonical UI parity contract
-current_plan: null
-status: ready_for_planning
-stopped_at: Phase 13 needs planning
-last_updated: "2026-05-11T00:00:00Z"
+current_plan: "02"
+status: in_progress
+last_updated: "2026-05-11T10:24:20Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State
@@ -31,13 +30,13 @@ human control, and verification before claiming success.
 
 Current Milestone: v1.1
 Phase: 13 - Canonical UI parity contract
-Plan: Not started
-Status: Ready for planning
+Plan: 02 - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards
+Status: In progress
 Last Activity: 2026-05-11
-Last Activity Description: Started v1.1 to close WUI/TUI parity gaps from inactive WUI artifacts,
-stale routes, and missing UI methods after the 90s/TUI WUI design commit.
+Last Activity Description: Completed 13-01-PLAN.md; UI-01 now has a canonical operator UI
+surface/action contract consumed by active TUI and WUI code.
 
-Progress: [----------] 0%
+Progress: [#####-----] 50%
 
 ## Active Scope
 
@@ -46,6 +45,21 @@ Progress: [----------] 0%
 - Logs/admin/PRD fragment decisions: fully wire with backend methods and TUI parity, or quarantine
   from active UI scope.
 - Focused tests that prevent orphan WUI files or stale routes from drifting back in.
+
+## Recent Decisions
+
+- Phase 13 Plan 01 kept UI-01 metadata in `whilly/operator_views.py` to extend the existing pure
+  operator contract pattern.
+- TUI surface key handling now derives from `operator_surface_hotkeys()` instead of a duplicate
+  literal map.
+- Active WUI dashboard JavaScript receives surface order, hotkey copy, and route prefixes through
+  dashboard context.
+
+## Performance Metrics
+
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 13 | 01 | 9 min | 3 | 7 |
 
 ## Previous Milestone
 
@@ -64,4 +78,5 @@ Archives:
 
 ## Next Step
 
-Run `$gsd-plan-phase 13` to create executable plans for the canonical UI parity contract.
+Run `$gsd-execute-phase 13` or execute
+`.planning/phases/13-canonical-ui-parity-contract/13-02-PLAN.md` for UI-02 static/rendered stale-pattern guards.
