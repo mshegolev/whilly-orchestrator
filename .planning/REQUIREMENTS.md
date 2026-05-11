@@ -24,6 +24,20 @@
 - [ ] **WUI-03**: Operator can use logs, admin, and PRD UI capabilities only when every visible
   control has a matching backend method, auth behavior, and integration test.
 
+### Version Updates
+
+- [x] **UPD-01**: Operator can run a non-mutating version check that reports the installed Whilly
+  version, latest available version, update availability, and a clear message when the package index
+  cannot be reached.
+- [x] **UPD-02**: Operator can request a manual update that uses the detected supported installer
+  path, supports dry-run output, and fails safely with copy-pastable guidance when the install
+  context is unsupported.
+- [x] **UPD-03**: Operator can opt into automatic update checks or automatic updates through an
+  explicit setting or flag; the default behavior never silently mutates the installation.
+- [x] **UPD-04**: Update behavior is covered by unit tests with mocked package-index and subprocess
+  boundaries, including newer-version, up-to-date, network failure, manual dry-run, manual apply,
+  and auto-update policy cases.
+
 ### TUI Parity
 
 - [ ] **TUI-01**: Operator can access the same canonical user-interface capabilities from TUI that
@@ -61,6 +75,10 @@
 |-------------|-------|--------|
 | UI-01 | Phase 13 | Complete |
 | UI-02 | Phase 13 | Complete |
+| UPD-01 | Phase 13.1 | Complete |
+| UPD-02 | Phase 13.1 | Complete |
+| UPD-03 | Phase 13.1 | Complete |
+| UPD-04 | Phase 13.1 | Complete |
 | WUI-01 | Phase 14 | Pending |
 | WUI-02 | Phase 14 | Pending |
 | WUI-03 | Phase 14 | Pending |
@@ -70,10 +88,10 @@
 | QA-02 | Phase 16 | Pending |
 
 **Coverage:**
-- v1.1 requirements: 9 total
-- Mapped to phases: 9
+- v1.1 requirements: 13 total
+- Mapped to phases: 13
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-11*
-*Last updated: 2026-05-11 after completing Phase 13 UI-02*
+*Last updated: 2026-05-11 after completing Phase 13.1 update mechanism*

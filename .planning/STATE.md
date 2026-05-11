@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: UI parity completion
-current_phase: "13"
-current_phase_name: Canonical UI parity contract
-current_plan: "02"
-status: in_progress
-last_updated: "2026-05-11T10:41:56Z"
+current_phase: "14"
+current_phase_name: WUI method and fragment wiring
+current_plan: null
+status: ready_for_planning
+last_updated: "2026-05-11T11:20:00Z"
 last_activity: 2026-05-11
 progress:
-  total_phases: 4
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 100
+  total_phases: 5
+  completed_phases: 2
+  total_plans: 3
+  completed_plans: 3
+  percent: 40
 ---
 
 # Project State
@@ -29,14 +29,14 @@ human control, and verification before claiming success.
 ## Current Position
 
 Current Milestone: v1.1
-Phase: 13 - Canonical UI parity contract
-Plan: 02 - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards
-Status: Complete
+Phase: 14 - WUI method and fragment wiring
+Plan: Not planned yet
+Status: Ready for planning
 Last Activity: 2026-05-11
-Last Activity Description: Completed 13-02-PLAN.md; UI-02 now has WUI artifact classification,
-canonical static hotkeys, and static/rendered stale-pattern guards.
+Last Activity Description: Completed urgent Phase 13.1. Whilly now has `whilly update check`,
+`whilly update install`, and `whilly update auto` with default-off automatic policy.
 
-Progress: [##########] 100%
+Progress: [####------] 40%
 
 ## Active Scope
 
@@ -45,6 +45,8 @@ Progress: [##########] 100%
 - Logs/admin/PRD fragment decisions: fully wire with backend methods and TUI parity, or quarantine
   from active UI scope.
 - Focused tests that prevent orphan WUI files or stale routes from drifting back in.
+- Version lifecycle controls so operators can check for a newer Whilly release, apply a manual
+  update, or opt into automatic update behavior without hidden environment mutation.
 
 ## Recent Decisions
 
@@ -60,6 +62,20 @@ Progress: [##########] 100%
   `_prd.html` remain inactive quarantined artifacts.
 - `whilly/api/static/whilly-hotkeys.js` is now active after replacing stale `1-7` selectors and
   `/admin/workers/*` routes with the canonical five-surface API contract.
+- Phase 13.1 was inserted after Phase 13 because update checks/manual update/automatic update
+  policy are product lifecycle controls that should be available before continuing lower-priority
+  WUI/TUI parity work.
+- Phase 13.1 keeps automatic updates explicit: default mode is off, and no unrelated command
+  silently upgrades Whilly.
+- Update tests mock PyPI and subprocess boundaries so verification does not mutate the local
+  environment.
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 13.1 inserted after Phase 13: Version update checks and manual/automatic update modes
+  (URGENT).
 
 ## Performance Metrics
 
@@ -67,6 +83,7 @@ Progress: [##########] 100%
 |-------|------|----------|-------|-------|
 | 13 | 01 | 9 min | 3 | 7 |
 | 13 | 02 | 8 min | 3 | 4 |
+| 13.1 | 01 | focused | 3 | 6 |
 
 ## Previous Milestone
 
