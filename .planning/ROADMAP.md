@@ -9,9 +9,9 @@ after pulling `feat(wui): adopt 90s/TUI design system (#270)`.
 ## Current Milestone: v1.1 UI parity completion
 
 Close inactive WUI artifacts, stale routes, and missing UI methods so every active operator
-interface path is canonical, reachable, and verified across TUI and WUI. Phase 13.1 is an urgent
-inserted product lifecycle addition for version update checks and safe package updates before
-continuing WUI/TUI parity work.
+interface path is canonical, reachable, and verified across TUI and WUI. Phases 13.1 and 13.2 are
+urgent inserted product lifecycle additions for version updates and GitHub feedback reporting
+before continuing WUI/TUI parity work.
 
 ## Phases
 
@@ -20,6 +20,8 @@ continuing WUI/TUI parity work.
 - [x] **Phase 13.1: Version update checks and manual/automatic update modes (INSERTED)** - Add (completed 2026-05-11)
   classic package-update behavior: check for newer versions, run a manual update, and support an
   explicit automatic update policy.
+- [x] **Phase 13.2: GitHub feedback issue reporter (INSERTED)** - Add (completed 2026-05-11)
+  a fast `whilly feedback` command for explicit GitHub bug/idea reports.
 - [ ] **Phase 14: WUI method and fragment wiring** - Make active WUI static/templates use current
   DOM/API contracts and wire or quarantine logs/admin/PRD fragments.
 - [ ] **Phase 15: TUI capability parity** - Add or adjust TUI surfaces/help so it matches every
@@ -71,6 +73,23 @@ manually or opt into automatic update behavior that follows classic package-mana
 
 Plans:
 - [x] 13.1-01-PLAN.md - Implement version check, manual update, and opt-in auto-update modes.
+
+### Phase 13.2: GitHub feedback issue reporter (INSERTED)
+
+**Goal:** Give operators a fast, explicit support channel to create GitHub bug or idea issues from
+Whilly while testing the package on another computer.
+**Requirements**: FEED-01, FEED-02, FEED-03
+**Depends on:** Phase 13.1
+**Plans:** 1/1 plans complete
+**Canonical refs**: `whilly/feedback.py`, `whilly/cli/feedback.py`, `whilly/cli/__init__.py`,
+`whilly/gh_utils.py`, `tests/unit/test_feedback.py`, `tests/unit/test_feedback_cli.py`
+**Success Criteria** (what must be TRUE):
+  1. `whilly feedback` can create a GitHub issue for `bug` or `idea` reports.
+  2. Feedback report bodies include Whilly/runtime context and redact known secret patterns.
+  3. Dry-run prints the `gh issue create` command without creating an issue.
+
+Plans:
+- [x] 13.2-01-PLAN.md - Implement GitHub feedback issue reporter.
 
 ### Phase 14: WUI method and fragment wiring
 **Goal**: Ensure every active WUI fragment/control has a current server method, supported route, auth behavior, and test.
@@ -129,6 +148,7 @@ Phases execute in numeric order. v1.1 continues after archived v1.0 Phase 12.
 |-------|----------------|--------|-----------|
 | 13. Canonical UI parity contract | 2/2 | Complete   | 2026-05-11 |
 | 13.1. Version update checks and manual/automatic update modes | 1/1 | Complete | 2026-05-11 |
+| 13.2. GitHub feedback issue reporter | 1/1 | Complete | 2026-05-11 |
 | 14. WUI method and fragment wiring | 0/0 | Pending | - |
 | 15. TUI capability parity | 0/0 | Pending | - |
 | 16. UI parity verification and docs | 0/0 | Pending | - |
