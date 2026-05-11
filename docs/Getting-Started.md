@@ -7,12 +7,23 @@ nav_order: 2
 
 Step-by-step walkthroughs for the most common flows. If you want the full flag/config reference, see [`Whilly-Usage.md`](./Whilly-Usage.md).
 
+For OpenCode runs, including the free `opencode/big-pickle` model and where to
+set `WHILLY_MODEL`, see [`OpenCode-Developer-Guide.md`](./OpenCode-Developer-Guide.md).
+
 ---
 
 ## 0. Install (one-time)
 
+> **⚠️ Python 3.12+ required.** `pip install whilly-orchestrator==4.4.0`
+> (and every release since) will fail on Python 3.10 / 3.11 with
+> `Could not find a version that satisfies the requirement
+> whilly-orchestrator==4.4.0`. Install on a 3.12+ interpreter
+> instead — e.g. `python3.12 -m pip install whilly-orchestrator` or
+> `pipx install --python python3.12 whilly-orchestrator`. To install
+> 3.12 if you don't have it: `pyenv install 3.12 && pyenv local 3.12`.
+
 ```bash
-# macOS / Linux / Windows (needs Python 3.10+)
+# macOS / Linux / Windows (needs Python 3.12+)
 pipx install whilly-orchestrator
 
 # verify
@@ -134,8 +145,23 @@ enable_board_sync = true                     # perform Jira transitions
 Then:
 
 ```bash
-whilly --from-jira ABC-123 --go
-whilly --from-jira https://company.atlassian.net/browse/ABC-123 --go
+whilly jira import ABC-123
+# writes out/jira-ABC-123.json with plan_id=jira-abc-123
+
+whilly jira import ABC-123 --import-db
+whilly run --plan jira-abc-123
+
+# one-shot import + run
+whilly jira import ABC-123 --run
+whilly jira import https://company.atlassian.net/browse/ABC-123 --run
+```
+
+If Jira settings are missing and the command runs in a terminal, Whilly asks
+for the missing values. When the API token/PAT is missing, it opens the Jira
+Cloud token page in your browser. In non-interactive shells, use:
+
+```bash
+whilly jira import ABC-123 --interactive-config
 ```
 
 While the task runs, whilly transitions the Jira ticket in step with its internal status — the mapping (overridable via `[jira.status_mapping]`):
@@ -227,9 +253,10 @@ MAX_MEMORY_PERCENT = 75
 Kill signals:
 
 ```bash
+export TASK=TASK-001                       # placeholder — the stuck task id
 # any running whilly exits cleanly on SIGINT — just Ctrl+C
-pkill -f whilly                        # nuclear option
-tmux kill-session -t whilly-<TASK>     # single stuck agent (when USE_TMUX=1)
+pkill -f whilly                            # nuclear option
+tmux kill-session -t "whilly-$TASK"        # single stuck agent (when USE_TMUX=1)
 ```
 
 ---

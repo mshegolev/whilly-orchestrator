@@ -16,6 +16,13 @@ from collections.abc import Iterator
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_worker_insecure_warning_latch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from whilly.cli import worker as _cli_worker
+
+    monkeypatch.setattr(_cli_worker, "_INSECURE_WARNING_EMITTED", False, raising=True)
+
+
 @pytest.fixture
 def listening_port() -> Iterator[int]:
     """Bind a real listener on an ephemeral port; yield it; close on teardown.

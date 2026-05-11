@@ -61,6 +61,8 @@ def reset_env(monkeypatch):
         "LLM_MODEL",
         "LLM_PROVIDER",
         "LLM_TIER_OVERRIDE",
+        "WHILLY_LLM_RAW_LOG_PATH",
+        "WHILLY_LLM_SESSION_ID",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -253,6 +255,59 @@ class TestOpencodeAdapter:
         envelope = json.loads(capsys.readouterr().out)
         assert "First chunk." in envelope["result"]
         assert "Second chunk." in envelope["result"]
+
+    def test_opencode_114_text_part_stream(self, adapter, capsys, monkeypatch):
+        monkeypatch.setenv("WHILLY_CLI", "opencode")
+        events = [
+            {"type": "step_start", "part": {"type": "step-start"}},
+            {"type": "text", "part": {"type": "text", "text": "New stream shape."}},
+            {
+                "type": "step_finish",
+                "part": {
+                    "type": "step-finish",
+                    "tokens": {"input": 6, "output": 420, "total": 11273},
+                    "cost": 0,
+                },
+            },
+        ]
+        stdout = "\n".join(json.dumps(e) for e in events)
+        monkeypatch.setattr(subprocess, "run", MagicMock(return_value=_mock_run(stdout=stdout, returncode=0)))
+        rc = adapter.main(["-p", "x"])
+        assert rc == 0
+        envelope = json.loads(capsys.readouterr().out)
+        assert "New stream shape." in envelope["result"]
+        assert envelope["usage"]["input_tokens"] == 6
+        assert envelope["usage"]["output_tokens"] == 420
+
+    def test_raw_llm_log_file_records_native_stream_without_prompt(self, adapter, capsys, monkeypatch, tmp_path):
+        monkeypatch.setenv("WHILLY_CLI", "opencode")
+        raw_path = tmp_path / "raw.jsonl"
+        monkeypatch.setenv("WHILLY_LLM_RAW_LOG_PATH", str(raw_path))
+        monkeypatch.setenv("WHILLY_LLM_SESSION_ID", "demo/PAR-001/attempt-1")
+        prompt = "short prompt that should not be persisted in argv"
+        stdout = "\n".join(
+            [
+                json.dumps({"type": "text", "part": {"text": "ok"}}),
+                json.dumps({"type": "step_finish", "part": {"tokens": {"input": 1, "output": 1}}}),
+            ]
+        )
+
+        def fake_run(cmd, **kwargs):
+            return _mock_run(stdout=stdout, stderr="debug line", returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        rc = adapter.main(["-p", prompt])
+        assert rc == 0
+        capsys.readouterr()
+
+        raw_text = raw_path.read_text()
+        lines = [json.loads(line) for line in raw_text.splitlines()]
+        assert lines[0]["type"] == "cli_run"
+        assert lines[0]["session_id"] == "demo/PAR-001/attempt-1"
+        assert "<prompt>" in lines[0]["cmd"]
+        assert prompt not in raw_text
+        assert any(line.get("type") == "cli_stdout" and line.get("event_type") == "text" for line in lines)
+        assert any(line.get("type") == "cli_stderr" and line.get("line") == "debug line" for line in lines)
 
     def test_garbage_lines_in_stream_are_skipped(self, adapter, capsys, monkeypatch):
         monkeypatch.setenv("WHILLY_CLI", "opencode")

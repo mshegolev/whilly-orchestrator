@@ -49,6 +49,14 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "005_plan_budget",
     "006_plan_github_ref",
     "007_plan_prd_file",
+    "008_workers_owner_email",
+    "009_bootstrap_tokens",
+    "010_funnel_url",
+    "011_events_notify_trigger",
+    "012_pull_requests_and_pr_events",
+    "013_work_intents_repo_targets",
+    "014_control_state",
+    "015_plan_verification_commands",
 )
 
 
@@ -134,9 +142,9 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "007_plan_prd_file"
+    assert head_version == "015_plan_verification_commands"
 
-    # ── Step 3: 006- and 007-specific deltas exist ──────────────────
+    # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
         _fetchval(
             empty_postgres_dsn,
@@ -172,6 +180,103 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(prd_file_column_count) == 1
 
+    # 008: ``workers.owner_email`` text NULL + partial index exist.
+    owner_email_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'workers' AND column_name = 'owner_email'
+            """,
+        )
+    )
+    assert int(owner_email_column_count) == 1
+    owner_email_index_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_indexes
+            WHERE tablename = 'workers'
+              AND indexname = 'ix_workers_owner_email'
+            """,
+        )
+    )
+    assert int(owner_email_index_count) == 1
+
+    # 009: ``bootstrap_tokens`` table + partial index exist.
+    bootstrap_tokens_table_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'bootstrap_tokens'
+            """,
+        )
+    )
+    assert int(bootstrap_tokens_table_count) == 1
+    bootstrap_tokens_index_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_indexes
+            WHERE tablename = 'bootstrap_tokens'
+              AND indexname = 'ix_bootstrap_tokens_owner_email_active'
+            """,
+        )
+    )
+    assert int(bootstrap_tokens_index_count) == 1
+
+    # 010: ``funnel_url`` singleton table exists with the singleton check.
+    funnel_url_table_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'funnel_url'
+            """,
+        )
+    )
+    assert int(funnel_url_table_count) == 1
+    funnel_url_singleton_check = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.table_constraints
+            WHERE table_name = 'funnel_url'
+              AND constraint_name = 'funnel_url_singleton'
+              AND constraint_type = 'CHECK'
+            """,
+        )
+    )
+    assert int(funnel_url_singleton_check) == 1
+
+    # 011: ``whilly_notify_event`` plpgsql function + ``tr_events_notify``
+    # AFTER INSERT trigger on ``events`` exist.
+    notify_fn_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = 'whilly_notify_event'
+            """,
+        )
+    )
+    assert int(notify_fn_count) == 1
+    notify_trigger_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM pg_trigger t
+            JOIN pg_class c ON c.oid = t.tgrelid
+            WHERE c.relname = 'events'
+              AND t.tgname = 'tr_events_notify'
+              AND NOT t.tgisinternal
+            """,
+        )
+    )
+    assert int(notify_trigger_count) == 1
+
     # Confirm the whilly tables are present (sanity).
     tables = {
         row["table_name"]
@@ -181,12 +286,72 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events')
+                  AND table_name IN (
+                    'workers',
+                    'plans',
+                    'tasks',
+                    'events',
+                    'bootstrap_tokens',
+                    'funnel_url',
+                    'work_intents',
+                    'plan_origins',
+                    'repo_targets',
+                    'plan_repo_targets',
+                    'task_repo_targets',
+                    'control_state'
+                  )
                 """,
             )
         )
     }
-    assert tables == {"workers", "plans", "tasks", "events"}
+    assert tables == {
+        "workers",
+        "plans",
+        "tasks",
+        "events",
+        "bootstrap_tokens",
+        "funnel_url",
+        "work_intents",
+        "plan_origins",
+        "repo_targets",
+        "plan_repo_targets",
+        "task_repo_targets",
+        "control_state",
+    }
+
+    control_state_columns = [
+        row["column_name"]
+        for row in asyncio.run(
+            _fetchall(
+                empty_postgres_dsn,
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'control_state'
+                ORDER BY ordinal_position
+                """,
+            )
+        )
+    ]
+    assert control_state_columns == [
+        "id",
+        "paused",
+        "pause_reason",
+        "paused_by",
+        "paused_at",
+        "updated_at",
+    ]
+
+    verification_commands_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'plans' AND column_name = 'verification_commands'
+            """,
+        )
+    )
+    assert int(verification_commands_column_count) == 1
 
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
@@ -205,7 +370,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events')
+                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens', 'funnel_url', 'control_state')
                 """,
             )
         )
@@ -224,8 +389,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "007_plan_prd_file"
+    assert first_version == "015_plan_verification_commands"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "007_plan_prd_file"
+    assert second_version == "015_plan_verification_commands"

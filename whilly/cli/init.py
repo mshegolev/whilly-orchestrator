@@ -340,6 +340,16 @@ def run_init_command(
 
     try:
         payload = builder(prd_path=prd_path, plan_id=slug, model=args.model)
+        payload.setdefault(
+            "origin",
+            {
+                "system": "manual_prd",
+                "ref": slug,
+                "title": idea[:200],
+                "prd_file": str(prd_path),
+                "decomposition_mode": mode,
+            },
+        )
     except RuntimeError as exc:
         print(
             f"whilly init: task generation failed: {exc}\n"

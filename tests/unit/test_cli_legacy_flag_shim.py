@@ -29,20 +29,22 @@ What we cover here
 * ``whilly --resume`` and ``whilly --all`` exit 0 with a diagnostic
   (they have no v4 equivalent, but legacy scripts must not break).
 * New-style invocations (``whilly run ...``, ``whilly init ...``,
-  ``whilly worker connect ...``) route unchanged.
+  ``whilly worker connect ...``, ``whilly rollback ...``) route unchanged.
 * The shim does not interfere with ``whilly --help`` / ``whilly -V``.
 
 How we isolate
 --------------
 We patch the v4 subcommand entry points (``run_run_command``,
 ``run_init_command``, ``run_plan_command``, ``run_worker_command``,
-``run_register_command``, ``run_connect_command``, ``run_dashboard_command``)
+``run_register_command``, ``run_connect_command``, ``run_dashboard_command``,
+``run_rollback_command``)
 on :mod:`whilly.cli` so the shim's routing decision is observable
 without spinning up Postgres or invoking Claude.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Sequence
 
 import pytest
@@ -90,6 +92,8 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
         "register": _Spy(),
         "connect": _Spy(),
         "forge": _Spy(),
+        "rollback": _Spy(),
+        "jira": _Spy(),
     }
     # The dispatcher imports each handler lazily; inject the spies into
     # the source modules so the eventual ``from whilly.cli.run import
@@ -97,6 +101,8 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
     import whilly.cli.dashboard as cli_dashboard
     import whilly.cli.init as cli_init
     import whilly.cli.plan as cli_plan
+    import whilly.cli.jira as cli_jira
+    import whilly.cli.rollback as cli_rollback
     import whilly.cli.run as cli_run
     import whilly.cli.worker as cli_worker
     import whilly.forge.intake as forge_intake
@@ -109,6 +115,8 @@ def spies(monkeypatch: pytest.MonkeyPatch) -> dict[str, _Spy]:
     monkeypatch.setattr(cli_worker, "run_register_command", bag["register"])
     monkeypatch.setattr(cli_worker, "run_connect_command", bag["connect"])
     monkeypatch.setattr(forge_intake, "run_forge_command", bag["forge"])
+    monkeypatch.setattr(cli_rollback, "run_rollback_command", bag["rollback"])
+    monkeypatch.setattr(cli_jira, "run_jira_command", bag["jira"])
     return bag
 
 
@@ -155,6 +163,23 @@ class TestApplyLegacyShim:
     def test_tasks_without_path_returns_exit_2(self) -> None:
         """``whilly --tasks`` (no path) emits a clear diagnostic + exit 2."""
         new_args, exit_code = _apply_legacy_shim(["--tasks"])
+        assert new_args is None
+        assert exit_code == 2
+
+    def test_from_jira_routes_to_jira_import(self) -> None:
+        """``whilly --from-jira KEY`` -> ``whilly jira import KEY``."""
+        new_args, exit_code = _apply_legacy_shim(["--from-jira", "ABC-123"])
+        assert new_args == ["jira", "import", "ABC-123"]
+        assert exit_code is None
+
+    def test_from_jira_go_routes_to_jira_import_run(self) -> None:
+        """``--go`` remains accepted as the legacy one-shot run modifier."""
+        new_args, exit_code = _apply_legacy_shim(["--from-jira", "ABC-123", "--go", "--max-iterations", "1"])
+        assert new_args == ["jira", "import", "ABC-123", "--run", "--max-iterations", "1"]
+        assert exit_code is None
+
+    def test_from_jira_without_ref_returns_exit_2(self) -> None:
+        new_args, exit_code = _apply_legacy_shim(["--from-jira"])
         assert new_args is None
         assert exit_code == 2
 
@@ -266,6 +291,12 @@ class TestMainDispatchWithShim:
         assert spies["init"].calls == []
         assert spies["plan"].calls == []
 
+    def test_main_from_jira_go_routes_to_jira_import_run(self, spies: dict[str, _Spy]) -> None:
+        rc = main(["--from-jira", "ABC-123", "--go", "--max-iterations", "1"])
+        assert rc == 0
+        assert spies["jira"].calls == [["import", "ABC-123", "--run", "--max-iterations", "1"]]
+        assert spies["run"].calls == []
+
     # VAL-CROSS-BACKCOMPAT-009
     def test_main_headless_with_tasks_sets_env_and_routes(
         self, spies: dict[str, _Spy], monkeypatch: pytest.MonkeyPatch
@@ -358,6 +389,11 @@ class TestMainDispatchWithShim:
         assert rc == 0
         assert spies["plan"].calls == [["show", "p"]]
 
+    def test_main_new_style_rollback_preflight_dispatches_lazily(self, spies: dict[str, _Spy]) -> None:
+        rc = main(["rollback", "preflight", "push", "--json"])
+        assert rc == 0
+        assert spies["rollback"].calls == [["preflight", "push", "--json"]]
+
     def test_main_new_style_dashboard_unchanged(self, spies: dict[str, _Spy]) -> None:
         rc = main(["dashboard", "--once"])
         assert rc == 0
@@ -366,10 +402,13 @@ class TestMainDispatchWithShim:
     # ── Ensure --help / --version paths still work ──
 
     def test_main_dash_help_prints_v4_help(self, capsys: pytest.CaptureFixture[str]) -> None:
+        sys.modules.pop("whilly.cli.rollback", None)
         rc = main(["--help"])
         assert rc == 0
         out = capsys.readouterr().out
         assert "Whilly v4" in out
+        assert "rollback" in out
+        assert "whilly.cli.rollback" not in sys.modules
 
     def test_main_dash_version_prints_version(self, capsys: pytest.CaptureFixture[str]) -> None:
         rc = main(["--version"])
@@ -425,3 +464,4 @@ def test_shim_module_constants_are_frozensets() -> None:
     assert "--reset" in cli._LEGACY_VERB_FLAGS
     assert "--all" in cli._LEGACY_VERB_FLAGS
     assert "--headless" in cli._LEGACY_VERB_FLAGS
+    assert "--from-jira" in cli._LEGACY_VERB_FLAGS

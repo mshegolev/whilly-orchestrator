@@ -11,6 +11,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from whilly.core.task_id import validate_task_id
+
 log = logging.getLogger("whilly")
 
 PRIORITY_ORDER: dict[str, int] = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -52,12 +54,22 @@ class Task:
     github_url: str | None = None
     jira_key: str | None = None
     jira_url: str | None = None
+    repo_target_id: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> Task:
-        """Create Task from a JSON dict, ignoring unknown keys."""
+        """Create Task from a JSON dict, ignoring unknown keys.
+
+        ``id`` is validated at this surface (M1 VAL-SEC-023..026): every
+        downstream caller — agent dispatch, worktree paths, tmux session
+        names, branch names — interpolates the id into shell-meaningful
+        contexts, so a malformed id never gets to leave this method.
+        """
         known = {f.name for f in cls.__dataclass_fields__.values()}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        filtered = {k: v for k, v in data.items() if k in known}
+        if "id" in filtered:
+            validate_task_id(filtered["id"])
+        return cls(**filtered)
 
     def to_dict(self) -> dict:
         """Serialize back to a dict suitable for JSON."""
@@ -84,6 +96,8 @@ class Task:
             result["jira_key"] = self.jira_key
         if self.jira_url is not None:
             result["jira_url"] = self.jira_url
+        if self.repo_target_id:
+            result["repo_target_id"] = self.repo_target_id
 
         return result
 

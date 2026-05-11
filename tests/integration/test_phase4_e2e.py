@@ -463,23 +463,25 @@ async def test_phase4_e2e_events_table_has_claim_start_complete_per_task(
     assert rc == RUN_EXIT_OK, f"whilly run returned {rc}"
     capsys.readouterr()
 
+    expected_sequence = (Transition.CLAIM.value, Transition.START.value, Transition.COMPLETE.value)
     async with db_pool.acquire() as conn:
         # Filter out the import-time ``task.created`` audit events
         # written by the plan-import path (M3 fix-feature) — this test
-        # pins the worker-side state-machine transitions only.
+        # pins the worker-side state-machine transitions only, not the
+        # diagnostic LLM events recorded around the runner call.
         rows = await conn.fetch(
             "SELECT task_id, event_type, created_at, payload "
             "FROM events "
-            "WHERE task_id = ANY($1::text[]) AND event_type != 'task.created' "
+            "WHERE task_id = ANY($1::text[]) AND event_type = ANY($2::text[]) "
             "ORDER BY task_id, created_at, id",
             list(TASK_IDS),
+            list(expected_sequence),
         )
 
     by_task: dict[str, list[asyncpg.Record]] = {tid: [] for tid in TASK_IDS}
     for row in rows:
         by_task[row["task_id"]].append(row)
 
-    expected_sequence = (Transition.CLAIM.value, Transition.START.value, Transition.COMPLETE.value)
     for tid in TASK_IDS:
         events = by_task[tid]
         assert len(events) == 3, (

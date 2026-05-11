@@ -211,6 +211,29 @@ def test_worker_image_pip_list_excludes_control_plane_dists() -> None:
             "`'.[worker]'` (NOT `'.[server,worker]'`).\n"
             f"--- pip list (full) ---\n{run_proc.stdout}"
         )
+
+        # Runtime sibling of ``pip list``: the worker binary must
+        # actually start. The v4.4.0 fastapi-leak regression
+        # (fix-m1-whilly-worker-fastapi-leak) was caught at import-time —
+        # fastapi was missing from the [worker] extras *and* the entry
+        # closure pulled it in via whilly.adapters.transport.__init__
+        # eager re-exports. ``pip list`` proves the dist is absent;
+        # ``whilly-worker --help`` proves the entry closure does not
+        # *try* to import it.
+        help_proc = subprocess.run(  # noqa: S603 — fully literal argv
+            ["docker", "run", "--rm", "--entrypoint", "whilly-worker", tag, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=RUN_TIMEOUT_SECONDS,
+            check=False,
+        )
+        assert help_proc.returncode == 0, (
+            f"`docker run whilly-worker --help` exited {help_proc.returncode} "
+            "inside the worker image. This is the v4.4.0 fastapi-leak shape — "
+            "the worker entry closure must run with only the [worker] extras.\n"
+            f"stdout:\n{help_proc.stdout}\n"
+            f"stderr:\n{help_proc.stderr}\n"
+        )
     finally:
         # Best-effort cleanup. The image is small (~150MB) but accumulating
         # one per CI run is unfriendly. Errors are intentionally swallowed

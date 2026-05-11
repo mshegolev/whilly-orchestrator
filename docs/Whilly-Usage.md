@@ -36,7 +36,7 @@ whilly --from-github whilly:ready --go
 # One specific issue or Jira ticket
 whilly --from-issue owner/repo/42 --go           # slash form — shell-safe
 whilly --from-issue 'owner/repo#42' --go         # '#' form, quote in zsh/bash
-whilly --from-jira ABC-123 --go                  # single Jira ticket
+whilly jira import ABC-123 --run                 # single Jira ticket
 ```
 
 ## Task sources
@@ -45,11 +45,17 @@ whilly --from-jira ABC-123 --go                  # single Jira ticket
 |------|--------|-------|
 | `--from-github <label>` | GitHub issues by label | `all`/`*`/`-` = no filter |
 | `--from-issue <ref>` | one GitHub issue | `owner/repo/N`, `owner/repo#N`, or URL |
-| `--from-jira <key>` | one Jira ticket | `ABC-123` or browse URL; auth via `[jira]` |
+| `jira import <key>` | one Jira ticket | `ABC-123` or browse URL; auth via `[jira]`; legacy `--from-jira <key> --go` still works |
 | `--from-project <url>` | GitHub Projects v2 board | full board items |
 | `--from-issues-project <url> --repo o/r` | Projects board filtered by issue repo | |
 
 Every source writes to an idempotent plan file (`tasks-…json`); re-running refreshes description/priority/labels without losing status.
+
+For Jira, `whilly jira import` validates auth before fetching. If `JIRA_SERVER_URL`,
+`JIRA_USERNAME`, or `JIRA_API_TOKEN` is missing, an interactive terminal prompts
+for it. Missing PAT opens the Jira Cloud API token page; non-interactive runs
+print the exact variables and the same URL. Use `--no-interactive-config` to
+force instructions-only behavior.
 
 ## Lifecycle sync
 
@@ -98,11 +104,12 @@ Drives Jira transitions via REST v3. Uses `urllib` stdlib — no extra deps.
 ## Companion commands
 
 ```bash
+export PLAN_FILE=tasks.json                    # placeholder — your plan json path
 whilly --config show                           # merged config, secrets redacted
 whilly --config path                           # OS-native user config location
 whilly --config migrate                        # legacy .env → whilly.toml + keyring
 whilly --ensure-board-statuses                 # create missing Projects v2 columns
-whilly --post-merge <plan.json>                # after an out-of-band merge: flush cards/tickets to Done
+whilly --post-merge "$PLAN_FILE"               # after an out-of-band merge: flush cards/tickets to Done
 ```
 
 ## Inspecting task logs
@@ -121,9 +128,10 @@ Every plan run writes per-task artifacts under `whilly_logs/`:
 Three viewer subcommands sit in front of these files — no Rich, no extra deps:
 
 ```bash
-whilly logs --list                   # table: task_id, status, duration, cost, last event
-whilly logs <task-id>                # prompt + events timeline + stdout for one task
-whilly logs --tail <task-id>         # live follow (also -f); Ctrl-C to exit
+export TASK_ID=TASK-001               # placeholder — your task id
+whilly logs --list                    # table: task_id, status, duration, cost, last event
+whilly logs "$TASK_ID"                # prompt + events timeline + stdout for one task
+whilly logs --tail "$TASK_ID"         # live follow (also -f); Ctrl-C to exit
 ```
 
 `whilly logs` is a read-only viewer — it does not run the startup banner, does not
@@ -278,6 +286,15 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 | `WHILLY_TRACE_HTTP`               | `0`                    | Same as `--trace`: `ANTHROPIC_LOG=debug` + `tasks/http_trace.jsonl` (full bodies) |
 | `WHILLY_ORCHESTRATOR`             | `file`                 | `file` (key-files collisions) or `llm` (LLM batching) |
 | `WHILLY_VOICE`                    | `1`                    | macOS voice notifications |
+| `SLACK_ACCESS_TOKEN`              | *(unset)*              | Slack bot/user token; `whilly run` posts a summary to `WHILLY_SLACK_CHANNEL` when set (also accepts `WHILLY_SLACK_ACCESS_TOKEN`) |
+| `WHILLY_SLACK_CHANNEL`            | *(unset)* / demo default `C0B1WT58EBE` | Target channel id, e.g. `C0B1WT58EBE` — must be a channel the token's app/user is a member of |
+| `WHILLY_SLACK_ENABLED`            | `1`                    | Kill switch; setting to `0` skips Slack even when token + channel are set |
+| `WHILLY_SLACK_API_BASE_URL`       | `https://slack.com/api` | Override the API root (test stubs / on-prem proxies) |
+| `WHILLY_SLACK_TIMEOUT_S`          | `5.0`                  | HTTP timeout for `chat.postMessage` |
+| `WHILLY_SLACK_MESSAGE_TEMPLATE`   | *(see `whilly/config.py`)* | `str.format`-style template; placeholders match `RunCompletedEvent` fields plus `completed_at_iso` |
+| `WHILLY_SLACK_WEBHOOK_URL`        | *(unset)*              | Optional Incoming Webhook for per-task demo messages from workers; otherwise demo workers can use `SLACK_ACCESS_TOKEN` |
+| `WHILLY_SLACK_NOTIFY_EVENTS`      | `terminal`             | Demo webhook events: `terminal`, `started`, `all`, or `none` |
+| `WHILLY_PUBLIC_BASE_URL`          | `http://127.0.0.1:8000` | Base URL used in Slack links to `/llm-ops` |
 | `WHILLY_HEADLESS`                 | `0`                    | JSON stdout, no TUI (auto when stdout is not a TTY) |
 | `WHILLY_DECOMPOSE_EVERY`          | `5`                    | Re-plan oversized pending tasks every N iterations |
 | `WHILLY_AUTO_MERGE`               | `ask`                  | `ask` / `yes` / `claude` / `no` on plan completion |
@@ -287,6 +304,55 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 
 Every `WHILLY_*` variable corresponds to an equivalent `whilly.toml` field (same name, any case).
 See `whilly.example.toml` for the complete template.
+
+### Slack run-completed notifications
+
+`whilly run` posts one Slack message per invocation, summarising the
+plan id, worker id, hostname, and `WorkerStats` counters. The hook is
+in :mod:`whilly.cli.run`; the adapter is :mod:`whilly.adapters.notifications.slack`.
+
+Operator setup (one-time):
+
+1. Create a Slack app, add the `chat:write` scope, install it into the
+   target workspace.
+2. Either invite the bot to channel `C0B1WT58EBE` (or your own) or use
+   a user token whose owner is a member of that channel.
+3. Export the env vars:
+
+   ```bash
+   export SLACK_ACCESS_TOKEN=xoxb-...        # or xoxe.xoxp-... (rotated user)
+   export WHILLY_SLACK_CHANNEL=C0B1WT58EBE
+   ```
+
+The feature stays off when `SLACK_ACCESS_TOKEN` is empty
+(:func:`whilly.adapters.notifications.factory.make_notifier` returns a
+no-op `NullNotifier`). Slack outages and `chat.postMessage`
+`{"ok": false}` responses are logged at WARNING but never change the
+CLI exit code.
+
+### Slack per-task demo notifications
+
+Distributed demo workers can also post task-level messages. This path is
+intended for `workshop-demo.sh` and supports either an Incoming Webhook or
+a bot token:
+
+```bash
+export WHILLY_SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
+export WHILLY_SLACK_NOTIFY_EVENTS=all
+export WHILLY_PUBLIC_BASE_URL=http://127.0.0.1:8000
+bash workshop-demo.sh --cli opencode --workers 2 --keep-running
+```
+
+Each message includes task id, plan id, worker id, model, terminal status,
+and a `/llm-ops?task_id=...` link. Webhook failures are logged and ignored.
+Bot-token mode defaults to channel `C0B1WT58EBE`; override with
+`WHILLY_SLACK_CHANNEL` when needed.
+
+The summary text is a `str.format` template; override
+`WHILLY_SLACK_MESSAGE_TEMPLATE` to customise the message without
+touching code. Available placeholders match the
+:class:`whilly.core.notifications.RunCompletedEvent` fields plus
+`{completed_at_iso}`.
 
 ## Keyboard Shortcuts
 
@@ -338,6 +404,8 @@ whilly/
   reporter.py               JSON + Markdown cost reports
   decomposer.py             Task decomposition via LLM
   notifications.py          macOS voice alerts
+  core/notifications.py     RunCompletedEvent + NotificationPort (pure)
+  adapters/notifications/   Slack + Null impls; `make_notifier(cfg)` factory
   sources/                  Input adapters (GitHub Issues, Project v2, unified)
   sinks/                    Output adapters (PR creation, etc.)
   agents/                   Pluggable backends (claude, opencode)

@@ -124,27 +124,45 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import os
 import socket
+import subprocess
 import sys
 import uuid
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
-from whilly.adapters.runner import run_task
+from whilly.adapters.runner.claude_cli import run_task
 from whilly.adapters.transport.client import RemoteWorkerClient
-from whilly.core.models import Plan, WorkerId
-from whilly.worker import (
+from whilly.ci.github import GitHubCIPollAdapter
+from whilly.ci.models import CI_VERIFICATION_SOURCE
+from whilly.core.models import Plan, Task, WorkerId
+from whilly.pipeline.verification import resolve_verification_specs, run_verification_commands
+from whilly.worker.funnel import (
+    FUNNEL_URL_FILE_ENV,
+    FUNNEL_URL_POLL_SECONDS_ENV,
+    FUNNEL_URL_SOURCE_ENV,
+    FunnelUrlSourceError,
+    StaticUrlSource,
+    make_funnel_url_source,
+)
+from whilly.worker.remote import (
     DEFAULT_HEARTBEAT_INTERVAL,
+    RemoteVerificationRunnerCallable,
     RemoteRunnerCallable,
     RemoteWorkerStats,
+    RotationStats,
     run_remote_worker_with_heartbeat,
+    run_remote_worker_with_url_rotation,
 )
 
 __all__ = [
+    "BIG_PICKLE_HEALTHCHECK_ENV",
     "BOOTSTRAP_TOKEN_ENV",
     "CONTROL_URL_ENV",
     "EXIT_CONNECT_ERROR",
@@ -158,6 +176,7 @@ __all__ = [
     "build_connect_parser",
     "build_register_parser",
     "build_worker_parser",
+    "check_opencode_big_pickle_availability",
     "check_opencode_groq_credentials",
     "classify_control_url",
     "main",
@@ -184,6 +203,18 @@ WORKER_ID_ENV: Final[str] = "WHILLY_WORKER_ID"
 #: ``whilly worker register`` subcommand reads the same value the
 #: control plane writes (single source of truth for the env name).
 BOOTSTRAP_TOKEN_ENV: Final[str] = "WHILLY_WORKER_BOOTSTRAP_TOKEN"
+
+#: Opt-in flag for the OpenCode Zen ``opencode/big-pickle`` availability
+#: probe (misc-m1-big-pickle-sunset-watch). Default OFF so a fresh
+#: worker boot doesn't pay the ~10s subprocess timeout when the
+#: operator doesn't care; ops / CI scripts that DO care set it to
+#: exactly ``"1"``. Any other value (including ``"true"``, ``"yes"``,
+#: ``""``) leaves the probe inactive — the strict literal match keeps
+#: the toggle unambiguous and matches the existing
+#: ``WHILLY_USE_TMUX=1`` / ``WHILLY_USE_WORKSPACE=1`` style.
+BIG_PICKLE_HEALTHCHECK_ENV: Final[str] = "WHILLY_BIG_PICKLE_HEALTHCHECK"
+
+_VERIFICATION_ENV_ALLOWLIST: Final[tuple[str, ...]] = ("PATH", "HOME", "PYTHONPATH", "VIRTUAL_ENV")
 
 # Exit codes — kept aligned with :mod:`whilly.cli.run` so callers comparing
 # against the v4 CLI never see numbering drift between subcommands.
@@ -327,6 +358,28 @@ def enforce_scheme_guard(url: str, *, insecure: bool) -> tuple[str, str, int]:
     return scheme, host, port
 
 
+_INSECURE_WARNING_EMITTED: bool = False
+
+
+def _warn_insecure_once(prefix: str, host: str) -> None:
+    """Emit the plain-HTTP-to-non-loopback warning at most once per process.
+
+    Both worker entry points (legacy ``whilly-worker --connect`` and the
+    ``whilly worker connect`` subcommand) share a single module-level
+    latch so two consecutive invocations in the same Python process
+    produce exactly one warning line on stderr (VAL-M2-WORKER-INSECURE-007
+    / VAL-M2-WORKER-INSECURE-901).
+    """
+    global _INSECURE_WARNING_EMITTED
+    if _INSECURE_WARNING_EMITTED:
+        return
+    print(
+        f"{prefix}: warning — using plain HTTP to non-loopback host {host!r} (--insecure). Prefer HTTPS in production.",
+        file=sys.stderr,
+    )
+    _INSECURE_WARNING_EMITTED = True
+
+
 def build_worker_parser() -> argparse.ArgumentParser:
     """Build the ``whilly-worker ...`` argparse tree.
 
@@ -416,6 +469,30 @@ def build_worker_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--verify-command",
+        dest="verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run a required verification command after an agent reports completion; "
+            "repeatable. A non-zero exit marks the task FAILED."
+        ),
+    )
+    parser.add_argument(
+        "--optional-verify-command",
+        dest="optional_verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run an optional verification command after completion; repeatable. "
+            "Failures are recorded as warnings and do not block DONE."
+        ),
+    )
+    parser.add_argument(
         "--insecure",
         dest="insecure",
         action="store_true",
@@ -426,7 +503,53 @@ def build_worker_parser() -> argparse.ArgumentParser:
             "warning to stderr when set."
         ),
     )
+    parser.add_argument(
+        "--funnel-source",
+        dest="funnel_source",
+        default=None,
+        choices=("static", "postgres", "file"),
+        help=(
+            "M2 funnel-URL discovery mode (env: "
+            f"{FUNNEL_URL_SOURCE_ENV}). 'static' (default — back-compat) "
+            "uses --connect verbatim with no polling. 'postgres' polls the "
+            "funnel_url table via WHILLY_DATABASE_URL. 'file' polls the "
+            "shared-volume file at WHILLY_FUNNEL_URL_FILE (default "
+            "/funnel/url.txt). On URL rotation the worker releases any "
+            "in-flight task and reconnects against the new URL while "
+            "preserving its existing worker_id and bearer."
+        ),
+    )
+    parser.add_argument(
+        "--funnel-file",
+        dest="funnel_file",
+        default=None,
+        help=(
+            f"Shared-volume file the funnel sidecar publishes to (env: "
+            f"{FUNNEL_URL_FILE_ENV}). Used when --funnel-source=file. "
+            "Defaults to /funnel/url.txt."
+        ),
+    )
+    parser.add_argument(
+        "--funnel-poll-seconds",
+        dest="funnel_poll_seconds",
+        type=float,
+        default=None,
+        help=(
+            f"Poll cadence (seconds) for the chosen funnel source (env: "
+            f"{FUNNEL_URL_POLL_SECONDS_ENV}). Defaults: 30 for postgres, "
+            "5 for file."
+        ),
+    )
     return parser
+
+
+def _verification_command_arg(value: str) -> str:
+    """Validate a ``NAME=COMMAND`` verification flag while preserving its string value."""
+
+    name, sep, command = value.partition("=")
+    if not sep or not name.strip() or not command.strip():
+        raise argparse.ArgumentTypeError("expected NAME=COMMAND")
+    return value
 
 
 def run_worker_command(
@@ -464,6 +587,16 @@ def run_worker_command(
     parser = build_worker_parser()
     args = parser.parse_args(list(argv))
 
+    # Optional one-shot OpenCode Zen Big Pickle availability probe
+    # (misc-m1-big-pickle-sunset-watch). Gated behind
+    # ``WHILLY_BIG_PICKLE_HEALTHCHECK=1`` so it's a no-op for users
+    # who don't care; when enabled, a 401/403 from the free-tier
+    # endpoint emits a clear multi-line warning with the three
+    # documented escape hatches but does NOT abort the worker boot.
+    big_pickle_warning = check_opencode_big_pickle_availability()
+    if big_pickle_warning is not None:
+        print(big_pickle_warning, file=sys.stderr, end="")
+
     # CLI flag > env > error. The hand-rolled validation lets us produce
     # one diagnostic per missing input that names the env var, instead of
     # argparse's "the following arguments are required" message that hides
@@ -477,21 +610,42 @@ def run_worker_command(
         )
         return EXIT_ENVIRONMENT_ERROR
 
-    token = args.token or os.environ.get(WORKER_TOKEN_ENV)
-    if not token:
-        print(
-            f"whilly-worker: --token is required (or set {WORKER_TOKEN_ENV}). "
-            "This is the per-worker bearer issued at registration; "
-            "the bootstrap secret is for `whilly-worker register` only.",
-            file=sys.stderr,
-        )
-        return EXIT_ENVIRONMENT_ERROR
-
     plan_id = args.plan_id or os.environ.get(PLAN_ID_ENV)
     if not plan_id:
         print(
             f"whilly-worker: --plan is required (or set {PLAN_ID_ENV}). "
             "This is the plan id imported via `whilly plan import`.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    token = args.token or os.environ.get(WORKER_TOKEN_ENV)
+    if not token:
+        # Keyring-resume read path (M2, VAL-M1-DEMO-009): when neither
+        # ``--token`` nor ``WHILLY_WORKER_TOKEN`` is provided, fall back
+        # to a bearer previously stored by ``whilly worker connect``
+        # (or any other caller of ``store_worker_credential``). Lookup
+        # is keyed by the canonical control URL; ``plan_id`` is passed
+        # through for forward-compatibility with future per-plan scoping.
+        # Any storage-backend error is treated as "no token" so the
+        # canonical diagnostic below covers all "operator forgot to
+        # provide a bearer" cases, not just the env/flag branches.
+        try:
+            from whilly.secrets import fetch_worker_credential
+
+            token = fetch_worker_credential(connect_url, plan_id)
+        except Exception as exc:
+            logger.warning(
+                "whilly-worker: keychain lookup failed for %s: %s",
+                connect_url,
+                exc,
+            )
+            token = None
+    if not token:
+        print(
+            "whilly-worker: no token: pass --token, set "
+            f"{WORKER_TOKEN_ENV}, or run `whilly worker connect` to "
+            "store one in the keychain.",
             file=sys.stderr,
         )
         return EXIT_ENVIRONMENT_ERROR
@@ -507,11 +661,7 @@ def run_worker_command(
         print(f"whilly-worker: {exc}", file=sys.stderr)
         return EXIT_CONNECT_ERROR
     if args.insecure and scheme == "http" and not _is_loopback_host(host):
-        print(
-            f"whilly-worker: warning — using plain HTTP to non-loopback host {host!r} "
-            "(--insecure). Prefer HTTPS in production.",
-            file=sys.stderr,
-        )
+        _warn_insecure_once("whilly-worker", host)
 
     worker_id = _resolve_worker_id(args.worker_id)
     effective_runner: RemoteRunnerCallable = runner if runner is not None else run_task
@@ -521,19 +671,34 @@ def run_worker_command(
     # can be set, the first to fire wins (the loop honours either).
     max_processed = 1 if args.once else None
 
-    stats = asyncio.run(
-        _async_worker(
-            connect_url=connect_url,
-            token=token,
-            plan_id=plan_id,
-            worker_id=worker_id,
-            runner=effective_runner,
-            heartbeat_interval=heartbeat_interval,
-            max_iterations=args.max_iterations,
-            max_processed=max_processed,
-            install_signal_handlers=install_signal_handlers,
+    funnel_env_overrides: dict[str, str] = {}
+    if args.funnel_source is not None:
+        funnel_env_overrides[FUNNEL_URL_SOURCE_ENV] = args.funnel_source
+    if args.funnel_file is not None:
+        funnel_env_overrides[FUNNEL_URL_FILE_ENV] = args.funnel_file
+    if args.funnel_poll_seconds is not None:
+        funnel_env_overrides[FUNNEL_URL_POLL_SECONDS_ENV] = str(args.funnel_poll_seconds)
+
+    try:
+        stats = asyncio.run(
+            _async_worker(
+                connect_url=connect_url,
+                token=token,
+                plan_id=plan_id,
+                worker_id=worker_id,
+                runner=effective_runner,
+                heartbeat_interval=heartbeat_interval,
+                max_iterations=args.max_iterations,
+                max_processed=max_processed,
+                install_signal_handlers=install_signal_handlers,
+                funnel_env=funnel_env_overrides,
+                verify_commands=args.verify_commands,
+                optional_verify_commands=args.optional_verify_commands,
+            )
         )
-    )
+    except FunnelUrlSourceError as exc:
+        print(f"whilly-worker: {exc}", file=sys.stderr)
+        return EXIT_ENVIRONMENT_ERROR
 
     print(
         (
@@ -583,43 +748,149 @@ async def _async_worker(
     max_iterations: int | None,
     max_processed: int | None,
     install_signal_handlers: bool,
+    funnel_env: dict[str, str] | None = None,
+    verify_commands: Sequence[str] = (),
+    optional_verify_commands: Sequence[str] = (),
 ) -> RemoteWorkerStats:
     """Open the HTTP client, build a synthetic Plan, run the loop.
 
-    The ``async with`` over :class:`RemoteWorkerClient` is the only
-    side-effect surface — the loop owns connection lifecycle, signal
-    handler installation, and TaskGroup unwinding. We don't catch
-    anything: an :class:`AuthError` (bad token), a :class:`ServerError`
-    (control plane down), or any other transport failure surfaces as a
-    traceback so the supervisor (Kubernetes, systemd, tmux) knows the
-    pod failed and restart policies kick in. Mapping these onto exit
-    codes here would conflate "the env was wrong" (already returned 2
-    from the sync wrapper) with "the cluster is broken", and operator
-    triage would lose the typed exception information.
+    When ``WHILLY_FUNNEL_URL_SOURCE`` (or its ``--funnel-source``
+    override) selects a non-static discovery mode, the loop runs
+    inside :func:`run_remote_worker_with_url_rotation` so a
+    funnel-side URL change is absorbed transparently — the worker
+    releases any in-flight task, closes the previous client, opens a
+    new one against the new URL, and resumes. The same ``worker_id``
+    and bearer are reused across rotations, so the control plane
+    sees a single identity reconnecting (no duplicate-worker error).
+    With the v6.0 paid-plan funnel the URL is constant across
+    reconnects, so steady-state operation effectively short-circuits
+    this branch.
 
-    The synthetic ``Plan(id=plan_id, name=plan_id)`` is documented in the
-    module docstring — the worker doesn't need the full task list and the
-    server has no ``GET /plans/{id}`` today.
+    Static mode behaves byte-equivalently to the v4.4 baseline: one
+    :class:`RemoteWorkerClient` for the lifetime of the loop, no
+    polling, no rotation supervisor.
+
+    Static mode fetches plan metadata once before the worker loop. Rotation
+    mode fetches it once per freshly opened client session so profile-native
+    verification commands follow the active control-plane connection.
     """
-    plan = Plan(id=plan_id, name=plan_id)
-    async with RemoteWorkerClient(connect_url, token) as client:
-        logger.info(
-            "whilly-worker: connecting to %s as worker_id=%s plan_id=%s once=%s",
-            connect_url,
-            worker_id,
-            plan_id,
-            max_processed == 1,
-        )
-        return await run_remote_worker_with_heartbeat(
-            client,
-            runner,
+
+    merged_env: dict[str, str] = dict(os.environ)
+    if funnel_env:
+        merged_env.update(funnel_env)
+    source = make_funnel_url_source(control_url=connect_url, env=merged_env)
+
+    if isinstance(source, StaticUrlSource):
+        # Back-compat path: byte-equivalent to v4.4.
+        try:
+            async with RemoteWorkerClient(connect_url, token) as client:
+                plan = await client.get_plan(plan_id)
+                verification_runner = _build_verification_runner(
+                    plan,
+                    verify_commands=verify_commands,
+                    optional_verify_commands=optional_verify_commands,
+                )
+                logger.info(
+                    "whilly-worker: connecting to %s as worker_id=%s plan_id=%s once=%s",
+                    connect_url,
+                    worker_id,
+                    plan_id,
+                    max_processed == 1,
+                )
+                return await run_remote_worker_with_heartbeat(
+                    client,
+                    runner,
+                    plan,
+                    worker_id,
+                    heartbeat_interval=heartbeat_interval,
+                    max_iterations=max_iterations,
+                    max_processed=max_processed,
+                    install_signal_handlers=install_signal_handlers,
+                    verification_runner=verification_runner,
+                )
+        finally:
+            await source.aclose()
+
+    logger.info(
+        "whilly-worker: URL-rotation mode (source=%s, poll=%ss); seed url=%s worker_id=%s plan_id=%s",
+        merged_env.get(FUNNEL_URL_SOURCE_ENV, "static"),
+        source.poll_interval,
+        connect_url,
+        worker_id,
+        plan_id,
+    )
+
+    initial = await source.fetch()
+    initial_url = initial or connect_url
+
+    @contextlib.asynccontextmanager
+    async def _client_factory(url: str) -> AsyncIterator[RemoteWorkerClient]:
+        async with RemoteWorkerClient(url, token) as client:
+            yield client
+
+    async def _session_context_factory(
+        client: RemoteWorkerClient,
+    ) -> tuple[Plan, RemoteVerificationRunnerCallable | None]:
+        plan = await client.get_plan(plan_id)
+        return plan, _build_verification_runner(
             plan,
+            verify_commands=verify_commands,
+            optional_verify_commands=optional_verify_commands,
+        )
+
+    try:
+        rotation_stats: RotationStats = await run_remote_worker_with_url_rotation(
+            _client_factory,
+            runner,
+            Plan(id=plan_id, name=plan_id),
             worker_id,
+            initial_url,
+            source,
             heartbeat_interval=heartbeat_interval,
             max_iterations=max_iterations,
             max_processed=max_processed,
             install_signal_handlers=install_signal_handlers,
+            session_context_factory=_session_context_factory,
         )
+    finally:
+        await source.aclose()
+
+    logger.info(
+        "whilly-worker: rotation supervisor finished — sessions=%d rotations=%d",
+        rotation_stats.inner_runs,
+        rotation_stats.url_rotations,
+    )
+    return rotation_stats.stats
+
+
+def _build_verification_runner(
+    plan: Plan,
+    *,
+    verify_commands: Sequence[str],
+    optional_verify_commands: Sequence[str],
+) -> RemoteVerificationRunnerCallable | None:
+    """Build the remote verification runner from profile and explicit CLI commands."""
+
+    verification_specs = resolve_verification_specs(
+        profile_commands=plan.verification_commands,
+        required_cli=verify_commands,
+        optional_cli=optional_verify_commands,
+    )
+    if not verification_specs:
+        return None
+    ci_poll_runner = (
+        GitHubCIPollAdapter() if any(spec.source == CI_VERIFICATION_SOURCE for spec in verification_specs) else None
+    )
+
+    async def verification_runner(_task: Task):
+        return await run_verification_commands(
+            verification_specs,
+            cwd=Path.cwd(),
+            env_allowlist=_VERIFICATION_ENV_ALLOWLIST,
+            ci_poll_runner=ci_poll_runner,
+        )
+
+    return verification_runner
 
 
 def build_register_parser() -> argparse.ArgumentParser:
@@ -881,59 +1152,178 @@ def build_connect_parser() -> argparse.ArgumentParser:
 
 
 def check_opencode_groq_credentials() -> str | None:
-    """Return a single-line error message if opencode+groq is selected but ``GROQ_API_KEY`` is missing.
+    """Return a single-line error message if the operator opted into the
+    explicit groq path (``WHILLY_MODEL=groq/...``) but ``GROQ_API_KEY`` is missing.
 
-    Returns ``None`` on success (env is fine, or the operator opted out
-    of the groq path via ``WHILLY_MODEL=<other-provider>/<model>``).
+    Returns ``None`` on success (env is fine, or the operator did not opt
+    into the groq path).
 
-    Default since v4.4 (feature m1-opencode-groq-default): the worker
-    container ships with ``WHILLY_CLI=opencode`` and
-    ``WHILLY_MODEL=groq/openai/gpt-oss-120b`` (free-tier on Groq,
-    ~14k req/day). Without ``GROQ_API_KEY`` set, ``opencode run`` would
-    fail at the first agent invocation with a confusing 401 from the
-    provider — far worse for new operators than a single-line, up-front
-    diagnostic that names the env var, points at the free console, and
-    documents the WHILLY_MODEL escape hatch.
+    Default since v4.4.2 (feature m1-opencode-big-pickle-default): the
+    worker container ships with ``WHILLY_CLI=opencode`` and
+    ``WHILLY_MODEL=opencode/big-pickle`` — OpenCode Zen's anonymous
+    free-tier model, requiring NO credential. Empty / unset
+    ``WHILLY_MODEL`` therefore no longer routes through Groq, so the
+    guard must NOT fire on an empty value (zero-key onboarding).
 
     The check is intentionally narrow:
 
     * ``WHILLY_CLI`` must be exactly ``opencode`` (case-insensitive,
       whitespace-stripped). Any other CLI selector (or empty/unset)
       returns ``None`` because GROQ_API_KEY is not their concern.
-    * ``WHILLY_MODEL`` must be empty (defaults to groq) or start with
-      the literal ``groq/`` prefix. Operators who explicitly set a
-      non-groq provider (``anthropic/claude-...``, ``openai/gpt-4o``,
-      etc.) bypass the check.
+    * ``WHILLY_MODEL`` must start with the literal ``groq/`` prefix —
+      i.e. the operator explicitly opted into Groq. Empty value (the
+      v4.4.2 default → big-pickle) and any other provider
+      (``anthropic/claude-...``, ``openai/gpt-4o``, …) bypass the check.
     * ``GROQ_API_KEY`` is empty / whitespace-only / unset.
 
     The returned message is a single line so docker-compose / CI
     grep-style assertions can match it without regex acrobatics
-    (VAL-M1-AGENT-DEFAULT-003).
+    (VAL-M1-AGENT-DEFAULT-002).
     """
     cli = (os.environ.get("WHILLY_CLI") or "").strip().lower()
     if cli != "opencode":
         return None
     model = (os.environ.get("WHILLY_MODEL") or "").strip()
     # Empty WHILLY_MODEL → opencode backend resolves to DEFAULT_MODEL,
-    # which is groq/openai/gpt-oss-120b since v4.4. So an unset value
-    # also routes through Groq and needs the API key.
-    if model == "":
-        is_groq = True
-    else:
-        # provider/... (or provider/sub/...) form. Bare ids without a
-        # slash never auto-prefix to ``groq/`` (see _PROVIDER_BY_PREFIX
-        # in whilly.agents.opencode), so they cannot reach Groq.
-        is_groq = "/" in model and model.split("/", 1)[0].lower() == "groq"
+    # which is opencode/big-pickle since v4.4.2 (zero-key onboarding).
+    # Empty value MUST NOT trigger the groq guard.
+    if not model:
+        return None
+    # provider/... (or provider/sub/...) form. Bare ids without a slash
+    # never auto-prefix to ``groq/`` (see _PROVIDER_BY_PREFIX in
+    # whilly.agents.opencode), so they cannot reach Groq.
+    is_groq = "/" in model and model.split("/", 1)[0].lower() == "groq"
     if not is_groq:
         return None
     api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
     if api_key:
         return None
     return (
-        "whilly worker: GROQ_API_KEY is required when WHILLY_CLI=opencode "
-        "(or set WHILLY_MODEL to a non-groq provider). "
+        "whilly worker: GROQ_API_KEY is required when WHILLY_MODEL=groq/... "
+        "(or unset WHILLY_MODEL to use the zero-key opencode/big-pickle default). "
         "See https://console.groq.com to obtain a free key."
     )
+
+
+_BIG_PICKLE_PROBE_CMD: Final[tuple[str, ...]] = (
+    "opencode",
+    "run",
+    "--format",
+    "json",
+    "--model",
+    "opencode/big-pickle",
+    "ping",
+)
+_BIG_PICKLE_PROBE_TIMEOUT_SECONDS: Final[float] = 10.0
+
+_BIG_PICKLE_AUTH_FAILURE_MARKERS: Final[tuple[str, ...]] = (
+    "401",
+    "403",
+    "unauthorized",
+    "api key required",
+    "requires api key",
+    "requires an api key",
+    "provide an api key",
+    "api key is required",
+    "missing api key",
+    "no api key",
+)
+
+_BIG_PICKLE_SUNSET_WARNING: Final[str] = (
+    "whilly worker: WARNING — opencode/big-pickle availability probe failed with auth error.\n"
+    "OpenCode Zen documents Big Pickle as free 'for a limited time'; a 401/403/'API key\n"
+    "required' response means the free tier likely sunset. The worker will keep running,\n"
+    "but every agent run that targets opencode/big-pickle will fail.\n"
+    "\n"
+    "Pick one of these escape hatches and re-launch the worker:\n"
+    "\n"
+    "  1) Groq (free tier, ~14k req/day — https://console.groq.com):\n"
+    "       export GROQ_API_KEY=gsk_...\n"
+    "       export WHILLY_MODEL=groq/openai/gpt-oss-120b\n"
+    "\n"
+    "  2) Anthropic Claude (https://console.anthropic.com):\n"
+    "       export ANTHROPIC_API_KEY=sk-ant-...\n"
+    "       export WHILLY_MODEL=anthropic/claude-opus-4-6\n"
+    "\n"
+    "  3) OpenAI (https://platform.openai.com):\n"
+    "       export OPENAI_API_KEY=sk-...\n"
+    "       export WHILLY_MODEL=openai/gpt-4o-mini\n"
+    "\n"
+    f"To silence this probe, unset {BIG_PICKLE_HEALTHCHECK_ENV}.\n"
+)
+
+
+def _big_pickle_probe_indicates_auth_failure(stdout: str, stderr: str) -> bool:
+    """Return True iff the probe output looks like an auth-tier failure.
+
+    Token-based heuristic over both streams (case-insensitive). Pure
+    function — no env, no I/O — so the unit test can drive every
+    fixture through it without subprocess plumbing.
+    """
+    haystack = f"{stdout}\n{stderr}".lower()
+    return any(marker in haystack for marker in _BIG_PICKLE_AUTH_FAILURE_MARKERS)
+
+
+def check_opencode_big_pickle_availability() -> str | None:
+    """Probe OpenCode Zen's ``opencode/big-pickle`` and return a sunset warning on auth failure.
+
+    Forward-compatibility safety net for the v4.4.2 zero-key default
+    (misc-m1-big-pickle-sunset-watch). When OpenCode Zen flips
+    ``opencode/big-pickle`` from "free, anonymous" to "requires API
+    key", every fresh worker that ships with the v4.4.2 default will
+    silently fail at the FIRST agent run with an unhelpful provider
+    401. This helper detects the flip at worker startup and emits a
+    clear multi-line warning naming the three documented escape
+    hatches with copy-paste-ready ``WHILLY_MODEL=...`` lines.
+
+    Behaviour
+    ---------
+    * Gated behind ``WHILLY_BIG_PICKLE_HEALTHCHECK`` (must equal the
+      literal string ``"1"`` after stripping whitespace; any other
+      value leaves the helper inactive). Default OFF — operators who
+      don't care don't pay the ~10s probe cost on every worker boot.
+    * When active, runs ``opencode run --format json --model
+      opencode/big-pickle 'ping'`` with a 10-second wall-clock timeout
+      under :func:`subprocess.run`.
+    * Healthy probe (return code 0, no auth-failure markers in
+      stdout/stderr) → returns ``None``.
+    * Auth-failure probe (any of ``401`` / ``403`` / ``"API key
+      required"`` / ``"unauthorized"`` markers in stdout or stderr) →
+      returns the multi-line warning string (caller writes it to
+      stderr; the worker DOES NOT exit).
+    * Probe execution failure (``opencode`` not on ``PATH``,
+      subprocess timeout, any other ``OSError``) → returns ``None``.
+      The helper is a safety net, not a hard gate; falsely warning a
+      user whose laptop happens to be offline would be worse than the
+      occasional missed sunset alert (the weekly CI workflow at
+      ``.github/workflows/big-pickle-health.yml`` is the actual
+      early-warning system).
+
+    Why a separate helper, not folded into ``check_opencode_groq_credentials``?
+        The groq guard is a *config* check — it inspects ``os.environ``
+        only, runs in microseconds, and is unconditionally invoked at
+        the top of ``run_connect_command``. This helper performs a
+        ~seconds-scale subprocess probe and MUST stay opt-in; sharing
+        a function would force operators who don't care about Big
+        Pickle to either disable it explicitly or eat the latency.
+    """
+    flag = (os.environ.get(BIG_PICKLE_HEALTHCHECK_ENV) or "").strip()
+    if flag != "1":
+        return None
+    try:
+        result = subprocess.run(
+            list(_BIG_PICKLE_PROBE_CMD),
+            capture_output=True,
+            text=True,
+            timeout=_BIG_PICKLE_PROBE_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not _big_pickle_probe_indicates_auth_failure(result.stdout or "", result.stderr or ""):
+        return None
+    return _BIG_PICKLE_SUNSET_WARNING
 
 
 def run_connect_command(argv: Sequence[str]) -> int:
@@ -989,11 +1379,13 @@ def run_connect_command(argv: Sequence[str]) -> int:
     parser = build_connect_parser()
     args = parser.parse_args(connect_argv)
 
-    # ── 0. Fail fast on missing GROQ_API_KEY when opencode+groq is selected ──
-    # Default since v4.4 (m1-opencode-groq-default): the worker uses
-    # opencode + groq/openai/gpt-oss-120b. Catch the missing-key case
+    # ── 0. Fail fast on missing GROQ_API_KEY when explicit groq is selected ──
+    # Default since v4.4.2 (m1-opencode-big-pickle-default): the worker
+    # uses opencode + opencode/big-pickle (zero-key path), so the guard
+    # is a no-op for empty/unset WHILLY_MODEL. When the operator opts
+    # into Groq via WHILLY_MODEL=groq/..., catch the missing-key case
     # BEFORE any HTTP call so docker compose smoke tests get a clean
-    # single-line diagnostic on stderr (VAL-M1-AGENT-DEFAULT-003), and
+    # single-line diagnostic on stderr (VAL-M1-AGENT-DEFAULT-002), and
     # never appear to "register but never claim" because the agent run
     # itself died at the first task with a provider 401.
     groq_err = check_opencode_groq_credentials()
@@ -1008,11 +1400,7 @@ def run_connect_command(argv: Sequence[str]) -> int:
         print(f"whilly worker connect: {exc}", file=sys.stderr)
         return EXIT_CONNECT_ERROR
     if args.insecure and scheme == "http" and not _is_loopback_host(host):
-        print(
-            f"whilly worker connect: warning — using plain HTTP to non-loopback host {host!r} "
-            "(--insecure). Prefer HTTPS in production.",
-            file=sys.stderr,
-        )
+        _warn_insecure_once("whilly worker connect", host)
 
     # ── 2. Plan id is required (no env-var fallback for this surface). ──
     plan_id_raw = args.plan_id

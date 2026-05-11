@@ -81,8 +81,69 @@ from typing import Final
 
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
 from whilly.adapters.runner.result_parser import AgentResult
+from whilly.ci.events import make_ci_poll_result_event, make_ci_poll_started_event
+from whilly.core.agent_runner import (
+    SECRET_LINT_BLOCKED_EVENT_TYPE,
+    SECRET_LINT_FAIL_REASON,
+    SHELL_COMMAND_BLOCKED_EVENT_TYPE,
+    SHELL_COMMAND_FAIL_REASON,
+    scan_task_command_surface,
+    scan_task_secret_surface,
+)
 from whilly.core.models import Plan, Task, WorkerId
-from whilly.core.prompts import build_task_prompt
+from whilly.core.prompts import (
+    PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
+    PROMPT_INJECTION_FAIL_REASON,
+    PromptInjectionBlocked,
+    build_task_prompt,
+)
+from whilly.llm_ops import (
+    LLM_RUN_CANCELLED_EVENT_TYPE,
+    LLM_RUN_FAILED_EVENT_TYPE,
+    LLM_RUN_FINISHED_EVENT_TYPE,
+    LLM_RUN_STARTED_EVENT_TYPE,
+    LLMOpsSession,
+    finish_llm_session,
+    session_event_detail,
+    session_event_payload,
+    start_llm_session,
+)
+from whilly.pipeline.events import (
+    PipelineTaskEvent,
+    make_stage_failed_event,
+    make_stage_started_event,
+    make_stage_succeeded_event,
+    stage_context_from_task,
+)
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_REQUIRED_RELEASE_REASON,
+    build_human_review_checkpoint,
+    is_human_review_approved,
+    make_human_review_required_event,
+)
+from whilly.pipeline.verification import (
+    VERIFICATION_FAILED_EVENT,
+    VerificationRunOutcome,
+    make_verification_result_event,
+    make_verification_started_event,
+)
+from whilly.repair.events import (
+    REPAIR_ATTEMPT_REQUESTED_EVENT,
+    make_repair_attempt_completed_event,
+    make_repair_attempt_requested_event,
+    make_repair_escalated_event,
+)
+from whilly.repair.models import RepairBudget, RepairTrigger
+from whilly.repair.policy import (
+    REPAIR_ACTION_ESCALATE,
+    REPAIR_ACTION_REQUEST,
+    current_repair_attempt,
+    decide_repair,
+    parse_repair_attempt,
+)
+from whilly.repair.tasks import build_repair_task
+from whilly.security.secret_lint import redact_secrets
+from whilly.slack_task_notify import notify_slack_task_started, notify_slack_task_terminal
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +164,8 @@ _FAIL_REASON_OUTPUT_CAP: Final[int] = 500
 # backoff_schedule fall back to defaults — passing ``run_task`` directly
 # satisfies the alias without an adapter wrapper.
 RunnerCallable = Callable[[Task, str], Awaitable[AgentResult]]
+
+VerificationRunnerCallable = Callable[[Task], Awaitable[VerificationRunOutcome]]
 
 
 @dataclass(frozen=True)
@@ -169,12 +232,218 @@ def _build_fail_reason(result: AgentResult) -> str:
     return f"exit_code={result.exit_code}"
 
 
+async def _record_llm_event(
+    repo: TaskRepository,
+    session: LLMOpsSession,
+    event_type: str,
+    payload: dict[str, object],
+    detail: dict[str, object] | None = None,
+) -> None:
+    """Best-effort Postgres event append for LLM Ops metadata."""
+
+    recorder = getattr(repo, "record_task_event", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(session.task_id, event_type, payload, detail=detail)
+    except Exception:  # noqa: BLE001 - observability must not fail task execution
+        log.warning(
+            "llm ops event append failed: task=%s event_type=%s",
+            session.task_id,
+            event_type,
+            exc_info=True,
+        )
+
+
+async def _record_pipeline_event(repo: TaskRepository, event: PipelineTaskEvent | None) -> None:
+    """Best-effort Postgres event append for pipeline runtime metadata."""
+
+    if event is None:
+        return
+    recorder = getattr(repo, "record_task_event", None)
+    if recorder is None:
+        return
+    try:
+        await recorder(*event.record_task_event_args(), **event.record_task_event_kwargs())
+    except Exception:  # noqa: BLE001 - observability must not fail task execution
+        log.warning(
+            "pipeline event append failed: task=%s event_type=%s",
+            event.task_id,
+            event.event_type,
+            exc_info=True,
+        )
+
+
+def _verification_failure_detail(outcome: VerificationRunOutcome) -> dict[str, object]:
+    """Compact FAIL detail for required verification failures."""
+
+    failed_results = []
+    for result in outcome.results:
+        if not result.required or result.succeeded:
+            continue
+        failed_result: dict[str, object] = {
+            "name": result.name,
+            "command": redact_secrets(result.command),
+            "source": result.source,
+            "returncode": result.returncode,
+            "timed_out": result.timed_out,
+            "blocked": result.blocked,
+            "pattern_matched": result.pattern_matched,
+        }
+        if result.repair_max_attempts > 0:
+            failed_result["repair_max_attempts"] = result.repair_max_attempts
+        failed_results.append(failed_result)
+    return {"reason": "verification_failed", "failed_results": failed_results}
+
+
+async def _record_ci_poll_evidence(
+    repo: TaskRepository,
+    task_id: str,
+    *,
+    plan_id: str,
+    outcome: VerificationRunOutcome,
+) -> None:
+    """Record CI poll evidence before mapped verification result events."""
+
+    for evidence in outcome.ci_polls:
+        await _record_pipeline_event(repo, make_ci_poll_started_event(task_id, evidence.spec, plan_id=plan_id))
+        await _record_pipeline_event(repo, make_ci_poll_result_event(task_id, evidence.result, plan_id=plan_id))
+
+
+def _repair_trigger_from_verification_failure(
+    running: Task,
+    plan: Plan,
+    verification_outcome: VerificationRunOutcome,
+) -> tuple[RepairTrigger, RepairBudget] | None:
+    """Return the first configured repair trigger from required verification failure."""
+
+    for result in verification_outcome.results:
+        if not result.required or result.succeeded or result.repair_max_attempts <= 0:
+            continue
+        parsed_attempt = parse_repair_attempt(running.id)
+        orig_task_id = parsed_attempt[0] if parsed_attempt is not None else running.id
+        current_attempt = current_repair_attempt(running.id)
+        trigger_type = "ci" if result.source == "ci" else "verification"
+        reason = result.stderr or result.pattern_matched or result.name or "verification_failed"
+        return (
+            RepairTrigger(
+                orig_task_id=orig_task_id,
+                plan_id=plan.id,
+                trigger_type=trigger_type,
+                trigger_event_type=result.event_name,
+                reason=reason,
+                current_attempt=current_attempt,
+                last_failure_event_type=result.event_name,
+                last_repair_task_id=running.id if current_attempt > 0 else "",
+            ),
+            RepairBudget(max_attempts=result.repair_max_attempts),
+        )
+    return None
+
+
+async def _handle_repair_from_verification_failure(
+    repo: TaskRepository,
+    running: Task,
+    plan: Plan,
+    verification_outcome: VerificationRunOutcome,
+) -> None:
+    """Request or escalate bounded repair for a failed required verification result."""
+
+    trigger_and_budget = _repair_trigger_from_verification_failure(running, plan, verification_outcome)
+    if trigger_and_budget is None:
+        return
+    trigger, budget = trigger_and_budget
+    decision = decide_repair(trigger, budget)
+    if decision.action == REPAIR_ACTION_REQUEST:
+        repair_task = build_repair_task(running, trigger, decision)
+        event = make_repair_attempt_requested_event(trigger, decision)
+        inserter = getattr(repo, "insert_repair_task", None)
+        if inserter is None:
+            log.warning("repair task insertion unavailable: task=%s repair_task=%s", running.id, repair_task.id)
+            return
+        try:
+            await inserter(running, repair_task, event)
+        except Exception:  # noqa: BLE001 - original verification failure still owns terminal state
+            log.warning(
+                "repair task insertion failed: task=%s repair_task=%s",
+                running.id,
+                repair_task.id,
+                exc_info=True,
+            )
+        return
+    if decision.action == REPAIR_ACTION_ESCALATE:
+        await _record_pipeline_event(repo, make_repair_escalated_event(trigger, decision))
+
+
+def _event_payload(event: dict[str, object]) -> dict[str, object]:
+    payload = event.get("payload", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+async def _repair_max_attempts_for_completion(
+    repo: TaskRepository, orig_task_id: str, repair_task_id: str
+) -> int | None:
+    lister = getattr(repo, "list_task_events", None)
+    if lister is None:
+        return None
+    try:
+        events = await lister(orig_task_id, event_prefix=REPAIR_ATTEMPT_REQUESTED_EVENT)
+    except Exception:  # noqa: BLE001 - completion evidence falls back to current attempt
+        log.warning(
+            "repair requested event lookup failed: orig_task=%s repair_task=%s",
+            orig_task_id,
+            repair_task_id,
+            exc_info=True,
+        )
+        return None
+    for event in reversed(tuple(events)):
+        payload = _event_payload(event)
+        if payload.get("repair_task_id") != repair_task_id:
+            continue
+        max_attempts = payload.get("max_attempts")
+        if isinstance(max_attempts, int):
+            return max_attempts
+        try:
+            return int(str(max_attempts))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+async def _record_repair_attempt_completed(
+    repo: TaskRepository,
+    running: Task,
+    plan: Plan,
+    *,
+    terminal_status: str,
+) -> None:
+    parsed_attempt = parse_repair_attempt(running.id)
+    if parsed_attempt is None:
+        return
+    orig_task_id, attempt = parsed_attempt
+    max_attempts = await _repair_max_attempts_for_completion(repo, orig_task_id, running.id)
+    if max_attempts is None:
+        max_attempts = attempt
+    await _record_pipeline_event(
+        repo,
+        make_repair_attempt_completed_event(
+            orig_task_id=orig_task_id,
+            repair_task_id=running.id,
+            plan_id=plan.id,
+            attempt=attempt,
+            max_attempts=max_attempts,
+            terminal_status=terminal_status,
+        ),
+    )
+
+
 # Reason string written into the RELEASE event payload when the worker
 # releases an in-flight task because of SIGTERM / SIGINT (TASK-019b2). Distinct
 # from ``"visibility_timeout"`` (the sweep) so dashboards / post-mortems can
 # tell why a row bounced. Keep in sync with the value asserted in
 # tests/integration/test_worker_signals.py.
 SHUTDOWN_RELEASE_REASON: Final[str] = "shutdown"
+OPERATOR_PAUSE_RELEASE_REASON: Final[str] = "operator_pause"
 
 
 async def _sleep_or_stop(idle_wait: float, stop: asyncio.Event | None) -> None:
@@ -194,6 +463,26 @@ async def _sleep_or_stop(idle_wait: float, stop: asyncio.Event | None) -> None:
         # Normal "interval elapsed" path — caller re-checks ``stop`` at
         # the top of the next iteration.
         return
+
+
+async def _workers_paused(repo: TaskRepository) -> bool:
+    checker = getattr(repo, "is_workers_paused", None)
+    if checker is None:
+        return False
+    return bool(await checker())
+
+
+async def _release_for_operator_pause(repo: TaskRepository, task: Task, worker_id: WorkerId) -> None:
+    try:
+        await repo.release_task(task.id, task.version, OPERATOR_PAUSE_RELEASE_REASON)
+    except VersionConflictError as exc:
+        log.warning(
+            "operator-pause release lost the race: worker=%s task=%s expected_version=%d actual=%s",
+            worker_id,
+            task.id,
+            task.version,
+            exc.actual_version,
+        )
 
 
 async def _await_runner_or_stop(
@@ -246,6 +535,40 @@ async def _await_runner_or_stop(
     return runner_task.result(), False
 
 
+async def _await_verification_or_stop(
+    verification_coro: Awaitable[VerificationRunOutcome],
+    stop: asyncio.Event,
+) -> tuple[VerificationRunOutcome | None, bool]:
+    """Race verification against shutdown, mirroring the runner path."""
+
+    verification_task: asyncio.Task[VerificationRunOutcome] = asyncio.ensure_future(verification_coro)
+    stop_task: asyncio.Task[bool] = asyncio.ensure_future(stop.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {verification_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except BaseException:
+        verification_task.cancel()
+        stop_task.cancel()
+        raise
+
+    if stop_task in done:
+        verification_task.cancel()
+        try:
+            await verification_task
+        except (asyncio.CancelledError, Exception) as exc:
+            log.debug("verification cancelled during shutdown: %r", exc)
+        return None, True
+
+    stop_task.cancel()
+    try:
+        await stop_task
+    except asyncio.CancelledError:
+        pass
+    return verification_task.result(), False
+
+
 async def run_local_worker(
     repo: TaskRepository,
     runner: RunnerCallable,
@@ -255,6 +578,8 @@ async def run_local_worker(
     idle_wait: float = DEFAULT_IDLE_WAIT,
     max_iterations: int | None = None,
     stop: asyncio.Event | None = None,
+    post_complete_hook: Callable[[Task], Awaitable[None]] | None = None,
+    verification_runner: VerificationRunnerCallable | None = None,
 ) -> WorkerStats:
     """Run the local worker loop against ``plan.id`` for ``worker_id``.
 
@@ -330,6 +655,16 @@ async def run_local_worker(
 
         iterations += 1
 
+        if await _workers_paused(repo):
+            idle_polls += 1
+            log.info(
+                "worker=%s plan=%s: global pause active, skipping claim",
+                worker_id,
+                plan.id,
+            )
+            await _sleep_or_stop(idle_wait, stop)
+            continue
+
         claimed = await repo.claim_task(worker_id, plan.id)
         if claimed is None:
             idle_polls += 1
@@ -355,20 +690,194 @@ async def run_local_worker(
             )
             continue
 
-        prompt = build_task_prompt(running, plan)
+        if await _workers_paused(repo):
+            log.info(
+                "worker=%s task=%s: global pause observed after start, releasing claim",
+                worker_id,
+                running.id,
+            )
+            await _release_for_operator_pause(repo, running, worker_id)
+            continue
+
+        stage_context = stage_context_from_task(running, plan)
+        await _record_pipeline_event(repo, make_stage_started_event(stage_context))
+        checkpoint = build_human_review_checkpoint(
+            task=running,
+            stage={"id": stage_context.stage_id} if stage_context is not None else None,
+            plan_id=plan.id,
+        )
+        if checkpoint is not None:
+            await _record_pipeline_event(repo, make_human_review_required_event(checkpoint))
+
+        try:
+            prompt = build_task_prompt(running, plan)
+        except PromptInjectionBlocked as exc:
+            try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=PROMPT_INJECTION_FAIL_REASON,
+                        detail=exc.event_payload,
+                    ),
+                )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
+                await repo.fail_task(
+                    running.id,
+                    running.version,
+                    PROMPT_INJECTION_FAIL_REASON,
+                    detail=exc.event_payload,
+                    prelude_event_type=PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
+                    prelude_payload=exc.event_payload,
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "prompt guard fail_task lost the race: task=%s expected_version=%d actual=%s",
+                    running.id,
+                    running.version,
+                    conflict.actual_version,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "worker=%s task=%s → FAILED (%s marker=%r)",
+                worker_id,
+                running.id,
+                PROMPT_INJECTION_FAIL_REASON,
+                exc.match.matched_marker,
+            )
+            continue
+
+        secret_finding = scan_task_secret_surface(running, prompt=prompt)
+        if secret_finding is not None:
+            payload = secret_finding.event_payload(task_id=running.id, plan_id=plan.id)
+            try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=SECRET_LINT_FAIL_REASON,
+                        detail=payload,
+                    ),
+                )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
+                await repo.fail_task(
+                    running.id,
+                    running.version,
+                    SECRET_LINT_FAIL_REASON,
+                    detail=payload,
+                    prelude_event_type=SECRET_LINT_BLOCKED_EVENT_TYPE,
+                    prelude_payload=payload,
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "secret guard fail_task lost the race: task=%s expected_version=%d actual=%s",
+                    running.id,
+                    running.version,
+                    conflict.actual_version,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "worker=%s task=%s → FAILED (%s pattern_id=%r)",
+                worker_id,
+                running.id,
+                SECRET_LINT_FAIL_REASON,
+                secret_finding.pattern_id,
+            )
+            continue
+
+        shell_scan = scan_task_command_surface(running)
+        if shell_scan.blocked:
+            payload = shell_scan.event_payload(task_id=running.id, plan_id=plan.id)
+            try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(
+                        stage_context,
+                        reason=SHELL_COMMAND_FAIL_REASON,
+                        detail=payload,
+                    ),
+                )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
+                await repo.fail_task(
+                    running.id,
+                    running.version,
+                    SHELL_COMMAND_FAIL_REASON,
+                    detail=payload,
+                    prelude_event_type=SHELL_COMMAND_BLOCKED_EVENT_TYPE,
+                    prelude_payload=payload,
+                )
+            except VersionConflictError as conflict:
+                log.warning(
+                    "shell guard fail_task lost the race: task=%s expected_version=%d actual=%s",
+                    running.id,
+                    running.version,
+                    conflict.actual_version,
+                )
+                continue
+            failed += 1
+            log.warning(
+                "worker=%s task=%s → FAILED (%s pattern=%r)",
+                worker_id,
+                running.id,
+                SHELL_COMMAND_FAIL_REASON,
+                shell_scan.pattern_matched,
+            )
+            continue
+
+        llm_session: LLMOpsSession | None = None
+        try:
+            llm_session = start_llm_session(running, plan, worker_id, prompt, attempt=running.version)
+            await _record_llm_event(
+                repo,
+                llm_session,
+                LLM_RUN_STARTED_EVENT_TYPE,
+                session_event_payload(llm_session, "started"),
+                session_event_detail(llm_session, "started"),
+            )
+            notify_slack_task_started(llm_session)
+        except Exception:  # noqa: BLE001 - keep task execution independent from observability
+            log.warning("llm ops session start failed: task=%s", running.id, exc_info=True)
+            llm_session = None
 
         # Race the runner against ``stop`` so SIGTERM mid-runner doesn't
         # have to wait for an arbitrarily long agent call before we can
         # release the task. When ``stop`` is None (legacy callers, unit
         # tests for 019a/019b1) we just await the runner directly — the
         # original codepath, untouched.
-        if stop is None:
-            result: AgentResult | None = await runner(running, prompt)
-            shutdown_during_run = False
+        if llm_session is None:
+            if stop is None:
+                result: AgentResult | None = await runner(running, prompt)
+                shutdown_during_run = False
+            else:
+                result, shutdown_during_run = await _await_runner_or_stop(runner(running, prompt), stop)
         else:
-            result, shutdown_during_run = await _await_runner_or_stop(runner(running, prompt), stop)
+            with llm_session.runner_environment():
+                if stop is None:
+                    result = await runner(running, prompt)
+                    shutdown_during_run = False
+                else:
+                    result, shutdown_during_run = await _await_runner_or_stop(runner(running, prompt), stop)
 
         if shutdown_during_run:
+            if llm_session is not None:
+                try:
+                    detail = finish_llm_session(
+                        llm_session,
+                        None,
+                        "cancelled",
+                        error=SHUTDOWN_RELEASE_REASON,
+                    )
+                    await _record_llm_event(
+                        repo,
+                        llm_session,
+                        LLM_RUN_CANCELLED_EVENT_TYPE,
+                        session_event_payload(llm_session, "cancelled", error=SHUTDOWN_RELEASE_REASON),
+                        detail,
+                    )
+                except Exception:  # noqa: BLE001 - shutdown release is the priority
+                    log.warning("llm ops cancellation record failed: task=%s", running.id, exc_info=True)
             log.info(
                 "worker=%s task=%s: shutdown mid-runner, releasing claim",
                 worker_id,
@@ -391,13 +900,155 @@ async def run_local_worker(
 
         # ``shutdown_during_run`` was False, so ``result`` is set.
         assert result is not None  # for mypy; the helper's contract guarantees this
+        if llm_session is not None:
+            llm_status = "success" if result.is_complete and result.exit_code == 0 else "failed"
+            llm_event_type = LLM_RUN_FINISHED_EVENT_TYPE if llm_status == "success" else LLM_RUN_FAILED_EVENT_TYPE
+            try:
+                detail = finish_llm_session(llm_session, result, llm_status)
+                await _record_llm_event(
+                    repo,
+                    llm_session,
+                    llm_event_type,
+                    session_event_payload(llm_session, llm_status, result),
+                    detail,
+                )
+            except Exception:  # noqa: BLE001 - task completion/failure still owns the state transition
+                log.warning("llm ops finish record failed: task=%s", running.id, exc_info=True)
+
+        if await _workers_paused(repo):
+            log.info(
+                "worker=%s task=%s: global pause observed before terminal transition, releasing claim",
+                worker_id,
+                running.id,
+            )
+            await _release_for_operator_pause(repo, running, worker_id)
+            continue
+
         if result.is_complete and result.exit_code == 0:
+            if verification_runner is not None:
+                try:
+                    await _record_pipeline_event(
+                        repo,
+                        make_verification_started_event(running.id, plan_id=plan.id),
+                    )
+                    if stop is None:
+                        verification_outcome = await verification_runner(running)
+                        shutdown_during_verification = False
+                    else:
+                        verification_outcome, shutdown_during_verification = await _await_verification_or_stop(
+                            verification_runner(running),
+                            stop,
+                        )
+                except Exception as exc:  # noqa: BLE001 - verification failure owns task state
+                    detail = {"error": f"{type(exc).__name__}: {exc}"}
+                    await _record_pipeline_event(
+                        repo,
+                        PipelineTaskEvent(
+                            task_id=running.id,
+                            event_type=VERIFICATION_FAILED_EVENT,
+                            payload={
+                                "task_id": running.id,
+                                "plan_id": plan.id,
+                                "reason": "verification_runner_exception",
+                            },
+                            detail=detail,
+                        ),
+                    )
+                    await _record_pipeline_event(
+                        repo,
+                        make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
+                    )
+                    try:
+                        await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
+                        await repo.fail_task(running.id, running.version, "verification_failed", detail=detail)
+                    except VersionConflictError as conflict:
+                        log.warning(
+                            "verification fail_task lost the race: task=%s expected_version=%d actual=%s",
+                            running.id,
+                            running.version,
+                            conflict.actual_version,
+                        )
+                        continue
+                    failed += 1
+                    log.info("worker=%s task=%s → FAILED (verification_failed)", worker_id, running.id)
+                    continue
+
+                if shutdown_during_verification:
+                    log.info(
+                        "worker=%s task=%s: shutdown mid-verification, releasing claim",
+                        worker_id,
+                        running.id,
+                    )
+                    try:
+                        await repo.release_task(running.id, running.version, SHUTDOWN_RELEASE_REASON)
+                        released_on_shutdown += 1
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "release_task lost the race: task=%s expected_version=%d actual=%s — already released",
+                            running.id,
+                            running.version,
+                            exc.actual_version,
+                        )
+                    break
+
+                assert verification_outcome is not None
+                await _record_ci_poll_evidence(repo, running.id, plan_id=plan.id, outcome=verification_outcome)
+                for verification_result in verification_outcome.results:
+                    await _record_pipeline_event(
+                        repo,
+                        make_verification_result_event(running.id, verification_result, plan_id=plan.id),
+                    )
+                if verification_outcome.required_failed:
+                    detail = _verification_failure_detail(verification_outcome)
+                    try:
+                        await _handle_repair_from_verification_failure(repo, running, plan, verification_outcome)
+                        await _record_pipeline_event(
+                            repo,
+                            make_stage_failed_event(stage_context, reason="verification_failed", detail=detail),
+                        )
+                        await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
+                        await repo.fail_task(running.id, running.version, "verification_failed", detail=detail)
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "verification fail_task lost the race: task=%s expected_version=%d actual=%s",
+                            running.id,
+                            running.version,
+                            exc.actual_version,
+                        )
+                        continue
+                    if llm_session is not None:
+                        notify_slack_task_terminal(llm_session, "FAILED", result, reason="verification_failed")
+                    failed += 1
+                    log.info("worker=%s task=%s → FAILED (verification_failed)", worker_id, running.id)
+                    continue
+
+            if checkpoint is not None:
+                review_events = await repo.list_task_events(running.id, event_prefix="human_review.")
+                if not is_human_review_approved(checkpoint, review_events):
+                    try:
+                        await repo.release_task(
+                            running.id,
+                            running.version,
+                            HUMAN_REVIEW_REQUIRED_RELEASE_REASON,
+                        )
+                    except VersionConflictError as exc:
+                        log.warning(
+                            "human-review release lost the race: task=%s expected_version=%d actual=%s",
+                            running.id,
+                            running.version,
+                            exc.actual_version,
+                        )
+                        continue
+                    log.info("worker=%s task=%s → PENDING (human_review_required)", worker_id, running.id)
+                    continue
+
             try:
                 # ``cost_usd`` flows from the agent runner's parsed usage
                 # envelope into the per-plan spend accumulator (TASK-102,
                 # VAL-BUDGET-030). ``None`` / 0.0 (e.g. Claude CLI did
                 # not emit ``total_cost_usd``) is the documented
                 # no-op-spend path (VAL-BUDGET-032).
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="DONE")
                 await repo.complete_task(
                     running.id,
                     running.version,
@@ -411,11 +1062,29 @@ async def run_local_worker(
                     exc.actual_version,
                 )
                 continue
+            await _record_pipeline_event(repo, make_stage_succeeded_event(stage_context))
+            if llm_session is not None:
+                notify_slack_task_terminal(llm_session, "DONE", result)
             completed += 1
             log.info("worker=%s task=%s → DONE", worker_id, running.id)
+            if post_complete_hook is not None:
+                try:
+                    await post_complete_hook(running)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "worker=%s task=%s: post_complete_hook raised (%s); swallowing",
+                        worker_id,
+                        running.id,
+                        exc,
+                    )
         else:
             reason = _build_fail_reason(result)
             try:
+                await _record_pipeline_event(
+                    repo,
+                    make_stage_failed_event(stage_context, reason=reason),
+                )
+                await _record_repair_attempt_completed(repo, running, plan, terminal_status="FAILED")
                 await repo.fail_task(running.id, running.version, reason)
             except VersionConflictError as exc:
                 log.warning(
@@ -425,6 +1094,8 @@ async def run_local_worker(
                     exc.actual_version,
                 )
                 continue
+            if llm_session is not None:
+                notify_slack_task_terminal(llm_session, "FAILED", result, reason=reason)
             failed += 1
             log.info("worker=%s task=%s → FAILED (%s)", worker_id, running.id, reason)
 
@@ -439,8 +1110,10 @@ async def run_local_worker(
 
 __all__ = [
     "DEFAULT_IDLE_WAIT",
+    "OPERATOR_PAUSE_RELEASE_REASON",
     "SHUTDOWN_RELEASE_REASON",
     "RunnerCallable",
+    "VerificationRunnerCallable",
     "WorkerStats",
     "run_local_worker",
 ]

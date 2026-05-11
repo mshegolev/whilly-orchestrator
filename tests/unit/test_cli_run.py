@@ -51,6 +51,8 @@ from whilly.cli.run import (
     build_run_parser,
     run_run_command,
 )
+from whilly.ci.github import GitHubCIPollAdapter
+from whilly.core.models import Plan, Task, TaskStatus, VerificationCommand
 from whilly.worker.local import WorkerStats
 
 
@@ -93,6 +95,12 @@ def test_build_run_parser_accepts_all_optional_flags() -> None:
             "0.5",
             "--worker-id",
             "test-worker-x",
+            "--verify-command",
+            "unit=pytest -q tests/unit",
+            "--optional-verify-command",
+            "lint=ruff check whilly tests",
+            "--verify-timeout",
+            "12.5",
         ]
     )
     assert args.plan_id == "P-1"
@@ -100,6 +108,9 @@ def test_build_run_parser_accepts_all_optional_flags() -> None:
     assert args.idle_wait == pytest.approx(0.1)
     assert args.heartbeat_interval == pytest.approx(0.5)
     assert args.worker_id == "test-worker-x"
+    assert args.verify_commands == ["unit=pytest -q tests/unit"]
+    assert args.optional_verify_commands == ["lint=ruff check whilly tests"]
+    assert args.verify_timeout == pytest.approx(12.5)
 
 
 # ─── worker-id resolution ────────────────────────────────────────────────
@@ -279,6 +290,36 @@ def test_run_run_command_forwards_injected_runner(monkeypatch: pytest.MonkeyPatc
     assert seen_runner == [_stub_runner], "runner kwarg did not reach _async_run unchanged"
 
 
+def test_run_run_command_forwards_verification_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verification flags are parsed at the CLI boundary and forwarded to the async composer."""
+    monkeypatch.setenv(DATABASE_URL_ENV, "postgresql://user@127.0.0.1/whilly")
+    seen: dict[str, object] = {}
+
+    async def _fake_async_run(**kwargs: object) -> WorkerStats:
+        seen.update(kwargs)
+        return WorkerStats()
+
+    monkeypatch.setattr(cli_run, "_async_run", _fake_async_run)
+
+    code = run_run_command(
+        [
+            "--plan",
+            "P-VERIFY",
+            "--verify-command",
+            "unit=pytest -q tests/unit",
+            "--optional-verify-command",
+            "lint=ruff check whilly tests",
+            "--verify-timeout",
+            "10",
+        ]
+    )
+
+    assert code == EXIT_OK
+    assert seen["verify_commands"] == ["unit=pytest -q tests/unit"]
+    assert seen["optional_verify_commands"] == ["lint=ruff check whilly tests"]
+    assert seen["verify_timeout"] == pytest.approx(10.0)
+
+
 def test_asyncio_run_is_used_for_async_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """``run_run_command`` keeps a sync surface even though the work is async.
 
@@ -306,3 +347,231 @@ def test_asyncio_run_is_used_for_async_path(monkeypatch: pytest.MonkeyPatch) -> 
     code = run_run_command(["--plan", "P-ASY"])
     assert code == EXIT_OK
     assert len(seen_calls) == 1, "asyncio.run was not called exactly once"
+
+
+# ─── verification runner composition ─────────────────────────────────────
+
+
+class _FakeConnection:
+    async def execute(self, *_args: object) -> None:
+        return None
+
+
+class _FakeAcquire:
+    async def __aenter__(self) -> _FakeConnection:
+        return _FakeConnection()
+
+    async def __aexit__(self, *_args: object) -> None:
+        return None
+
+
+class _FakePool:
+    def acquire(self) -> _FakeAcquire:
+        return _FakeAcquire()
+
+
+async def _capture_async_run_verification_specs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    profile_commands: tuple[VerificationCommand, ...] = (),
+    verify_commands: tuple[str, ...] = (),
+    optional_verify_commands: tuple[str, ...] = (),
+) -> tuple[object, ...] | None:
+    task = Task(id="T-VERIFY", status=TaskStatus.PENDING)
+    plan = Plan(
+        id="P-VERIFY",
+        name="Verification plan",
+        tasks=(task,),
+        verification_commands=profile_commands,
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_create_pool(_dsn: str) -> _FakePool:
+        return _FakePool()
+
+    async def _fake_close_pool(_pool: object) -> None:
+        captured["closed"] = True
+
+    async def _fake_select_plan_with_tasks(_conn: object, _plan_id: str) -> tuple[Plan, tuple[Task, ...]]:
+        return plan, (task,)
+
+    async def _fake_run_verification_commands(commands: object, **_kwargs: object) -> object:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        return object()
+
+    async def _fake_run_worker(
+        _repo: object,
+        _workspace_runner: object,
+        worker_plan: Plan,
+        _worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> WorkerStats:
+        captured["plan"] = worker_plan
+        captured["verification_runner_present"] = verification_runner is not None
+        if verification_runner is not None:
+            await verification_runner(task)  # type: ignore[misc]
+        return WorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_run, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(cli_run, "close_pool", _fake_close_pool)
+    monkeypatch.setattr(cli_run, "_select_plan_with_tasks", _fake_select_plan_with_tasks)
+    monkeypatch.setattr(cli_run, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_run, "run_worker", _fake_run_worker)
+    monkeypatch.setattr(cli_run, "TaskRepository", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli_run, "RepoTargetWorkspaceResolver", lambda _repo: object())
+    monkeypatch.setattr(cli_run, "is_auto_open_pr_enabled", lambda: False)
+
+    await cli_run._async_run(
+        dsn="postgresql://user@127.0.0.1/whilly",
+        plan_id=plan.id,
+        worker_id="w-verify",
+        runner=_stub_runner,
+        max_iterations=1,
+        idle_wait=0,
+        heartbeat_interval=1,
+        install_signal_handlers=False,
+        verify_commands=verify_commands,
+        optional_verify_commands=optional_verify_commands,
+        verify_timeout=5,
+    )
+
+    assert captured["closed"] is True
+    assert captured["plan"] == plan
+    assert captured["verification_runner_present"] == bool(
+        profile_commands or verify_commands or optional_verify_commands
+    )
+    return captured.get("commands")  # type: ignore[return-value]
+
+
+@pytest.mark.asyncio
+async def test_async_run_creates_verification_runner_for_profile_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = await _capture_async_run_verification_specs(
+        monkeypatch,
+        profile_commands=(
+            VerificationCommand(
+                name="profile-unit",
+                command="pytest -q tests/unit",
+                required=True,
+            ),
+        ),
+    )
+
+    assert commands is not None
+    assert [(command.name, command.source, command.required) for command in commands] == [
+        ("profile-unit", "profile", True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_run_orders_profile_required_cli_optional_cli_specs(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = await _capture_async_run_verification_specs(
+        monkeypatch,
+        profile_commands=(
+            VerificationCommand(
+                name="profile-unit",
+                command="pytest -q tests/unit",
+                required=True,
+            ),
+        ),
+        verify_commands=("cli-required=pytest -q",),
+        optional_verify_commands=("cli-optional=ruff check whilly",),
+    )
+
+    assert commands is not None
+    assert [command.source for command in commands] == ["profile", "cli", "cli"]
+    assert [command.name for command in commands] == ["profile-unit", "cli-required", "cli-optional"]
+    assert [command.required for command in commands] == [True, True, False]
+
+
+@pytest.mark.asyncio
+async def test_async_run_preserves_cli_only_verification_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
+    commands = await _capture_async_run_verification_specs(
+        monkeypatch,
+        verify_commands=("unit=pytest -q tests/unit",),
+        optional_verify_commands=("lint=ruff check whilly",),
+    )
+
+    assert commands is not None
+    assert [(command.name, command.command, command.source, command.required) for command in commands] == [
+        ("unit", "pytest -q tests/unit", "cli", True),
+        ("lint", "ruff check whilly", "cli", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_run_passes_ci_poll_runner_for_ci_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = Task(id="T-CI", status=TaskStatus.PENDING)
+    plan = Plan(
+        id="P-CI",
+        name="CI plan",
+        tasks=(task,),
+        verification_commands=(
+            VerificationCommand(
+                name="ci-status",
+                command="ci://github/acme/widgets#pr-42",
+                required=True,
+                source="ci",
+            ),
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    async def _fake_create_pool(_dsn: str) -> _FakePool:
+        return _FakePool()
+
+    async def _fake_close_pool(_pool: object) -> None:
+        return None
+
+    async def _fake_select_plan_with_tasks(_conn: object, _plan_id: str) -> tuple[Plan, tuple[Task, ...]]:
+        return plan, (task,)
+
+    async def _fake_run_verification_commands(commands: object, **kwargs: object) -> object:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        captured["ci_poll_runner"] = kwargs.get("ci_poll_runner")
+        return object()
+
+    async def _fake_run_worker(
+        _repo: object,
+        _workspace_runner: object,
+        worker_plan: Plan,
+        _worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> WorkerStats:
+        captured["plan"] = worker_plan
+        assert verification_runner is not None
+        await verification_runner(task)  # type: ignore[misc]
+        return WorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_run, "create_pool", _fake_create_pool)
+    monkeypatch.setattr(cli_run, "close_pool", _fake_close_pool)
+    monkeypatch.setattr(cli_run, "_select_plan_with_tasks", _fake_select_plan_with_tasks)
+    monkeypatch.setattr(cli_run, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_run, "run_worker", _fake_run_worker)
+    monkeypatch.setattr(cli_run, "TaskRepository", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli_run, "RepoTargetWorkspaceResolver", lambda _repo: object())
+    monkeypatch.setattr(cli_run, "is_auto_open_pr_enabled", lambda: False)
+
+    await cli_run._async_run(
+        dsn="postgresql://user@127.0.0.1/whilly",
+        plan_id=plan.id,
+        worker_id="w-ci",
+        runner=_stub_runner,
+        max_iterations=1,
+        idle_wait=0,
+        heartbeat_interval=1,
+        install_signal_handlers=False,
+        verify_timeout=5,
+    )
+
+    assert [command.source for command in captured["commands"]] == ["ci"]  # type: ignore[index]
+    assert isinstance(captured["ci_poll_runner"], GitHubCIPollAdapter)

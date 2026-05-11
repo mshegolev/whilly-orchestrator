@@ -244,10 +244,24 @@ case "${1:-}" in
     [[ "${1:-}" == "-c" ]] || exit 0
     shift
     q="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
-    # ----- terminal-state guard query (the new fix) -----
-    if [[ "$q" == *"id || '|' || status"* ]]; then
+    # ----- terminal-state guard query (non-terminal rows ONLY; has NOT IN) -----
+    if [[ "$q" == *"id || '|' || status"* && "$q" == *"not in"* ]]; then
       if [[ "${WHILLY_TEST_TASKS_STUCK:-0}" == "1" ]]; then
         printf 'PAR-001|PENDING\nPAR-002|CLAIMED\n'
+      fi
+      exit 0
+    fi
+    # ----- DONE-count guard query (ALL rows; NO NOT IN clause) -----
+    # This is the second guard added by fix-m1-workshop-demo-5-tasks (the
+    # additive --min-done check). The shim returns 5 DONE rows on the happy
+    # path (so the helper sees DONE=5 PENDING=0 and exits 0); on the stuck
+    # path the previous terminal-state guard already exited 4 before this
+    # query is issued, so the response shape here doesn't matter.
+    if [[ "$q" == *"id || '|' || status"* ]]; then
+      if [[ "${WHILLY_TEST_TASKS_STUCK:-0}" == "1" ]]; then
+        printf 'PAR-001|PENDING\nPAR-002|CLAIMED\nPAR-003|DONE\nPAR-004|DONE\nPAR-005|DONE\n'
+      else
+        printf 'PAR-001|DONE\nPAR-002|DONE\nPAR-003|DONE\nPAR-004|DONE\nPAR-005|DONE\n'
       fi
       exit 0
     fi

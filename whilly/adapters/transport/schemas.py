@@ -73,12 +73,13 @@ generated ``__init__`` / ``__eq__``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Final
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
+from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus, VerificationCommand
 
 # ---------------------------------------------------------------------------
 # Validation primitives
@@ -100,12 +101,28 @@ MAX_HOSTNAME_LEN: Final[int] = 256
 MAX_TOKEN_LEN: Final[int] = 1024
 MAX_REASON_LEN: Final[int] = 2048
 MAX_DESCRIPTION_LEN: Final[int] = 8192
+MAX_EMAIL_LEN: Final[int] = 320  # RFC 5321 §4.5.3.1.3 (64 local + 1 @ + 255 domain)
 
 NonEmptyShortStr = Annotated[str, Field(min_length=1, max_length=MAX_ID_LEN)]
 NonEmptyHostname = Annotated[str, Field(min_length=1, max_length=MAX_HOSTNAME_LEN)]
 NonEmptyToken = Annotated[str, Field(min_length=1, max_length=MAX_TOKEN_LEN)]
 NonEmptyReason = Annotated[str, Field(min_length=1, max_length=MAX_REASON_LEN)]
 NonNegativeVersion = Annotated[int, Field(ge=0)]
+# Lightweight email shape check — pydantic's ``EmailStr`` would pull in the
+# optional ``email-validator`` dependency, which is not in [server]/[dev]
+# extras. The regex enforces a single ``@`` separating a non-empty local
+# part from a domain that contains at least one dot — enough to reject
+# obviously malformed input (``"x"``, ``"x@"``, ``"@y"``, ``"x@y"``)
+# without re-implementing RFC 5321. The Postgres column has no CHECK
+# constraint, so this validator is the canonical gate.
+OwnerEmail = Annotated[
+    str,
+    Field(
+        min_length=3,
+        max_length=MAX_EMAIL_LEN,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    ),
+]
 
 
 class _FrozenModel(BaseModel):
@@ -156,6 +173,7 @@ class TaskPayload(_FrozenModel):
     test_steps: list[str] = Field(default_factory=list)
     prd_requirement: str = ""
     version: NonNegativeVersion = 0
+    repo_target_id: str = ""
 
     @classmethod
     def from_task(cls, task: Task) -> TaskPayload:
@@ -176,6 +194,7 @@ class TaskPayload(_FrozenModel):
             test_steps=list(task.test_steps),
             prd_requirement=task.prd_requirement,
             version=task.version,
+            repo_target_id=task.repo_target_id,
         )
 
     def to_task(self) -> Task:
@@ -197,6 +216,38 @@ class TaskPayload(_FrozenModel):
             test_steps=tuple(self.test_steps),
             prd_requirement=self.prd_requirement,
             version=self.version,
+            repo_target_id=self.repo_target_id,
+        )
+
+
+class VerificationCommandPayload(_FrozenModel):
+    """Wire-format projection of :class:`whilly.core.models.VerificationCommand`."""
+
+    name: NonEmptyShortStr
+    command: Annotated[str, Field(min_length=1, max_length=MAX_DESCRIPTION_LEN)]
+    required: bool = True
+    source: NonEmptyShortStr = "profile"
+    repair_max_attempts: NonNegativeVersion = 0
+
+    @classmethod
+    def from_verification_command(cls, command: VerificationCommand) -> VerificationCommandPayload:
+        """Build a wire payload from a domain verification command."""
+        return cls(
+            name=command.name,
+            command=command.command,
+            required=command.required,
+            source=command.source,
+            repair_max_attempts=command.repair_max_attempts,
+        )
+
+    def to_verification_command(self) -> VerificationCommand:
+        """Reconstruct a domain verification command from this wire payload."""
+        return VerificationCommand(
+            name=self.name,
+            command=self.command,
+            required=self.required,
+            source=self.source,
+            repair_max_attempts=self.repair_max_attempts,
         )
 
 
@@ -214,11 +265,26 @@ class PlanPayload(_FrozenModel):
 
     id: NonEmptyShortStr
     name: NonEmptyShortStr
+    verification_commands: list[VerificationCommandPayload] = Field(default_factory=list)
 
     @classmethod
     def from_plan(cls, plan: Plan) -> PlanPayload:
         """Build a wire payload from a domain :class:`Plan`."""
-        return cls(id=plan.id, name=plan.name)
+        return cls(
+            id=plan.id,
+            name=plan.name,
+            verification_commands=[
+                VerificationCommandPayload.from_verification_command(command) for command in plan.verification_commands
+            ],
+        )
+
+    def to_plan(self) -> Plan:
+        """Reconstruct task-free domain plan metadata from this wire payload."""
+        return Plan(
+            id=self.id,
+            name=self.name,
+            verification_commands=tuple(command.to_verification_command() for command in self.verification_commands),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +299,18 @@ class RegisterRequest(_FrozenModel):
     ``token``. ``hostname`` is the only field the worker can self-report
     that's worth recording — it shows up in the dashboard (TASK-027) so
     operators can correlate workers with the boxes they run on.
+
+    ``owner_email`` is optional (M2 mission, migration 008): when set, it
+    binds the worker row to the operator who registered it so the M2
+    admin dashboard can list ``workers WHERE owner_email = $1``. Legacy
+    bootstrap registrations omit the field and the column stays NULL.
+    Validation is a lightweight regex shape check (single ``@`` between
+    non-empty local part and a dotted domain) — enough to reject typos
+    without pulling in the optional ``email-validator`` dependency.
     """
 
     hostname: NonEmptyHostname
+    owner_email: OwnerEmail | None = None
 
 
 class RegisterResponse(_FrozenModel):
@@ -355,6 +430,110 @@ class CompleteResponse(_FrozenModel):
 
 
 # ---------------------------------------------------------------------------
+# Diagnostic task events
+# ---------------------------------------------------------------------------
+
+
+class TaskEventRequest(_FrozenModel):
+    """``POST /tasks/{task_id}/events`` request body for diagnostic events."""
+
+    worker_id: NonEmptyShortStr
+    event_type: NonEmptyShortStr
+    payload: dict[str, Any] = Field(default_factory=dict)
+    detail: dict[str, Any] | None = None
+
+
+class TaskEventResponse(_FrozenModel):
+    """Acknowledgement for a diagnostic event append."""
+
+    ok: bool = True
+
+
+class RepairTaskPayload(_FrozenModel):
+    """Dependency-free task payload accepted by ``POST /tasks/{task_id}/repair``."""
+
+    id: NonEmptyShortStr
+    description: Annotated[str, Field(max_length=MAX_DESCRIPTION_LEN)]
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    test_steps: list[str] = Field(default_factory=list)
+    prd_requirement: str = ""
+    priority: Priority = Priority.MEDIUM
+    key_files: list[str] = Field(default_factory=list)
+    repo_target_id: str = ""
+    dependencies: list[NonEmptyShortStr] | None = None
+
+
+class RepairTaskEventPayload(_FrozenModel):
+    """Record-ready audit event supplied with a remote repair task request."""
+
+    event_type: NonEmptyShortStr
+    task_id: NonEmptyShortStr
+    payload: dict[str, Any] = Field(default_factory=dict)
+    detail: dict[str, Any] | None = None
+
+
+class RepairTaskRequest(_FrozenModel):
+    """``POST /tasks/{task_id}/repair`` request body."""
+
+    worker_id: NonEmptyShortStr
+    orig_task_version: NonNegativeVersion
+    repair_task: RepairTaskPayload
+    event: RepairTaskEventPayload
+
+
+class RepairTaskResponse(_FrozenModel):
+    """Acknowledgement for a remote repair task insertion."""
+
+    ok: bool = True
+    repair_task_id: NonEmptyShortStr
+
+
+class TaskEventItem(_FrozenModel):
+    """One persisted task event returned by ``GET /tasks/{task_id}/events``."""
+
+    id: int
+    task_id: NonEmptyShortStr
+    plan_id: NonEmptyShortStr | None = None
+    event_type: NonEmptyShortStr
+    created_at: datetime
+    payload: dict[str, Any] = Field(default_factory=dict)
+    detail: dict[str, Any] | None = None
+
+
+class ListTaskEventsResponse(_FrozenModel):
+    """Ordered diagnostic/audit events for a task."""
+
+    events: list[TaskEventItem] = Field(default_factory=list)
+
+
+class HumanReviewDecisionRequest(_FrozenModel):
+    """Admin-only human-review decision for ``POST /api/v1/tasks/{task_id}/human-review``."""
+
+    decision: Literal["approved", "rejected", "changes_requested"]
+    reviewer: NonEmptyShortStr
+    stage_id: NonEmptyShortStr | None = None
+    comment: str = ""
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    requested_changes: list[NonEmptyShortStr] = Field(default_factory=list)
+
+
+class ControlPauseRequest(_FrozenModel):
+    """Admin-only request body for ``POST /api/v1/admin/workers/pause``."""
+
+    reason: Annotated[str, Field(max_length=MAX_REASON_LEN)] = ""
+
+
+class ControlStateResponse(_FrozenModel):
+    """Global worker pause state returned by admin control endpoints."""
+
+    paused: bool
+    pause_reason: str | None = None
+    paused_by: str | None = None
+    paused_at: datetime | None = None
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Fail
 # ---------------------------------------------------------------------------
 
@@ -372,6 +551,7 @@ class FailRequest(_FrozenModel):
     worker_id: NonEmptyShortStr
     version: NonNegativeVersion
     reason: NonEmptyReason
+    detail: dict[str, Any] | None = None
 
 
 class FailResponse(_FrozenModel):
@@ -490,23 +670,33 @@ class ErrorResponse(_FrozenModel):
 
 __all__ = [
     "MAX_DESCRIPTION_LEN",
+    "MAX_EMAIL_LEN",
     "MAX_HOSTNAME_LEN",
     "MAX_ID_LEN",
     "MAX_REASON_LEN",
     "MAX_TOKEN_LEN",
+    "OwnerEmail",
     "ClaimRequest",
     "ClaimResponse",
     "CompleteRequest",
     "CompleteResponse",
+    "ControlPauseRequest",
+    "ControlStateResponse",
     "ErrorResponse",
     "FailRequest",
     "FailResponse",
     "HeartbeatRequest",
     "HeartbeatResponse",
+    "HumanReviewDecisionRequest",
+    "ListTaskEventsResponse",
     "PlanPayload",
     "RegisterRequest",
     "RegisterResponse",
     "ReleaseRequest",
     "ReleaseResponse",
     "TaskPayload",
+    "TaskEventItem",
+    "TaskEventRequest",
+    "TaskEventResponse",
+    "VerificationCommandPayload",
 ]

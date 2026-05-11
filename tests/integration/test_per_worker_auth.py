@@ -435,6 +435,51 @@ async def test_cross_worker_bearer_on_complete_returns_403(
     assert events_after == events_before, "no event row may be written on rejected complete"
 
 
+async def test_cross_worker_bearer_on_task_events_returns_403(
+    http_client_no_legacy: AsyncClient,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """A worker cannot read another worker's claimed task event detail."""
+    plan_id = "PLAN-CROSS-EVENTS"
+    task_id = "T-cross-events-1"
+    await _seed_task(db_pool, plan_id, task_id)
+    _worker_a, token_a = await _register(http_client_no_legacy, "host-cross-events-a")
+    worker_b, token_b = await _register(http_client_no_legacy, "host-cross-events-b")
+
+    r_claim = await http_client_no_legacy.post(
+        CLAIM_PATH,
+        json={"worker_id": worker_b, "plan_id": plan_id},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert r_claim.status_code == 200, r_claim.text
+
+    r_record = await http_client_no_legacy.post(
+        f"/tasks/{task_id}/events",
+        json={
+            "worker_id": worker_b,
+            "event_type": "human_review.required",
+            "payload": {"task_id": task_id, "stage_id": "release_review"},
+        },
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert r_record.status_code == 200, r_record.text
+
+    denied = await http_client_no_legacy.get(
+        f"/tasks/{task_id}/events",
+        params={"event_prefix": "human_review."},
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert denied.status_code == 403, denied.text
+
+    allowed = await http_client_no_legacy.get(
+        f"/tasks/{task_id}/events",
+        params={"event_prefix": "human_review."},
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert [event["event_type"] for event in allowed.json()["events"]] == ["human_review.required"]
+
+
 async def test_cross_worker_bearer_on_fail_returns_403(
     http_client_no_legacy: AsyncClient,
     db_pool: asyncpg.Pool,
@@ -599,7 +644,11 @@ async def test_legacy_worker_token_accepted_with_warning(
         assert r2.status_code == 200, r2.text
 
     deprecation_records = [
-        rec for rec in caplog.records if rec.levelno == logging.WARNING and "deprecated" in rec.getMessage().lower()
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "deprecated" in rec.getMessage().lower()
+        and "WHILLY_WORKER_TOKEN" in rec.getMessage()
     ]
     assert len(deprecation_records) == 1, f"expected exactly one deprecation WARNING, got {len(deprecation_records)}"
 
@@ -690,7 +739,11 @@ async def test_per_worker_bearer_takes_precedence_over_legacy(
         )
     assert r.status_code == 200
     deprecation_records = [
-        rec for rec in caplog.records if rec.levelno == logging.WARNING and "deprecated" in rec.getMessage().lower()
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "deprecated" in rec.getMessage().lower()
+        and "WHILLY_WORKER_TOKEN" in rec.getMessage()
     ]
     assert deprecation_records == [], "per-worker authentication path must NOT emit the legacy deprecation log"
 

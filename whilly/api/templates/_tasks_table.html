@@ -1,0 +1,63 @@
+{# Patched version of whilly/api/templates/_tasks_table.html
+   Diff vs upstream — three changes:
+   1. <table> gets class="tbl"
+   2. Status / priority / review spans get class="s s-XXX" (design system convention)
+      while KEEPING the original status-XXX class for backward compatibility
+   3. <td>s use data-l="..." (design system uses CSS attr() for mobile labels);
+      keep data-mobile-label for any existing JS that reads it #}
+{% set task_columns = table_columns.tasks %}
+<table id="tasks"
+       class="tbl"
+       hx-get="/?fragment=tasks"
+       hx-trigger="every 5s, whilly:reviewDecision from:body, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+       hx-swap="outerHTML"
+       role="grid">
+  <thead>
+    <tr>
+      {% for column in task_columns %}
+        <th scope="col">{{ column.label_for("wui") }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% if tasks %}
+      {% for t in tasks %}
+        {% set _l0 = task_columns[0].label_for("wui") %}
+        {% set _l1 = task_columns[1].label_for("wui") %}
+        {% set _l2 = task_columns[2].label_for("wui") %}
+        {% set _l3 = task_columns[3].label_for("wui") %}
+        {% set _l4 = task_columns[4].label_for("wui") %}
+        {% set _l5 = task_columns[5].label_for("wui") %}
+        {% set _l6 = task_columns[6].label_for("wui") %}
+        <tr id="task-{{ t.task_id }}"
+            data-filter-text="{{ t.task_id }} {{ t.plan_id }} {{ t.status }} {{ t.priority }} {{ t.claimed_by or '' }} {{ t.human_review.stage_id }} {{ t.human_review.decision or '' }} {{ t.human_review.reason }}">
+          <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}"><code>{{ t.task_id }}</code></td>
+          <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ t.plan_id }}</td>
+          <td data-l="{{ _l2 }}" data-mobile-label="{{ _l2 }}">
+            <strong class="s s-{{ t.status }} status status-{{ t.status|lower }}">{{ t.status }}</strong>
+          </td>
+          <td data-l="{{ _l3 }}" data-mobile-label="{{ _l3 }}">
+            <strong class="s p-{{ t.priority }} priority priority-{{ t.priority }}">{{ t.priority }}</strong>
+          </td>
+          <td data-l="{{ _l4 }}" data-mobile-label="{{ _l4 }}">{{ t.claimed_by if t.claimed_by else "—" }}</td>
+          <td data-l="{{ _l5 }}" data-mobile-label="{{ _l5 }}">
+            {% if t.human_review.required %}
+              {% set review_label = t.human_review.decision or "pending_review" %}
+              <strong class="s s-{{ review_label }} review review-{{ review_label }}">{{ review_label|replace("_", " ") }}</strong>
+              {% if t.human_review.stage_id %}<code>{{ t.human_review.stage_id }}</code>{% endif %}
+            {% else %}
+              <span style="opacity:.6">—</span>
+            {% endif %}
+          </td>
+          <td data-l="{{ _l6 }}" data-mobile-label="{{ _l6 }}">
+            <time datetime="{{ format_iso(t.updated_at) }}">{{ format_human(t.updated_at) }}</time>
+          </td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr id="tasks-empty">
+        <td colspan="{{ task_columns|length }}"><em class="empty-state" style="color:var(--muted)">No tasks in queue.</em></td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>

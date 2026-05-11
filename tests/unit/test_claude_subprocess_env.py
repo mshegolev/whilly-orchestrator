@@ -26,6 +26,13 @@ from whilly.adapters.runner.proxy import (
     WHILLY_PROXY_URL_ENV,
 )
 
+HIDDEN_ENV = {
+    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+    "GH_TOKEN": "hidden-github-token",
+    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+}
+
 
 # ─── claude_cli._spawn_and_collect ────────────────────────────────────────
 
@@ -79,10 +86,50 @@ async def test_claude_cli_no_proxy_default(
     env = captured_spawn_env["env"]
     assert env is not None
     assert "HTTPS_PROXY" not in env
-    # NO_PROXY may or may not be present (parent env can carry it from
-    # tests host); the contract is "no diff vs parent_env".
-    if "NO_PROXY" in env:
-        assert env["NO_PROXY"] == os.environ.get("NO_PROXY")
+    assert "NO_PROXY" not in env
+
+
+async def test_claude_cli_excludes_operational_secrets(
+    captured_spawn_env: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claude worker subprocesses get provider creds, not Whilly ops secrets."""
+    monkeypatch.delenv(WHILLY_PROXY_URL_ENV, raising=False)
+    monkeypatch.delenv(INHERITED_HTTPS_PROXY_ENV, raising=False)
+    monkeypatch.setenv("CLAUDE_BIN", "/bin/true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    for name, value in HIDDEN_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    from whilly.adapters.runner.claude_cli import _spawn_and_collect
+
+    await _spawn_and_collect(prompt="hi", model="claude-opus-4-6[1m]")
+
+    env = captured_spawn_env["env"]
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    for name in HIDDEN_ENV:
+        assert name not in env
+
+
+async def test_claude_cli_passes_model_to_spawn_env(
+    captured_spawn_env: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The async Claude runner asks proxy/env helpers for the selected model."""
+    captured_model: dict[str, str | None] = {}
+
+    def fake_spawn_env_for_claude(*, model: str | None = None, required_env: tuple[str, ...] = ()) -> dict[str, str]:
+        captured_model["model"] = model
+        captured_model["required_env"] = ",".join(required_env)
+        return {"PATH": "/bin"}
+
+    monkeypatch.setattr("whilly.adapters.runner.claude_cli.proxy.spawn_env_for_claude", fake_spawn_env_for_claude)
+
+    from whilly.adapters.runner.claude_cli import _spawn_and_collect
+
+    await _spawn_and_collect(prompt="hi", model="claude-sonnet-4-5")
+
+    assert captured_model == {"model": "claude-sonnet-4-5", "required_env": ""}
 
 
 async def test_claude_cli_with_whilly_proxy_url_env(
@@ -198,6 +245,9 @@ def test_prd_generator_call_claude_without_proxy(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv(WHILLY_PROXY_URL_ENV, raising=False)
     monkeypatch.delenv(INHERITED_HTTPS_PROXY_ENV, raising=False)
     monkeypatch.setenv("CLAUDE_BIN", "/bin/true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    for name, value in HIDDEN_ENV.items():
+        monkeypatch.setenv(name, value)
 
     captured: dict[str, Any] = {}
     monkeypatch.setattr("whilly.prd_generator.subprocess.Popen", _make_fake_popen(captured))
@@ -209,3 +259,26 @@ def test_prd_generator_call_claude_without_proxy(monkeypatch: pytest.MonkeyPatch
     env = captured["env"]
     assert env is not None
     assert "HTTPS_PROXY" not in env
+    assert env["ANTHROPIC_API_KEY"] == "sk-ant-test"
+    for name in HIDDEN_ENV:
+        assert name not in env
+
+
+def test_prd_generator_call_claude_passes_model_to_spawn_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PRD generator uses the model-specific Claude spawn env contract."""
+    captured: dict[str, Any] = {}
+
+    def fake_spawn_env_for_claude(*, model: str | None = None, required_env: tuple[str, ...] = ()) -> dict[str, str]:
+        captured["model"] = model
+        captured["required_env"] = required_env
+        return {"PATH": "/bin"}
+
+    monkeypatch.setattr("whilly.prd_generator.proxy.spawn_env_for_claude", fake_spawn_env_for_claude)
+    monkeypatch.setattr("whilly.prd_generator.subprocess.Popen", _make_fake_popen(captured))
+
+    from whilly.prd_generator import _call_claude
+
+    _call_claude(prompt="any", model="claude-sonnet-4-5")
+
+    assert captured["model"] == "claude-sonnet-4-5"
+    assert captured["required_env"] == ()
