@@ -1,13 +1,16 @@
 """Integration test: docker-compose.demo.yml worker service exposes
-the v4.4 opencode + Groq defaults (m1-opencode-groq-default).
+the v4.4.2 opencode + Big Pickle defaults
+(m1-opencode-big-pickle-default).
 
-Pins three behavioural invariants on the canonical demo compose file:
+Pins these behavioural invariants on the canonical demo compose file:
 
 1. ``services.worker.environment.WHILLY_CLI`` defaults to ``opencode``.
 2. ``services.worker.environment.WHILLY_MODEL`` defaults to
-   ``groq/openai/gpt-oss-120b``.
-3. ``services.worker.environment`` references ``GROQ_API_KEY`` (so the
-   host's ``.env`` value, if any, is forwarded into the container).
+   ``opencode/big-pickle`` — the zero-key, anonymous free-tier model on
+   OpenCode Zen.
+3. ``services.worker.environment`` still forwards ``GROQ_API_KEY``
+   (escape hatch — kept optional, never required).
+4. No high-entropy Groq key (``gsk_...``) was committed.
 
 Each value uses Compose's ``${VAR:-default}`` expansion so operators can
 override on the command line / via ``.env``.
@@ -16,7 +19,7 @@ Skips cleanly when the Docker daemon isn't reachable for the optional
 ``docker-compose config -q`` syntactic-validity check; the YAML parse +
 default-value assertions always run because they don't need Docker.
 
-Backs VAL-M1-AGENT-DEFAULT-001.
+Backs VAL-M1-AGENT-DEFAULT-001 / -003 / -004.
 """
 
 from __future__ import annotations
@@ -95,37 +98,48 @@ def test_worker_environment_has_whilly_cli_opencode_default() -> None:
     # The literal string accepted by compose's expansion is ``${WHILLY_CLI:-opencode}``.
     # Allow a plain ``opencode`` value too in case a future PR drops the override.
     assert "opencode" in raw, (
-        f"worker.environment.WHILLY_CLI must default to 'opencode' (m1-opencode-groq-default); got: {raw!r}"
+        f"worker.environment.WHILLY_CLI must default to 'opencode' (m1-opencode-big-pickle-default); got: {raw!r}"
     )
     # Defensive: catch the legacy empty default that breaks the new behaviour.
     assert raw not in {"${WHILLY_CLI:-}", ""}, (
         f"WHILLY_CLI default was reverted to the empty string ({raw!r}). "
-        "v4.4 mandates the worker default to 'opencode'."
+        "v4.4.2 mandates the worker default to 'opencode'."
     )
 
 
-def test_worker_environment_has_whilly_model_groq_default() -> None:
-    """``WHILLY_MODEL`` must default to ``groq/openai/gpt-oss-120b``."""
+def test_worker_environment_has_whilly_model_big_pickle_default() -> None:
+    """``WHILLY_MODEL`` must default to ``opencode/big-pickle`` (zero-key onboarding)."""
     env = _load_worker_environment()
     assert "WHILLY_MODEL" in env, "worker.environment must declare WHILLY_MODEL"
     raw = env["WHILLY_MODEL"]
-    assert "groq/openai/gpt-oss-120b" in raw, (
-        f"worker.environment.WHILLY_MODEL must default to 'groq/openai/gpt-oss-120b' "
-        f"(m1-opencode-groq-default); got: {raw!r}"
+    assert "opencode/big-pickle" in raw, (
+        f"worker.environment.WHILLY_MODEL must default to 'opencode/big-pickle' "
+        f"(m1-opencode-big-pickle-default — zero-key onboarding); got: {raw!r}"
+    )
+    # Make the regression contract explicit: the v4.4 Groq default is no
+    # longer the worker's auto-default. It can still appear as a comment
+    # / placeholder elsewhere in the file, but NOT as the active worker
+    # `WHILLY_MODEL` default.
+    assert "groq/openai/gpt-oss-120b" not in raw, (
+        f"worker.environment.WHILLY_MODEL still resolves to the deprecated v4.4 Groq default ({raw!r}). "
+        "v4.4.2 requires zero-key big-pickle as the active default; Groq is now an opt-in escape hatch."
     )
 
 
-def test_worker_environment_forwards_groq_api_key() -> None:
-    """``GROQ_API_KEY`` must be forwarded from the host env / ``.env`` to the worker.
+def test_worker_environment_forwards_groq_api_key_optional() -> None:
+    """``GROQ_API_KEY`` is forwarded as an OPTIONAL escape-hatch credential.
 
-    The expected literal is ``${GROQ_API_KEY:-}`` (empty default — never
-    a real secret committed to YAML). Operators put the actual key into
-    the gitignored ``.env`` file at the repo root.
+    Even though the new default model is opencode/big-pickle (no key
+    needed), the demo compose file MUST still forward the host's
+    ``GROQ_API_KEY`` if it is set — that's how operators opt into the
+    Groq escape hatch by setting `WHILLY_MODEL=groq/...`. The expected
+    literal is ``${GROQ_API_KEY:-}`` (empty default — never a real
+    secret committed to YAML).
     """
     env = _load_worker_environment()
     assert "GROQ_API_KEY" in env, (
         "worker.environment must reference GROQ_API_KEY so the host's "
-        ".env value is forwarded into the worker container."
+        ".env value is forwarded into the worker container (Groq escape hatch)."
     )
     raw = env["GROQ_API_KEY"]
     # Either ``${GROQ_API_KEY:-}`` (with empty default) or ``${GROQ_API_KEY}``

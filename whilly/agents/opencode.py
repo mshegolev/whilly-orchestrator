@@ -22,12 +22,23 @@ Configuration via env:
                             forms (e.g. ``groq/openai/gpt-oss-120b``) pass
                             through untouched.
 
-Default since v4.4 (feature m1-opencode-groq-default): ``opencode`` is
-the default agent CLI in worker containers, and the default model is
-``groq/openai/gpt-oss-120b`` (free-tier on Groq, ~14k req/day). Worker
-startup fails fast with a clear, single-line error message if the
-operator selected the default groq path without setting ``GROQ_API_KEY``
-— see ``whilly.cli.worker.check_opencode_groq_credentials``.
+Default since v4.4.2 (feature m1-opencode-big-pickle-default): ``opencode``
+is the default agent CLI in worker containers, and the default model is
+``opencode/big-pickle`` — OpenCode Zen's free-tier "stealth" model, served
+anonymously (no API key, no `opencode auth login`, no env-var setup).
+The goal is **zero-key onboarding**: a fresh checkout + ``bash workshop-demo.sh``
+spins up a working agent without the operator having to provision any
+provider credential.
+
+Operators who prefer Groq still get the v4.4 path by setting
+``WHILLY_MODEL=groq/openai/gpt-oss-120b`` and providing ``GROQ_API_KEY``;
+the worker still emits the same single-line fail-fast diagnostic for that
+case via ``whilly.cli.worker.check_opencode_groq_credentials``.
+Anthropic / OpenAI escape hatches (`WHILLY_MODEL=anthropic/...` etc.)
+remain unchanged.
+
+Research evidence backing the zero-key claim lives at
+``{missionDir}/research/opencode-big-pickle.md``.
 """
 
 from __future__ import annotations
@@ -41,15 +52,19 @@ import time
 from pathlib import Path
 
 from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER, spawn_with_eagain_retry
+from whilly.adapters.runner.env import build_runner_env
 
 log = logging.getLogger("whilly")
 
 
-# v4.4 (feature m1-opencode-groq-default): the default model is the free-tier
-# Groq-hosted OpenAI gpt-oss-120b. Operators who want the legacy Anthropic
-# default set ``WHILLY_MODEL=anthropic/claude-opus-4-6`` in their env or
-# ``.env`` — the override is fully respected by ``default_model()`` below.
-DEFAULT_MODEL = "groq/openai/gpt-oss-120b"
+# v4.4.2 (feature m1-opencode-big-pickle-default): the default model is
+# OpenCode Zen's free, anonymous "stealth" model — no API key required as
+# of 2026-05-02. The model id format is ``opencode/<model>`` per
+# https://opencode.ai/docs/zen/. Operators who want a different default
+# (Groq's gpt-oss-120b, Anthropic's claude-opus-4-6, …) set
+# ``WHILLY_MODEL=...`` in their env or ``.env`` — the override is fully
+# respected by ``default_model()`` below.
+DEFAULT_MODEL = "opencode/big-pickle"
 DEFAULT_BIN = "opencode"
 
 # Heuristic provider prefixes — auto-applied to bare model ids. Already-
@@ -344,7 +359,9 @@ class OpenCodeBackend:
         cwd: Path | None = None,
     ) -> AgentResult:
         start = time.monotonic()
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
+        child_env = build_runner_env(os.environ, model=resolved, backend="opencode")
         try:
             proc = spawn_with_eagain_retry(
                 lambda: subprocess.run(
@@ -354,6 +371,7 @@ class OpenCodeBackend:
                     timeout=timeout,
                     cwd=str(cwd) if cwd else None,
                     check=False,
+                    env=child_env,
                 )
             )
         except subprocess.TimeoutExpired:
@@ -391,7 +409,9 @@ class OpenCodeBackend:
         log_file: Path | None = None,
         cwd: Path | None = None,
     ) -> subprocess.Popen:
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
+        child_env = build_runner_env(os.environ, model=resolved, backend="opencode")
 
         if log_file:
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -401,7 +421,7 @@ class OpenCodeBackend:
                 "# whilly agent preamble\n"
                 f"# timestamp : {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"# backend   : {self.name}\n"
-                f"# model     : {model or self.default_model()}\n"
+                f"# model     : {resolved}\n"
                 f"# cwd       : {cwd or 'inherited'}\n"
                 f"# cmd       : {' '.join(cmd[:2])} ... <prompt {len(prompt)} chars>\n"
                 "# note      : opencode --format json streams events; final result\n"
@@ -419,6 +439,7 @@ class OpenCodeBackend:
                 stdout=stdout_target,
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd) if cwd else None,
+                env=child_env,
             )
         )
 

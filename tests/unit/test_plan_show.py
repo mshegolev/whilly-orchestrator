@@ -25,6 +25,7 @@ from __future__ import annotations
 from whilly.cli.plan import render_plan_graph
 from whilly.core.models import Plan, Priority, Task, TaskStatus
 from whilly.core.scheduler import detect_cycles
+from whilly.operator_views import HumanReviewState
 
 
 def test_render_plan_graph_snapshot_acyclic_three_tasks() -> None:
@@ -180,3 +181,21 @@ def test_render_plan_graph_summary_omits_zero_buckets() -> None:
     rendered = render_plan_graph(plan, (t1, t2), detect_cycles(plan), use_color=False)
     summary = rendered.splitlines()[-1]
     assert summary == "Summary: 2 tasks · DONE=2", f"got: {summary!r}"
+
+
+def test_render_plan_graph_marks_tasks_waiting_for_human_review() -> None:
+    """Human-review audit state renders inline without changing task status."""
+    t = Task(id="release", status=TaskStatus.IN_PROGRESS, priority=Priority.CRITICAL, description="")
+    plan = Plan(id="p", name="p", tasks=(t,))
+
+    rendered = render_plan_graph(
+        plan,
+        (t,),
+        detect_cycles(plan),
+        use_color=False,
+        human_review_by_task={
+            "release": HumanReviewState(required=True, stage_id="release_review", reason="stage_human_gate")
+        },
+    )
+
+    assert "[IN_PROGRESS] release  (critical)  review=pending stage=release_review" in rendered

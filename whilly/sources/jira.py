@@ -11,7 +11,8 @@ Public surface mirrors :mod:`whilly.sources.github_issues`::
     from whilly.sources.jira import fetch_single_jira_issue
     plan_path, stats = fetch_single_jira_issue("ABC-123", out_path="tasks.json")
 
-CLI entry point: ``whilly --from-jira ABC-123 [--go]`` (see cli.py).
+CLI entry point: ``whilly jira import ABC-123 [--import-db|--run]``.
+The legacy ``whilly --from-jira ABC-123 [--go]`` form is still routed there.
 
 Uses only stdlib (``urllib.request``) so Jira access works without ``requests``
 being installed.
@@ -24,12 +25,15 @@ import json
 import logging
 import os
 import re
+import ssl
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from json import JSONDecodeError
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from whilly.security.prompt_sanitizer import sanitize_external_text
 from whilly.sources.github_issues import FetchStats, GitHubIssuesSource, merge_into_plan
 
 log = logging.getLogger("whilly")
@@ -45,6 +49,10 @@ class JiraAuth:
     server_url: str
     username: str
     token: str
+    verify_ssl: bool = True
+    ca_file: str = ""
+    auth_scheme: str = "basic"
+    api_version: str = "3"
 
     @classmethod
     def from_config(cls) -> JiraAuth:
@@ -52,6 +60,10 @@ class JiraAuth:
         server = ""
         username = ""
         token = ""
+        verify_ssl = True
+        ca_file = ""
+        auth_scheme = "basic"
+        api_version = "3"
         try:
             from whilly.config import get_toml_section
             from whilly.secrets import resolve as resolve_secret
@@ -60,6 +72,10 @@ class JiraAuth:
             server = (section.get("server_url") or "").strip()
             username = (section.get("username") or "").strip()
             raw_token = section.get("token") or ""
+            verify_ssl = _parse_bool_setting(section.get("verify_ssl"), default=True)
+            ca_file = (section.get("ca_file") or "").strip()
+            auth_scheme = _normalize_jira_auth_scheme(section.get("auth_scheme") or auth_scheme)
+            api_version = _normalize_jira_api_version(section.get("api_version") or api_version)
             if raw_token:
                 resolved = resolve_secret(raw_token)
                 token = resolved if isinstance(resolved, str) else ""
@@ -69,16 +85,134 @@ class JiraAuth:
         server = server or os.environ.get("JIRA_SERVER_URL", "").strip()
         username = username or os.environ.get("JIRA_USERNAME", "").strip()
         token = token or os.environ.get("JIRA_API_TOKEN", "").strip()
-        if not (server and username and token):
-            missing = [
-                name for name, val in (("server_url", server), ("username", username), ("token", token)) if not val
-            ]
+        company_settings = _company_settings_jira_auth()
+        server = server or company_settings.get("server_url", "")
+        username = username or company_settings.get("username", "")
+        token = token or company_settings.get("token", "")
+        verify_ssl = _parse_bool_setting(
+            os.environ.get("JIRA_VERIFY_SSL")
+            or os.environ.get("JIRA_SSL_VERIFY")
+            or company_settings.get("verify_ssl"),
+            default=verify_ssl,
+        )
+        ca_file = (
+            os.environ.get("JIRA_CA_FILE")
+            or os.environ.get("JIRA_SSL_CA_FILE")
+            or company_settings.get("ca_file")
+            or ca_file
+        ).strip()
+        auth_scheme = _normalize_jira_auth_scheme(
+            os.environ.get("JIRA_AUTH_SCHEME")
+            or os.environ.get("JIRA_TOKEN_TYPE")
+            or company_settings.get("auth_scheme")
+            or auth_scheme
+        )
+        api_version = _normalize_jira_api_version(
+            os.environ.get("JIRA_API_VERSION") or company_settings.get("api_version") or api_version
+        )
+        required = [("server_url", server), ("token", token)]
+        if auth_scheme == "basic":
+            required.append(("username", username))
+        if not all(value for _, value in required):
+            missing = [name for name, val in required if not val]
             raise RuntimeError(
                 "Jira source is unconfigured — missing: "
                 + ", ".join(missing)
-                + ". Set [jira] in whilly.toml or JIRA_SERVER_URL/JIRA_USERNAME/JIRA_API_TOKEN."
+                + ". Set [jira] in whilly.toml or JIRA_SERVER_URL/JIRA_USERNAME/JIRA_API_TOKEN. "
+                + "For Personal Access Tokens set JIRA_AUTH_SCHEME=bearer."
             )
-        return cls(server_url=server.rstrip("/"), username=username, token=token)
+        return cls(
+            server_url=server.rstrip("/"),
+            username=username,
+            token=token,
+            verify_ssl=verify_ssl,
+            ca_file=ca_file,
+            auth_scheme=auth_scheme,
+            api_version=api_version,
+        )
+
+
+def _company_settings_jira_auth() -> dict[str, str]:
+    """Resolve Jira auth from a flat company settings YAML file when configured.
+
+    Some QA environments keep shared settings in a top-level YAML file with
+    keys such as ``JIRA_URL``, ``JIRA_TOKEN`` and ``EMAIL_USER``. Whilly keeps
+    this optional and stdlib-only: set ``WHILLY_COMPANY_SETTINGS_FILE`` (or
+    ``COMPANY_SETTINGS_FILE``) to opt in. Values are never logged here.
+    """
+
+    path = os.environ.get("WHILLY_COMPANY_SETTINGS_FILE") or os.environ.get("COMPANY_SETTINGS_FILE") or ""
+    if not path:
+        return {}
+    settings_path = Path(path).expanduser()
+    try:
+        raw = settings_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    data = _parse_flat_yaml_settings(raw)
+    return {
+        "server_url": data.get("JIRA_URL", ""),
+        "username": data.get("JIRA_USERNAME") or data.get("EMAIL_USER") or data.get("ACCOUNT_USER") or "",
+        "token": data.get("JIRA_TOKEN", ""),
+        "verify_ssl": data.get("JIRA_VERIFY_SSL") or data.get("JIRA_SSL_VERIFY") or "",
+        "ca_file": data.get("JIRA_CA_FILE") or data.get("JIRA_SSL_CA_FILE") or "",
+        "auth_scheme": data.get("JIRA_AUTH_SCHEME") or data.get("JIRA_TOKEN_TYPE") or "",
+        "api_version": data.get("JIRA_API_VERSION") or "",
+    }
+
+
+def _parse_flat_yaml_settings(raw: str) -> dict[str, str]:
+    """Parse simple top-level ``KEY: value`` YAML settings without PyYAML."""
+
+    out: dict[str, str] = {}
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        key = key.strip()
+        if not key or key.startswith("-"):
+            continue
+        value = value.strip()
+        if " #" in value:
+            value = value.split(" #", 1)[0].rstrip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
+def _parse_bool_setting(value: Any, *, default: bool) -> bool:
+    """Parse common config/env boolean spellings while preserving the default."""
+
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _normalize_jira_auth_scheme(value: Any) -> str:
+    """Normalize Jira authorization mode."""
+
+    text = str(value or "").strip().lower()
+    if text in {"bearer", "pat", "token", "personal_access_token"}:
+        return "bearer"
+    return "basic"
+
+
+def _normalize_jira_api_version(value: Any) -> str:
+    """Normalize supported Jira REST API version names."""
+
+    text = str(value or "").strip().lower()
+    if text in {"2", "3", "latest"}:
+        return text
+    return "3"
 
 
 # ── Low-level REST call ───────────────────────────────────────────────────────
@@ -87,20 +221,57 @@ class JiraAuth:
 def _jira_get(auth: JiraAuth, path: str, *, timeout: int = 15) -> dict:
     """GET ``{server}{path}`` and return parsed JSON. Raises RuntimeError on failure."""
     url = f"{auth.server_url}{path}"
-    header = base64.b64encode(f"{auth.username}:{auth.token}".encode("utf-8")).decode("ascii")
+    if auth.auth_scheme == "bearer":
+        authorization = f"Bearer {auth.token}"
+    else:
+        header = base64.b64encode(f"{auth.username}:{auth.token}".encode("utf-8")).decode("ascii")
+        authorization = f"Basic {header}"
     req = Request(
         url,
-        headers={"Authorization": f"Basic {header}", "Accept": "application/json"},
+        headers={"Authorization": authorization, "Accept": "application/json"},
         method="GET",
     )
+    context = _jira_ssl_context(auth)
     try:
-        with urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8") or "{}")
+        if context is None:
+            response = urlopen(req, timeout=timeout)
+        else:
+            response = urlopen(req, timeout=timeout, context=context)
+        with response as resp:
+            raw_body = resp.read().decode("utf-8", errors="replace")
+            try:
+                return json.loads(raw_body or "{}")
+            except JSONDecodeError as exc:
+                content_type = resp.headers.get("content-type", "")
+                status = getattr(resp, "status", "")
+                hint = "received HTML login/SSO page" if "<html" in raw_body.lower() else "response body is not JSON"
+                prefix = raw_body.replace("\r", " ").replace("\n", " ")[:300]
+                raise RuntimeError(
+                    f"Jira GET {path} returned non-JSON response: HTTP {status}, "
+                    f"content-type={content_type!r}, {hint}: {prefix}"
+                ) from exc
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500] if exc.fp else ""
         raise RuntimeError(f"Jira GET {path} failed: HTTP {exc.code} — {body}") from exc
     except URLError as exc:
         raise RuntimeError(f"Jira GET {path} network error: {exc.reason}") from exc
+
+
+def _jira_ssl_context(auth: JiraAuth) -> ssl.SSLContext | None:
+    """Return an explicit SSL context only when Jira TLS config differs from defaults."""
+
+    if not auth.verify_ssl:
+        log.warning("Jira TLS certificate verification is disabled by configuration")
+        return ssl._create_unverified_context()  # noqa: SLF001 - operator-controlled corporate Jira escape hatch
+    if auth.ca_file:
+        return ssl.create_default_context(cafile=auth.ca_file)
+    return None
+
+
+def _jira_rest_path(auth: JiraAuth, resource: str) -> str:
+    """Build a Jira REST path using the configured API version."""
+
+    return f"/rest/api/{auth.api_version}/{resource.lstrip('/')}"
 
 
 # ── Description flattening (Jira v3 Atlassian Document Format) ────────────────
@@ -233,20 +404,23 @@ def issue_to_task_dict(key: str, payload: dict[str, Any]) -> dict[str, Any]:
             snippet = snippet[:480].rsplit("\n", 1)[0] + "\n…"
         description_short = f"{summary}\n\n{snippet}"
 
-    # Return a dict that plays the same role as a gh issue for merge_into_plan.
-    # We monkey-patch `number` to the Jira key so the resulting Task.id becomes
-    # JIRA-<key> via a custom conversion wrapper (handled by `_adapt_for_merge`).
     return {
         "_jira_key": key,
         "number": key,  # merge_into_plan uses this to build the task id
         "title": summary,
         "body": body,
+        "description": sanitize_external_text(description_short, scope="jira_description"),
         "description_short": description_short,
         "labels": labels_for_gh,
         "url": browse_url,
         "priority": _jira_priority(fields),
-        "acceptance_criteria": _extract_section_bullets(body, "Acceptance"),
-        "test_steps": _extract_section_bullets(body, "Test"),
+        "acceptance_criteria": [
+            sanitize_external_text(item, scope="jira_acceptance")
+            for item in _extract_section_bullets(body, "Acceptance")
+        ],
+        "test_steps": [
+            sanitize_external_text(item, scope="jira_test") for item in _extract_section_bullets(body, "Test")
+        ],
         "jira_key": key,
     }
 
@@ -287,7 +461,7 @@ def fetch_single_jira_issue(
     clean_key = parse_jira_key(key)
     auth = JiraAuth.from_config()
     # Use v3 for richer ADF payload; v2 responds with plain-string description.
-    payload = _jira_get(auth, f"/rest/api/3/issue/{clean_key}", timeout=timeout)
+    payload = _jira_get(auth, _jira_rest_path(auth, f"issue/{clean_key}"), timeout=timeout)
     jira_dict = issue_to_task_dict(clean_key, payload)
     source = GitHubIssuesSource(
         owner="jira",
@@ -315,14 +489,47 @@ def _rewrite_task_id_to_jira(plan_path: Path, key: str) -> None:
         return
     data = json.loads(plan_path.read_text(encoding="utf-8"))
     changed = False
+    browse_url = ""
+    repo_target = _jira_target_repo_block()
     for task in data.get("tasks", []):
         if task.get("id") == f"GH-{key}":
             task["id"] = f"JIRA-{key}"
             task.setdefault("category", "jira-issue")
             task["jira_key"] = key
+            browse_url = str(task.get("prd_requirement") or "")
+            if repo_target is None:
+                task.pop("repo_target_id", None)
+            else:
+                task["repo_target_id"] = repo_target["id"]
             changed = True
     if changed:
+        data["origin"] = {
+            "system": "jira_issue",
+            "ref": key,
+            "url": browse_url,
+            "title": f"Jira issue {key}",
+            "decomposition_mode": "source_adapter",
+        }
+        data["repo_targets"] = [] if repo_target is None else [repo_target]
         plan_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _jira_target_repo_block() -> dict[str, str] | None:
+    """Return optional GitHub repo target for Jira-sourced tasks.
+
+    Jira issue keys do not identify a code repository by themselves. Operators
+    can set ``WHILLY_JIRA_TARGET_REPO=owner/repo`` to make generated v4 plans
+    repo-routable while keeping the Jira origin separate from execution.
+    """
+    repo = os.environ.get("WHILLY_JIRA_TARGET_REPO", "").strip()
+    if not repo or "/" not in repo:
+        return None
+    return {
+        "id": f"github:{repo}",
+        "provider": "github",
+        "repo_full_name": repo,
+        "clone_url": f"https://github.com/{repo}.git",
+    }
 
 
 # ── Key parsing ───────────────────────────────────────────────────────────────

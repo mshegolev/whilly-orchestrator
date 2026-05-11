@@ -241,6 +241,14 @@ def test_run_async_writes_prompt_and_preamble(tmp_path, monkeypatch):
     """Dispatch should write prompt.md + meta.json + a log preamble before Popen spawns."""
     backend = ClaudeHandoffBackend()
     log_file = tmp_path / "agent.log"
+    hidden_names = {
+        "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+        "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+        "GH_TOKEN": "hidden-github-token",
+        "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+    }
+    for name, value in hidden_names.items():
+        monkeypatch.setenv(name, value)
 
     captured: dict = {}
 
@@ -278,6 +286,10 @@ def test_run_async_writes_prompt_and_preamble(tmp_path, monkeypatch):
     # Popen gets the expected env var so its polling script can find the result.
     assert "WHILLY_HANDOFF_RESULT_PATH" in captured["env"]
     assert captured["env"]["WHILLY_HANDOFF_RESULT_PATH"].endswith("result.json")
+    assert captured["env"]["WHILLY_HANDOFF_TIMEOUT"] == "3"
+    assert "WHILLY_HANDOFF_DIR" in captured["env"]
+    for name in hidden_names:
+        assert name not in captured["env"]
     proc.wait()
 
 

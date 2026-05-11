@@ -66,6 +66,8 @@ from whilly.cli.worker import (
     main,
     run_worker_command,
 )
+from whilly.core.models import Plan, Task, TaskStatus, VerificationCommand
+from whilly.pipeline.verification import VerificationRunOutcome
 from whilly.worker.remote import DEFAULT_HEARTBEAT_INTERVAL, RemoteWorkerStats
 
 # ---------------------------------------------------------------------------
@@ -153,6 +155,10 @@ def test_build_worker_parser_accepts_all_flags() -> None:
             "0.5",
             "--max-iterations",
             "3",
+            "--verify-command",
+            "unit=pytest -q tests/unit",
+            "--optional-verify-command",
+            "lint=ruff check whilly",
         ]
     )
     assert args.connect_url == "http://127.0.0.1:8000"
@@ -162,6 +168,8 @@ def test_build_worker_parser_accepts_all_flags() -> None:
     assert args.once is True
     assert args.heartbeat_interval == pytest.approx(0.5)
     assert args.max_iterations == 3
+    assert args.verify_commands == ["unit=pytest -q tests/unit"]
+    assert args.optional_verify_commands == ["lint=ruff check whilly"]
 
 
 # ---------------------------------------------------------------------------
@@ -232,13 +240,84 @@ def test_missing_token_exits_2_with_hint(
 
     "Отсутствие токена → exit 2 с подсказкой" is the literal AC for
     TASK-022c — this test is the canonical regression guard for it.
+
+    Since M2 (VAL-M1-DEMO-009) the worker also consults the OS keychain
+    via :func:`whilly.secrets.fetch_worker_credential` before giving up;
+    the diagnostic now mentions ``whilly worker connect`` as a third
+    option. We force the keyring lookup to ``None`` so this regression
+    guard is independent of any bearer the developer's keychain may
+    legitimately hold for ``http://127.0.0.1:8000``.
     """
     _clear_worker_env(monkeypatch)
+    monkeypatch.setattr("whilly.secrets.fetch_worker_credential", lambda *a, **kw: None)
     code = run_worker_command(["--connect", "http://127.0.0.1:8000", "--plan", "P-1"])
     assert code == EXIT_ENVIRONMENT_ERROR
     captured = capsys.readouterr()
     assert WORKER_TOKEN_ENV in captured.err
     assert "--token" in captured.err
+    assert "whilly worker connect" in captured.err
+    assert "keychain" in captured.err.lower()
+
+
+def test_keychain_token_satisfies_required_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAL-M1-DEMO-009: with no ``--token`` / env, a keychain bearer is used.
+
+    Mirrors the M1 keyring-resume contract that was deferred to M2:
+    after ``whilly worker connect`` stores a bearer via
+    :func:`whilly.secrets.store_worker_credential`, a follow-up
+    ``whilly-worker --connect <url> --plan <p>`` invocation (without
+    ``--token`` / ``WHILLY_WORKER_TOKEN``) must fetch the bearer from
+    the OS keychain and proceed to the loop.
+    """
+    _clear_worker_env(monkeypatch)
+    monkeypatch.setattr(
+        "whilly.secrets.fetch_worker_credential",
+        lambda *a, **kw: "keychain-bearer",
+    )
+    captured, fake = _make_async_worker_recorder()
+    monkeypatch.setattr(cli_worker, "_async_worker", fake)
+    code = run_worker_command(
+        ["--connect", "http://127.0.0.1:8000", "--plan", "P-resume"],
+    )
+    assert code == EXIT_OK
+    assert len(captured) == 1
+    assert captured[0]["token"] == "keychain-bearer"
+
+
+def test_cli_token_takes_precedence_over_keychain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--token`` wins even when the keychain has a bearer for ``--connect``.
+
+    Pins the precedence: explicit CLI > env > keychain. A regression
+    that reordered these would silently substitute a stale stored
+    bearer for the operator's one-off override.
+    """
+    _clear_worker_env(monkeypatch)
+    fetched: list[tuple[object, ...]] = []
+
+    def _fetch(*args: object, **kwargs: object) -> str:
+        fetched.append(args)
+        return "stale-keychain-bearer"
+
+    monkeypatch.setattr("whilly.secrets.fetch_worker_credential", _fetch)
+    captured, fake = _make_async_worker_recorder()
+    monkeypatch.setattr(cli_worker, "_async_worker", fake)
+    code = run_worker_command(
+        [
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--plan",
+            "P-1",
+            "--token",
+            "explicit-cli-bearer",
+        ],
+    )
+    assert code == EXIT_OK
+    assert captured[0]["token"] == "explicit-cli-bearer"
+    assert fetched == []  # keychain never consulted when --token is set
 
 
 def test_missing_plan_exits_2_with_hint(
@@ -503,6 +582,32 @@ def test_runner_kwarg_reaches_async_worker(monkeypatch: pytest.MonkeyPatch) -> N
     assert captured[0]["runner"] is _stub_runner
 
 
+def test_verification_flags_reach_async_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remote worker CLI forwards required and optional verification flags."""
+    _clear_worker_env(monkeypatch)
+    captured, fake = _make_async_worker_recorder()
+    monkeypatch.setattr(cli_worker, "_async_worker", fake)
+
+    code = run_worker_command(
+        [
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--token",
+            "X",
+            "--plan",
+            "P-1",
+            "--verify-command",
+            "unit=pytest -q",
+            "--optional-verify-command",
+            "lint=ruff check whilly",
+        ],
+    )
+
+    assert code == EXIT_OK
+    assert captured[0]["verify_commands"] == ["unit=pytest -q"]
+    assert captured[0]["optional_verify_commands"] == ["lint=ruff check whilly"]
+
+
 def test_install_signal_handlers_kwarg_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     """``install_signal_handlers`` reaches ``_async_worker`` unchanged.
 
@@ -607,3 +712,337 @@ def test_asyncio_run_is_used_for_async_path(monkeypatch: pytest.MonkeyPatch) -> 
     )
     assert code == EXIT_OK
     assert len(seen_calls) == 1, "asyncio.run was not called exactly once"
+
+
+@pytest.mark.asyncio
+async def test_async_worker_fetches_plan_and_builds_profile_verification_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Static remote mode fetches plan metadata and resolves profile before CLI commands."""
+    task = Task(id="T-VERIFY", status=TaskStatus.PENDING)
+    fetched_plan = Plan(
+        id="P-1",
+        name="Fetched profile plan",
+        verification_commands=(
+            VerificationCommand(name="profile-unit", command="pytest -q tests/unit", required=True),
+        ),
+    )
+    captured: dict[str, object] = {}
+    clients: list[object] = []
+
+    class _FakeClient:
+        def __init__(self, base_url: str, token: str) -> None:
+            self.base_url = base_url
+            self.token = token
+            self.get_plan_calls: list[str] = []
+            clients.append(self)
+
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_plan(self, plan_id: str) -> Plan:
+            self.get_plan_calls.append(plan_id)
+            return fetched_plan
+
+    async def _fake_run_verification_commands(commands: object, **kwargs: object) -> VerificationRunOutcome:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        captured["verification_kwargs"] = kwargs
+        return VerificationRunOutcome(results=())
+
+    async def _fake_run_remote_worker_with_heartbeat(
+        client: object,
+        runner: object,
+        plan: Plan,
+        worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> RemoteWorkerStats:
+        captured["client"] = client
+        captured["plan"] = plan
+        captured["worker_id"] = worker_id
+        captured["verification_runner_present"] = verification_runner is not None
+        assert verification_runner is not None
+        await verification_runner(task)  # type: ignore[misc]
+        return RemoteWorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_worker, "RemoteWorkerClient", _FakeClient)
+    monkeypatch.setattr(cli_worker, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_worker, "run_remote_worker_with_heartbeat", _fake_run_remote_worker_with_heartbeat)
+
+    await cli_worker._async_worker(
+        connect_url="http://127.0.0.1:8000",
+        token="token",
+        plan_id="P-1",
+        worker_id="w-verify",
+        runner=_stub_runner,  # type: ignore[arg-type]
+        heartbeat_interval=1,
+        max_iterations=1,
+        max_processed=None,
+        install_signal_handlers=False,
+        verify_commands=("cli-required=pytest -q",),
+        optional_verify_commands=("cli-optional=ruff check whilly",),
+    )
+
+    assert len(clients) == 1
+    assert clients[0].get_plan_calls == ["P-1"]  # type: ignore[attr-defined]
+    assert captured["plan"] == fetched_plan
+    assert captured["verification_runner_present"] is True
+    commands = captured["commands"]  # type: ignore[assignment]
+    assert [(command.name, command.source, command.required) for command in commands] == [
+        ("profile-unit", "profile", True),
+        ("cli-required", "cli", True),
+        ("cli-optional", "cli", False),
+    ]
+    assert captured["verification_kwargs"]["cwd"] == cli_worker.Path.cwd()  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_remote_worker_passes_ci_poll_runner_for_ci_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = Task(id="T-CI-VERIFY", status=TaskStatus.PENDING)
+    fetched_plan = Plan(
+        id="P-1",
+        name="Fetched CI plan",
+        verification_commands=(
+            VerificationCommand(
+                name="ci-status",
+                command="ci://github/example/repo/pull/42",
+                required=True,
+                source="ci",
+                repair_max_attempts=1,
+            ),
+        ),
+    )
+    captured: dict[str, object] = {}
+    ci_runner = object()
+
+    class _FakeClient:
+        def __init__(self, _base_url: str, _token: str) -> None:
+            return None
+
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_plan(self, _plan_id: str) -> Plan:
+            return fetched_plan
+
+    async def _fake_run_verification_commands(commands: object, **kwargs: object) -> VerificationRunOutcome:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        captured["verification_kwargs"] = kwargs
+        return VerificationRunOutcome(results=())
+
+    async def _fake_run_remote_worker_with_heartbeat(
+        _client: object,
+        _runner: object,
+        _plan: Plan,
+        _worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> RemoteWorkerStats:
+        assert verification_runner is not None
+        await verification_runner(task)  # type: ignore[misc]
+        return RemoteWorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_worker, "GitHubCIPollAdapter", lambda: ci_runner, raising=False)
+    monkeypatch.setattr(cli_worker, "RemoteWorkerClient", _FakeClient)
+    monkeypatch.setattr(cli_worker, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_worker, "run_remote_worker_with_heartbeat", _fake_run_remote_worker_with_heartbeat)
+
+    await cli_worker._async_worker(
+        connect_url="http://127.0.0.1:8000",
+        token="token",
+        plan_id="P-1",
+        worker_id="w-ci-verify",
+        runner=_stub_runner,  # type: ignore[arg-type]
+        heartbeat_interval=1,
+        max_iterations=1,
+        max_processed=None,
+        install_signal_handlers=False,
+        verify_commands=(),
+        optional_verify_commands=(),
+    )
+
+    commands = captured["commands"]  # type: ignore[assignment]
+    assert [(command.name, command.source, command.repair_max_attempts) for command in commands] == [
+        ("ci-status", "ci", 1),
+    ]
+    assert captured["verification_kwargs"]["ci_poll_runner"] is ci_runner  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_async_worker_preserves_cli_only_remote_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote verification still works when only explicit CLI flags are configured."""
+    task = Task(id="T-VERIFY", status=TaskStatus.PENDING)
+    fetched_plan = Plan(id="P-1", name="Fetched profile plan")
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        def __init__(self, _base_url: str, _token: str) -> None:
+            return None
+
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_plan(self, _plan_id: str) -> Plan:
+            return fetched_plan
+
+    async def _fake_run_verification_commands(commands: object, **_kwargs: object) -> VerificationRunOutcome:
+        captured["commands"] = tuple(commands)  # type: ignore[arg-type]
+        return VerificationRunOutcome(results=())
+
+    async def _fake_run_remote_worker_with_heartbeat(
+        _client: object,
+        _runner: object,
+        _plan: Plan,
+        _worker_id: str,
+        *,
+        verification_runner: object | None,
+        **_kwargs: object,
+    ) -> RemoteWorkerStats:
+        assert verification_runner is not None
+        await verification_runner(task)  # type: ignore[misc]
+        return RemoteWorkerStats()
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_worker, "RemoteWorkerClient", _FakeClient)
+    monkeypatch.setattr(cli_worker, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_worker, "run_remote_worker_with_heartbeat", _fake_run_remote_worker_with_heartbeat)
+
+    await cli_worker._async_worker(
+        connect_url="http://127.0.0.1:8000",
+        token="token",
+        plan_id="P-1",
+        worker_id="w-verify",
+        runner=_stub_runner,  # type: ignore[arg-type]
+        heartbeat_interval=1,
+        max_iterations=1,
+        max_processed=None,
+        install_signal_handlers=False,
+        verify_commands=("cli-required=pytest -q",),
+        optional_verify_commands=("cli-optional=ruff check whilly",),
+    )
+
+    commands = captured["commands"]  # type: ignore[assignment]
+    assert [(command.name, command.command, command.source, command.required) for command in commands] == [
+        ("cli-required", "pytest -q", "cli", True),
+        ("cli-optional", "ruff check whilly", "cli", False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_worker_rotation_fetches_plan_per_client_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """URL-rotation mode refreshes plan metadata for each new client session."""
+    task = Task(id="T-VERIFY", status=TaskStatus.PENDING)
+    plans_by_url = {
+        "http://session-a": Plan(
+            id="P-1",
+            name="Session A",
+            verification_commands=(VerificationCommand(name="profile-a", command="pytest -q a", required=True),),
+        ),
+        "http://session-b": Plan(
+            id="P-1",
+            name="Session B",
+            verification_commands=(VerificationCommand(name="profile-b", command="pytest -q b", required=False),),
+        ),
+    }
+    captured: dict[str, object] = {"fetched": [], "commands": []}
+
+    class _FakeSource:
+        poll_interval = 0.01
+
+        async def fetch(self) -> str:
+            return "http://session-a"
+
+        async def aclose(self) -> None:
+            captured["source_closed"] = True
+
+    class _FakeClient:
+        def __init__(self, base_url: str, _token: str) -> None:
+            self.base_url = base_url
+
+        async def __aenter__(self) -> "_FakeClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get_plan(self, plan_id: str) -> Plan:
+            captured["fetched"].append((self.base_url, plan_id))  # type: ignore[attr-defined]
+            return plans_by_url[self.base_url]
+
+    async def _fake_run_verification_commands(commands: object, **_kwargs: object) -> VerificationRunOutcome:
+        captured["commands"].append(tuple(commands))  # type: ignore[attr-defined,arg-type]
+        return VerificationRunOutcome(results=())
+
+    async def _fake_run_remote_worker_with_url_rotation(
+        client_factory: object,
+        _runner: object,
+        _plan: Plan,
+        _worker_id: str,
+        initial_url: str,
+        _source: object,
+        *,
+        session_context_factory: object,
+        **_kwargs: object,
+    ) -> object:
+        for url in (initial_url, "http://session-b"):
+            async with client_factory(url) as client:  # type: ignore[misc]
+                session_plan, verification_runner = await session_context_factory(client)  # type: ignore[misc]
+                captured.setdefault("session_plans", []).append(session_plan)  # type: ignore[attr-defined]
+                assert verification_runner is not None
+                await verification_runner(task)
+        return cli_worker.RotationStats(inner_runs=2, url_rotations=1, stats=RemoteWorkerStats())
+
+    async def _stub_runner(_task: object, _prompt: str) -> object:
+        return object()
+
+    monkeypatch.setattr(cli_worker, "make_funnel_url_source", lambda **_kwargs: _FakeSource())
+    monkeypatch.setattr(cli_worker, "RemoteWorkerClient", _FakeClient)
+    monkeypatch.setattr(cli_worker, "run_verification_commands", _fake_run_verification_commands)
+    monkeypatch.setattr(cli_worker, "run_remote_worker_with_url_rotation", _fake_run_remote_worker_with_url_rotation)
+
+    await cli_worker._async_worker(
+        connect_url="http://seed",
+        token="token",
+        plan_id="P-1",
+        worker_id="w-verify",
+        runner=_stub_runner,  # type: ignore[arg-type]
+        heartbeat_interval=1,
+        max_iterations=1,
+        max_processed=None,
+        install_signal_handlers=False,
+        verify_commands=(),
+        optional_verify_commands=(),
+        funnel_env={"WHILLY_FUNNEL_URL_SOURCE": "file"},
+    )
+
+    assert captured["fetched"] == [("http://session-a", "P-1"), ("http://session-b", "P-1")]
+    session_plans = captured["session_plans"]  # type: ignore[assignment]
+    assert [plan.name for plan in session_plans] == ["Session A", "Session B"]
+    command_batches = captured["commands"]  # type: ignore[assignment]
+    assert [[command.name for command in commands] for commands in command_batches] == [["profile-a"], ["profile-b"]]
+    assert captured["source_closed"] is True

@@ -1,0 +1,58 @@
+{# Patched PRD wizard — drop into whilly/api/templates/_prd.html
+
+   POST /prd/generate with {slug, budget, idea} returns this fragment with
+   ``generated`` populated. ``generated`` is either None (initial render)
+   or {slug, budget, tasks:[{id,title}, ...]}.
+#}
+<section class="panel">
+  <header>PRD wizard</header>
+  <div class="body">
+    <form class="form-grid"
+          hx-post="/prd/generate"
+          hx-target="closest .panel" hx-swap="outerHTML">
+      <label for="prd-slug">Slug</label>
+      <input id="prd-slug" class="inp" name="slug" required
+             value="{{ prd.slug if prd else 'api-monitor' }}" />
+
+      <label for="prd-budget">Budget (USD)</label>
+      <input id="prd-budget" class="inp" name="budget" inputmode="decimal"
+             value="{{ prd.budget if prd else '5.00' }}" />
+
+      <label for="prd-idea">Idea / PRD draft</label>
+      <textarea id="prd-idea" class="inp" name="idea" rows="6"
+                style="font:var(--code);white-space:pre-wrap">{{ prd.idea if prd else
+'Build a CLI tool for monitoring API endpoints with exponential backoff and SLO alerting.' }}</textarea>
+
+      <div class="full" style="display:flex;gap:8px">
+        <button class="btn ok" type="submit">Generate plan ▸</button>
+        <button class="btn" type="reset">Clear</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+{% if generated %}
+<section class="panel">
+  <header>Generated · plan_id=<code>{{ generated.slug }}</code> · budget ${{ generated.budget }}</header>
+  <div class="body">
+    <table class="tbl">
+      <thead><tr><th>Task</th><th>Title</th></tr></thead>
+      <tbody>
+        {% for t in generated.tasks %}
+          <tr>
+            <td data-l="Task"><code>{{ t.id }}</code></td>
+            <td data-l="Title">{{ t.title }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="padding:10px;border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn ok"
+              hx-post="/prd/{{ generated.slug }}/dispatch" hx-swap="none">Dispatch (strict)</button>
+      <button class="btn"
+              hx-post="/prd/{{ generated.slug }}/save" hx-swap="none">Save PRD only</button>
+      <a class="btn" href="/prd/{{ generated.slug }}.md" download>Download PRD-{{ generated.slug }}.md</a>
+    </div>
+  </div>
+</section>
+{% endif %}

@@ -37,7 +37,9 @@ import pytest
 
 from whilly.adapters.transport.client import (
     CLAIM_PATH,
+    CONTROL_STATE_PATH,
     DEFAULT_BACKOFF_SCHEDULE,
+    PLAN_PATH_PREFIX,
     REGISTER_PATH,
     AuthError,
     HTTPClientError,
@@ -45,15 +47,21 @@ from whilly.adapters.transport.client import (
     ServerError,
     VersionConflictError,
     complete_path,
+    control_state_path,
     fail_path,
     heartbeat_path,
+    plan_path,
+    repair_path,
+    task_event_path,
 )
 from whilly.adapters.transport.schemas import (
     CompleteResponse,
+    ControlStateResponse,
     ErrorResponse,
     FailResponse,
     HeartbeatResponse,
     RegisterResponse,
+    TaskEventResponse,
     TaskPayload,
 )
 from whilly.core.models import Priority, Task, TaskStatus
@@ -176,6 +184,94 @@ async def test_bearer_token_attached_to_every_request() -> None:
         await client._request("POST", "/b", json={"x": 1})
 
     assert seen_headers == ["Bearer t-123", "Bearer t-123"]
+
+
+async def test_control_state_reads_worker_pause_state() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "paused": True,
+                "pause_reason": "release gate",
+                "paused_by": "lead@example.com",
+                "paused_at": "2026-05-08T10:00:00+00:00",
+                "updated_at": "2026-05-08T10:00:01+00:00",
+            },
+        )
+
+    async with _make_client(handler, token="t-123") as client:
+        state = await client.control_state()
+
+    assert control_state_path() == CONTROL_STATE_PATH
+    assert seen_paths == [CONTROL_STATE_PATH]
+    assert isinstance(state, ControlStateResponse)
+    assert state.paused is True
+    assert state.pause_reason == "release gate"
+
+
+async def test_get_plan_fetches_plan_metadata_with_verification_commands() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "id": "P-1",
+                "name": "Profile Verification",
+                "github_issue_ref": None,
+                "verification_commands": [
+                    {
+                        "name": "profile-required",
+                        "command": ".venv/bin/python -m pytest -q tests/unit",
+                        "required": True,
+                        "source": "profile",
+                    },
+                    {
+                        "name": "profile-optional",
+                        "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+                        "required": False,
+                        "source": "profile",
+                    },
+                ],
+            },
+        )
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        plan = await client.get_plan("P-1")
+
+    assert PLAN_PATH_PREFIX == "/api/v1/plans"
+    assert plan_path("P-1") == "/api/v1/plans/P-1"
+    assert captured == {
+        "method": "GET",
+        "path": "/api/v1/plans/P-1",
+        "auth": "Bearer bearer-tok",
+    }
+    assert plan.id == "P-1"
+    assert plan.name == "Profile Verification"
+    assert plan.tasks == ()
+    assert [command.name for command in plan.verification_commands] == [
+        "profile-required",
+        "profile-optional",
+    ]
+    assert [command.required for command in plan.verification_commands] == [True, False]
+
+
+async def test_get_plan_404_uses_existing_client_error_mapping(captured_sleeps: list[float]) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not_found", "detail": "plan missing"})
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        with pytest.raises(HTTPClientError) as excinfo:
+            await client.get_plan("P-missing")
+
+    assert excinfo.value.status_code == 404
+    assert captured_sleeps == []
 
 
 async def test_bootstrap_flag_swaps_in_bootstrap_token() -> None:
@@ -1133,6 +1229,176 @@ async def test_complete() -> None:
     assert exc.error_code == "version_conflict"
 
 
+async def test_record_event_posts_llm_diagnostic_payload() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"ok": True})
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        response = await client.record_event(
+            "TASK-022a3",
+            "w-1",
+            "llm.run_finished",
+            payload={"status": "success"},
+            detail={"artifact_ref": "whilly_logs/tasks/TASK-022a3/attempt-1"},
+        )
+
+    assert isinstance(response, TaskEventResponse)
+    assert response.ok is True
+    assert captured["method"] == "POST"
+    assert captured["path"] == task_event_path("TASK-022a3")
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "event_type": "llm.run_finished",
+        "payload": {"status": "success"},
+        "detail": {"artifact_ref": "whilly_logs/tasks/TASK-022a3/attempt-1"},
+    }
+
+
+async def test_record_event_posts_ci_and_repair_diagnostics() -> None:
+    captured_bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        captured_bodies.append(json.loads(request.read().decode()))
+        return httpx.Response(200, json={"ok": True})
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        await client.record_event(
+            "TASK-022a3",
+            "w-1",
+            "ci.poll.started",
+            payload={"provider": "github", "target": "ci://repo/pr/42"},
+        )
+        await client.record_event(
+            "TASK-022a3",
+            "w-1",
+            "repair.attempt.completed",
+            payload={"task_id": "TASK-022a3-repair-1", "outcome": "DONE"},
+        )
+
+    assert captured_bodies == [
+        {
+            "worker_id": "w-1",
+            "event_type": "ci.poll.started",
+            "payload": {"provider": "github", "target": "ci://repo/pr/42"},
+        },
+        {
+            "worker_id": "w-1",
+            "event_type": "repair.attempt.completed",
+            "payload": {"task_id": "TASK-022a3-repair-1", "outcome": "DONE"},
+        },
+    ]
+
+
+async def test_request_repair_posts_repair_task_payload() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"ok": True, "repair_task_id": "TASK-022a3-repair-1"})
+
+    repair_task = {
+        "id": "TASK-022a3-repair-1",
+        "description": "Repair failing CI.",
+        "acceptance_criteria": ["CI passes"],
+        "test_steps": ["Run CI status verification"],
+        "prd_requirement": "CI-02",
+        "priority": "high",
+        "key_files": ["whilly/worker/remote.py"],
+        "repo_target_id": "repo-1",
+    }
+    event = {
+        "event_type": "repair.attempt.requested",
+        "task_id": "TASK-022a3",
+        "payload": {
+            "task_id": "TASK-022a3",
+            "repair_task_id": "TASK-022a3-repair-1",
+            "attempt": 1,
+            "max_attempts": 2,
+        },
+        "detail": {"failed_results": [{"name": "ci", "source": "ci"}]},
+    }
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        repair_task_id = await client.request_repair(
+            "TASK-022a3",
+            "w-1",
+            4,
+            repair_task,
+            event,
+        )
+
+    assert repair_task_id == "TASK-022a3-repair-1"
+    assert captured["method"] == "POST"
+    assert captured["path"] == repair_path("TASK-022a3")
+    assert captured["auth"] == "Bearer bearer-tok"
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "orig_task_version": 4,
+        "repair_task": repair_task,
+        "event": event,
+    }
+
+
+async def test_list_task_events_gets_filtered_events() -> None:
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["params"] = dict(request.url.params)
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(
+            200,
+            json={
+                "events": [
+                    {
+                        "id": 7,
+                        "task_id": "TASK-022a3",
+                        "plan_id": "PLAN-1",
+                        "event_type": "human_review.approved",
+                        "created_at": "2026-05-07T09:30:00Z",
+                        "payload": {
+                            "task_id": "TASK-022a3",
+                            "stage_id": "release_review",
+                            "decision": "approved",
+                        },
+                        "detail": {"review_url": "https://example.test/review/1"},
+                    }
+                ]
+            },
+        )
+
+    async with _make_client(handler, token="bearer-tok") as client:
+        events = await client.list_task_events("TASK-022a3", event_prefix="human_review.")
+
+    assert len(events) == 1
+    assert events[0].event_type == "human_review.approved"
+    assert events[0].payload["stage_id"] == "release_review"
+    assert events[0].detail == {"review_url": "https://example.test/review/1"}
+    assert captured == {
+        "method": "GET",
+        "path": task_event_path("TASK-022a3"),
+        "params": {"event_prefix": "human_review."},
+        "auth": "Bearer bearer-tok",
+    }
+
+
 async def test_complete_propagates_auth_error_on_403(captured_sleeps: list[float]) -> None:
     """A 403 from the per-worker bearer surfaces as :class:`AuthError`, no retry.
 
@@ -1247,6 +1513,41 @@ async def test_fail() -> None:
     assert exc.actual_version == 2
     assert exc.actual_status == TaskStatus.FAILED
     assert exc.error_code == "version_conflict"
+
+
+async def test_fail_sends_optional_detail_when_provided() -> None:
+    captured: dict[str, Any] = {}
+    post_update = _sample_task_payload(version=2, status=TaskStatus.FAILED)
+
+    def happy_handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(200, json={"task": post_update.model_dump(mode="json")})
+
+    detail = {
+        "event_type": "prompt_injection_blocked",
+        "matched_marker": "</system>",
+        "task_id": "TASK-guard",
+        "plan_id": "plan-guard",
+        "redacted_excerpt": "[blocked] override",
+    }
+
+    async with _make_client(happy_handler) as client:
+        await client.fail(
+            task_id="TASK-guard",
+            worker_id="w-1",
+            version=1,
+            reason="prompt_injection_blocked",
+            detail=detail,
+        )
+
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "worker_id": "w-1",
+        "version": 1,
+        "reason": "prompt_injection_blocked",
+        "detail": detail,
+    }
 
 
 async def test_fail_rejects_empty_reason_at_schema_layer() -> None:

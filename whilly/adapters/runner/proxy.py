@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import urlparse
 
+from whilly.adapters.runner.env import build_runner_env
+
 logger = logging.getLogger("whilly.proxy")
 
 DEFAULT_NO_PROXY: str = "localhost,127.0.0.1,::1"
@@ -122,24 +124,23 @@ def _resolve_no_proxy(env: Mapping[str, str], default: str) -> str:
 def build_subprocess_env(
     parent_env: Mapping[str, str],
     settings: ProxySettings,
+    *,
+    required_env: tuple[str, ...] = (),
+    model: str | None = None,
 ) -> dict[str, str]:
     """Return env dict suitable for the ``env=`` kwarg of a child-process spawn.
 
-    Two cases:
-
-    * ``settings.is_active=False`` → return ``dict(parent_env)``
-      unchanged. The proxy logic is a no-op.
-    * ``settings.is_active=True`` → return ``parent_env`` plus
-      ``HTTPS_PROXY`` + ``NO_PROXY`` keys from ``settings``. Existing
-      values in ``parent_env`` are overridden so the operator's
-      CLI/env override always wins.
-
-    ``parent_env`` is read-only — we always allocate a fresh dict so
-    callers passing ``os.environ`` are not mutated. This matters
-    because Whilly worker loops reuse the same parent_env across many
-    spawns; mutating it would leak the proxy into the parent process.
+    Starts from the scrubbed coding-agent runner environment and then,
+    only when a proxy URL is active, layers ``HTTPS_PROXY`` + ``NO_PROXY``
+    from ``settings``. Existing values in ``parent_env`` are overridden so
+    the operator's CLI/env override always wins.
     """
-    result = dict(parent_env)
+    result = build_runner_env(
+        parent_env,
+        required_env=required_env,
+        model=model,
+        backend=_runner_backend(parent_env),
+    )
     # Bind to a local so the truthy check narrows for the type checker
     # without an `assert` — assertions are stripped under ``python -O``,
     # so a real branch is the safer guard.
@@ -150,7 +151,19 @@ def build_subprocess_env(
     return result
 
 
-def spawn_env_for_claude(parent_env: Mapping[str, str] | None = None) -> dict[str, str]:
+def _runner_backend(parent_env: Mapping[str, str]) -> str:
+    """Return credential-inference backend for the spawned coding-agent process."""
+
+    cli = parent_env.get("WHILLY_CLI", "").strip().lower()
+    return cli or "claude"
+
+
+def spawn_env_for_claude(
+    parent_env: Mapping[str, str] | None = None,
+    *,
+    model: str | None = None,
+    required_env: tuple[str, ...] = (),
+) -> dict[str, str]:
     """Resolve proxy settings from ``parent_env`` and build the spawn-env in one step.
 
     Single entry-point used by both ``claude_cli._spawn_and_collect`` and
@@ -163,7 +176,7 @@ def spawn_env_for_claude(parent_env: Mapping[str, str] | None = None) -> dict[st
 
         parent_env = os.environ
     settings = resolve_proxy_settings(env=parent_env)
-    return build_subprocess_env(parent_env, settings)
+    return build_subprocess_env(parent_env, settings, model=model, required_env=required_env)
 
 
 def should_probe(env: Mapping[str, str] | None = None) -> bool:

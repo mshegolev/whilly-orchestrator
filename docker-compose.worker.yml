@@ -41,13 +41,24 @@
 services:
   # ─── App: whilly-worker (HTTP-client). No DB, no API — pure pull-loop. ────
   worker:
-    # Default to the published image (matches v4.3.1 release artifact). The
-    # production Dockerfile installs `'.[server,worker]'`; the worker role
-    # never touches the server-only paths at runtime, so this is the same
-    # image used by docker-compose.control-plane.yml. Override with
-    # WHILLY_IMAGE=<tag> for dev / local-build workflows.
-    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.3.1}
-    container_name: whilly-worker
+    # Default to the published image (matches the current v4.6.4 release
+    # artifact — must stay in lock-step with docker-compose.control-plane.yml
+    # so a worker booted against a fresh control-plane never lags behind on
+    # migration-aware client code). The production Dockerfile installs
+    # `'.[server,worker]'`; the worker role never touches the server-only
+    # paths at runtime, so this is the same image used by
+    # docker-compose.control-plane.yml. Override with WHILLY_IMAGE=<tag>
+    # for dev / local-build workflows.
+    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.6.4}
+    # No `container_name:` here — Compose auto-generates names like
+    # `whilly-orchestrator-worker-1`, `-worker-2`, ... so operators can run
+    # `docker-compose -f docker-compose.worker.yml up -d --scale worker=N`
+    # for multi-worker scenarios (VAL-M2-DEMO-902 / VAL-M2-LHR-003). A fixed
+    # name would force Docker to refuse `--scale worker=N>1` (container
+    # names must be unique). The worker entrypoint registers itself using
+    # `$(hostname)` (see `hostname:` below), so the events table audit
+    # identity stays meaningful regardless of the auto-generated container
+    # name.
     # Container hostname propagated to `whilly worker register --hostname`
     # via the entrypoint's `$(hostname)` capture. Operators set this in
     # .env.worker so the events table shows a meaningful identity in the
@@ -56,8 +67,9 @@ services:
     restart: unless-stopped
     environment:
       # Required at RUNTIME — must be supplied by the operator in
-      # .env.worker (typically http://<vps-ip>:8000 or https://<vps-host>
-      # behind Caddy / Tailscale Funnel at M2). We deliberately use the
+      # .env.worker (typically http://<vps-ip>:8000 or the rotating
+      # https://<random>.lhr.life URL published by the M2 localhost.run
+      # `funnel` sidecar). We deliberately use the
       # `:-` (default-if-unset) form rather than `:?` (required) here so
       # that a `docker-compose -f docker-compose.worker.yml config -q`
       # against a clean checkout (no env file, no exported vars) parses
@@ -111,6 +123,8 @@ services:
       LLM_X_TITLE: ${LLM_X_TITLE:-}
       LLM_FORCE_COMPLETE: ${LLM_FORCE_COMPLETE:-0}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+      WHILLY_INSECURE: "${WHILLY_INSECURE:-}"
+      WHILLY_USE_CONNECT_FLOW: "${WHILLY_USE_CONNECT_FLOW:-}"
     volumes:
       # PLACEHOLDER for M4 (per-worker plan-workspace topology — see
       # docs/Workspace-Topology.md). At M1 this mount is declared but

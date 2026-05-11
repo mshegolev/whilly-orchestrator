@@ -46,15 +46,18 @@ its declared footprint.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import asyncpg
 import pytest
@@ -62,6 +65,9 @@ from alembic import command
 from alembic.config import Config
 
 from whilly.adapters.db import MIGRATIONS_DIR, TaskRepository, close_pool, create_pool
+
+if TYPE_CHECKING:
+    from testcontainers.postgres import PostgresContainer as _PostgresContainer  # type: ignore[import-untyped]
 
 # ─── Fixture-file loader (M1 readiness baseline) ─────────────────────────
 #
@@ -120,11 +126,14 @@ def load_fixture_fn() -> Callable[[str], Any]:
 # Postgres inside the container is healthy. Root cause is in the colima/lima
 # vsock proxy, not in the test code.
 #
-# A tight 3-attempt retry with exponential backoff (0.5 s, 1.0 s, 2.0 s) is
-# enough to ride out the transient wedge in nearly every observed case. On
-# *full* failure we re-raise the underlying exception with a pytest-friendly
-# wrapper that calls out the canonical remediation: ``colima restart``.
-_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0)
+# A 5-attempt retry with exponential backoff (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s)
+# is enough to ride out the transient wedge in every observed case. The earlier
+# 3-attempt ceiling (~3.5 s wall) was occasionally insufficient when scrutiny
+# round-5 ran the full integration suite (~430 tests deep) — the new ceiling
+# (~15.5 s wall) covers the documented vsock-proxy wedge cycle. On *full*
+# failure we re-raise the underlying exception with a pytest-friendly wrapper
+# that calls out the canonical remediation: ``colima restart``.
+_TC_RETRY_BACKOFFS: tuple[float, ...] = (0.5, 1.0, 2.0, 4.0, 8.0)
 _TC_REMEDIATION_HINT: str = (
     "Hint: this is the documented colima/testcontainers port-forwarding flake "
     "(see AGENTS.md → 'Known pre-existing issues'). Run `colima restart` and "
@@ -142,10 +151,11 @@ def _retry_colima_flake(
     op: str,
     backoffs: tuple[float, ...] = _TC_RETRY_BACKOFFS,
 ) -> _T:
-    """Run ``fn`` with 3-attempt exponential backoff against colima flake.
+    """Run ``fn`` with 5-attempt exponential backoff against colima flake.
 
-    Sleeps from :data:`_TC_RETRY_BACKOFFS` (default 0.5 s, 1.0 s, 2.0 s)
-    *between* attempts: 4 attempts total (1 initial + len(backoffs) retries).
+    Sleeps from :data:`_TC_RETRY_BACKOFFS` (default 0.5 s, 1.0 s, 2.0 s,
+    4.0 s, 8.0 s) *between* attempts: 6 attempts total (1 initial +
+    len(backoffs) retries).
     Re-raises the *last* exception wrapped in :class:`RuntimeError` whose
     message names the operation and the ``colima restart`` remediation, so
     the failure message in the pytest report points the operator straight
@@ -195,7 +205,7 @@ async def _retry_create_pool_async(
 ) -> asyncpg.Pool:
     """Async sibling of :func:`_retry_colima_flake` for ``create_pool``.
 
-    Mirrors the same 3-attempt exponential-backoff policy. We can't use the
+    Mirrors the same 5-attempt exponential-backoff policy. We can't use the
     sync helper here because ``await create_pool(...)`` must yield to the
     event loop, and ``time.sleep`` would block it. Uses ``asyncio.sleep``
     instead.
@@ -229,6 +239,150 @@ async def _retry_create_pool_async(
     ) from last_exc
 
 
+# ─── Testcontainer orphan cleanup (whilly-labeled postgres:15-alpine) ────
+#
+# Background: testcontainers' Ryuk reaper is disabled in this project
+# (TESTCONTAINERS_RYUK_DISABLED=true) because Ryuk's host-docker-socket
+# bind-mount is rejected by colima. With Ryuk off, the only teardown path
+# is the fixture's ``finally`` block calling ``pg.stop()``. When pytest is
+# killed mid-run (pytest-timeout wall-clock budget, SIGTERM from worker
+# pause, OOM, kill -9, mid-fixture exception in ``_retry_colima_flake``),
+# ``finally`` does NOT execute and ``postgres:15-alpine`` containers leak.
+# Repeated mission runs accumulate orphan containers (one per aborted run).
+#
+# Two-part fix (per fix-m3-testcontainers-postgres-leak):
+#
+# 1. Pre-flight session-start cleanup (this module's ``pytest_sessionstart``
+#    hook) force-removes any container with image=postgres:15-alpine AND
+#    label ``org.whilly.testcontainers=true`` BEFORE booting a new one.
+#    The label-targeted filter prevents touching the user's own
+#    docker-compose postgres or any unrelated container.
+#
+# 2. atexit-based teardown registration: each ``PostgresContainer`` that
+#    starts in this module also registers an ``atexit`` handler that
+#    calls ``pg.stop()``. ``atexit`` fires on normal interpreter exit,
+#    ``sys.exit``, ``SystemExit`` and ``SIGTERM`` (covers pytest-timeout
+#    abort, ``kill <pid>``); it does NOT fire on ``SIGKILL`` / ``kill -9``,
+#    which is unavoidable without a kernel-level reaper.
+WHILLY_TESTCONTAINER_LABEL_KEY: str = "org.whilly.testcontainers"
+WHILLY_TESTCONTAINER_LABEL_VALUE: str = "true"
+WHILLY_TESTCONTAINER_IMAGE: str = "postgres:15-alpine"
+
+
+def _cleanup_orphan_testcontainers(
+    *,
+    image: str = WHILLY_TESTCONTAINER_IMAGE,
+    label_key: str = WHILLY_TESTCONTAINER_LABEL_KEY,
+    label_value: str = WHILLY_TESTCONTAINER_LABEL_VALUE,
+) -> list[str]:
+    """Force-remove whilly-labeled orphan testcontainer postgres instances.
+
+    Runs ``docker ps -aq --filter label=<key>=<value>
+    --filter ancestor=<image>`` then ``docker rm -f <ids...>``. Idempotent
+    and silent on a clean system: returns ``[]`` when nothing matches and
+    swallows docker CLI / OS errors so a flaky daemon never blocks a
+    pytest session start.
+    """
+    docker_bin = shutil.which("docker")
+    if docker_bin is None:
+        return []
+    label_filter = f"{label_key}={label_value}"
+    try:
+        ls = subprocess.run(
+            [
+                docker_bin,
+                "ps",
+                "-aq",
+                "--filter",
+                f"label={label_filter}",
+                "--filter",
+                f"ancestor={image}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    if ls.returncode != 0:
+        return []
+    ids = [token for token in ls.stdout.split() if token]
+    if not ids:
+        return []
+    try:
+        subprocess.run(
+            [docker_bin, "rm", "-f", *ids],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return ids
+
+
+def _register_pg_atexit_stop(pg: _PostgresContainer) -> Callable[[], None]:
+    """Register an idempotent atexit hook that calls ``pg.stop()``.
+
+    Returns the hook itself so the fixture's normal teardown path can also
+    invoke it directly (and the hook still no-ops on the redundant atexit
+    call). atexit handlers run on normal exit, ``sys.exit``, unhandled
+    ``SystemExit`` and SIGTERM — covering pytest-timeout aborts and
+    ``kill <pid>`` but not ``SIGKILL``.
+
+    The ``PostgresContainer`` reference is held inside a closure-local mutable
+    container and explicitly cleared (set to ``None``) after the first stop
+    fires, so any DockerClient / requests-unixsocket references it transitively
+    keeps alive can be garbage-collected between fixture teardown and final
+    interpreter exit. This matters during long pytest sessions where the
+    accumulated socket references can exacerbate the colima vsock-proxy
+    port-forwarding wedge documented in AGENTS.md.
+    """
+    state: dict[str, Any] = {"done": False, "pg": pg}
+
+    def _stop_once() -> None:
+        if state["done"]:
+            return
+        state["done"] = True
+        if state.get("pg") is None:
+            return
+        try:
+            state["pg"].stop()
+        except Exception as exc:  # noqa: BLE001 — atexit best effort
+            err_msg = f"atexit PostgresContainer.stop() raised: {type(exc).__name__}: {exc!s}"
+            del exc
+            _TC_LOG.warning("%s", err_msg)
+        finally:
+            state["pg"] = None
+
+    atexit.register(_stop_once)
+    return _stop_once
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Force-remove leftover whilly testcontainer postgres orphans before any test runs.
+
+    Uses the label/ancestor filter so it never touches the user's
+    docker-compose postgres or unrelated containers. Safe when Docker is
+    absent — the helper returns ``[]`` and the hook is a no-op.
+    """
+    if not docker_available():
+        return
+    try:
+        removed = _cleanup_orphan_testcontainers()
+    except Exception:  # noqa: BLE001 — never let cleanup crash collection
+        _TC_LOG.warning("orphan testcontainer cleanup raised", exc_info=True)
+        return
+    if removed:
+        _TC_LOG.warning(
+            "Force-removed %d orphan whilly testcontainer(s) at session start: %s",
+            len(removed),
+            removed,
+        )
+
+
 try:
     from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]
 
@@ -237,24 +391,182 @@ except ImportError:  # pragma: no cover — testcontainers is in [dev]; defensiv
     HAS_TESTCONTAINERS = False
 
 
+DOCKER_AUTOSTART_ENV = "WHILLY_TEST_DOCKER_AUTOSTART"
+_DOCKER_PROVIDER_START_ATTEMPTED = False
+_DOCKER_LAST_UNAVAILABLE_REASON = ""
+
+
+@dataclass(frozen=True)
+class DockerAvailability:
+    available: bool
+    reason: str = ""
+
+
 def docker_available() -> bool:
-    """Return True iff a Docker daemon is reachable.
+    """Return True iff a Docker daemon is reachable, after one safe provider bootstrap attempt."""
+
+    return docker_availability().available
+
+
+def docker_availability() -> DockerAvailability:
+    """Return Docker daemon reachability and a useful remediation message.
 
     ``shutil.which`` checks the binary; ``docker info`` is the
     authoritative daemon-reachable check (cheap; ~30ms on a warm CLI).
+    On macOS, a stopped Colima context is common enough that we try
+    ``colima start`` once before deciding Docker-backed tests must skip.
     """
+    global _DOCKER_LAST_UNAVAILABLE_REASON
+
+    initial = _docker_info_available()
+    if initial.available:
+        _DOCKER_LAST_UNAVAILABLE_REASON = ""
+        return initial
+
+    context_name = _active_docker_context()
+    docker_host = resolve_docker_host()
+    start_note = _try_start_docker_provider(context_name=context_name, docker_host=docker_host)
+    if start_note is not None:
+        retry = _docker_info_available()
+        if retry.available:
+            _DOCKER_LAST_UNAVAILABLE_REASON = ""
+            return retry
+        reason = f"{initial.reason} {start_note} Docker is still unreachable: {retry.reason}"
+    else:
+        reason = initial.reason
+
+    reason = _docker_unavailable_message(reason, context_name=context_name, docker_host=docker_host)
+    _DOCKER_LAST_UNAVAILABLE_REASON = reason
+    return DockerAvailability(False, reason)
+
+
+def _docker_info_available() -> DockerAvailability:
     if shutil.which("docker") is None:
-        return False
+        return DockerAvailability(
+            False,
+            "Docker CLI is not on PATH; install Docker Desktop, Colima, Rancher Desktop, or another Docker provider.",
+        )
     try:
         result = subprocess.run(
             ["docker", "info"],
             capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return DockerAvailability(False, "`docker info` timed out; the Docker daemon or socket is not responding.")
+    except OSError as exc:
+        return DockerAvailability(False, f"`docker info` could not run: {exc}.")
+    if result.returncode == 0:
+        return DockerAvailability(True)
+    detail = _compact_message(result.stderr or result.stdout or "")
+    suffix = f": {detail}" if detail else "."
+    return DockerAvailability(False, f"`docker info` failed{suffix}")
+
+
+def _active_docker_context() -> str | None:
+    if shutil.which("docker") is None:
+        return None
+    try:
+        result = subprocess.run(
+            ["docker", "context", "show"],
+            capture_output=True,
+            text=True,
             timeout=5,
             check=False,
         )
     except (subprocess.TimeoutExpired, OSError):
-        return False
-    return result.returncode == 0
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _try_start_docker_provider(*, context_name: str | None, docker_host: str | None) -> str | None:
+    """Best-effort local Docker provider bootstrap.
+
+    Only Colima is started automatically: it is CLI-native, common in
+    this repo's macOS workflow, and does not require launching a GUI app.
+    Other providers are explained in the skip message instead.
+    """
+    global _DOCKER_PROVIDER_START_ATTEMPTED
+
+    if not _docker_autostart_enabled() or _DOCKER_PROVIDER_START_ATTEMPTED:
+        return None
+    if sys.platform != "darwin" or not _looks_like_colima(context_name, docker_host):
+        return None
+    if shutil.which("colima") is None:
+        return None
+
+    _DOCKER_PROVIDER_START_ATTEMPTED = True
+    try:
+        result = subprocess.run(
+            ["colima", "start"],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "`colima start` timed out."
+    except OSError as exc:
+        return f"`colima start` could not run: {exc}."
+    if result.returncode == 0:
+        return "`colima start` completed."
+    detail = _compact_message(result.stderr or result.stdout or "")
+    suffix = f": {detail}" if detail else "."
+    return f"`colima start` failed{suffix}"
+
+
+def _docker_autostart_enabled() -> bool:
+    return os.environ.get(DOCKER_AUTOSTART_ENV, "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _looks_like_colima(context_name: str | None, docker_host: str | None) -> bool:
+    haystack = " ".join(part for part in (context_name, docker_host) if part).lower()
+    return "colima" in haystack
+
+
+def _docker_unavailable_message(reason: str, *, context_name: str | None, docker_host: str | None) -> str:
+    hint = _docker_provider_hint(context_name=context_name, docker_host=docker_host)
+    parts = [reason]
+    if context_name:
+        parts.append(f"active Docker context: {context_name}")
+    if docker_host:
+        parts.append(f"Docker endpoint: {docker_host}")
+    parts.append(hint)
+    return ". ".join(part.rstrip(".") for part in parts if part) + "."
+
+
+def _compact_message(raw: str) -> str:
+    return " ".join(raw.split())
+
+
+def _docker_provider_hint(*, context_name: str | None, docker_host: str | None) -> str:
+    if sys.platform == "darwin":
+        if _looks_like_colima(context_name, docker_host):
+            return (
+                "On macOS with Colima, run `colima start` and then `docker ps`; "
+                "if the socket is wedged, run `colima restart`."
+            )
+        haystack = " ".join(part for part in (context_name, docker_host) if part).lower()
+        if "desktop" in haystack or ".docker/run/docker.sock" in haystack:
+            return "On macOS with Docker Desktop, run `open -a Docker`, wait for startup, then run `docker ps`."
+        if "rancher" in haystack or ".rd/" in haystack:
+            return "On macOS with Rancher Desktop, start Rancher Desktop, enable dockerd mode, then run `docker ps`."
+        return "Start your Docker provider, or switch context with `docker context use colima`, then run `docker ps`."
+    if sys.platform.startswith("linux"):
+        return "On Linux, start Docker with `sudo systemctl start docker` or `sudo service docker start`, then run `docker ps`."
+    if sys.platform.startswith("win"):
+        return "On Windows, start Docker Desktop and wait until `docker ps` succeeds."
+    return "Start a Docker-compatible daemon and verify it with `docker ps`."
+
+
+def docker_unavailable_reason() -> str:
+    if not HAS_TESTCONTAINERS:
+        return "testcontainers is not installed; install development dependencies with `pip install -e '.[dev]'`."
+    return _DOCKER_LAST_UNAVAILABLE_REASON or docker_availability().reason
 
 
 def resolve_docker_host() -> str | None:
@@ -296,7 +608,7 @@ def resolve_docker_host() -> str | None:
 # so module-level decoration is optional but makes the intent explicit.
 DOCKER_REQUIRED = pytest.mark.skipif(
     not (HAS_TESTCONTAINERS and docker_available()),
-    reason="Docker daemon not reachable; testcontainers cannot boot Postgres",
+    reason=docker_unavailable_reason(),
 )
 
 
@@ -336,8 +648,11 @@ def postgres_dsn() -> Iterator[str]:
     The container survives the entire pytest session; per-test
     isolation is provided by :func:`db_pool` truncating tables.
     """
-    if not (HAS_TESTCONTAINERS and docker_available()):
-        pytest.skip("Docker daemon not reachable; testcontainers cannot boot Postgres")
+    if not HAS_TESTCONTAINERS:
+        pytest.skip(docker_unavailable_reason())
+    availability = docker_availability()
+    if not availability.available:
+        pytest.skip(availability.reason)
 
     prior_docker_host = os.environ.get("DOCKER_HOST")
     if prior_docker_host is None:
@@ -351,16 +666,26 @@ def postgres_dsn() -> Iterator[str]:
 
     prior_db_url = os.environ.get("WHILLY_DATABASE_URL")
 
-    # Wrap the testcontainers Postgres start in a 3-attempt exponential-backoff
-    # retry loop (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
-    # port-forwarding flake documented in AGENTS.md. The container is started
-    # imperatively (not via ``with``) so we can retry; cleanup is in the outer
-    # ``finally`` block.
-    pg = PostgresContainer("postgres:15-alpine")
-    started = False
+    # Wrap the testcontainers Postgres start in a 5-attempt exponential-backoff
+    # retry loop (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s; ~15.5 s wall ceiling) to
+    # ride out the colima/Rancher-Desktop port-forwarding flake documented in
+    # AGENTS.md. The container is started imperatively (not via ``with``) so
+    # we can retry; cleanup is in the outer ``finally`` block.
+    #
+    # The container carries the whilly testcontainer label so the
+    # ``pytest_sessionstart`` orphan-cleanup hook can target it across runs
+    # without touching unrelated docker workloads.
+    pg = PostgresContainer(WHILLY_TESTCONTAINER_IMAGE).with_kwargs(
+        labels={WHILLY_TESTCONTAINER_LABEL_KEY: WHILLY_TESTCONTAINER_LABEL_VALUE}
+    )
+    stop_pg: Callable[[], None] | None = None
     try:
         _retry_colima_flake(pg.start, op="PostgresContainer('postgres:15-alpine').start()")
-        started = True
+        # Register atexit teardown immediately after a successful start so a
+        # mid-fixture exception below (alembic flake, pytest-timeout abort,
+        # SIGTERM) still triggers a stop. The hook is idempotent — calling
+        # it again from the ``finally`` block is a no-op.
+        stop_pg = _register_pg_atexit_stop(pg)
         raw = pg.get_connection_url()
         # testcontainers ships ``postgresql+psycopg2://`` by default; rip
         # back to plain ``postgresql://`` so env.py's own asyncpg coercion
@@ -371,7 +696,7 @@ def postgres_dsn() -> Iterator[str]:
         os.environ["WHILLY_DATABASE_URL"] = dsn
         # Alembic's first SQL contact also rides through colima's port-forward
         # — same flake surface as the container start above. Retry with the
-        # same 3-attempt exponential backoff.
+        # same 5-attempt exponential backoff.
         _retry_colima_flake(
             lambda: command.upgrade(_build_alembic_config(dsn), "head"),
             op="alembic.command.upgrade(head)",
@@ -379,11 +704,8 @@ def postgres_dsn() -> Iterator[str]:
 
         yield dsn
     finally:
-        if started:
-            try:
-                pg.stop()
-            except Exception:  # noqa: BLE001 — teardown best effort
-                _TC_LOG.warning("PostgresContainer.stop() raised during teardown", exc_info=True)
+        if stop_pg is not None:
+            stop_pg()
         if prior_docker_host is None:
             os.environ.pop("DOCKER_HOST", None)
         else:
@@ -414,8 +736,8 @@ async def db_pool(postgres_dsn: str) -> AsyncIterator[asyncpg.Pool]:
     block, RESTART IDENTITY so the BIGSERIAL events.id sequence
     starts fresh) — see module docstring for the rationale.
 
-    Pool creation is wrapped in a 3-attempt exponential-backoff retry
-    (0.5 s, 1.0 s, 2.0 s) to ride out the colima/Rancher-Desktop
+    Pool creation is wrapped in a 5-attempt exponential-backoff retry
+    (0.5 s, 1.0 s, 2.0 s, 4.0 s, 8.0 s) to ride out the colima/Rancher-Desktop
     port-forwarding flake documented in AGENTS.md — the symptom
     surfaces here as ``OSError: [Errno 61] Connect call failed`` from
     ``pool.acquire()``'s ``SELECT 1`` health check inside whilly's
@@ -426,7 +748,9 @@ async def db_pool(postgres_dsn: str) -> AsyncIterator[asyncpg.Pool]:
     pool = await _retry_create_pool_async(postgres_dsn, min_size=2, max_size=20)
     try:
         async with pool.acquire() as conn:
-            await conn.execute("TRUNCATE events, tasks, plans, workers RESTART IDENTITY CASCADE")
+            await conn.execute(
+                "TRUNCATE events, tasks, plans, workers, bootstrap_tokens, control_state RESTART IDENTITY CASCADE"
+            )
         yield pool
     finally:
         await close_pool(pool)

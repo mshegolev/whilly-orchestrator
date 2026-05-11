@@ -20,6 +20,7 @@ here. These tests cover the AC for TASK-021a1:
 from __future__ import annotations
 
 import sys
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -29,17 +30,25 @@ from whilly.adapters.transport.schemas import (
     ClaimResponse,
     CompleteRequest,
     CompleteResponse,
+    ControlPauseRequest,
+    ControlStateResponse,
     ErrorResponse,
     FailRequest,
     FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    HumanReviewDecisionRequest,
+    ListTaskEventsResponse,
     PlanPayload,
     RegisterRequest,
     RegisterResponse,
+    TaskEventItem,
+    TaskEventRequest,
+    TaskEventResponse,
     TaskPayload,
+    VerificationCommandPayload,
 )
-from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.models import Plan, Priority, Task, TaskStatus, VerificationCommand
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -64,6 +73,7 @@ def _sample_task() -> Task:
         test_steps=("python3 -m mypy --strict ...",),
         prd_requirement="FR-1.2, TC-6",
         version=7,
+        repo_target_id="github:owner/repo",
     )
 
 
@@ -83,6 +93,7 @@ def test_task_payload_dependencies_become_lists_on_the_wire() -> None:
     payload = TaskPayload.from_task(_sample_task())
     assert payload.dependencies == ["TASK-009d", "TASK-021a0"]
     assert payload.key_files == ["whilly/adapters/transport/schemas.py"]
+    assert payload.repo_target_id == "github:owner/repo"
 
 
 def test_task_payload_json_round_trip() -> None:
@@ -103,6 +114,109 @@ def test_plan_payload_from_plan_omits_tasks() -> None:
     assert "tasks" not in payload.model_dump()
 
 
+def test_plan_payload_from_plan_includes_ordered_verification_commands() -> None:
+    """Plan metadata carries verification commands but not sibling tasks."""
+    commands = (
+        VerificationCommand(
+            name="profile-required",
+            command=".venv/bin/python -m pytest -q tests/unit",
+            required=True,
+            source="profile",
+        ),
+        VerificationCommand(
+            name="profile-optional",
+            command=".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+            required=False,
+            source="profile",
+        ),
+    )
+    plan = Plan(id="PLAN-VERIFY", name="Verification", tasks=(_sample_task(),), verification_commands=commands)
+
+    payload = PlanPayload.from_plan(plan)
+
+    assert [item.name for item in payload.verification_commands] == ["profile-required", "profile-optional"]
+    assert payload.model_dump()["verification_commands"] == [
+        {
+            "name": "profile-required",
+            "command": ".venv/bin/python -m pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+        {
+            "name": "profile-optional",
+            "command": ".venv/bin/python -m pytest -q tests/integration --maxfail=1",
+            "required": False,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+    ]
+    assert "tasks" not in payload.model_dump()
+
+
+def test_plan_payload_json_round_trip_preserves_verification_source() -> None:
+    """Transport JSON recreates pure Plan metadata without sibling tasks."""
+    payload = PlanPayload(
+        id="PLAN-VERIFY",
+        name="Verification",
+        verification_commands=[
+            VerificationCommandPayload(
+                name="profile-required",
+                command=".venv/bin/python -m pytest -q tests/unit",
+                required=True,
+                source="profile",
+            )
+        ],
+    )
+
+    rebuilt = PlanPayload.model_validate_json(payload.model_dump_json())
+    plan = rebuilt.to_plan()
+
+    assert plan == Plan(
+        id="PLAN-VERIFY",
+        name="Verification",
+        verification_commands=(
+            VerificationCommand(
+                name="profile-required",
+                command=".venv/bin/python -m pytest -q tests/unit",
+                required=True,
+                source="profile",
+            ),
+        ),
+    )
+    assert plan.tasks == ()
+
+
+def test_plan_payload_includes_ci_repair_budget() -> None:
+    """Remote plan metadata preserves CI source and bounded repair budget."""
+    plan = Plan(
+        id="PLAN-CI-REPAIR",
+        name="CI Repair",
+        verification_commands=(
+            VerificationCommand(
+                name="github-ci",
+                command="ci://github/checks?owner=acme&repo=demo&pr=42",
+                required=True,
+                source="ci",
+                repair_max_attempts=2,
+            ),
+        ),
+    )
+
+    payload = PlanPayload.from_plan(plan)
+
+    assert payload.model_dump()["verification_commands"] == [
+        {
+            "name": "github-ci",
+            "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+            "required": True,
+            "source": "ci",
+            "repair_max_attempts": 2,
+        }
+    ]
+    assert payload.to_plan() == plan
+
+
 # ---------------------------------------------------------------------------
 # Request / response shapes
 # ---------------------------------------------------------------------------
@@ -112,8 +226,33 @@ def test_register_request_response_happy_path() -> None:
     req = RegisterRequest(hostname="worker-01.local")
     resp = RegisterResponse(worker_id="w-abc", token="opaque-bearer")
     assert req.hostname == "worker-01.local"
+    assert req.owner_email is None
     assert resp.worker_id == "w-abc"
     assert resp.token == "opaque-bearer"
+
+
+def test_register_request_accepts_owner_email() -> None:
+    """``owner_email`` is optional and round-trips when set (M2 migration 008)."""
+    req = RegisterRequest(hostname="worker-01.local", owner_email="alice@example.com")
+    assert req.owner_email == "alice@example.com"
+
+
+@pytest.mark.parametrize(
+    "bad_email",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("plain", id="no-at-sign"),
+        pytest.param("a@", id="no-domain"),
+        pytest.param("@b.com", id="no-local-part"),
+        pytest.param("a@b", id="no-dot-in-domain"),
+        pytest.param("a b@c.com", id="space-in-local"),
+        pytest.param("a@b@c.com", id="double-at"),
+    ],
+)
+def test_register_request_rejects_malformed_owner_email(bad_email: str) -> None:
+    """Malformed ``owner_email`` values surface as 422 at the wire boundary."""
+    with pytest.raises(ValidationError):
+        RegisterRequest(hostname="worker-01.local", owner_email=bad_email)
 
 
 def test_claim_response_empty_queue_is_none() -> None:
@@ -141,6 +280,77 @@ def test_heartbeat_response_ok_field() -> None:
     """Mirrors :meth:`TaskRepository.update_heartbeat` boolean return."""
     assert HeartbeatResponse(ok=True).ok is True
     assert HeartbeatResponse(ok=False).ok is False
+
+
+def test_task_event_request_response_happy_path() -> None:
+    req = TaskEventRequest(
+        worker_id="w",
+        event_type="llm.run_finished",
+        payload={"status": "success"},
+        detail={"artifact_ref": "whilly_logs/tasks/T-1/attempt-1"},
+    )
+    assert req.payload["status"] == "success"
+    assert req.detail == {"artifact_ref": "whilly_logs/tasks/T-1/attempt-1"}
+    assert TaskEventResponse().ok is True
+
+
+def test_list_task_events_response_carries_ordered_event_items() -> None:
+    event = TaskEventItem(
+        id=10,
+        task_id="T-1",
+        plan_id="PLAN-1",
+        event_type="human_review.approved",
+        created_at=datetime(2026, 5, 7, 9, 30, tzinfo=UTC),
+        payload={"task_id": "T-1", "decision": "approved"},
+        detail={"review_url": "https://example.test/review/1"},
+    )
+    response = ListTaskEventsResponse(events=[event])
+
+    assert response.events == [event]
+    assert response.events[0].payload["decision"] == "approved"
+    with pytest.raises(ValidationError):
+        TaskEventItem(
+            id=10,
+            task_id="T-1",
+            plan_id="PLAN-1",
+            event_type="human_review.approved",
+            created_at=event.created_at,
+            payload={},
+            unexpected=True,
+        )
+
+
+def test_human_review_decision_request_pins_admin_payload_shape() -> None:
+    request = HumanReviewDecisionRequest(
+        decision="approved",
+        reviewer="lead@example.com",
+        stage_id="release_review",
+        comment="Evidence reviewed.",
+        evidence={"review_url": "https://example.test/review/1"},
+    )
+
+    assert request.decision == "approved"
+    assert request.reviewer == "lead@example.com"
+    with pytest.raises(ValidationError):
+        HumanReviewDecisionRequest(decision="maybe", reviewer="lead@example.com")
+
+
+def test_control_state_schemas_pin_pause_resume_payload_shape() -> None:
+    pause = ControlPauseRequest(reason="deploy gate")
+    state = ControlStateResponse(
+        paused=True,
+        pause_reason="deploy gate",
+        paused_by="lead@example.com",
+        paused_at=datetime(2026, 5, 8, 10, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 5, 8, 10, 1, tzinfo=UTC),
+    )
+
+    assert pause.reason == "deploy gate"
+    assert state.paused is True
+    assert state.pause_reason == "deploy gate"
+    assert state.paused_by == "lead@example.com"
+    with pytest.raises(ValidationError):
+        ControlPauseRequest(reason="x", unexpected=True)
 
 
 def test_error_response_carries_version_conflict_fields() -> None:

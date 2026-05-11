@@ -94,7 +94,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal
 
 import asyncpg
@@ -102,10 +102,12 @@ from rich.console import Console
 
 from whilly.adapters.db import close_pool, create_pool
 from whilly.adapters.db.repository import TaskRepository, VersionConflictError
-from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, serialize_plan
+from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, parse_plan_dict, serialize_plan
 from whilly.core.gates import GateVerdictKind, evaluate_decision_gate
-from whilly.core.models import Plan, Priority, Task, TaskId, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskId, TaskStatus, VerificationCommand
 from whilly.core.scheduler import detect_cycles
+from whilly.core.triz import analyze_plan_triz, format_plan_triz_report, plan_triz_report_to_dict
+from whilly.operator_views import EventRow, HumanReviewState, human_review_states_from_events
 
 __all__ = ["build_plan_parser", "render_plan_graph", "run_plan_command"]
 
@@ -128,9 +130,86 @@ DATABASE_URL_ENV: str = "WHILLY_DATABASE_URL"
 # дублей" half of the AC; the surrounding ``async with conn.transaction()``
 # in :func:`_async_import` handles the "в одной транзакции" half.
 _INSERT_PLAN_SQL: str = """
-INSERT INTO plans (id, name)
-VALUES ($1, $2)
+INSERT INTO plans (id, name, verification_commands)
+VALUES ($1, $2, $3::jsonb)
 ON CONFLICT (id) DO NOTHING
+"""
+
+
+_UPSERT_WORK_INTENT_SQL: str = """
+INSERT INTO work_intents (
+    id,
+    origin_system,
+    origin_ref,
+    external_url,
+    title,
+    content_hash
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (origin_system, origin_ref) DO UPDATE
+SET external_url = EXCLUDED.external_url,
+    title = EXCLUDED.title,
+    content_hash = EXCLUDED.content_hash,
+    updated_at = NOW()
+RETURNING id
+"""
+
+
+_UPSERT_PLAN_ORIGIN_SQL: str = """
+INSERT INTO plan_origins (
+    plan_id,
+    work_intent_id,
+    prd_file,
+    decomposition_mode
+)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (plan_id, work_intent_id) DO UPDATE
+SET prd_file = EXCLUDED.prd_file,
+    decomposition_mode = EXCLUDED.decomposition_mode
+"""
+
+
+_UPSERT_REPO_TARGET_SQL: str = """
+INSERT INTO repo_targets (
+    id,
+    provider,
+    repo_full_name,
+    clone_url,
+    default_branch,
+    credential_policy
+)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE
+SET provider = EXCLUDED.provider,
+    repo_full_name = EXCLUDED.repo_full_name,
+    clone_url = EXCLUDED.clone_url,
+    default_branch = EXCLUDED.default_branch,
+    credential_policy = EXCLUDED.credential_policy
+"""
+
+
+_UPSERT_PLAN_REPO_TARGET_SQL: str = """
+INSERT INTO plan_repo_targets (
+    plan_id,
+    repo_target_id,
+    is_default
+)
+VALUES ($1, $2, $3)
+ON CONFLICT (plan_id, repo_target_id) DO UPDATE
+SET is_default = EXCLUDED.is_default
+"""
+
+
+_UPSERT_TASK_REPO_TARGET_SQL: str = """
+INSERT INTO task_repo_targets (
+    task_id,
+    repo_target_id,
+    base_ref
+)
+SELECT $1, $2, ''
+WHERE EXISTS (SELECT 1 FROM tasks WHERE id = $1 AND plan_id = $3)
+ON CONFLICT (task_id) DO UPDATE
+SET repo_target_id = EXCLUDED.repo_target_id
 """
 
 
@@ -200,9 +279,41 @@ VALUES (NULL, $1, 'plan.applied', $2::jsonb)
 # every operator-visible SQL string lives in module-scope so a schema review
 # can ``grep`` for table names without descending into function bodies.
 _SELECT_PLAN_SQL: str = """
-SELECT id, name
+SELECT id, name, verification_commands
 FROM plans
 WHERE id = $1
+"""
+
+
+_SELECT_PLAN_ORIGIN_SQL: str = """
+SELECT
+    wi.origin_system,
+    wi.origin_ref,
+    wi.external_url,
+    wi.title,
+    wi.content_hash,
+    po.prd_file,
+    po.decomposition_mode
+FROM plan_origins po
+JOIN work_intents wi ON wi.id = po.work_intent_id
+WHERE po.plan_id = $1
+ORDER BY po.created_at ASC
+LIMIT 1
+"""
+
+
+_SELECT_PLAN_REPO_TARGETS_SQL: str = """
+SELECT
+    rt.id,
+    rt.provider,
+    rt.repo_full_name,
+    rt.clone_url,
+    rt.default_branch,
+    rt.credential_policy
+FROM plan_repo_targets prt
+JOIN repo_targets rt ON rt.id = prt.repo_target_id
+WHERE prt.plan_id = $1
+ORDER BY prt.is_default DESC, rt.id ASC
 """
 
 
@@ -224,10 +335,21 @@ SELECT
     acceptance_criteria,
     test_steps,
     prd_requirement,
-    version
+    version,
+    trt.repo_target_id
 FROM tasks
+LEFT JOIN task_repo_targets trt ON trt.task_id = tasks.id
 WHERE plan_id = $1
 ORDER BY id
+"""
+
+
+_SELECT_HUMAN_REVIEW_EVENTS_SQL: str = """
+SELECT id, task_id, plan_id, event_type, created_at, COALESCE(payload, '{}'::jsonb) AS payload, detail
+FROM events
+WHERE task_id = ANY($1::text[])
+  AND event_type LIKE 'human_review.%'
+ORDER BY created_at ASC, id ASC
 """
 
 
@@ -322,6 +444,29 @@ def build_plan_parser() -> argparse.ArgumentParser:
         help="Force plain ASCII output (default: auto-detect via isatty).",
     )
 
+    # ── plan triz ────────────────────────────────────────────────────────
+    # v4-safe replacement for the useful v3 plan-level TRIZ/challenge
+    # preflight. It reads an already-imported plan from Postgres and runs a
+    # pure deterministic analysis over the task DAG.
+    p_triz = sub.add_parser(
+        "triz",
+        help="Run deterministic TRIZ/challenge preflight on an imported plan.",
+    )
+    p_triz.add_argument(
+        "plan_id",
+        help="Plan id to analyse (matches the 'plan_id' field in the original JSON).",
+    )
+    p_triz.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the report as JSON instead of text.",
+    )
+    p_triz.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return exit code 1 when the TRIZ verdict is REVISE or REJECT.",
+    )
+
     # ── plan reset ───────────────────────────────────────────────────────
     # Operator-facing recovery primitive (TASK-103). Two modes:
     #   --keep-tasks → soft: tasks → PENDING, events purged, RESET row
@@ -410,6 +555,8 @@ def run_plan_command(argv: Sequence[str]) -> int:
         return _run_export(args.plan_id)
     if args.action == "show":
         return _run_show(args.plan_id, no_color=bool(args.no_color))
+    if args.action == "triz":
+        return _run_triz(args.plan_id, as_json=bool(args.json), strict=bool(args.strict))
     if args.action == "reset":
         return _run_reset(
             args.plan_id,
@@ -644,7 +791,13 @@ async def _insert_plan_and_tasks(
     ``::jsonb`` casts in :data:`_INSERT_TASK_SQL` accept the resulting
     text without complaint.
     """
-    await conn.execute(_INSERT_PLAN_SQL, plan.id, plan.name)
+    await conn.execute(
+        _INSERT_PLAN_SQL,
+        plan.id,
+        plan.name,
+        json.dumps([_verification_command_to_dict(command) for command in plan.verification_commands]),
+    )
+    await _upsert_plan_metadata(conn, plan)
     inserted = 0
     for task in tasks:
         # Use ``fetchval`` on the RETURNING-augmented task INSERT so a
@@ -668,6 +821,8 @@ async def _insert_plan_and_tasks(
             task.prd_requirement,
             task.version,
         )
+        if task.repo_target_id:
+            await conn.execute(_UPSERT_TASK_REPO_TARGET_SQL, task.id, task.repo_target_id, plan.id)
         if new_id is None:
             # ON CONFLICT (id) DO NOTHING — pre-existing row owned by
             # this plan (idempotent re-run) or by a different plan
@@ -698,6 +853,50 @@ async def _insert_plan_and_tasks(
         )
         inserted += 1
     logger.info("plan import: inserted plan %s with %d task(s)", plan.id, inserted)
+
+
+async def _upsert_plan_metadata(conn: asyncpg.Connection, plan: Plan) -> None:
+    """Persist optional origin and repo-target metadata for ``plan``."""
+    if plan.origin is not None:
+        work_intent_id = _work_intent_id(plan.origin)
+        stored_id = await conn.fetchval(
+            _UPSERT_WORK_INTENT_SQL,
+            work_intent_id,
+            plan.origin.system,
+            plan.origin.ref,
+            plan.origin.url,
+            plan.origin.title,
+            plan.origin.content_hash,
+        )
+        await conn.execute(
+            _UPSERT_PLAN_ORIGIN_SQL,
+            plan.id,
+            stored_id,
+            plan.origin.prd_file,
+            plan.origin.decomposition_mode,
+        )
+
+    for index, target in enumerate(plan.repo_targets):
+        await conn.execute(
+            _UPSERT_REPO_TARGET_SQL,
+            target.id,
+            target.provider,
+            target.repo_full_name,
+            target.clone_url,
+            target.default_branch,
+            target.credential_policy,
+        )
+        await conn.execute(
+            _UPSERT_PLAN_REPO_TARGET_SQL,
+            plan.id,
+            target.id,
+            index == 0,
+        )
+
+
+def _work_intent_id(origin: PlanOrigin) -> str:
+    """Return stable internal id for a source origin."""
+    return f"{origin.system}:{origin.ref}"
 
 
 def _run_export(plan_id: str) -> int:
@@ -785,6 +984,23 @@ async def _async_export(dsn: str, plan_id: str) -> tuple[Plan, list[Task]] | Non
         await close_pool(pool)
 
 
+async def _async_show(dsn: str, plan_id: str) -> tuple[Plan, list[Task], Mapping[str, HumanReviewState]] | None:
+    """Fetch plan-show data, including display-only human-review audit state."""
+
+    pool = await create_pool(dsn)
+    try:
+        async with pool.acquire() as conn:
+            result = await _select_plan_with_tasks(conn, plan_id)
+            if result is None:
+                return None
+            plan, tasks = result
+            task_ids = [str(task.id) for task in tasks]
+            event_rows = await conn.fetch(_SELECT_HUMAN_REVIEW_EVENTS_SQL, task_ids) if task_ids else []
+    finally:
+        await close_pool(pool)
+    return plan, tasks, human_review_states_from_events(tuple(_event_row_to_operator_event(row) for row in event_rows))
+
+
 async def _select_plan_with_tasks(
     conn: asyncpg.Connection,
     plan_id: str,
@@ -812,8 +1028,19 @@ async def _select_plan_with_tasks(
         return None
 
     task_rows = await conn.fetch(_SELECT_TASKS_SQL, plan_id)
+    origin_row = await conn.fetchrow(_SELECT_PLAN_ORIGIN_SQL, plan_id)
+    repo_target_rows = await conn.fetch(_SELECT_PLAN_REPO_TARGETS_SQL, plan_id)
     tasks = [_row_to_task(row) for row in task_rows]
-    plan = Plan(id=plan_row["id"], name=plan_row["name"], tasks=tuple(tasks))
+    origin = _row_to_origin(origin_row) if origin_row is not None else None
+    repo_targets = tuple(_row_to_repo_target(row) for row in repo_target_rows)
+    plan = Plan(
+        id=plan_row["id"],
+        name=plan_row["name"],
+        tasks=tuple(tasks),
+        origin=origin,
+        repo_targets=repo_targets,
+        verification_commands=_decode_verification_commands_jsonb(plan_row["verification_commands"]),
+    )
     logger.info("plan export: fetched plan %s with %d task(s)", plan.id, len(tasks))
     return plan, tasks
 
@@ -852,6 +1079,74 @@ def _decode_jsonb(raw: object) -> list[str]:
     return out
 
 
+def _decode_verification_commands_jsonb(raw: object) -> tuple[VerificationCommand, ...]:
+    """Return ``raw`` as validated plan-level verification command metadata."""
+    if raw is None:
+        decoded: list[object] = []
+    elif isinstance(raw, list):
+        decoded = raw
+    elif isinstance(raw, str):
+        decoded_any = json.loads(raw)
+        if not isinstance(decoded_any, list):
+            raise TypeError(f"expected verification_commands JSONB array, got {type(decoded_any).__name__}")
+        decoded = decoded_any
+    else:
+        raise TypeError(f"unexpected verification_commands JSONB type {type(raw).__name__}: {raw!r}")
+    plan, _tasks = parse_plan_dict(
+        {
+            "plan_id": "_verification_commands",
+            "project": "_verification_commands",
+            "tasks": [],
+            "verification_commands": decoded,
+        }
+    )
+    return plan.verification_commands
+
+
+def _verification_command_to_dict(command: VerificationCommand) -> dict[str, object]:
+    return {
+        "name": command.name,
+        "command": command.command,
+        "required": command.required,
+        "source": command.source,
+        "repair_max_attempts": command.repair_max_attempts,
+    }
+
+
+def _event_row_to_operator_event(row: asyncpg.Record) -> EventRow:
+    return EventRow(
+        event_id=int(row["id"]),
+        task_id=_optional_text(row["task_id"]),
+        plan_id=_optional_text(row["plan_id"]),
+        event_type=str(row["event_type"]),
+        created_at=row["created_at"],
+        detail=_merge_event_payload_detail(row["payload"], row["detail"]),
+    )
+
+
+def _merge_event_payload_detail(payload: object, detail: object) -> dict[str, object]:
+    merged = _json_object(detail)
+    merged.update(_json_object(payload))
+    return merged
+
+
+def _json_object(raw: object) -> dict[str, object]:
+    if raw is None:
+        return {}
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        decoded = json.loads(raw)
+        return dict(decoded) if isinstance(decoded, Mapping) else {}
+    return dict(raw)  # type: ignore[arg-type]
+
+
+def _optional_text(raw: object) -> str | None:
+    if raw is None:
+        return None
+    return str(raw)
+
+
 def _row_to_task(row: asyncpg.Record) -> Task:
     """Map one ``tasks`` row to the immutable :class:`Task` value object.
 
@@ -872,7 +1167,42 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         test_steps=tuple(_decode_jsonb(row["test_steps"])),
         prd_requirement=row["prd_requirement"],
         version=row["version"],
+        repo_target_id=_optional_record_value(row, "repo_target_id"),
     )
+
+
+def _row_to_origin(row: asyncpg.Record) -> PlanOrigin:
+    """Map plan-origin SELECT row to :class:`PlanOrigin`."""
+    return PlanOrigin(
+        system=row["origin_system"],
+        ref=row["origin_ref"],
+        url=row["external_url"],
+        title=row["title"],
+        content_hash=row["content_hash"],
+        prd_file=row["prd_file"],
+        decomposition_mode=row["decomposition_mode"],
+    )
+
+
+def _row_to_repo_target(row: asyncpg.Record) -> RepoTarget:
+    """Map repo-target SELECT row to :class:`RepoTarget`."""
+    return RepoTarget(
+        id=row["id"],
+        provider=row["provider"],
+        repo_full_name=row["repo_full_name"],
+        clone_url=row["clone_url"],
+        default_branch=row["default_branch"],
+        credential_policy=row["credential_policy"],
+    )
+
+
+def _optional_record_value(row: asyncpg.Record, key: str) -> str:
+    """Return optional SELECT column from an asyncpg record."""
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 # ── plan show ────────────────────────────────────────────────────────────
@@ -900,6 +1230,7 @@ def render_plan_graph(
     cycles: Sequence[Sequence[TaskId]],
     *,
     use_color: bool,
+    human_review_by_task: Mapping[str, HumanReviewState] | None = None,
 ) -> str:
     """Return the ASCII dependency graph for ``plan`` as a single string.
 
@@ -971,9 +1302,17 @@ def render_plan_graph(
     # bound on the enum (not the actual rows) so the layout stays
     # consistent across exports of small plans.
     badge_width = max(len(s.value) for s in TaskStatus)
+    human_review_by_task = human_review_by_task or {}
 
     for task in ordered:
-        body_lines.append(_render_task_line(task, badge_width=badge_width, use_color=use_color))
+        body_lines.append(
+            _render_task_line(
+                task,
+                badge_width=badge_width,
+                use_color=use_color,
+                human_review=human_review_by_task.get(task.id),
+            )
+        )
         if task.dependencies:
             # Filter to in-plan deps only — cross-plan deps are silently
             # ignored throughout the scheduler (see scheduler.py docstring
@@ -1007,7 +1346,13 @@ def render_plan_graph(
     return raw
 
 
-def _render_task_line(task: Task, *, badge_width: int, use_color: bool) -> str:
+def _render_task_line(
+    task: Task,
+    *,
+    badge_width: int,
+    use_color: bool,
+    human_review: HumanReviewState | None = None,
+) -> str:
     """Format one ``[STATUS] task_id (priority)`` row.
 
     The badge is left-padded to ``badge_width`` so the trailing ids and
@@ -1024,7 +1369,18 @@ def _render_task_line(task: Task, *, badge_width: int, use_color: bool) -> str:
         badge = f"[{color}]{badge_text}[/{color}]"
     else:
         badge = badge_text
-    return f"[{badge}] {task.id}  ({task.priority.value})"
+    suffix = _human_review_suffix(human_review)
+    return f"[{badge}] {task.id}  ({task.priority.value}){suffix}"
+
+
+def _human_review_suffix(state: HumanReviewState | None) -> str:
+    if state is None or not state.required:
+        return ""
+    label = state.decision or "pending"
+    suffix = f"  review={label}"
+    if state.stage_id:
+        suffix += f" stage={state.stage_id}"
+    return suffix
 
 
 def _compute_topological_depth(
@@ -1141,7 +1497,7 @@ def _run_show(plan_id: str, *, no_color: bool) -> int:
         )
         return EXIT_ENVIRONMENT_ERROR
 
-    result = asyncio.run(_async_export(dsn, plan_id))
+    result = asyncio.run(_async_show(dsn, plan_id))
     if result is None:
         print(
             f"whilly plan show: plan {plan_id!r} not found — check the id matches the "
@@ -1150,10 +1506,16 @@ def _run_show(plan_id: str, *, no_color: bool) -> int:
         )
         return EXIT_ENVIRONMENT_ERROR
 
-    plan, tasks = result
+    plan, tasks, human_review_by_task = result
     cycles = detect_cycles(plan)
     use_color = _should_use_color(no_color=no_color)
-    rendered = render_plan_graph(plan, tasks, cycles, use_color=use_color)
+    rendered = render_plan_graph(
+        plan,
+        tasks,
+        cycles,
+        use_color=use_color,
+        human_review_by_task=human_review_by_task,
+    )
 
     # Use a Rich Console so [green]...[/green] tags resolve to ANSI when
     # color is enabled. ``soft_wrap=True`` keeps long task ids on a
@@ -1206,6 +1568,44 @@ def _should_use_color(*, no_color: bool) -> bool:
     except (io.UnsupportedOperation, ValueError):
         # Closed buffer / detached file descriptor.
         return False
+
+
+def _run_triz(plan_id: str, *, as_json: bool, strict: bool) -> int:
+    """Implement ``whilly plan triz <plan_id>``.
+
+    This is the v4 migration of the legacy v3 plan-level TRIZ/challenge
+    surface: read a plan from Postgres, run the pure analyzer, print a
+    compact report, and optionally fail CI via ``--strict`` when the
+    verdict is not ``approve``.
+    """
+
+    dsn = os.environ.get(DATABASE_URL_ENV)
+    if not dsn:
+        print(
+            f"whilly plan triz: {DATABASE_URL_ENV} is not set — point it at a Postgres "
+            "instance with the v4 schema applied (see scripts/db-up.sh).",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    result = asyncio.run(_async_export(dsn, plan_id))
+    if result is None:
+        print(
+            f"whilly plan triz: plan {plan_id!r} not found — check the id matches the "
+            "'plan_id' you used at import time.",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    plan, tasks = result
+    report = analyze_plan_triz(Plan(id=plan.id, name=plan.name, tasks=tuple(tasks)))
+    if as_json:
+        print(json.dumps(plan_triz_report_to_dict(report), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(format_plan_triz_report(report), end="")
+    if strict and report.verdict != "approve":
+        return EXIT_VALIDATION_ERROR
+    return EXIT_OK
 
 
 # ── plan reset (TASK-103) ────────────────────────────────────────────────

@@ -17,8 +17,12 @@ The status-oriented workflow allows you to:
 Sync only Todo items from a GitHub Project to Issues and Whilly tasks:
 
 ```bash
-whilly --sync-todo "https://github.com/users/mshegolev/projects/4" --repo owner/name
+whilly github-projects sync-todo "https://github.com/users/mshegolev/projects/4" --repo owner/name
 ```
+
+For demo or operator workflows where Project items already point to Issues,
+add `--existing-only` to record those Issues without converting draft Project
+items into new repository Issues.
 
 This will:
 - Fetch only items with "Todo" status from the project
@@ -31,7 +35,7 @@ This will:
 Monitor a project for new Todo items and sync them automatically:
 
 ```bash
-whilly --watch-project "https://github.com/users/mshegolev/projects/4" --repo owner/name
+whilly github-projects watch "https://github.com/users/mshegolev/projects/4" --repo owner/name
 ```
 
 This runs continuously and:
@@ -44,17 +48,18 @@ This runs continuously and:
 Update a Project item status when an Issue changes:
 
 ```bash
-whilly --sync-status 123 "In Progress"
+whilly github-projects sync-status 123 "In Progress"
 ```
 
-This updates the corresponding Project item to "In Progress" status.
+This updates the corresponding Project item to "In Progress" status through
+GitHub Projects v2 `updateProjectV2ItemFieldValue`.
 
 ### 4. Check Sync Status
 
 View current sync state and statistics:
 
 ```bash
-whilly --project-sync-status
+whilly github-projects status
 ```
 
 Shows:
@@ -80,23 +85,23 @@ The workflow maps GitHub Project statuses to Whilly labels:
 ### Scenario 1: Manual Sync Workflow
 
 1. User moves items to "Todo" in GitHub Project
-2. Run sync command: `whilly --sync-todo PROJECT_URL --repo owner/name`
+2. Run sync command: `whilly github-projects sync-todo PROJECT_URL --repo owner/name`
 3. Whilly creates Issues and tasks for new Todo items
 4. Work on tasks using regular Whilly workflow
-5. Update status as needed: `whilly --sync-status ISSUE_NUMBER "Done"`
+5. Update status as needed: `whilly github-projects sync-status ISSUE_NUMBER "Done"`
 
 ### Scenario 2: Continuous Monitoring Workflow
 
-1. Start monitoring: `whilly --watch-project PROJECT_URL --repo owner/name`
+1. Start monitoring: `whilly github-projects watch PROJECT_URL --repo owner/name`
 2. User moves items to "Todo" in GitHub Project (in web interface)
 3. Whilly automatically detects changes and creates Issues/tasks
 4. Work proceeds automatically as new tasks appear
 
 ### Scenario 3: Hybrid Workflow
 
-1. Use `--sync-todo` for initial batch of Todo items
-2. Use `--watch-project` for ongoing monitoring
-3. Use `--sync-status` for manual status updates when needed
+1. Use `whilly github-projects sync-todo` for initial batch of Todo items
+2. Use `whilly github-projects watch` for ongoing monitoring
+3. Use `whilly github-projects sync-status` for manual status updates when needed
 
 ## Configuration
 
@@ -146,8 +151,7 @@ The workflow maintains state in `.whilly_project_sync_state.json` to:
 To reset the state (useful for debugging or re-syncing everything):
 
 ```bash
-# Reset via CLI (not implemented yet, use file deletion)
-rm .whilly_project_sync_state.json
+whilly github-projects reset-state
 ```
 
 ## Error Handling
@@ -164,11 +168,11 @@ The sync commands handle various error cases:
 
 ### Backward Compatibility
 
-The new status-oriented commands work alongside the existing `--from-project` command:
+The status-oriented subcommands work alongside the full project conversion command:
 
-- `--from-project` - Converts ALL project items to Issues/tasks (original behavior)
-- `--sync-todo` - Converts only Todo items with incremental sync (new behavior)
-- `--watch-project` - Continuous monitoring of Todo items (new behavior)
+- `whilly github-projects from-project` - Converts ALL project items to Issues/tasks.
+- `whilly github-projects sync-todo` - Converts only Todo items with incremental sync.
+- `whilly github-projects watch` - Continuous monitoring of Todo items.
 
 ### Combined Usage
 
@@ -176,13 +180,13 @@ You can combine approaches:
 
 ```bash
 # Initial full conversion
-whilly --from-project PROJECT_URL --repo owner/name
+whilly github-projects from-project PROJECT_URL --repo owner/name
 
 # Switch to incremental Todo-only sync
-whilly --sync-todo PROJECT_URL --repo owner/name
+whilly github-projects sync-todo PROJECT_URL --repo owner/name
 
 # Enable continuous monitoring
-whilly --watch-project PROJECT_URL --repo owner/name
+whilly github-projects watch PROJECT_URL --repo owner/name
 ```
 
 ## Troubleshooting

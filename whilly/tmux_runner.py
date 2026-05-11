@@ -109,7 +109,8 @@ def launch_agent(
     prompt_file = log_dir / f"{task_id}_prompt.txt"
     prompt_file.write_text(prompt)
 
-    cd_prefix = f'cd "{cwd}" && ' if cwd else ""
+    log_file_q = shlex.quote(str(log_file))
+    cd_prefix = f"cd {shlex.quote(str(cwd))} && " if cwd else ""
 
     # Ask the backend for argv; the last element is the prompt placeholder we
     # will replace with a shell cat-substitution. Assertion guards against any
@@ -128,24 +129,37 @@ def launch_agent(
     # до первого события агента. С --output-format stream-json Claude CLI
     # пишет JSONL events инкрементально — preamble просто гарантирует, что
     # файл существует и непустой даже на холодном старте.
+    #
+    # Every interpolated field is run through ``shlex.quote`` (M1 VAL-SEC-027/028).
+    # Even if a malicious plan ever smuggled a shell metacharacter past the
+    # task-id validator, the wrapper hands the bytes to ``zsh -ic`` as a
+    # single-quoted literal — no command substitution, no canary file.
     backend_name = getattr(backend, "name", "claude")
-    preamble_cmd = (
-        f'printf "# whilly agent preamble\\n'
-        f"# timestamp : $(date '+%Y-%m-%d %H:%M:%S')\\n"
-        f"# session   : {session_name}\\n"
-        f"# task_id   : {task_id}\\n"
-        f"# backend   : {backend_name}\\n"
-        f"# model     : {model}\\n"
-        f"# cwd       : {cwd or 'inherited'}\\n"
-        f"# note      : stream-json: events JSONL появляются live, tail -f покажет прогресс\\n"
-        f'# ---\\n" > "{log_file}"; '
-    )
+    cwd_label = str(cwd) if cwd else "inherited"
+    preamble_lines = [
+        "# whilly agent preamble",
+        f"# session   : {session_name}",
+        f"# task_id   : {task_id}",
+        f"# backend   : {backend_name}",
+        f"# model     : {model}",
+        f"# cwd       : {cwd_label}",
+        "# note      : stream-json: events JSONL появляются live, tail -f покажет прогресс",
+        "# ---",
+    ]
+    preamble_cmd_parts = [
+        f"echo {shlex.quote(preamble_lines[0])} > {log_file_q}",
+        f"date '+# timestamp : %Y-%m-%d %H:%M:%S' >> {log_file_q}",
+    ]
+    for line in preamble_lines[1:]:
+        preamble_cmd_parts.append(f"echo {shlex.quote(line)} >> {log_file_q}")
+    preamble_cmd = "; ".join(preamble_cmd_parts) + "; "
+
     wrapper = (
         f"{cd_prefix}"
         f"{preamble_cmd}"
         f'{prefix_cmd} "$(cat {shlex.quote(str(prompt_file))})" '
-        f'>> "{log_file}" 2>&1; '
-        f'echo "EXIT_CODE=$?" >> "{log_file}"'
+        f">> {log_file_q} 2>&1; "
+        f'echo "EXIT_CODE=$?" >> {log_file_q}'
     )
 
     # zsh -ic sources ~/.zshrc so user-defined functions (e.g. claudeproxy wrappers) resolve.

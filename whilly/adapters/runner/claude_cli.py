@@ -47,6 +47,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Final
 
 from whilly.adapters.runner import proxy
@@ -98,18 +99,35 @@ def _resolve_model(model: str | None) -> str:
     return os.environ.get("WHILLY_MODEL") or DEFAULT_MODEL
 
 
+DEFAULT_DISALLOWED_TOOLS: Final[str] = "Write,Edit,MultiEdit,NotebookEdit,Bash"
+
+
 def _permission_args() -> list[str]:
     """Return the permission-related Claude CLI flags.
 
-    Mirrors v3 default: agents run unattended via
-    ``--dangerously-skip-permissions``. Operators wanting an attended TTY
-    flow set ``WHILLY_CLAUDE_SAFE=1`` and get ``--permission-mode acceptEdits``
-    instead — the same env knob the v3 backend honours so the operational
-    contract is unchanged.
+    Default posture (since v4.7.0) is **deny-by-default**: argv carries
+    ``--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash`` and OMITS
+    ``--dangerously-skip-permissions``. To restore the legacy unattended
+    behavior set ``WHILLY_AGENT_ALLOW_SHELL=1`` — this drops the denylist
+    and re-emits ``--dangerously-skip-permissions``.
+
+    ``WHILLY_CLAUDE_SAFE=1`` continues to add ``--permission-mode acceptEdits``
+    and stacks on top of the default-deny denylist; the synchronous
+    ``ClaudeBackend`` honours the same env knobs so both worker dispatch
+    paths produce equivalent argv.
     """
-    if os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes"):
-        return ["--permission-mode", "acceptEdits"]
-    return ["--dangerously-skip-permissions"]
+    safe_mode = os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes")
+    allow_shell = os.environ.get("WHILLY_AGENT_ALLOW_SHELL") in ("1", "true", "yes")
+
+    if allow_shell:
+        if safe_mode:
+            return ["--permission-mode", "acceptEdits"]
+        return ["--dangerously-skip-permissions"]
+
+    args: list[str] = ["--disallowedTools", DEFAULT_DISALLOWED_TOOLS]
+    if safe_mode:
+        args.extend(["--permission-mode", "acceptEdits"])
+    return args
 
 
 def build_command(prompt: str, model: str) -> list[str]:
@@ -162,7 +180,7 @@ def _is_retriable_error(result: AgentResult) -> bool:
     return any(needle in text for needle in _API_ERROR_SUBSTRINGS)
 
 
-async def _spawn_and_collect(prompt: str, model: str) -> AgentResult:
+async def _spawn_and_collect(prompt: str, model: str, *, cwd: Path | None = None) -> AgentResult:
     """Spawn ``claude`` once and return the parsed :class:`AgentResult`.
 
     All known subprocess-level failures (missing binary, EAGAIN) are
@@ -176,13 +194,18 @@ async def _spawn_and_collect(prompt: str, model: str) -> AgentResult:
     # TASK-109-3: inject HTTPS_PROXY/NO_PROXY into the spawned env only,
     # so worker-side asyncpg / httpx (running in the parent process)
     # keep going direct to Postgres / control plane.
-    child_env = proxy.spawn_env_for_claude()
+    child_env = proxy.spawn_env_for_claude(model=model)
+    spawn_kwargs = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "env": child_env,
+    }
+    if cwd is not None:
+        spawn_kwargs["cwd"] = str(cwd)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=child_env,
+            **spawn_kwargs,
         )
     except FileNotFoundError:
         log.error("claude binary not found at %r — set CLAUDE_BIN to override", _claude_bin())
@@ -217,6 +240,7 @@ async def run_task(
     prompt: str,
     model: str | None = None,
     *,
+    cwd: Path | None = None,
     backoff_schedule: Sequence[int] = BACKOFF_SCHEDULE,
 ) -> AgentResult:
     """Run ``claude`` for *task* with retry on transient API errors.
@@ -234,6 +258,9 @@ async def run_task(
     model:
         Explicit model override; falls back to ``WHILLY_MODEL`` env then
         :data:`DEFAULT_MODEL`.
+    cwd:
+        Optional working directory for the agent subprocess. Repo-targeted
+        ``whilly run`` calls pass the prepared workspace path here.
     backoff_schedule:
         Exponential backoff in seconds between retries. Defaults to
         :data:`BACKOFF_SCHEDULE` (5/10/20/40/60). Tests pass ``(0, 0, 0, 0, 0)``
@@ -265,7 +292,7 @@ async def run_task(
             )
             await asyncio.sleep(delay)
 
-        result = await _spawn_and_collect(prompt, resolved_model)
+        result = await _spawn_and_collect(prompt, resolved_model, cwd=cwd)
         last_result = result
 
         if not _is_retriable_error(result):

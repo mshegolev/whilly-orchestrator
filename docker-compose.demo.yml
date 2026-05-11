@@ -51,7 +51,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.demo
-    image: whilly-demo:latest
+    # WHILLY_IMAGE_TAG_REF выставляется обёрткой workshop-demo.sh из
+    # WHILLY_IMAGE_TAG: set → `mshegolev/whilly:${WHILLY_IMAGE_TAG}`,
+    # unset → `whilly-demo:latest` (local-build path сохраняется
+    # байт-в-байт). См. VAL-M1-COMPOSE-011.
+    image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}
     # Никогда не пытаться пулить из registry — образ собран локально
     # (см. шаг сборки в DEMO-CHECKLIST.md). Без этого compose на чистой
     # машине пытается `docker pull whilly-demo` и падает с
@@ -70,8 +74,11 @@ services:
       # Cluster-join secret (тоже хардкод для демо).
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+      WHILLY_LOG_DIR: /logs
     ports:
       - "127.0.0.1:${WHILLY_CONTROL_PORT:-8000}:8000"
+    volumes:
+      - whilly_demo_logs:/logs:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:8000/health"]
       interval: 3s
@@ -95,7 +102,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.demo
-    image: whilly-demo:latest
+    image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}
     pull_policy: never
     # `container_name` намеренно НЕ указан — иначе compose откажется делать
     # вторую реплику при `--scale worker=2` (имя контейнера должно быть
@@ -140,14 +147,17 @@ services:
       # cli_adapter.py транслирует whilly's argv в native argv каждого CLI
       # и парсит native output. WHILLY_CLI выбирает adapter route.
       #
-      # Since v4.4 (m1-opencode-groq-default): the worker default is
-      # `opencode` + `groq/openai/gpt-oss-120b` (free tier, ~14k req/day).
-      # Operators provide GROQ_API_KEY via the host env or the repo `.env`
-      # file (gitignored — never commit a real key). To opt out of the
-      # groq path, override WHILLY_MODEL=<other-provider>/<model>; the
-      # entrypoint's groq-credentials check then becomes a no-op.
+      # Since v4.4.2 (m1-opencode-big-pickle-default): the worker default
+      # is `opencode` + `opencode/big-pickle` — the free, anonymous
+      # stealth model on OpenCode Zen (no API key required as of
+      # 2026-05-02). Zero-key onboarding: workshop-demo.sh works on a
+      # fresh checkout without any provider credential. To opt into Groq
+      # set WHILLY_MODEL=groq/openai/gpt-oss-120b AND provide GROQ_API_KEY
+      # via the host env / `.env` (gitignored — never commit a real key);
+      # the worker's groq-credentials guard then re-engages. Anthropic /
+      # OpenAI escape hatches work the same way.
       WHILLY_CLI: ${WHILLY_CLI:-opencode}
-      WHILLY_MODEL: ${WHILLY_MODEL:-groq/openai/gpt-oss-120b}
+      WHILLY_MODEL: ${WHILLY_MODEL:-opencode/big-pickle}
       WHILLY_FORCE_COMPLETE: ${WHILLY_FORCE_COMPLETE:-1}
       # Credentials для каждого agentic CLI (читаются нативно):
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -168,15 +178,75 @@ services:
       LLM_X_TITLE: ${LLM_X_TITLE:-}
       LLM_FORCE_COMPLETE: ${LLM_FORCE_COMPLETE:-0}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
+      WHILLY_LOG_DIR: /logs
+      # Optional demo Slack notifications. Set WHILLY_SLACK_WEBHOOK_URL
+      # to an Incoming Webhook and tasks will post STARTED/DONE/FAILED
+      # messages with links back to the built-in LLM Ops UI.
+      WHILLY_SLACK_WEBHOOK_URL: ${WHILLY_SLACK_WEBHOOK_URL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      WHILLY_SLACK_ACCESS_TOKEN: ${WHILLY_SLACK_ACCESS_TOKEN:-}
+      SLACK_ACCESS_TOKEN: ${SLACK_ACCESS_TOKEN:-}
+      WHILLY_SLACK_CHANNEL: ${WHILLY_SLACK_CHANNEL:-C0B1WT58EBE}
+      SLACK_CHANNEL: ${SLACK_CHANNEL:-C0B1WT58EBE}
+      WHILLY_SLACK_API_BASE_URL: ${WHILLY_SLACK_API_BASE_URL:-https://slack.com/api}
+      WHILLY_SLACK_ENABLED: ${WHILLY_SLACK_ENABLED:-1}
+      WHILLY_SLACK_NOTIFY_EVENTS: ${WHILLY_SLACK_NOTIFY_EVENTS:-terminal}
+      WHILLY_PUBLIC_BASE_URL: ${WHILLY_PUBLIC_BASE_URL:-http://127.0.0.1:8000}
+    volumes:
+      - whilly_demo_logs:/logs
     command: ["worker"]
 
-  # ─── 4. (Опционально) одноразовый seed-runner ──────────────────────────────
+  # ─── 4. (Опционально) funnel sidecar — localhost.run reverse SSH tunnel ────
+  #
+  # Profile-gated за `--profile funnel` — дефолтный
+  # `docker compose -f docker-compose.demo.yml up` обязан остаться
+  # байт-в-байт как в v4.4 (mission §4 backcompat invariant).
+  # Активируется явным `docker compose ... --profile funnel up -d`.
+  #
+  # Держит SSH reverse-tunnel к `nokey@localhost.run` (free anonymous
+  # tier) и публикует ротирующийся `https://<random>.lhr.life` URL в
+  # postgres-таблицу `funnel_url` + shared-volume `/funnel/url.txt`.
+  # На disconnect — exponential backoff и переподключение. См.
+  # `Dockerfile.funnel`, `scripts/funnel/run.sh`,
+  # `docs/Deploy-M2.md` § Topology A.
+  funnel:
+    build:
+      context: .
+      dockerfile: Dockerfile.funnel
+    image: whilly-funnel:latest
+    pull_policy: never
+    container_name: whilly-demo-funnel
+    profiles: ["funnel"]
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      FUNNEL_LOCAL_HOST: control-plane
+      FUNNEL_LOCAL_PORT: "8000"
+      FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-60}"
+      FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
+      FUNNEL_URL_FILE: /funnel/url.txt
+      # M3 (m3-funnel-stable-url-via-ssh-key): опционально включает
+      # SSH-key stable URL и paid custom-domain режимы. По дефолту пусто
+      # — поведение байт-в-байт совпадает с v4.5 anonymous-rotating.
+      # См. docs/Distributed-Setup.md § "Stable URL via SSH key (M3)".
+      FUNNEL_SSH_KEY_PATH: "${FUNNEL_SSH_KEY_PATH:-}"
+      FUNNEL_CUSTOM_DOMAIN: "${FUNNEL_CUSTOM_DOMAIN:-}"
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+    volumes:
+      - funnel_url_volume:/funnel
+    # Mission §4 cap: ~32 MB alpine + openssh-client image.
+    mem_limit: 64m
+    mem_reservation: 16m
+
+  # ─── 5. (Опционально) одноразовый seed-runner ──────────────────────────────
   # Импортирует demo-план в БД сразу после старта control-plane. Поднимается
   # отдельным сервисом с `restart: 'no'` — в `docker compose up` он сделает
   # своё дело и завершится; повторный `up` не запустит его снова без
   # `--force-recreate`. Можно отключить с `--scale seed=0`.
   seed:
-    image: whilly-demo:latest
+    image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}
     pull_policy: never
     container_name: whilly-demo-seed
     profiles: ["seed"]
@@ -193,3 +263,10 @@ services:
 volumes:
   whilly_demo_pgdata:
     name: whilly_demo_pgdata
+  # Shared volume between the funnel sidecar (writer) and any consumer
+  # that prefers reading `/funnel/url.txt` over a postgres lookup. Only
+  # populated when `--profile funnel` is active.
+  funnel_url_volume:
+    name: whilly_demo_funnel_url
+  whilly_demo_logs:
+    name: whilly_demo_logs

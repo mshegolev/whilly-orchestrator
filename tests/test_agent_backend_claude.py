@@ -74,23 +74,57 @@ class TestBuildCommand:
         assert "-p" in cmd
         assert cmd[-1] == "hello"
 
-    def test_default_skip_permissions(self):
-        cmd = ClaudeBackend().build_command("x")
-        assert "--dangerously-skip-permissions" in cmd
+    def test_default_denies_dangerous_tools(self):
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd = ClaudeBackend().build_command("x")
+        assert "--dangerously-skip-permissions" not in cmd
         assert "acceptEdits" not in cmd
+        assert "--disallowedTools" in cmd
+        disallowed = cmd[cmd.index("--disallowedTools") + 1]
+        for tool in ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"):
+            assert tool in disallowed
 
     def test_safe_mode_uses_accept_edits(self):
-        cmd = ClaudeBackend().build_command("x", safe_mode=True)
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd = ClaudeBackend().build_command("x", safe_mode=True)
         assert "--permission-mode" in cmd
         assert "acceptEdits" in cmd
         assert "--dangerously-skip-permissions" not in cmd
+        assert "--disallowedTools" in cmd
 
     def test_safe_mode_via_env(self):
-        cmd_off = ClaudeBackend().build_command("x")
+        with patch.dict("os.environ", {}, clear=False):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd_off = ClaudeBackend().build_command("x")
         with patch.dict("os.environ", {"WHILLY_CLAUDE_SAFE": "1"}):
+            import os as _os
+
+            _os.environ.pop("WHILLY_AGENT_ALLOW_SHELL", None)
             cmd_on = ClaudeBackend().build_command("x")
-        assert "--dangerously-skip-permissions" in cmd_off
+        assert "--dangerously-skip-permissions" not in cmd_off
+        assert "--disallowedTools" in cmd_off
         assert "acceptEdits" in cmd_on
+        assert "--disallowedTools" in cmd_on
+
+    def test_allow_shell_env_restores_legacy_flag(self):
+        with patch.dict("os.environ", {"WHILLY_AGENT_ALLOW_SHELL": "1"}):
+            import os as _os
+
+            _os.environ.pop("WHILLY_CLAUDE_SAFE", None)
+            cmd = ClaudeBackend().build_command("x")
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--disallowedTools" not in cmd
 
     def test_explicit_model(self):
         cmd = ClaudeBackend().build_command("x", model="claude-sonnet-4")
@@ -278,6 +312,39 @@ class TestRun:
         assert res.exit_code == 1
         assert "boom" in res.result_text
 
+    def test_passes_scrubbed_env_to_subprocess_run(self):
+        payload = _claude_payload(f"all good {COMPLETION_MARKER}", cost=0.1)
+        captured: dict = {}
+
+        def fake_run(*_args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _Proc(0, payload)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "PATH": "/usr/bin",
+                    "CLAUDE_BIN": "/opt/claude",
+                    "ANTHROPIC_API_KEY": "sk-ant-test",
+                    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+                    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+                    "GH_TOKEN": "hidden-github-token",
+                    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+                },
+                clear=True,
+            ),
+            patch("whilly.agents.claude.subprocess.run", side_effect=fake_run),
+        ):
+            res = ClaudeBackend().run("anything", model="claude-sonnet-4-5")
+
+        assert res.exit_code == 0
+        assert captured["env"] == {
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "CLAUDE_BIN": "/opt/claude",
+            "PATH": "/usr/bin",
+        }
+
 
 # ── collect_result_from_file ─────────────────────────────────────────────────
 
@@ -317,6 +384,38 @@ class TestRunAsyncPreamble:
         assert "whilly agent preamble" in content
         assert "backend   : claude" in content
         popen_mock.assert_called_once()
+
+    def test_passes_scrubbed_env_to_popen(self, tmp_path: Path):
+        log = tmp_path / "log.txt"
+        captured: dict = {}
+
+        def fake_popen(*_args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return object()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "PATH": "/usr/bin",
+                    "CLAUDE_BIN": "/opt/claude",
+                    "ANTHROPIC_API_KEY": "sk-ant-test",
+                    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+                    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+                    "GH_TOKEN": "hidden-github-token",
+                    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+                },
+                clear=True,
+            ),
+            patch("whilly.agents.claude.subprocess.Popen", side_effect=fake_popen),
+        ):
+            ClaudeBackend().run_async("hello prompt", model="claude-sonnet-4-5", log_file=log)
+
+        assert captured["env"] == {
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "CLAUDE_BIN": "/opt/claude",
+            "PATH": "/usr/bin",
+        }
 
 
 # ── EAGAIN retry on Popen ──────────────────────────────────────────────────

@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, parse_plan_dict, serialize_plan
-from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskStatus, VerificationCommand
 
 
 def _write_json(tmp_path: Path, payload: dict[str, Any]) -> Path:
@@ -233,6 +233,191 @@ def test_serialize_plan_emits_plan_id_even_when_equal_to_project() -> None:
 
     assert out["plan_id"] == "Workshop A"
     assert out["project"] == "Workshop A"
+
+
+def test_plan_origin_and_repo_targets_round_trip(tmp_path: Path) -> None:
+    payload = _minimal_plan_dict(
+        origin={
+            "system": "github_issue",
+            "ref": "owner/repo/42",
+            "url": "https://github.com/owner/repo/issues/42",
+            "title": "Add feature",
+            "prd_file": "docs/PRD-issue.md",
+            "decomposition_mode": "forge_intake",
+        },
+        repo_targets=[
+            {
+                "id": "github:owner/repo",
+                "provider": "github",
+                "repo_full_name": "owner/repo",
+                "clone_url": "https://github.com/owner/repo.git",
+                "default_branch": "main",
+            }
+        ],
+        tasks=[_minimal_task_dict(repo_target_id="github:owner/repo")],
+    )
+    target = _write_json(tmp_path, payload)
+
+    plan, tasks = parse_plan(target)
+
+    assert plan.origin == PlanOrigin(
+        system="github_issue",
+        ref="owner/repo/42",
+        url="https://github.com/owner/repo/issues/42",
+        title="Add feature",
+        prd_file="docs/PRD-issue.md",
+        decomposition_mode="forge_intake",
+    )
+    assert plan.repo_targets == (
+        RepoTarget(
+            id="github:owner/repo",
+            provider="github",
+            repo_full_name="owner/repo",
+            clone_url="https://github.com/owner/repo.git",
+            default_branch="main",
+        ),
+    )
+    assert tasks[0].repo_target_id == "github:owner/repo"
+
+    encoded = serialize_plan(plan, tasks)
+    assert encoded["origin"]["system"] == "github_issue"
+    assert encoded["repo_targets"][0]["repo_full_name"] == "owner/repo"
+    assert encoded["tasks"][0]["repo_target_id"] == "github:owner/repo"
+
+
+def test_plan_verification_commands_parse_and_serialize_round_trip(tmp_path: Path) -> None:
+    payload = _minimal_plan_dict(
+        verification_commands=[
+            {"name": "unit", "command": "pytest -q tests/unit", "required": True, "source": "profile"},
+            {"name": "lint", "command": "ruff check whilly tests", "required": False, "source": "profile"},
+        ],
+    )
+    target = _write_json(tmp_path, payload)
+
+    plan, tasks = parse_plan(target)
+
+    assert plan.verification_commands == (
+        VerificationCommand(name="unit", command="pytest -q tests/unit", required=True, source="profile"),
+        VerificationCommand(name="lint", command="ruff check whilly tests", required=False, source="profile"),
+    )
+
+    encoded = serialize_plan(plan, tasks)
+    assert encoded["verification_commands"] == [
+        {
+            "name": "unit",
+            "command": "pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+        {
+            "name": "lint",
+            "command": "ruff check whilly tests",
+            "required": False,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+    ]
+
+    round_trip = tmp_path / "round-trip.json"
+    round_trip.write_text(json.dumps(encoded), encoding="utf-8")
+
+    parsed_plan, parsed_tasks = parse_plan(round_trip)
+
+    assert parsed_plan == plan
+    assert parsed_tasks == tasks
+
+
+def test_plan_verification_commands_preserve_source_and_repair_budget(tmp_path: Path) -> None:
+    payload = _minimal_plan_dict(
+        verification_commands=[
+            {
+                "name": "ci-checks",
+                "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+                "required": True,
+                "source": "ci",
+                "repair_max_attempts": 2,
+            },
+            {"name": "profile-unit", "command": "pytest -q tests/unit"},
+        ],
+    )
+    target = _write_json(tmp_path, payload)
+
+    plan, tasks = parse_plan(target)
+
+    assert plan.verification_commands[0].source == "ci"
+    assert plan.verification_commands[0].repair_max_attempts == 2
+    assert plan.verification_commands[1].source == "profile"
+    assert plan.verification_commands[1].repair_max_attempts == 0
+    assert serialize_plan(plan, tasks)["verification_commands"] == [
+        {
+            "name": "ci-checks",
+            "command": "ci://github/checks?owner=acme&repo=demo&pr=42",
+            "required": True,
+            "source": "ci",
+            "repair_max_attempts": 2,
+        },
+        {
+            "name": "profile-unit",
+            "command": "pytest -q tests/unit",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+    ]
+
+
+def test_plan_verification_commands_default_required_and_source(tmp_path: Path) -> None:
+    target = _write_json(
+        tmp_path,
+        _minimal_plan_dict(verification_commands=[{"name": "unit", "command": "pytest -q"}]),
+    )
+
+    plan, tasks = parse_plan(target)
+
+    assert plan.verification_commands == (
+        VerificationCommand(name="unit", command="pytest -q", required=True, source="profile"),
+    )
+    assert serialize_plan(plan, tasks)["verification_commands"] == [
+        {
+            "name": "unit",
+            "command": "pytest -q",
+            "required": True,
+            "source": "profile",
+            "repair_max_attempts": 0,
+        },
+    ]
+
+
+def test_serialize_plan_omits_empty_verification_commands() -> None:
+    out = serialize_plan(Plan(id="plan-no-verify", name="No Verify"), ())
+
+    assert "verification_commands" not in out
+
+
+def test_parse_plan_verification_command_required_must_be_bool(tmp_path: Path) -> None:
+    target = _write_json(
+        tmp_path,
+        _minimal_plan_dict(
+            verification_commands=[
+                {"name": "unit", "command": "pytest -q", "required": "yes", "source": "profile"},
+            ],
+        ),
+    )
+
+    with pytest.raises(PlanParseError) as excinfo:
+        parse_plan(target)
+
+    message = str(excinfo.value)
+    assert "verification_commands[0]" in message
+    assert "required" in message
+
+
+def test_task_repo_target_must_be_declared(tmp_path: Path) -> None:
+    target = _write_json(tmp_path, _minimal_plan_dict(tasks=[_minimal_task_dict(repo_target_id="missing")]))
+
+    with pytest.raises(PlanParseError, match="is not declared"):
+        parse_plan(target)
 
 
 def test_serialize_then_parse_round_trips(tmp_path: Path) -> None:

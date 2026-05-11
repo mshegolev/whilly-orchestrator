@@ -141,14 +141,16 @@ Each run uploads `whilly_logs/whilly_events.jsonl` and the generated `whilly_ci_
 ### Quick checks via gh
 
 ```bash
+export RUN_ID=1234567890                    # placeholder — gh workflow run id
+
 # Recent runs
 gh run list --workflow=whilly-bot.yml --limit 10
 
 # View a specific run
-gh run view <run-id>
+gh run view "$RUN_ID"
 
 # Download artifact
-gh run download <run-id> --name whilly-logs-<run-id>
+gh run download "$RUN_ID" --name "whilly-logs-$RUN_ID"
 
 # Then locally:
 jq 'select(.event=="task.done") | {task_id, cost_usd, duration_s}' \

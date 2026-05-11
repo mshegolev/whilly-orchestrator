@@ -72,15 +72,29 @@ import logging
 import os
 import socket
 import sys
+import time
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Final
 
 from whilly.adapters.db import TaskRepository, close_pool, create_pool
-from whilly.adapters.runner import run_task
+from whilly.adapters.notifications import make_notifier
+from whilly.adapters.runner import AgentResult, run_task
 from whilly.audit import JsonlEventSink
+from whilly.ci.github import GitHubCIPollAdapter
+from whilly.ci.models import CI_VERIFICATION_SOURCE
 from whilly.cli.plan import _select_plan_with_tasks
-from whilly.core.models import WorkerId
+from whilly.config import WhillyConfig
+from whilly.core.models import Task, WorkerId
+from whilly.core.notifications import NotificationPort, RunCompletedEvent
+from whilly.pipeline.verification import resolve_verification_specs, run_verification_commands
+from whilly.sinks.post_complete_pr_hook import (
+    is_auto_open_pr_enabled,
+    run_post_complete_pr_hook,
+)
+from whilly.workspaces import RepoTargetWorkspaceResolver, WORKSPACE_FAILED_EXIT_CODE
 from whilly.worker import (
     DEFAULT_HEARTBEAT_INTERVAL,
     DEFAULT_IDLE_WAIT,
@@ -118,6 +132,8 @@ INSERT INTO workers (worker_id, hostname, token_hash)
 VALUES ($1, $2, $3)
 ON CONFLICT (worker_id) DO UPDATE SET last_heartbeat = NOW()
 """
+
+_VERIFICATION_ENV_ALLOWLIST: Final[tuple[str, ...]] = ("PATH", "HOME", "PYTHONPATH", "VIRTUAL_ENV")
 
 
 def build_run_parser() -> argparse.ArgumentParser:
@@ -174,13 +190,53 @@ def build_run_parser() -> argparse.ArgumentParser:
             "workers on the same host don't collide on the workers PK."
         ),
     )
+    parser.add_argument(
+        "--verify-command",
+        dest="verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run a required verification command after an agent reports completion; "
+            "repeatable. A non-zero exit marks the task FAILED."
+        ),
+    )
+    parser.add_argument(
+        "--optional-verify-command",
+        dest="optional_verify_commands",
+        action="append",
+        default=[],
+        type=_verification_command_arg,
+        metavar="NAME=COMMAND",
+        help=(
+            "Run an optional verification command after completion; repeatable. "
+            "Failures are recorded as warnings and do not block DONE."
+        ),
+    )
+    parser.add_argument(
+        "--verify-timeout",
+        type=float,
+        default=600.0,
+        help="Timeout in seconds for each verification command (default: 600).",
+    )
     return parser
+
+
+def _verification_command_arg(value: str) -> str:
+    """Validate a ``NAME=COMMAND`` verification flag while preserving its string value."""
+
+    name, sep, command = value.partition("=")
+    if not sep or not name.strip() or not command.strip():
+        raise argparse.ArgumentTypeError("expected NAME=COMMAND")
+    return value
 
 
 def run_run_command(
     argv: Sequence[str],
     *,
     runner: RunnerCallable | None = None,
+    notifier: NotificationPort | None = None,
     install_signal_handlers: bool = True,
 ) -> int:
     """Entry point for ``whilly run ...``; returns the process exit code.
@@ -190,6 +246,12 @@ def run_run_command(
     :func:`whilly.adapters.runner.run_task` is used. Unit tests pass a stub
     coroutine so the CLI plumbing — argparse, pool lifecycle, registration,
     plan load — is exercised end-to-end without spawning ``claude``.
+
+    ``notifier`` is the symmetric seam for the post-run Slack notification
+    port (:class:`whilly.core.notifications.NotificationPort`). Production
+    callers leave it ``None`` so :func:`whilly.adapters.notifications.make_notifier`
+    resolves the configured adapter from :class:`WhillyConfig` (Slack when
+    fully configured, no-op otherwise). Tests inject a recording stub.
 
     ``install_signal_handlers`` mirrors :func:`whilly.worker.main.run_worker`'s
     parameter of the same name. Production CLI invocations always run in
@@ -218,6 +280,9 @@ def run_run_command(
 
     worker_id = _resolve_worker_id(args.worker_id)
     effective_runner = runner if runner is not None else run_task
+    cfg = WhillyConfig.from_env()
+    effective_notifier = notifier if notifier is not None else make_notifier(cfg, logger)
+    start = time.monotonic()
 
     try:
         stats = asyncio.run(
@@ -230,9 +295,13 @@ def run_run_command(
                 idle_wait=args.idle_wait,
                 heartbeat_interval=args.heartbeat_interval,
                 install_signal_handlers=install_signal_handlers,
+                verify_commands=args.verify_commands,
+                optional_verify_commands=args.optional_verify_commands,
+                verify_timeout=args.verify_timeout,
             )
         )
     except _PlanNotFoundError as exc:
+        # Misconfig, not "work complete" — no notification.
         print(
             f"whilly run: plan {exc.plan_id!r} not found — check the id matches the "
             "'plan_id' you used at import time, or run `whilly plan import` first.",
@@ -249,6 +318,24 @@ def run_run_command(
         ),
         file=sys.stderr,
     )
+
+    event = RunCompletedEvent(
+        plan_id=args.plan_id,
+        worker_id=worker_id,
+        hostname=socket.gethostname(),
+        iterations=stats.iterations,
+        completed=stats.completed,
+        failed=stats.failed,
+        idle_polls=stats.idle_polls,
+        released_on_shutdown=stats.released_on_shutdown,
+        duration_s=time.monotonic() - start,
+        completed_at=datetime.now(tz=timezone.utc),
+    )
+    try:
+        effective_notifier.notify_run_completed(event)
+    except Exception:  # belt-and-braces; the adapter already swallows
+        logger.exception("whilly run: notifier raised")
+
     return EXIT_OK
 
 
@@ -297,6 +384,9 @@ async def _async_run(
     idle_wait: float | None,
     heartbeat_interval: float | None,
     install_signal_handlers: bool = True,
+    verify_commands: Sequence[str] = (),
+    optional_verify_commands: Sequence[str] = (),
+    verify_timeout: float = 600.0,
 ) -> WorkerStats:
     """Open the pool, register the worker, fetch the plan, run the loop.
 
@@ -341,15 +431,92 @@ async def _async_run(
         # are logged but never raised, so the orchestrator stays
         # functional on read-only filesystems / disk-full hosts.
         repo = TaskRepository(pool, jsonl_sink=JsonlEventSink())
+        workspace_resolver = RepoTargetWorkspaceResolver(repo)
+        task_workspaces: dict[str, Path] = {}
+
+        async def workspace_runner(task: Task, prompt: str) -> AgentResult:
+            try:
+                workspace = await workspace_resolver.prepare(task, plan)
+            except Exception as exc:  # noqa: BLE001 - return as task failure, do not crash worker
+                logger.warning(
+                    "whilly run: workspace preparation failed task=%s target=%s: %s",
+                    task.id,
+                    task.repo_target_id,
+                    exc,
+                )
+                try:
+                    await repo.record_task_event(
+                        task.id,
+                        "workspace.prepare_failed",
+                        {
+                            "repo_target_id": task.repo_target_id,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                except Exception:  # noqa: BLE001 - failure result owns state transition
+                    logger.warning("whilly run: failed to record workspace.prepare_failed", exc_info=True)
+                return AgentResult(
+                    output=f"workspace preparation failed: {type(exc).__name__}: {exc}",
+                    exit_code=WORKSPACE_FAILED_EXIT_CODE,
+                    is_complete=False,
+                )
+
+            task_workspaces[task.id] = workspace.path
+            if runner is run_task:
+                return await run_task(task, prompt, cwd=workspace.path)
+            return await runner(task, prompt)
+
+        # Post-COMPLETE PR opener hook (M2, VAL-PR-005..008 +
+        # VAL-PR-022 / VAL-PR-023). Only built when
+        # ``WHILLY_AUTO_OPEN_PR=1`` is set; otherwise the worker stays
+        # bit-for-bit equivalent to the v4.4 baseline. The hook itself
+        # additionally short-circuits when neither the legacy
+        # ``plan.github_issue_ref`` nor a task-level ``repo_target_id``
+        # provides PR-routable GitHub context.
+        post_complete_hook = None
+        if is_auto_open_pr_enabled():
+
+            async def post_complete_hook(task: Task) -> None:
+                await run_post_complete_pr_hook(
+                    repo,
+                    plan_id=plan.id,
+                    task=task,
+                    worktree_path=task_workspaces.get(task.id, Path.cwd()),
+                )
+
+        verification_specs = resolve_verification_specs(
+            profile_commands=plan.verification_commands,
+            required_cli=verify_commands,
+            optional_cli=optional_verify_commands,
+        )
+        verification_runner = None
+        if verification_specs:
+            ci_poll_runner = (
+                GitHubCIPollAdapter()
+                if any(spec.source == CI_VERIFICATION_SOURCE for spec in verification_specs)
+                else None
+            )
+
+            async def verification_runner(task: Task):
+                return await run_verification_commands(
+                    verification_specs,
+                    cwd=task_workspaces.get(task.id, Path.cwd()),
+                    timeout_s=verify_timeout,
+                    env_allowlist=_VERIFICATION_ENV_ALLOWLIST,
+                    ci_poll_runner=ci_poll_runner,
+                )
+
         return await run_worker(
             repo,
-            runner,
+            workspace_runner,
             plan,
             worker_id,
             idle_wait=idle_wait if idle_wait is not None else DEFAULT_IDLE_WAIT,
             heartbeat_interval=(heartbeat_interval if heartbeat_interval is not None else DEFAULT_HEARTBEAT_INTERVAL),
             max_iterations=max_iterations,
             install_signal_handlers=install_signal_handlers,
+            post_complete_hook=post_complete_hook,
+            verification_runner=verification_runner,
         )
     finally:
         await close_pool(pool)

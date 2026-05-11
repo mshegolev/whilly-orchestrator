@@ -49,8 +49,15 @@ format: ## Apply ruff formatter
 	$(PYTHON) -m ruff format whilly/ tests/
 	$(PYTHON) -m ruff check --fix whilly/ tests/
 
-test: ## Run pytest
-	$(PYTHON) -m pytest -q
+# Resource-aware test parallelism cap. Default WHILLY_PYTEST_PARALLEL=4
+# protects local laptops and GitHub Actions runners from OOM when xdist
+# spins up worker processes; testcontainers Postgres alone needs ~256MB
+# per worker. Override at the call site for fast laptops, e.g.
+#   WHILLY_PYTEST_PARALLEL=8 make test
+WHILLY_PYTEST_PARALLEL ?= 4
+
+test: ## Run pytest (parallelism capped via WHILLY_PYTEST_PARALLEL, default 4)
+	$(PYTHON) -m pytest -q -n auto --maxprocesses=$(WHILLY_PYTEST_PARALLEL)
 
 version: ## Show source version vs installed CLI version (diagnoses install drift)
 	@echo "Source (whilly/__init__.py): $$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' whilly/__init__.py | head -1)"

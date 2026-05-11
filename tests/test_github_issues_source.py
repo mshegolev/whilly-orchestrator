@@ -78,12 +78,17 @@ class TestSecretDetection:
     def test_aws_key_detected(self):
         text = "Use this credential: AKIAIOSFODNN7EXAMPLE"
         hits = _detect_secrets(text)
-        assert any("AKIA" in h for h in hits)
+        assert hits == ["aws-access-key-id"]
 
     def test_github_pat_detected(self):
         text = "token=ghp_" + "A" * 40
         hits = _detect_secrets(text)
-        assert any("ghp_" in h for h in hits)
+        assert hits == ["github-token"]
+
+    def test_multiple_secret_pattern_ids_detected(self):
+        text = "AKIAIOSFODNN7EXAMPLE and ghp_" + "A" * 40
+        hits = _detect_secrets(text)
+        assert hits == ["aws-access-key-id", "github-token"]
 
     def test_clean_text(self):
         assert _detect_secrets("just a normal description") == []
@@ -139,17 +144,24 @@ class TestIssueToTask:
         assert task.priority == "high"
         assert task.status == "pending"
         assert task.key_files == ["app/server.py"]
-        assert task.acceptance_criteria == ["GET /health -> 200"]
-        assert task.test_steps == ["curl -s localhost/health"]
+        # M1 sanitizer wraps each acceptance/test entry in <UNTRUSTED kind=...> fences.
+        assert len(task.acceptance_criteria) == 1
+        assert "GET /health -> 200" in task.acceptance_criteria[0]
+        assert task.acceptance_criteria[0].startswith("<UNTRUSTED kind=gh_issue_acceptance>")
+        assert len(task.test_steps) == 1
+        assert "curl -s localhost/health" in task.test_steps[0]
+        assert task.test_steps[0].startswith("<UNTRUSTED kind=gh_issue_test>")
         assert task.prd_requirement == "https://github.com/foo/bar/issues/42"
         assert "/health endpoint" in task.description
+        assert task.description.startswith("<UNTRUSTED kind=gh_issue_description>")
         assert secrets == []
 
     def test_empty_body(self):
         issue = {"number": 5, "title": "Quick fix", "body": "", "labels": [], "url": ""}
         task, secrets = issue_to_task(issue)
         assert task.id == "GH-5"
-        assert task.description == "Quick fix"
+        assert "Quick fix" in task.description
+        assert task.description.startswith("<UNTRUSTED kind=gh_issue_description>")
         assert task.acceptance_criteria == []
         assert task.priority == "medium"
 
@@ -162,7 +174,7 @@ class TestIssueToTask:
             "url": "",
         }
         _, secrets = issue_to_task(issue)
-        assert secrets
+        assert secrets == ["aws-access-key-id"]
 
     def test_long_body_truncated(self):
         body = "Header\n" + ("line\n" * 200)

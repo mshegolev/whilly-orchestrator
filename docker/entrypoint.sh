@@ -91,23 +91,27 @@ case "$ROLE" in
     : "${WHILLY_CONTROL_URL:?WHILLY_CONTROL_URL is required}"
     : "${WHILLY_PLAN_ID:?WHILLY_PLAN_ID is required}"
 
-    # ─── Fail fast: opencode + groq path requires GROQ_API_KEY (v4.4) ────
-    # Default since feature m1-opencode-groq-default: WHILLY_CLI=opencode +
-    # WHILLY_MODEL=groq/openai/gpt-oss-120b (free-tier on Groq). Without
-    # GROQ_API_KEY set, the agent's first task hits a provider 401 — far
-    # worse for the operator than a single-line diagnostic up-front.
+    if [[ -n "${TAILSCALE_AUTHKEY:-}" ]]; then
+      printf 'whilly worker: TAILSCALE_AUTHKEY is no longer used (Tailscale was removed in the localhost.run pivot 2026-05-02). See docs/Distributed-Setup.md for the localhost.run replacement.\n' >&2
+    fi
+
+    # ─── Fail fast: explicit groq path requires GROQ_API_KEY (v4.4.2) ────
+    # Default since feature m1-opencode-big-pickle-default: WHILLY_CLI=opencode
+    # + WHILLY_MODEL=opencode/big-pickle (zero-key, anonymous, free on
+    # OpenCode Zen). Empty / unset WHILLY_MODEL is the zero-key path and
+    # MUST NOT trigger this guard. Only when the operator explicitly opts
+    # into Groq via WHILLY_MODEL=groq/... does a missing GROQ_API_KEY
+    # become a fail-fast condition.
     # Mirrors whilly.cli.worker.check_opencode_groq_credentials.
     if [[ "$(printf '%s' "${WHILLY_CLI:-}" | tr '[:upper:]' '[:lower:]')" == "opencode" ]]; then
       _whilly_model_norm="${WHILLY_MODEL:-}"
       _is_groq=0
-      if [[ -z "${_whilly_model_norm}" ]]; then
-        # Empty model → opencode default = groq/openai/gpt-oss-120b
-        _is_groq=1
-      elif [[ "${_whilly_model_norm}" == groq/* || "${_whilly_model_norm}" == GROQ/* ]]; then
+      if [[ -n "${_whilly_model_norm}" ]] \
+         && [[ "${_whilly_model_norm}" == groq/* || "${_whilly_model_norm}" == GROQ/* ]]; then
         _is_groq=1
       fi
       if [[ "${_is_groq}" == "1" && -z "${GROQ_API_KEY:-}" ]]; then
-        printf 'whilly worker: GROQ_API_KEY is required when WHILLY_CLI=opencode (or set WHILLY_MODEL to a non-groq provider). See https://console.groq.com to obtain a free key.\n' >&2
+        printf 'whilly worker: GROQ_API_KEY is required when WHILLY_MODEL=groq/... (or unset WHILLY_MODEL to use the zero-key opencode/big-pickle default). See https://console.groq.com to obtain a free key.\n' >&2
         exit 2
       fi
       unset _whilly_model_norm _is_groq
@@ -235,11 +239,22 @@ case "$ROLE" in
       log "using pre-supplied WHILLY_WORKER_TOKEN (skipping register)"
     fi
 
-    exec whilly-worker \
-      --connect "$WHILLY_CONTROL_URL" \
-      --token "$WHILLY_WORKER_TOKEN" \
-      --plan "$WHILLY_PLAN_ID" \
-      "$@"
+    # WHILLY_INSECURE follows the same truthiness rules as the connect-flow
+    # branch above (line ~145) and forwards `--insecure` to the worker.
+    # Without it, plain HTTP to a non-loopback control-plane URL is rejected
+    # by the worker's scheme guard before any HTTP call. VAL-M1-ENTRYPOINT-001
+    # was reframed (m1-round5-contract-rereframer) to expect WHILLY_INSECURE=1
+    # to opt in and restore v4.3.1 plain-HTTP-non-loopback behavior.
+    worker_argv=(
+      whilly-worker
+      --connect "$WHILLY_CONTROL_URL"
+      --token "$WHILLY_WORKER_TOKEN"
+      --plan "$WHILLY_PLAN_ID"
+    )
+    if is_truthy "${WHILLY_INSECURE:-}"; then
+      worker_argv+=(--insecure)
+    fi
+    exec "${worker_argv[@]}" "$@"
     ;;
 
   migrate)

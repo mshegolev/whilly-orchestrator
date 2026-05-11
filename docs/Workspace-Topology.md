@@ -180,9 +180,10 @@ cd ./workspace/demo
 
 # 2. Per-task lifecycle on a CLAIM (illustrative — the worker
 #    automates this; an operator only runs it manually for forensics):
+export TASK_GIT_REF=origin/main           # placeholder — task.git_ref from claim payload
 git fetch origin
-git reset --hard <task.git_ref>
-git checkout -B worker-A/demo/T-42 <task.git_ref>
+git reset --hard "$TASK_GIT_REF"
+git checkout -B worker-A/demo/T-42 "$TASK_GIT_REF"
 
 # 3. Agentic CLI runs in the working tree...
 #    (claude / opencode / codex — produces commits on the local branch)

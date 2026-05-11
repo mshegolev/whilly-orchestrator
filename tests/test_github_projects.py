@@ -1,6 +1,7 @@
 """Tests for GitHub Projects integration."""
 
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -89,6 +90,27 @@ class TestSyncConfig:
 
 class TestGitHubProjectsConverter:
     """Test GitHubProjectsConverter class."""
+
+    @patch("subprocess.run")
+    def test_check_gh_cli_accepts_auth_status_success(self, mock_run):
+        """Test _check_gh_cli accepts a successful gh auth status probe."""
+        mock_run.return_value = Mock(stdout="Logged in to github.com as test", stderr="", returncode=0)
+
+        GitHubProjectsConverter(config=Mock(spec=WhillyConfig), check_gh_cli=True)
+
+        assert mock_run.call_args.args[0] == ["gh", "auth", "status"]
+
+    @patch("subprocess.run")
+    def test_check_gh_cli_falls_back_to_api_probe(self, mock_run):
+        """Test _check_gh_cli accepts usable API auth even if gh auth status is stale."""
+        mock_run.side_effect = [
+            subprocess.CalledProcessError(1, ["gh", "auth", "status"], stderr="token invalid"),
+            Mock(stdout="test\n", stderr="", returncode=0),
+        ]
+
+        GitHubProjectsConverter(config=Mock(spec=WhillyConfig), check_gh_cli=True)
+
+        assert mock_run.call_args_list[1].args[0] == ["gh", "api", "user", "--jq", ".login"]
 
     def test_sync_state_loading(self, converter):
         """Test sync state loading and saving."""
@@ -232,6 +254,64 @@ class TestGitHubProjectsConverter:
         assert stats["created_count"] == 1
         assert stats["total_todo_items"] == 1
 
+    @patch("subprocess.run")
+    @patch("whilly.sources.github_issues.fetch_github_issues")
+    def test_sync_todo_items_existing_only_skips_drafts(self, mock_fetch_issues, mock_run, converter):
+        """Test existing-only sync records Issues but does not create Issues for draft items."""
+        mock_response = {
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "items": {
+                            "nodes": [
+                                {
+                                    "id": "draft-item",
+                                    "updatedAt": "2024-01-01T00:00:00Z",
+                                    "fieldValues": {"nodes": [{"name": "Todo", "field": {"name": "Status"}}]},
+                                    "content": {"title": "Draft Todo", "body": "Draft body"},
+                                },
+                                {
+                                    "id": "issue-item",
+                                    "updatedAt": "2024-01-01T00:00:00Z",
+                                    "fieldValues": {"nodes": [{"name": "Todo", "field": {"name": "Status"}}]},
+                                    "content": {
+                                        "title": "Existing Issue",
+                                        "body": "Issue body",
+                                        "number": 245,
+                                        "url": "https://github.com/test/repo/issues/245",
+                                    },
+                                },
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+        mock_run.return_value = Mock(stdout=json.dumps(mock_response), returncode=0)
+
+        stats = converter.sync_todo_items(
+            "https://github.com/users/test/projects/1",
+            "test",
+            "repo",
+            create_draft_issues=False,
+        )
+
+        assert stats == {
+            "created_count": 0,
+            "skipped_count": 2,
+            "synced_count": 0,
+            "total_todo_items": 2,
+        }
+        assert converter._sync_state["synced_items"] == {
+            "issue-item:Todo": {
+                "issue_number": 245,
+                "issue_url": "https://github.com/test/repo/issues/245",
+                "last_sync": converter._sync_state["synced_items"]["issue-item:Todo"]["last_sync"],
+            }
+        }
+        assert mock_run.call_count == 1
+        mock_fetch_issues.assert_not_called()
+
     def test_get_sync_status(self, converter):
         """Test getting sync status."""
         # Set some state
@@ -291,11 +371,124 @@ class TestGitHubProjectsConverter:
         result = converter.sync_status_changes(123, "In Progress")
         assert result is False
 
+    @patch.object(GitHubProjectsConverter, "_update_project_item_status", return_value=True)
+    def test_sync_status_changes_restores_project_info_from_state(self, mock_update, converter):
+        """Test sync_status_changes can run in a fresh process after sync_todo_items saved state."""
+        converter._sync_state.update(
+            {
+                "project_url": "https://github.com/users/test/projects/1",
+                "synced_items": {"PVTI_item:Todo": {"issue_number": 123}},
+            }
+        )
+
+        result = converter.sync_status_changes(123, "In Progress")
+
+        assert result is True
+        assert converter._project_info == {
+            "owner": "test",
+            "project_number": 1,
+            "type": "user",
+            "repo": None,
+        }
+        mock_update.assert_called_once_with("PVTI_item", "In Progress")
+
     def test_sync_status_changes_item_not_found(self, converter):
         """Test sync_status_changes with unknown issue."""
         converter._project_info = {"test": "data"}
         result = converter.sync_status_changes(999, "In Progress")
         assert result is False
+
+    @patch("subprocess.run")
+    def test_sync_status_changes_updates_project_v2_status(self, mock_run, converter):
+        """Test sync_status_changes updates a Project v2 single-select Status field."""
+        converter._project_info = {
+            "owner": "test",
+            "project_number": 1,
+            "type": "user",
+            "repo": None,
+        }
+        converter._sync_state["synced_items"] = {"PVTI_item:Todo": {"issue_number": 123}}
+        fields_response = {
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "id": "PVT_project",
+                        "fields": {
+                            "nodes": [
+                                {
+                                    "id": "PVTSSF_status",
+                                    "name": "Status",
+                                    "options": [
+                                        {"id": "todo-option", "name": "Todo"},
+                                        {"id": "done-option", "name": "Done"},
+                                    ],
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        mutation_response = {
+            "data": {
+                "updateProjectV2ItemFieldValue": {
+                    "projectV2Item": {"id": "PVTI_item"},
+                }
+            }
+        }
+        mock_run.side_effect = [
+            Mock(stdout=json.dumps(fields_response), returncode=0),
+            Mock(stdout=json.dumps(mutation_response), returncode=0),
+        ]
+
+        result = converter.sync_status_changes(123, "Done")
+
+        assert result is True
+        assert mock_run.call_count == 2
+        field_query = mock_run.call_args_list[0].args[0]
+        mutation = mock_run.call_args_list[1].args[0]
+        assert "fields(first: 50)" in field_query[4]
+        assert "updateProjectV2ItemFieldValue" in mutation[4]
+        assert "-F" in mutation
+        assert "projectId=PVT_project" in mutation
+        assert "itemId=PVTI_item" in mutation
+        assert "fieldId=PVTSSF_status" in mutation
+        assert "optionId=done-option" in mutation
+
+    @patch("subprocess.run")
+    def test_sync_status_changes_unknown_project_status_fails(self, mock_run, converter):
+        """Test sync_status_changes fails if the Project has no matching Status option."""
+        converter._project_info = {
+            "owner": "test",
+            "project_number": 1,
+            "type": "user",
+            "repo": None,
+        }
+        converter._sync_state["synced_items"] = {"PVTI_item:Todo": {"issue_number": 123}}
+        fields_response = {
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "id": "PVT_project",
+                        "fields": {
+                            "nodes": [
+                                {
+                                    "id": "PVTSSF_status",
+                                    "name": "Status",
+                                    "options": [{"id": "todo-option", "name": "Todo"}],
+                                }
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        mock_run.return_value = Mock(stdout=json.dumps(fields_response), returncode=0)
+
+        result = converter.sync_status_changes(123, "Done")
+
+        assert result is False
+        assert mock_run.call_count == 1
 
 
 class TestStatusMapping:

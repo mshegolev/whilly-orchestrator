@@ -51,6 +51,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from whilly.agents.base import COMPLETION_MARKER, AgentResult, AgentUsage
+from whilly.adapters.runner.env import build_runner_env
 
 
 DEFAULT_HANDOFF_DIR = ".whilly/handoff"
@@ -269,7 +270,7 @@ class ClaudeHandoffBackend:
 
         _announce_dispatch(task_id)
 
-        env = dict(os.environ)
+        env = build_runner_env(os.environ, backend="handoff")
         env["WHILLY_HANDOFF_RESULT_PATH"] = str(result_path)
         env["WHILLY_HANDOFF_TIMEOUT"] = str(timeout_s)
         return subprocess.Popen(

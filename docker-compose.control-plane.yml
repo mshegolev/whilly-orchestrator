@@ -73,9 +73,14 @@ services:
 
   # ─── App: control-plane (FastAPI / uvicorn). No worker baked in here. ─────
   control-plane:
-    # Default to the published image (matches v4.3.1 release artifact).
+    # Default to the published image (matches the current v4.6.4 release
+    # artifact — the first tag that bundles the m3 user-facing fixes
+    # for UPPERCASE SSE event names + tasks-API 400 + metrics stale
+    # plan labels + Last-Event-ID overflow guard + listener_connected
+    # health flag; older defaults like 4.3.1 / 4.6.0 either crashed on
+    # boot or shipped with the round-3 user-testing regressions).
     # Override with WHILLY_IMAGE=<tag> for dev / local-build workflows.
-    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.3.1}
+    image: ${WHILLY_IMAGE:-mshegolev/whilly:4.6.4}
     container_name: whilly-cp-control-plane
     restart: unless-stopped
     depends_on:
@@ -90,6 +95,10 @@ services:
       # Cluster-join secret consumed by `whilly worker connect`. Keep it out
       # of git in real deployments; see docs/Distributed-Setup.md.
       WHILLY_WORKER_BOOTSTRAP_TOKEN: ${WHILLY_WORKER_BOOTSTRAP_TOKEN:-demo-bootstrap}
+      # Dedicated Prometheus bearer. Empty by default so /metrics remains
+      # fail-closed; v6-baseline-vps-up writes a private env-file for the
+      # live validator so it can verify both 200-with-bearer and 401-without.
+      WHILLY_METRICS_TOKEN: ${WHILLY_METRICS_TOKEN:-}
       WHILLY_LOG_LEVEL: ${WHILLY_LOG_LEVEL:-INFO}
     ports:
       # Long-form port mapping: host_ip is a SEPARATE field, which means
@@ -113,6 +122,53 @@ services:
     mem_reservation: 128m
     command: ["control-plane"]
 
+  # ─── funnel sidecar — localhost.run paid-plan reverse SSH tunnel ─────────
+  #
+  # Profile-gated behind `--profile funnel`. v6.0 paid-plan replacement
+  # of the v5.0 free-tier sidecar — the URL is STABLE
+  # (whilly-orchestrator.lhr.rocks by default; no <random> rotation).
+  #
+  # Auth: SSH key registered in the operator's localhost.run dashboard
+  # (https://localhost.run/dashboard/ssh-keys/, organisation
+  # 8f6cc6d6-26a7-422a-86a1-8d5834a07829) and bind-mounted from the
+  # host into the container at /etc/whilly-funnel/ssh-key:ro.
+  #
+  # See `Dockerfile.funnel`, `scripts/funnel/run.sh`, AGENTS.md
+  # § "Funnel URL hygiene" for the operator walkthrough.
+  funnel:
+    build:
+      context: .
+      dockerfile: Dockerfile.funnel
+    image: whilly-funnel:latest
+    pull_policy: never
+    container_name: whilly-cp-funnel
+    profiles: ["funnel"]
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      LHR_HOSTNAME: "${LHR_HOSTNAME:-whilly-orchestrator.lhr.rocks}"
+      LHR_REMOTE_USER: "${LHR_REMOTE_USER:-plan@localhost.run}"
+      LHR_REMOTE_HOST: "${LHR_REMOTE_HOST:-localhost.run}"
+      LHR_LOCAL_TARGET: "${LHR_LOCAL_TARGET:-control-plane:8000}"
+      FUNNEL_SERVER_ALIVE_INTERVAL: "${FUNNEL_SERVER_ALIVE_INTERVAL:-30}"
+      FUNNEL_SERVER_ALIVE_COUNT_MAX: "${FUNNEL_SERVER_ALIVE_COUNT_MAX:-3}"
+      FUNNEL_RETRY_BACKOFF_SECONDS: "${FUNNEL_RETRY_BACKOFF_SECONDS:-5}"
+      FUNNEL_URL_FILE: /funnel/url.txt
+      WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
+    volumes:
+      - funnel_url_volume:/funnel
+      - "${LHR_SSH_KEY_PATH:?must-be-set-on-VPS-see-AGENTS.md}:/etc/whilly-funnel/ssh-key:ro"
+    # Mission §4 cap: ~32 MB image; allow 64 MB headroom for psql + ssh.
+    mem_limit: 64m
+    mem_reservation: 16m
+
 volumes:
   whilly_cp_pgdata:
     name: whilly_cp_pgdata
+  # Shared volume between the funnel sidecar (writer) and any consumer
+  # that prefers reading `/funnel/url.txt` over a postgres lookup. Only
+  # populated when `--profile funnel` is active.
+  funnel_url_volume:
+    name: whilly_cp_funnel_url

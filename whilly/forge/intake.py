@@ -61,6 +61,7 @@ import asyncpg
 from whilly.adapters.db import close_pool, create_pool
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan_dict
 from whilly.cli.plan import _insert_plan_and_tasks
+from whilly.core.models import PlanOrigin, RepoTarget
 from whilly.forge._gh import (
     GHCLIError,
     GHCLIMissingError,
@@ -68,6 +69,7 @@ from whilly.forge._gh import (
     fetch_issue,
     flip_label,
 )
+from whilly.security.prompt_sanitizer import sanitize_external_text
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +147,10 @@ def _issue_to_description(issue: dict[str, Any]) -> str:
     parts: list[str] = []
     title = issue.get("title")
     if isinstance(title, str) and title.strip():
-        parts.append(f"# {title.strip()}")
+        parts.append("# " + sanitize_external_text(title.strip(), scope="issue_title"))
     body = issue.get("body")
     if isinstance(body, str) and body.strip():
-        parts.append(body.strip())
+        parts.append(sanitize_external_text(body.strip(), scope="issue_body"))
     comments = issue.get("comments") or []
     if isinstance(comments, list) and comments:
         rendered_comments: list[str] = []
@@ -157,7 +159,8 @@ def _issue_to_description(issue: dict[str, Any]) -> str:
                 continue
             comment_body = comment.get("body")
             if isinstance(comment_body, str) and comment_body.strip():
-                rendered_comments.append(f"### Comment {idx}\n{comment_body.strip()}")
+                fenced = sanitize_external_text(comment_body.strip(), scope=f"issue_comment_{idx}")
+                rendered_comments.append(f"### Comment {idx}\n{fenced}")
         if rendered_comments:
             parts.append("## Discussion\n\n" + "\n\n".join(rendered_comments))
     return "\n\n".join(parts) or "(empty issue)"
@@ -179,6 +182,34 @@ def _slug_for_issue(owner: str, repo: str, number: int) -> str:
     raw = f"issue-{owner}-{repo}-{number}".lower()
     cleaned = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
     return cleaned or f"issue-{number}"
+
+
+def _github_repo_target(owner: str, repo: str) -> dict[str, str]:
+    repo_full = f"{owner}/{repo}"
+    return {
+        "id": f"github:{repo_full}",
+        "provider": "github",
+        "repo_full_name": repo_full,
+        "clone_url": f"https://github.com/{repo_full}.git",
+    }
+
+
+def _github_issue_origin(
+    *,
+    owner: str,
+    repo: str,
+    number: int,
+    issue: dict[str, Any],
+    prd_path: Path,
+) -> dict[str, str]:
+    return {
+        "system": "github_issue",
+        "ref": f"{owner}/{repo}/{number}",
+        "url": str(issue.get("url") or f"https://github.com/{owner}/{repo}/issues/{number}"),
+        "title": str(issue.get("title") or f"{owner}/{repo}#{number}"),
+        "prd_file": str(prd_path),
+        "decomposition_mode": "forge_intake",
+    }
 
 
 # ── Async DB helpers ─────────────────────────────────────────────────────
@@ -437,6 +468,15 @@ def run_forge_intake_command(
 
     try:
         payload = builder(prd_path=prd_path, plan_id=slug, model=args.model)
+        repo_target = _github_repo_target(owner, repo)
+        payload.setdefault(
+            "origin",
+            _github_issue_origin(owner=owner, repo=repo, number=number, issue=issue, prd_path=prd_path),
+        )
+        payload.setdefault("repo_targets", [repo_target])
+        for task_raw in payload.get("tasks", []):
+            if isinstance(task_raw, dict):
+                task_raw.setdefault("repo_target_id", repo_target["id"])
     except RuntimeError as exc:
         print(
             f"whilly forge intake: task generation failed: {exc}\nPRD left at {prd_path} for inspection.",
@@ -468,6 +508,8 @@ def run_forge_intake_command(
                 plan_name=plan.name,
                 github_issue_ref=canonical_ref,
                 prd_file=str(prd_path),
+                origin=plan.origin,
+                repo_targets=plan.repo_targets,
                 tasks=tasks,
             )
         )
@@ -559,6 +601,8 @@ async def _async_intake_insert(
     github_issue_ref: str,
     prd_file: str,
     tasks: list,
+    origin: PlanOrigin | None = None,
+    repo_targets: tuple[RepoTarget, ...] = (),
 ) -> tuple[str, bool]:
     """Insert plan (with ``github_issue_ref`` + ``prd_file``) + tasks + ``plan.created`` event atomically.
 
@@ -629,7 +673,11 @@ async def _async_intake_insert(
                     )
                 # Insert the tasks alongside the plan in the same
                 # transaction (matches ``whilly plan import`` shape).
-                await _insert_plan_and_tasks(conn, _PlanProxy(plan_id, plan_name), tasks)
+                await _insert_plan_and_tasks(
+                    conn,
+                    _PlanProxy(plan_id, plan_name, origin=origin, repo_targets=repo_targets),
+                    tasks,
+                )
                 # VAL-CROSS-001 / VAL-CROSS-053: emit exactly one
                 # ``plan.created`` audit event row. Same transaction
                 # as the plan INSERT so the row is visible
@@ -655,6 +703,8 @@ async def _async_intake_insert(
                             # subject to the plans-row retention
                             # policy.
                             "prd_file": prd_file,
+                            "origin_system": origin.system if origin is not None else "",
+                            "origin_ref": origin.ref if origin is not None else "",
                         }
                     ),
                 )
@@ -676,11 +726,20 @@ class _PlanProxy:
     ``_insert_tasks``.
     """
 
-    __slots__ = ("id", "name")
+    __slots__ = ("id", "name", "origin", "repo_targets")
 
-    def __init__(self, plan_id: str, name: str) -> None:
+    def __init__(
+        self,
+        plan_id: str,
+        name: str,
+        *,
+        origin: PlanOrigin | None = None,
+        repo_targets: tuple[RepoTarget, ...] = (),
+    ) -> None:
         self.id = plan_id
         self.name = name
+        self.origin = origin
+        self.repo_targets = repo_targets
 
 
 __all__ = [

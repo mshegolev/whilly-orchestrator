@@ -1,0 +1,44 @@
+{# Patched version of whilly/api/templates/_workers_table.html
+   Same conventions as the patched tasks table. #}
+{% set worker_columns = table_columns.workers %}
+<table id="workers"
+       class="tbl"
+       hx-get="/?fragment=workers"
+       hx-trigger="every 5s, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline"
+       hx-swap="outerHTML"
+       role="grid">
+  <thead>
+    <tr>
+      {% for column in worker_columns %}
+        <th scope="col">{{ column.label_for("wui") }}</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% if workers %}
+      {% for w in workers %}
+        {% set _l0 = worker_columns[0].label_for("wui") %}
+        {% set _l1 = worker_columns[1].label_for("wui") %}
+        {% set _l2 = worker_columns[2].label_for("wui") %}
+        {% set _l3 = worker_columns[3].label_for("wui") %}
+        {% set _l4 = worker_columns[4].label_for("wui") %}
+        <tr id="worker-{{ w.worker_id }}"
+            data-filter-text="{{ w.worker_id }} {{ w.hostname }} {{ w.owner_email or '' }} {{ w.status }}">
+          <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}"><code>{{ w.worker_id }}</code></td>
+          <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ w.hostname }}</td>
+          <td data-l="{{ _l2 }}" data-mobile-label="{{ _l2 }}">{{ w.owner_email if w.owner_email else "—" }}</td>
+          <td data-l="{{ _l3 }}" data-mobile-label="{{ _l3 }}">
+            <strong class="s s-{{ w.status }} status status-{{ w.status }}">{{ w.status }}</strong>
+          </td>
+          <td data-l="{{ _l4 }}" data-mobile-label="{{ _l4 }}">
+            <time datetime="{{ format_iso(w.last_heartbeat) }}">{{ format_human(w.last_heartbeat) }}</time>
+          </td>
+        </tr>
+      {% endfor %}
+    {% else %}
+      <tr id="workers-empty">
+        <td colspan="{{ worker_columns|length }}"><em class="empty-state" style="color:var(--muted)">No workers connected yet.</em></td>
+      </tr>
+    {% endif %}
+  </tbody>
+</table>

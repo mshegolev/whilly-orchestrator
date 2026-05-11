@@ -273,6 +273,41 @@ class TestRun:
         assert res.exit_code == -2
         assert "not found" in res.result_text
 
+    def test_passes_scrubbed_env_for_resolved_model(self):
+        payload = json.dumps({"result": f"done {COMPLETION_MARKER}", "total_cost_usd": 0.05})
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return _Proc(0, payload)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "PATH": "/usr/bin",
+                    "WHILLY_MODEL": "groq/openai/gpt-oss-120b",
+                    "GROQ_API_KEY": "gsk_test",
+                    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+                    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+                    "GH_TOKEN": "hidden-github-token",
+                    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+                },
+                clear=True,
+            ),
+            patch("whilly.agents.opencode.subprocess.run", side_effect=fake_run),
+        ):
+            res = OpenCodeBackend().run("anything")
+
+        assert res.exit_code == 0
+        assert captured["cmd"][captured["cmd"].index("--model") + 1] == "groq/openai/gpt-oss-120b"
+        assert captured["env"] == {
+            "GROQ_API_KEY": "gsk_test",
+            "PATH": "/usr/bin",
+            "WHILLY_MODEL": "groq/openai/gpt-oss-120b",
+        }
+
 
 # ── collect_result_from_file ──────────────────────────────────────────────
 
@@ -305,6 +340,40 @@ class TestRunAsyncPreamble:
         assert "whilly agent preamble" in text
         assert "backend   : opencode" in text
         popen_mock.assert_called_once()
+
+    def test_run_async_passes_scrubbed_zero_key_env(self, tmp_path: Path):
+        log = tmp_path / "log.txt"
+        captured: dict = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return object()
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "PATH": "/usr/bin",
+                    "WHILLY_OPENCODE_BIN": "/opt/opencode",
+                    "OPENCODE_API_KEY": "not-needed-for-big-pickle",
+                    "OPENCODE_ZEN_API_KEY": "not-needed-for-big-pickle",
+                    "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+                    "WHILLY_WORKER_TOKEN": "hidden-worker-token",
+                    "GH_TOKEN": "hidden-github-token",
+                    "SLACK_ACCESS_TOKEN": "hidden-slack-token",
+                },
+                clear=True,
+            ),
+            patch("whilly.agents.opencode.subprocess.Popen", side_effect=fake_popen),
+        ):
+            OpenCodeBackend().run_async("p", model="opencode/big-pickle", log_file=log)
+
+        assert captured["cmd"][captured["cmd"].index("--model") + 1] == "opencode/big-pickle"
+        assert captured["env"] == {
+            "PATH": "/usr/bin",
+            "WHILLY_OPENCODE_BIN": "/opt/opencode",
+        }
 
 
 # ── Factory integration ────────────────────────────────────────────────────

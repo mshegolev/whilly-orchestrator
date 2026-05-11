@@ -1,0 +1,127 @@
+name: Big Pickle health (OpenCode Zen sunset watch)
+
+# Forward-compatibility safety net for the v4.4.2 zero-key default.
+# OpenCode Zen documents `opencode/big-pickle` as free "for a limited
+# time"; once Zen flips it behind an API key, every Whilly worker
+# shipping with the v4.4.2 default will silently fail at the FIRST
+# agent run with a provider 401. This weekly probe is the early-warning
+# system: if Big Pickle stops being free, the workflow fails and
+# notifies maintainers via GitHub's standard CI notification channel,
+# letting us cut a v4.4.x patch with the default flipped BEFORE
+# end-users notice.
+#
+# The companion follow-up feature `misc-m1-big-pickle-fallback` flips
+# `whilly.agents.opencode.DEFAULT_MODEL` to whichever Zen model is the
+# next free option once this workflow goes red — the choice depends on
+# which models are still free at sunset time and is intentionally
+# deferred until then.
+#
+# Mirror of the in-process probe `check_opencode_big_pickle_availability`
+# in `whilly/cli/worker.py` so behaviour is observable both from CI
+# and from a freshly-booted worker.
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC. One run per week is plenty: Zen's free-tier
+    # status changes at most monthly per their docs, and weekly probing
+    # gives maintainers a multi-day window to react before the next
+    # patch release.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe opencode/big-pickle (anonymous, free-tier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install opencode (sst/opencode CLI)
+        run: |
+          # Install the opencode binary into ~/.local/bin and put it
+          # on PATH for subsequent steps. The official installer is
+          # idempotent; we pin the latest stable release line.
+          set -euo pipefail
+          curl -fsSL https://opencode.ai/install | bash
+          echo "${HOME}/.opencode/bin" >> "$GITHUB_PATH"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify opencode is on PATH
+        run: |
+          set -euo pipefail
+          which opencode
+          opencode --version || true
+
+      - name: Probe opencode/big-pickle (10s timeout)
+        id: probe
+        run: |
+          set -uo pipefail
+
+          # Run the same command the worker fires from
+          # check_opencode_big_pickle_availability(). Capture stdout +
+          # stderr separately so we can scan both for auth markers.
+          STDOUT_FILE="$(mktemp)"
+          STDERR_FILE="$(mktemp)"
+          set +e
+          timeout 10s opencode run \
+            --format json \
+            --model opencode/big-pickle \
+            'ping' >"${STDOUT_FILE}" 2>"${STDERR_FILE}"
+          EXIT_CODE=$?
+          set -e
+
+          echo "::group::stdout"
+          cat "${STDOUT_FILE}"
+          echo "::endgroup::"
+          echo "::group::stderr"
+          cat "${STDERR_FILE}"
+          echo "::endgroup::"
+          echo "exit_code=${EXIT_CODE}"
+
+          # Mirror the helper's marker list (case-insensitive). Keep
+          # in sync with `_BIG_PICKLE_AUTH_FAILURE_MARKERS` in
+          # whilly/cli/worker.py — the test
+          # `tests/unit/test_big_pickle_availability.py` pins the
+          # in-process side; this grep pins the CI side.
+          COMBINED="$(cat "${STDOUT_FILE}" "${STDERR_FILE}" | tr '[:upper:]' '[:lower:]')"
+          AUTH_FAIL=0
+          for marker in \
+            "401" \
+            "403" \
+            "unauthorized" \
+            "api key required" \
+            "requires api key" \
+            "requires an api key" \
+            "provide an api key" \
+            "api key is required" \
+            "missing api key" \
+            "no api key"; do
+            if printf '%s' "${COMBINED}" | grep -Fq "${marker}"; then
+              AUTH_FAIL=1
+              echo "::warning::Big Pickle probe matched auth-failure marker: ${marker}"
+            fi
+          done
+
+          if [ "${AUTH_FAIL}" -eq 1 ]; then
+            echo "::error::OpenCode Zen 'opencode/big-pickle' returned an auth-tier failure."
+            echo "::error::The free tier appears to have sunset. Cut a v4.4.x patch flipping DEFAULT_MODEL."
+            echo "::error::See whilly/agents/opencode.py and the misc-m1-big-pickle-fallback follow-up."
+            exit 1
+          fi
+
+          if [ "${EXIT_CODE}" -ne 0 ]; then
+            # Non-auth failure (network blip, opencode crashed,
+            # timeout, ...). Do NOT fail the workflow — false
+            # positives spam maintainers; we only fail on the explicit
+            # auth-marker path. The job log still surfaces the exit
+            # code for triage.
+            echo "::warning::Big Pickle probe exited ${EXIT_CODE} without auth markers — likely transient. Re-run to confirm."
+            exit 0
+          fi
+
+          echo "Big Pickle probe healthy."

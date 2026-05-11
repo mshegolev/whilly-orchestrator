@@ -213,6 +213,20 @@ jobs:
         # asyncpg / fastapi из base namespace.
         run: pip install -e '.[dev]'
       - name: Run unit tests with coverage on whilly.core
+        # Resource-aware test parallelism cap (VAL-CROSS-READY-905):
+        # the literal cap below is `pytest -n auto --maxprocesses=4` —
+        # conservative default that protects ubuntu-latest GitHub runners
+        # (7GB RAM) from OOM when each xdist worker forks its own
+        # testcontainer Postgres + asyncpg pool. Override via the
+        # WHILLY_PYTEST_PARALLEL env var when scaling vertically.
+        #
+        # Coverage measurement here intentionally stays single-process
+        # (`coverage run -m pytest -q`) so the master process collects
+        # whilly.core line/branch hits without the multi-process merge
+        # dance — xdist is enabled in `make test` (Makefile honors
+        # WHILLY_PYTEST_PARALLEL=4 by default) and in the agent-backends
+        # job below where coverage isn't measured.
+        #
         # `tests/unit/` — v4 unit suite (439 тестов на момент TASK-033b).
         # tests/integration/ намеренно НЕ запускаются здесь — они требуют
         # Postgres через testcontainers + Docker daemon, и это уровень
@@ -287,4 +301,10 @@ jobs:
           print('backend registry OK:', names)
           "
       - name: Run backend + wiring tests
-        run: pytest -q tests/test_agent_backend_claude.py tests/test_agent_backend_opencode.py tests/test_decision_gate.py tests/test_whilly_error_handling.py
+        # Resource-aware test parallelism cap (VAL-CROSS-READY-905):
+        # `pytest -n auto --maxprocesses=4` distributes the 4 backend
+        # test files across xdist workers but caps the total at 4 to
+        # protect GitHub runner memory from OOM. The conservative
+        # default matches the WHILLY_PYTEST_PARALLEL convention used
+        # by the Makefile `test` target.
+        run: pytest -n auto --maxprocesses=4 -q tests/test_agent_backend_claude.py tests/test_agent_backend_opencode.py tests/test_decision_gate.py tests/test_whilly_error_handling.py

@@ -32,6 +32,12 @@ CREATE TABLE workers (
     -- ages past its threshold (2 min default) and releases the worker's
     -- in-flight tasks back to PENDING.
     status         TEXT NOT NULL DEFAULT 'online',
+    -- Per-user worker attribution (M2 mission, migration 008). NULL for
+    -- workers registered without an owner-email (legacy bootstrap path,
+    -- back-compat); set to the operator's email when registration
+    -- carries it. The partial index ix_workers_owner_email below pins
+    -- the per-owner lookup path in the M2 admin dashboard.
+    owner_email    TEXT,
     CONSTRAINT ck_workers_status_valid CHECK (status IN ('online', 'offline'))
 );
 
@@ -48,6 +54,13 @@ CREATE INDEX ix_workers_status_online_heartbeat ON workers (last_heartbeat)
 -- from the index so revocation does not collide on a single sentinel.
 CREATE UNIQUE INDEX ix_workers_token_hash_unique ON workers (token_hash)
     WHERE token_hash IS NOT NULL;
+-- Partial index on owner_email (M2, migration 008). Speeds up the
+-- per-owner worker listing query in the M2 admin dashboard
+-- (``SELECT ... FROM workers WHERE owner_email = $1``) without
+-- bloating the index footprint with one entry per anonymous /
+-- legacy-bootstrap row.
+CREATE INDEX ix_workers_owner_email ON workers (owner_email)
+    WHERE owner_email IS NOT NULL;
 
 -- ─── plans ───────────────────────────────────────────────────────────────
 CREATE TABLE plans (
@@ -80,6 +93,8 @@ CREATE TABLE plans (
     -- is True") at the plan-row level — a stable point-in-time
     -- fact that does not depend on the events log retention policy.
     prd_file TEXT,
+    -- Stores ordered plan-level profile verification metadata.
+    verification_commands JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -157,3 +172,241 @@ CREATE TABLE events (
 );
 
 CREATE INDEX ix_events_task_id_created_at ON events (task_id, created_at);
+
+-- ─── events NOTIFY trigger ───────────────────────────────────────────────
+-- M3 mission, migration 011_events_notify_trigger. Every row inserted
+-- into ``events`` fires ``pg_notify('whilly_events', …)`` with a small
+-- JSON payload that the M3 control-plane's ``_event_notify_listener_loop``
+-- (a dedicated asyncpg connection LISTENing on the ``whilly_events``
+-- channel) drains into the in-memory per-subscriber queue feeding
+-- ``GET /events/stream``.
+--
+-- The function is idempotent (``CREATE OR REPLACE FUNCTION``); the
+-- trigger creation is preceded by ``DROP TRIGGER IF EXISTS`` so a
+-- re-run of the migration succeeds against a database that already
+-- has both objects (VAL-M3-MIGRATE-010-901). Downgrade drops the
+-- trigger first then the function — no ``CASCADE`` (VAL-M3-MIGRATE-
+-- 010-902).
+--
+-- AFTER INSERT (not BEFORE) so ``NEW.id`` is the actual inserted PK
+-- rather than NULL; FOR EACH ROW so a multi-row INSERT
+-- (the existing ``EventFlusher`` batched path) emits one NOTIFY per
+-- row. Postgres delivers NOTIFYs only on COMMIT, so a rolled-back
+-- transaction emits zero NOTIFYs.
+--
+-- Payload size discipline: pg_notify caps at ~8000 bytes; when the
+-- assembled JSON exceeds 7900 bytes the trigger drops the heavy
+-- ``payload`` field and adds ``"truncated": true``.
+
+CREATE OR REPLACE FUNCTION whilly_notify_event() RETURNS trigger
+LANGUAGE plpgsql AS $body$
+DECLARE
+    v_full    jsonb;
+    v_text    text;
+    v_minimal jsonb;
+BEGIN
+    v_full := jsonb_build_object(
+        'event_id',   NEW.id,
+        'event_type', NEW.event_type,
+        'task_id',    NEW.task_id,
+        'plan_id',    NEW.plan_id,
+        'payload',    COALESCE(NEW.payload, '{}'::jsonb)
+    );
+    v_text := v_full::text;
+    IF octet_length(v_text) > 7900 THEN
+        v_minimal := jsonb_build_object(
+            'event_id',   NEW.id,
+            'event_type', NEW.event_type,
+            'task_id',    NEW.task_id,
+            'plan_id',    NEW.plan_id,
+            'truncated',  true
+        );
+        v_text := v_minimal::text;
+    END IF;
+    PERFORM pg_notify('whilly_events', v_text);
+    RETURN NEW;
+END;
+$body$;
+
+DROP TRIGGER IF EXISTS tr_events_notify ON events;
+CREATE TRIGGER tr_events_notify
+    AFTER INSERT ON events
+    FOR EACH ROW
+    EXECUTE FUNCTION whilly_notify_event();
+
+-- ─── pull_requests ───────────────────────────────────────────────────────
+-- M2 mission, migration 012_pull_requests_and_pr_events. Tracks the
+-- GitHub PRs the orchestrator opened on behalf of completed tasks
+-- (post-COMPLETE hook in m2-pr-opener-hook), the poller cursor for
+-- per-PR review feeds, and the latest observed review decision so the
+-- re-iterate path (m2-pr-iterate) can spawn follow-up tasks
+-- deterministically. ``plan_id`` matches ``plans.id`` (TEXT) so the
+-- FK can land — every other FK to ``plans.id`` (``tasks.plan_id``,
+-- ``events.plan_id``) is also TEXT. Repo-aware partial UNIQUE indexes
+-- pin idempotency: the post-COMPLETE hook cannot insert a duplicate row
+-- on retry for the same plan/repo target, but the same ``pr_number`` can
+-- coexist across different plans or repo targets.
+CREATE TABLE pull_requests (
+    id                     BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    plan_id                TEXT NOT NULL REFERENCES plans (id) ON DELETE CASCADE,
+    task_id                TEXT NOT NULL,
+    repo_target_id         TEXT,
+    pr_number              INTEGER NOT NULL,
+    pr_url                 TEXT NOT NULL,
+    branch                 TEXT NOT NULL,
+    head_sha               TEXT,
+    state                  TEXT NOT NULL DEFAULT 'open',
+    review_decision        TEXT,
+    last_synced_at         TIMESTAMPTZ,
+    last_seen_review_id    BIGINT,
+    last_seen_check_run_id BIGINT,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_pull_requests_state_valid CHECK (
+        state IN ('open', 'merged', 'closed', 'failed')
+    ),
+    CONSTRAINT ck_pull_requests_review_decision_valid CHECK (
+        review_decision IS NULL
+        OR review_decision IN ('APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED')
+    )
+);
+
+CREATE UNIQUE INDEX ix_pull_requests_plan_pr_null_repo_unique
+    ON pull_requests (plan_id, pr_number)
+    WHERE repo_target_id IS NULL;
+
+CREATE UNIQUE INDEX ix_pull_requests_plan_repo_pr_unique
+    ON pull_requests (plan_id, repo_target_id, pr_number)
+    WHERE repo_target_id IS NOT NULL;
+
+-- ─── work intents / repo targets ────────────────────────────────────────
+-- Provider-neutral provenance and execution-target metadata (migration
+-- 013). This keeps the existing GitHub-specific columns readable while
+-- giving Jira/GitHub/manual PRD flows a shared identity model.
+CREATE TABLE work_intents (
+    id            TEXT PRIMARY KEY,
+    origin_system TEXT NOT NULL,
+    origin_ref    TEXT NOT NULL,
+    external_url  TEXT NOT NULL DEFAULT '',
+    title         TEXT NOT NULL DEFAULT '',
+    raw_payload   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    content_hash  TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'ready',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX ix_work_intents_origin_unique
+    ON work_intents (origin_system, origin_ref);
+
+CREATE TABLE plan_origins (
+    plan_id            TEXT NOT NULL REFERENCES plans (id) ON DELETE CASCADE,
+    work_intent_id     TEXT NOT NULL REFERENCES work_intents (id) ON DELETE RESTRICT,
+    prd_file           TEXT NOT NULL DEFAULT '',
+    decomposition_mode TEXT NOT NULL DEFAULT '',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_plan_origins PRIMARY KEY (plan_id, work_intent_id)
+);
+
+CREATE TABLE repo_targets (
+    id                TEXT PRIMARY KEY,
+    provider          TEXT NOT NULL,
+    repo_full_name    TEXT NOT NULL,
+    clone_url         TEXT NOT NULL DEFAULT '',
+    default_branch    TEXT NOT NULL DEFAULT '',
+    credential_policy TEXT NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX ix_repo_targets_provider_repo_unique
+    ON repo_targets (provider, repo_full_name);
+
+CREATE TABLE plan_repo_targets (
+    plan_id        TEXT NOT NULL REFERENCES plans (id) ON DELETE CASCADE,
+    repo_target_id TEXT NOT NULL REFERENCES repo_targets (id) ON DELETE RESTRICT,
+    is_default     BOOLEAN NOT NULL DEFAULT false,
+    CONSTRAINT pk_plan_repo_targets PRIMARY KEY (plan_id, repo_target_id)
+);
+
+CREATE UNIQUE INDEX ix_plan_repo_targets_default_unique
+    ON plan_repo_targets (plan_id)
+    WHERE is_default;
+
+CREATE TABLE task_repo_targets (
+    task_id        TEXT PRIMARY KEY REFERENCES tasks (id) ON DELETE CASCADE,
+    repo_target_id TEXT NOT NULL REFERENCES repo_targets (id) ON DELETE RESTRICT,
+    base_ref       TEXT NOT NULL DEFAULT ''
+);
+
+ALTER TABLE pull_requests
+    ADD CONSTRAINT fk_pull_requests_repo_target_id_repo_targets
+    FOREIGN KEY (repo_target_id) REFERENCES repo_targets (id) ON DELETE SET NULL;
+
+-- ─── bootstrap_tokens ────────────────────────────────────────────────────
+-- Per-user worker-bootstrap auth (M2 mission, migration 009). Replaces
+-- the single shared ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var sentinel
+-- with a per-operator table: ``POST /workers/register`` carrying
+-- ``Bearer <plaintext>`` looks up the SHA-256 hex digest of the
+-- plaintext in this table; an active row (``revoked_at IS NULL`` AND
+-- (``expires_at IS NULL OR expires_at > NOW()``)) authorises the
+-- registration and pins the new ``workers.owner_email`` to the row's
+-- ``owner_email``. The ``is_admin`` bit (false by default) is the M2
+-- admin-CLI gate (``make_admin_auth`` consults this column to authorise
+-- ``whilly admin …`` calls). Plaintext NEVER reaches Postgres
+-- (PRD NFR-3 — mirrors the ``workers.token_hash`` discipline).
+CREATE TABLE bootstrap_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    owner_email TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ,
+    revoked_at  TIMESTAMPTZ,
+    is_admin    BOOLEAN NOT NULL DEFAULT false
+);
+
+-- Partial index over active rows only. The per-owner listing
+-- (``list_bootstrap_tokens``) and the per-owner active-token lookup
+-- paths only ever touch rows with ``revoked_at IS NULL``; revoked
+-- rows are forensic-only. Keeping the index footprint bounded to
+-- currently-issued tokens mirrors the pattern of
+-- ``ix_workers_owner_email`` (migration 008).
+CREATE INDEX ix_bootstrap_tokens_owner_email_active ON bootstrap_tokens (owner_email)
+    WHERE revoked_at IS NULL;
+
+-- ─── funnel_url ──────────────────────────────────────────────────────────
+-- Singleton table the localhost.run sidecar (migration 010) upserts on
+-- every reconnect with the public URL the funnel exposes. As of the
+-- v6.0 paid-plan switch (replace-funnel-with-lhr-paid) the URL is
+-- pinned via ``LHR_HOSTNAME`` (default
+-- ``https://whilly-orchestrator.lhr.rocks``) and is constant across
+-- reconnects — ``updated_at`` tracks "last reconnect" rather than
+-- "URL changed at". v5.0 readers continue to consume
+-- ``SELECT url FROM funnel_url ORDER BY updated_at DESC LIMIT 1``
+-- unchanged. The shared-volume file ``/funnel/url.txt`` remains the
+-- fallback for environments without postgres reachability.
+--
+-- The ``CHECK (id = 1)`` constraint pins the singleton invariant at the
+-- schema level — no second row can ever land. The sidecar upsert uses
+-- ``INSERT INTO funnel_url (id, url) VALUES (1, $URL)
+-- ON CONFLICT (id) DO UPDATE SET url=EXCLUDED.url, updated_at=NOW();``
+-- to refresh the row in place on every reconnect.
+CREATE TABLE funnel_url (
+    id         INTEGER PRIMARY KEY DEFAULT 1,
+    url        TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT funnel_url_singleton CHECK (id = 1)
+);
+
+-- ─── control_state ───────────────────────────────────────────────────────
+-- Singleton operator control row. ``Pause`` / ``Resume`` in WUI and TUI
+-- mutate this state; workers read it at safe checkpoints so a soft
+-- stop-crane can prevent new claims and release in-flight work without
+-- killing subprocesses.
+CREATE TABLE control_state (
+    id           TEXT PRIMARY KEY,
+    paused       BOOLEAN NOT NULL DEFAULT false,
+    pause_reason TEXT,
+    paused_by    TEXT,
+    paused_at    TIMESTAMPTZ,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_control_state_singleton CHECK (id = 'global')
+);
