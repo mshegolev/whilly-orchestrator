@@ -185,7 +185,9 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
     OperatorUiArtifact("whilly/api/templates/index.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/_tasks_table.html", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/_workers_table.html", OperatorUiArtifactStatus.ACTIVE),
-    OperatorUiArtifact("whilly/api/templates/_logs.html", OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL,
+    OperatorUiArtifact(
+        "whilly/api/templates/_logs.html",
+        OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL,
         reason="Routeable by ?fragment=logs but not in canonical nav/TUI parity yet.",
         followup_phase="14",
     ),
