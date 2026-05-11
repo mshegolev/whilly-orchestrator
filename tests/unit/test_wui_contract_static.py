@@ -44,18 +44,20 @@ def test_wui_artifacts_are_classified() -> None:
     artifacts_by_path = {artifact.path: artifact for artifact in artifacts}
     logs_artifact = artifacts_by_path["whilly/api/templates/_logs.html"]
     assert logs_artifact.status is OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL
-    assert logs_artifact.reason == "Routeable by ?fragment=logs but not in canonical nav/TUI parity yet."
-    assert logs_artifact.followup_phase == "14"
+    assert logs_artifact.reason == (
+        "Routeable by ?fragment=logs with backend coverage; kept out of canonical nav until TUI parity expands."
+    )
+    assert logs_artifact.followup_phase == "15"
 
     admin_artifact = artifacts_by_path["whilly/api/templates/_admin.html"]
     assert admin_artifact.status is OperatorUiArtifactStatus.INACTIVE_QUARANTINED
-    assert admin_artifact.reason == "Contains admin controls with unsupported /admin/* routes."
-    assert admin_artifact.followup_phase == "14"
+    assert admin_artifact.reason == "Quarantined from active WUI because it still references unsupported admin routes."
+    assert admin_artifact.followup_phase == "future"
 
     prd_artifact = artifacts_by_path["whilly/api/templates/_prd.html"]
     assert prd_artifact.status is OperatorUiArtifactStatus.INACTIVE_QUARANTINED
-    assert prd_artifact.reason == "Contains PRD controls with unsupported /prd/* routes."
-    assert prd_artifact.followup_phase == "14"
+    assert prd_artifact.reason == "Quarantined from active WUI because it still references unsupported PRD routes."
+    assert prd_artifact.followup_phase == "future"
 
     hotkeys_artifact = artifacts_by_path["whilly/api/static/whilly-hotkeys.js"]
     assert hotkeys_artifact.status is OperatorUiArtifactStatus.ACTIVE
@@ -76,6 +78,18 @@ def test_active_wui_artifacts_reject_stale_patterns() -> None:
             assert pattern not in text
         for regex in BANNED_ACTIVE_WUI_REGEXES:
             assert re.search(regex, text) is None
+
+
+def test_noncanonical_wui_fragments_are_not_in_active_dashboard_navigation() -> None:
+    project_root = _project_root()
+    dashboard_text = (project_root / "whilly/api/templates/index.html.j2").read_text()
+
+    assert "fragment=logs" not in dashboard_text
+    assert "_logs.html" not in dashboard_text
+    assert "_admin.html" not in dashboard_text
+    assert "_prd.html" not in dashboard_text
+    assert "/admin/slack" not in dashboard_text
+    assert "/prd/generate" not in dashboard_text
 
 
 def test_static_hotkeys_file_uses_current_contract() -> None:
