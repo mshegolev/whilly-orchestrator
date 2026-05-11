@@ -201,10 +201,7 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
         reason="Contains PRD controls with unsupported /prd/* routes.",
         followup_phase="14",
     ),
-    OperatorUiArtifact("whilly/api/static/whilly-hotkeys.js", OperatorUiArtifactStatus.INACTIVE_QUARANTINED,
-        reason="Static hotkey file still contains pre-contract selectors/routes; Task 2 fixes it before Phase 13 completes.",
-        followup_phase="13",
-    ),
+    OperatorUiArtifact("whilly/api/static/whilly-hotkeys.js", OperatorUiArtifactStatus.ACTIVE),
 )
 
 
