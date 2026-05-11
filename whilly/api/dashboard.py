@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -47,9 +49,59 @@ TEMPLATES_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
 DASHBOARD_TEMPLATE: Final[str] = "index.html.j2"
 WORKERS_FRAGMENT_TEMPLATE: Final[str] = "_workers_table.html"
 TASKS_FRAGMENT_TEMPLATE: Final[str] = "_tasks_table.html"
+LOGS_FRAGMENT_TEMPLATE: Final[str] = "_logs.html"
 
 TASKS_LIMIT: Final[int] = 200
 WORKERS_LIMIT: Final[int] = 200
+LOG_TAIL_DEFAULT: Final[int] = 200
+LOG_TOKENS_BUDGET_DEFAULT: Final[int] = 40_000
+
+
+@dataclass
+class LogLine:
+    ts: str
+    level: str
+    msg: str
+
+
+class FileLogStore:
+    """Minimal tail-N reader over ``whilly_logs/{task_id}.jsonl``.
+
+    Each line is expected to be a JSON object with at least ``msg``;
+    ``ts`` and ``level`` are looked up but tolerated when missing so
+    legacy log files still render. ``usage()`` is a stub — replace with
+    a real cost-tracking lookup when the orchestrator persists it.
+    """
+
+    def __init__(self, log_dir: Path) -> None:
+        self.log_dir = log_dir
+
+    def tail(self, task_id: str, n: int = LOG_TAIL_DEFAULT) -> list[LogLine]:
+        path = self.log_dir / f"{task_id}.jsonl"
+        if not path.exists():
+            return []
+        with path.open() as handle:
+            recent = deque(handle, maxlen=n)
+        lines: list[LogLine] = []
+        for raw in recent:
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                lines.append(LogLine(ts="--:--:--", level="INFO", msg=raw.rstrip()))
+                continue
+            lines.append(
+                LogLine(
+                    ts=str(obj.get("ts", "--:--:--")),
+                    level=str(obj.get("level", "INFO")),
+                    msg=str(obj.get("msg", "")),
+                )
+            )
+        return lines
+
+    def usage(self, task_id: str) -> tuple[int, int, float]:
+        # TODO: read from real cost-tracking store once available.
+        return (0, LOG_TOKENS_BUDGET_DEFAULT, 0.0)
+
 
 _templates: Jinja2Templates | None = None
 
@@ -154,9 +206,59 @@ def _normalise_fragment(raw: str | None) -> str | None:
     if raw is None:
         return None
     candidate = raw.strip().lower()
-    if candidate in ("workers", "tasks"):
+    if candidate in ("workers", "tasks", "logs"):
         return candidate
     return None
+
+
+def dashboard_logs(
+    request: Request,
+    task_id: str | None,
+    tasks: tuple[Any, ...],
+) -> HTMLResponse:
+    """Render the Logs surface fragment.
+
+    Reads :class:`FileLogStore` (or any compatible object) from
+    ``request.app.state.log_store``. ``tasks`` is the already-fetched
+    snapshot slice used to populate the dropdown so the caller can
+    share its single round-trip across surfaces.
+    """
+    templates = get_templates()
+    log_store: FileLogStore | None = getattr(request.app.state, "log_store", None)
+    if task_id is None and tasks:
+        task_id = getattr(tasks[0], "task_id", None)
+
+    log_lines: list[LogLine] = []
+    tokens_used = 0
+    tokens_budget = LOG_TOKENS_BUDGET_DEFAULT
+    cost_usd = 0.0
+    selected_status: str | None = None
+    if task_id and log_store is not None:
+        log_lines = list(log_store.tail(task_id, n=LOG_TAIL_DEFAULT))
+        tokens_used, tokens_budget, cost_usd = log_store.usage(task_id)
+        for candidate in tasks:
+            if getattr(candidate, "task_id", None) == task_id:
+                selected_status = getattr(candidate, "status", None)
+                break
+
+    context: dict[str, Any] = {
+        "request": request,
+        "task_id": task_id,
+        "tasks": tasks,
+        "log_lines": log_lines,
+        "tokens_used": tokens_used,
+        "tokens_budget": tokens_budget,
+        "cost_usd": cost_usd,
+        "status": selected_status,
+    }
+    response = templates.TemplateResponse(
+        request,
+        LOGS_FRAGMENT_TEMPLATE,
+        context,
+        status_code=status.HTTP_200_OK,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 async def render_dashboard(
@@ -165,6 +267,7 @@ async def render_dashboard(
     pool: asyncpg.Pool,
     fragment: str | None = None,
     events_token: str | None = None,
+    task_id: str | None = None,
 ) -> HTMLResponse:
     """Render the dashboard (full page or one of its two partials).
 
@@ -209,6 +312,8 @@ async def render_dashboard(
         "format_human": _format_human,
     }
 
+    if fragment_name == "logs":
+        return dashboard_logs(request, task_id, snapshot.tasks)
     if fragment_name == "workers":
         template_name = WORKERS_FRAGMENT_TEMPLATE
     elif fragment_name == "tasks":
@@ -228,11 +333,17 @@ async def render_dashboard(
 
 __all__ = [
     "DASHBOARD_TEMPLATE",
+    "FileLogStore",
+    "LOGS_FRAGMENT_TEMPLATE",
+    "LOG_TAIL_DEFAULT",
+    "LOG_TOKENS_BUDGET_DEFAULT",
+    "LogLine",
     "TASKS_FRAGMENT_TEMPLATE",
     "TASKS_LIMIT",
     "TEMPLATES_DIR",
     "WORKERS_FRAGMENT_TEMPLATE",
     "WORKERS_LIMIT",
+    "dashboard_logs",
     "get_templates",
     "render_dashboard",
 ]
