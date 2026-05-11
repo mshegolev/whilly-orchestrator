@@ -24,8 +24,8 @@ Covers the m3-htmx-dashboard feature:
 
 from __future__ import annotations
 
-import re
 import json
+import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
@@ -36,6 +36,7 @@ from httpx import ASGITransport, AsyncClient
 
 from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.transport.server import create_app
+from whilly.operator_views import operator_surface_hotkey_help, operator_surface_items, operator_wui_route_prefixes
 
 pytestmark = DOCKER_REQUIRED
 
@@ -307,19 +308,23 @@ async def test_dashboard_mobile_table_css_contract(client: AsyncClient) -> None:
 async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
+    surface_items = operator_surface_items()
+    surface_values = [surface.value for surface, _label in surface_items]
+    surface_labels = [label for _surface, label in surface_items]
+    route_prefixes = operator_wui_route_prefixes()
 
-    for label in ("Overview", "Compliance", "Plans/Tasks", "Workers", "Events"):
+    for index, label in enumerate(surface_labels, start=1):
         assert label in body
+        assert f"{index} {label}" in body
+    assert re.findall(r'data-surface-tab="([^"]+)"', body) == surface_values
     assert 'id="dashboard-filter"' in body
-    assert 'data-surface="overview"' in body
-    assert 'data-surface="compliance"' in body
-    assert 'data-surface="plans_tasks"' in body
-    assert 'data-surface="workers"' in body
-    assert 'data-surface="events"' in body
+    for surface in surface_values:
+        assert f'data-surface="{surface}"' in body
     assert "q=quit" in body
     assert "r=refresh" in body
     assert "R=resume workers" in body
-    assert "1-5=switch" in body
+    assert operator_surface_hotkey_help() in body
+    assert "1-7" not in body
     assert "/=filter" in body
     assert "p=pause workers" in body
     assert "Pause workers" in body
@@ -333,7 +338,11 @@ async def test_dashboard_mirrors_operator_surfaces_and_hotkeys(client: AsyncClie
     assert 'type === "click"' in body
     assert "submitControlAction" in body
     assert "isComplianceSurface" in body
-    assert "/api/v1/admin/workers/" in body
+    assert f"const surfaceOrder = {json.dumps(surface_values)};" in body
+    assert f'const workerControlRoutePrefix = "{route_prefixes["worker_control"]}";' in body
+    assert f'const taskHumanReviewRoutePrefix = "{route_prefixes["task_human_review"]}";' in body
+    assert "fetch(`${workerControlRoutePrefix}${action}`, {" in body
+    assert "fetch(`${taskHumanReviewRoutePrefix}${encodeURIComponent(taskId)}/human-review`, {" in body
     assert "togglePolling" not in body
     assert "pollingPaused" not in body
     assert "htmx:sseOpen" in body
@@ -520,6 +529,7 @@ async def test_dashboard_review_actions_use_clear_affordance_contract(
 async def test_dashboard_review_prompt_recovery_copy_and_hotkey_contract(client: AsyncClient) -> None:
     response = await client.get("/")
     body = response.text
+    route_prefixes = operator_wui_route_prefixes()
 
     for expected in (
         "No review row selected",
@@ -534,7 +544,8 @@ async def test_dashboard_review_prompt_recovery_copy_and_hotkey_contract(client:
         "Review recorded: approved",
         "Review recorded: rejected",
         "Review recorded: changes requested",
-        "/api/v1/tasks/${encodeURIComponent(taskId)}/human-review",
+        f'const taskHumanReviewRoutePrefix = "{route_prefixes["task_human_review"]}";',
+        "fetch(`${taskHumanReviewRoutePrefix}${encodeURIComponent(taskId)}/human-review`, {",
         "actionButton.dataset.reviewDecision",
         'submitReviewDecision(selectedReviewRow(), "approved")',
         'submitReviewDecision(selectedReviewRow(), "rejected")',
