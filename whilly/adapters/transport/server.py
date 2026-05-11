@@ -1252,6 +1252,11 @@ def create_app(
         # /docs (Swagger UI) and /openapi.json on FastAPI defaults —
         # operators expect them there, no reason to relocate.
     )
+    from whilly.api.dashboard import FileLogStore
+    from whilly.api.static_mount import mount_static_assets
+
+    mount_static_assets(app)
+    app.state.log_store = FileLogStore(Path("whilly_logs"))
     instrument_app(app)
 
     async def _probe_pool() -> tuple[bool, str | None]:
@@ -2404,7 +2409,11 @@ def create_app(
         response_class=HTMLResponse,
         include_in_schema=False,
     )
-    async def dashboard_index(request: Request, fragment: str | None = None) -> Response:
+    async def dashboard_index(
+        request: Request,
+        fragment: str | None = None,
+        task_id: str | None = None,
+    ) -> Response:
         events_token = None
         if fragment is None:
             events_token = mint_dashboard_token(
@@ -2412,7 +2421,13 @@ def create_app(
                 ttl_seconds=dashboard_token_ttl,
                 scope=DEFAULT_DASHBOARD_SCOPES,
             )
-        return await render_dashboard_view(request=request, pool=pool, fragment=fragment, events_token=events_token)
+        return await render_dashboard_view(
+            request=request,
+            pool=pool,
+            fragment=fragment,
+            events_token=events_token,
+            task_id=task_id,
+        )
 
     @app.get(
         "/events/stream",
