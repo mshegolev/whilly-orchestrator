@@ -24,6 +24,10 @@ EXIT_USAGE = 2
 CONTROL_COMPOSE_FILE = "docker-compose.control-plane.yml"
 WORKER_COMPOSE_FILE = "docker-compose.worker.yml"
 
+_MIN_PYTHON_MAJOR = 3
+_MIN_PYTHON_MINOR = 12
+_PYTHON_REQUIRED = f"python{_MIN_PYTHON_MAJOR}.{_MIN_PYTHON_MINOR}"
+
 _REDACTED_KEYS = frozenset(
     {
         "JIRA_API_TOKEN",
@@ -93,6 +97,54 @@ def _detect_compose_command() -> str:
     if shutil.which("docker-compose"):
         return "docker-compose"
     return "docker compose"
+
+
+def _check_python_available(
+    *,
+    err: object,
+    which: Callable[[str], str | None] = shutil.which,
+    system: str | None = None,
+) -> bool:
+    """Warn when ``python3.12`` is missing from ``$PATH``.
+
+    Whilly's :file:`pyproject.toml` pins ``requires-python = ">=3.12"``, so the
+    host CLI (``pipx install whilly-orchestrator`` / ``whilly`` console script)
+    needs a 3.12 interpreter to install at all. Docker workers ship their own
+    Python, so we deliberately do not block setup — the generated ``.env``
+    files remain useful for the container-only path — but we surface a clear,
+    OS-tailored install hint so the operator isn't blindsided later when
+    ``pipx`` refuses to resolve a release.
+
+    Returns ``True`` when a suitable interpreter was found, ``False``
+    otherwise. The boolean is informational; the caller does not exit on
+    ``False``.
+    """
+    if which(_PYTHON_REQUIRED):
+        return True
+
+    err.write(
+        f"whilly quick-setup: no '{_PYTHON_REQUIRED}' found on $PATH. "
+        f"Whilly requires Python {_MIN_PYTHON_MAJOR}.{_MIN_PYTHON_MINOR}+ for the "
+        "host CLI (Docker workers ship their own interpreter).\n"
+    )
+    err.write("Install Python 3.12 and then `pipx install --python python3.12 whilly-orchestrator`:\n")
+    resolved_system = system if system is not None else platform.system()
+    if resolved_system == "Darwin":
+        err.write("  brew install python@3.12\n")
+        err.write("  # or, via pyenv:\n")
+        err.write("  pyenv install 3.12 && pyenv local 3.12\n")
+    elif resolved_system == "Linux":
+        err.write("  # Debian/Ubuntu:\n")
+        err.write("  sudo apt update && sudo apt install python3.12 python3.12-venv\n")
+        err.write("  # or, via pyenv:\n")
+        err.write("  pyenv install 3.12 && pyenv local 3.12\n")
+    elif resolved_system == "Windows":
+        err.write("  winget install Python.Python.3.12\n")
+        err.write("  # or download the official installer from https://www.python.org/downloads/\n")
+    else:
+        err.write("  Use pyenv or your platform's package manager to install Python 3.12.\n")
+    err.flush()
+    return False
 
 
 def _resolve_docker_provider(selected: str) -> str:
@@ -268,11 +320,17 @@ def run_quick_setup_command(
     stderr: object | None = None,
     compose_probe: Callable[[], str] = _detect_compose_command,
     token_factory: Callable[[int], str] = secrets.token_urlsafe,
+    python_probe: Callable[[str], str | None] = shutil.which,
 ) -> int:
     out = sys.stdout if stdout is None else stdout
     err = sys.stderr if stderr is None else stderr
     parser = _build_parser()
     args = parser.parse_args(list(argv))
+
+    # Surface the Python 3.12 install hint up front. Soft check: we keep
+    # going so the operator still gets ``.env`` / ``.env.worker`` for the
+    # Docker-only path (workers ship their own interpreter).
+    _check_python_available(err=err, which=python_probe)
 
     repo_root = Path(args.repo_root).expanduser().resolve()
     if not repo_root.exists() or not repo_root.is_dir():

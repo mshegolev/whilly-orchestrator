@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -132,6 +133,92 @@ def test_quick_setup_prints_colima_guidance(
     assert "colima start" in captured.out
     assert "docker context use colima" in captured.out
     assert "TESTCONTAINERS_RYUK_DISABLED=true" in captured.out
+
+
+def test_quick_setup_prints_python_install_hint_when_python_3_12_missing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from whilly.cli.quick_setup import run_quick_setup_command
+
+    code = run_quick_setup_command(
+        ["--print-only", "--repo-root", str(tmp_path), "--compose-command", "docker compose"],
+        token_factory=_next_secret_factory("bootstrap-secret", "postgres-secret"),
+        python_probe=lambda _name: None,
+    )
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "python3.12" in captured.err
+    assert "Whilly requires Python 3.12+" in captured.err
+    assert "pipx install --python python3.12 whilly-orchestrator" in captured.err
+
+
+def test_quick_setup_silent_when_python_3_12_available(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from whilly.cli.quick_setup import run_quick_setup_command
+
+    code = run_quick_setup_command(
+        ["--print-only", "--repo-root", str(tmp_path), "--compose-command", "docker compose"],
+        token_factory=_next_secret_factory("bootstrap-secret", "postgres-secret"),
+        python_probe=lambda _name: "/usr/local/bin/python3.12",
+    )
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "no 'python3.12'" not in captured.err
+    assert "Whilly requires Python" not in captured.err
+
+
+def test_check_python_available_emits_macos_hint_when_missing() -> None:
+    from whilly.cli.quick_setup import _check_python_available
+
+    buf = io.StringIO()
+    found = _check_python_available(err=buf, which=lambda _name: None, system="Darwin")
+
+    assert found is False
+    output = buf.getvalue()
+    assert "brew install python@3.12" in output
+    assert "pyenv install 3.12" in output
+
+
+def test_check_python_available_emits_linux_hint_when_missing() -> None:
+    from whilly.cli.quick_setup import _check_python_available
+
+    buf = io.StringIO()
+    found = _check_python_available(err=buf, which=lambda _name: None, system="Linux")
+
+    assert found is False
+    output = buf.getvalue()
+    assert "apt install python3.12" in output
+    assert "pyenv install 3.12" in output
+
+
+def test_check_python_available_emits_windows_hint_when_missing() -> None:
+    from whilly.cli.quick_setup import _check_python_available
+
+    buf = io.StringIO()
+    found = _check_python_available(err=buf, which=lambda _name: None, system="Windows")
+
+    assert found is False
+    output = buf.getvalue()
+    assert "winget install Python.Python.3.12" in output
+
+
+def test_check_python_available_returns_true_and_stays_silent_when_found() -> None:
+    from whilly.cli.quick_setup import _check_python_available
+
+    buf = io.StringIO()
+    found = _check_python_available(
+        err=buf,
+        which=lambda _name: "/usr/local/bin/python3.12",
+        system="Darwin",
+    )
+
+    assert found is True
+    assert buf.getvalue() == ""
 
 
 def test_main_dispatches_quick_setup_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
