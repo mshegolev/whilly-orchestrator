@@ -21,6 +21,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly rollback ...`` → :mod:`whilly.cli.rollback`
 * ``whilly update ...`` → :mod:`whilly.cli.update`
 * ``whilly feedback ...`` → :mod:`whilly.cli.feedback`
+* ``whilly quick-setup ...`` → :mod:`whilly.cli.quick_setup`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
@@ -134,6 +135,7 @@ Commands:
   rollback   Create/list rollback points, run Git preflight checks, and restore with confirmation.
   update     Check for newer Whilly versions and run explicit package updates.
   feedback   Create a GitHub issue with a Whilly bug or idea report.
+  quick-setup Generate .env/.env.worker and print local Docker startup commands.
   pr-feedback Poll open PRs for a plan and emit review events
               (`pr-feedback poll --plan <id>`).
 
@@ -482,6 +484,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.feedback import run_feedback_command
 
         return run_feedback_command(rest)
+    if cmd == "quick-setup":
+        from whilly.cli.quick_setup import run_quick_setup_command
+
+        return run_quick_setup_command(rest)
     if cmd == "worker":
         # Sub-dispatch ``whilly worker register ...`` and
         # ``whilly worker connect ...`` to their handlers before falling
