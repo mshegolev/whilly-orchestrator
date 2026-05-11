@@ -41,7 +41,7 @@ Pinned contract:
 
    * declares ``LHR_HOSTNAME``, ``LHR_REMOTE_USER``, ``LHR_REMOTE_HOST``,
      ``LHR_LOCAL_TARGET`` env entries with the documented defaults;
-   * mounts the host SSH key path (``${LHR_SSH_KEY_PATH:?must-be-set}``)
+   * mounts the host SSH key path (``${LHR_SSH_KEY_PATH:-...}``)
      into the container at ``/etc/whilly-funnel/ssh-key`` read-only;
    * lints green via ``docker-compose config -q``.
 
@@ -297,7 +297,7 @@ def test_missing_ssh_key_exits_nonzero_with_dashboard_hint(tmp_path: Path) -> No
         "LHR_REMOTE_HOST",
         "LHR_LOCAL_TARGET",
         "/etc/whilly-funnel/ssh-key",
-        "${LHR_SSH_KEY_PATH:?",
+        "${LHR_SSH_KEY_PATH:-",
     ],
 )
 def test_compose_funnel_service_wires_paid_plan(compose_text: str, needle: str) -> None:
@@ -313,6 +313,13 @@ def test_compose_funnel_no_legacy_funnel_remote_user(compose_text: str) -> None:
 def test_compose_funnel_no_lhr_life_literal(compose_text: str) -> None:
     forbidden = re.compile(r"lhr\.life", re.IGNORECASE)
     assert not forbidden.search(compose_text)
+
+
+def test_compose_default_profile_does_not_require_lhr_ssh_key(compose_text: str) -> None:
+    assert "${LHR_SSH_KEY_PATH:?" not in compose_text, (
+        "default local control-plane startup must not require localhost.run/LHR SSH key configuration; "
+        "the funnel sidecar should validate its key only when --profile funnel is enabled"
+    )
 
 
 def test_compose_control_plane_lints_green() -> None:
