@@ -1,0 +1,85 @@
+{# Patched Logs surface — drop into whilly/api/templates/_logs.html
+   and add an `htmx-route` that returns this fragment for ?fragment=logs.
+
+   Expected context vars:
+     task_id          str | None      currently selected task
+     tasks            list[Task]      candidates for the dropdown
+     log_lines        list[LogLine]   {ts, level, msg}
+     tokens_used      int
+     tokens_budget    int
+     cost_usd         float
+     status           str             DONE / FAILED / IN_PROGRESS / …
+
+   Server-Sent Events:
+     - sse:log.append-{task_id} appends a line via hx-swap="beforeend"
+     - sse:task.status-{task_id} swaps the status + meter region
+#}
+<section class="panel"
+         hx-get="/?fragment=logs{% if task_id %}&task_id={{ task_id }}{% endif %}"
+         hx-trigger="every 10s, sse:task.status-{{ task_id }} from:body"
+         hx-swap="outerHTML">
+  <header style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <span>Logs{% if task_id %} · <code>{{ task_id }}</code>{% endif %}</span>
+    <span style="font-weight:400;font-size:13px;color:var(--muted)">
+      {% if status %}<strong class="s s-{{ status }}">{{ status }}</strong>{% endif %}
+    </span>
+  </header>
+
+  <div class="body">
+    <div style="padding:8px;display:flex;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--line)">
+      <select class="inp" name="task_id"
+              hx-get="/?fragment=logs"
+              hx-trigger="change"
+              hx-target="closest .panel"
+              hx-swap="outerHTML">
+        {% for t in tasks %}
+          <option value="{{ t.task_id }}" {% if t.task_id == task_id %}selected{% endif %}>
+            {{ t.task_id }} · {{ t.plan_id }} · {{ t.status }}
+          </option>
+        {% endfor %}
+      </select>
+      <button class="btn"
+              hx-get="/?fragment=logs&task_id={{ task_id }}"
+              hx-target="closest .panel" hx-swap="outerHTML">Refresh ⟳</button>
+      <a class="btn" href="/logs/{{ task_id }}.jsonl" download>Download .jsonl</a>
+    </div>
+
+    {% if task_id %}
+    <div style="padding:12px;display:grid;grid-template-columns:180px 1fr;gap:6px 14px;border-bottom:1px solid var(--line)">
+      <div style="color:var(--muted)">Task</div>
+      <div><code>{{ task_id }}</code></div>
+
+      <div style="color:var(--muted)">Tokens</div>
+      <div>
+        {% set pct = (tokens_used / tokens_budget) if tokens_budget else 0 %}
+        {% set lvl = 'danger' if pct > 0.9 else ('warn' if pct > 0.6 else '') %}
+        <div class="meter">
+          <div class="bar"><i class="{{ lvl }}" style="width: {{ (pct * 100)|round(1) }}%"></i></div>
+          <span><strong>{{ "{:,}".format(tokens_used) }}</strong> / {{ "{:,}".format(tokens_budget) }} tok</span>
+        </div>
+      </div>
+
+      <div style="color:var(--muted)">Cost</div>
+      <div>${{ "%.2f"|format(cost_usd) }} USD</div>
+    </div>
+    {% endif %}
+
+    <div style="padding:10px">
+      <div class="logs"
+           id="log-stream-{{ task_id }}"
+           role="log"
+           aria-live="polite"
+           {% if task_id %}sse-swap="log.append-{{ task_id }}" hx-swap="beforeend"{% endif %}>
+        {% if log_lines %}
+          {% for line in log_lines %}
+            <div><span class="ts">{{ line.ts }}</span>
+              <span class="lvl-{{ line.level }}">[{{ line.level }}]</span>
+              {{ line.msg }}</div>
+          {% endfor %}
+        {% else %}
+          <div><span class="ts">--:--:--</span> <span class="lvl-INFO">[INFO]</span> No log lines for this task.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>
