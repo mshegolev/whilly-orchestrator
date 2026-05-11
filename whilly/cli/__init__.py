@@ -18,6 +18,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly compliance ...`` → :mod:`whilly.cli.compliance`
 * ``whilly tui ...`` → :mod:`whilly.cli.tui`
 * ``whilly rollback ...`` → :mod:`whilly.cli.rollback`
+* ``whilly update ...`` → :mod:`whilly.cli.update`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
@@ -127,6 +128,7 @@ Commands:
   compliance Generate target-doc compliance reports.
   tui         Browserless operator console mirroring the web dashboard.
   rollback   Create/list rollback points, run Git preflight checks, and restore with confirmation.
+  update     Check for newer Whilly versions and run explicit package updates.
   pr-feedback Poll open PRs for a plan and emit review events
               (`pr-feedback poll --plan <id>`).
 
@@ -441,6 +443,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.rollback import run_rollback_command
 
         return run_rollback_command(rest)
+    if cmd == "update":
+        from whilly.cli.update import run_update_command
+
+        return run_update_command(rest)
     if cmd == "worker":
         # Sub-dispatch ``whilly worker register ...`` and
         # ``whilly worker connect ...`` to their handlers before falling
