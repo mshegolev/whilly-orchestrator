@@ -452,7 +452,7 @@
           <span>q=quit</span>
           <span>r=refresh</span>
           <span>R=resume workers</span>
-          <span>1-5=switch</span>
+          <span>{{ surface_switch_hotkey_label }}</span>
           <span>/=filter</span>
           <span>p=pause workers</span>
           <span>j/k=select</span>
@@ -680,7 +680,9 @@
   <script>
     (() => {
       const DASHBOARD_STATE_KEY = "whilly.operator.dashboard.state.v1";
-      const surfaceOrder = ["overview", "compliance", "plans_tasks", "workers", "events"];
+      const surfaceOrder = {{ surface_order_json | safe }};
+      const workerControlRoutePrefix = "{{ wui_route_prefixes.worker_control }}";
+      const taskHumanReviewRoutePrefix = "{{ wui_route_prefixes.task_human_review }}";
       const restorableFocusIds = new Set(["dashboard-filter", "dashboard-admin-token", "dashboard-reviewer"]);
       const filter = document.getElementById("dashboard-filter");
       const pollingState = document.getElementById("polling-state");
@@ -872,7 +874,7 @@
         }
         setPollingStatus(action === "pause" ? "Pausing" : "Resuming");
         try {
-          const response = await fetch(`/api/v1/admin/workers/${action}`, {
+          const response = await fetch(`${workerControlRoutePrefix}${action}`, {
             method: "POST",
             headers: {
               "Authorization": `Bearer ${token}`,
@@ -948,7 +950,7 @@
         }
         setPollingStatus("Recording");
         try {
-          const response = await fetch(`/api/v1/tasks/${encodeURIComponent(taskId)}/human-review`, {
+          const response = await fetch(`${taskHumanReviewRoutePrefix}${encodeURIComponent(taskId)}/human-review`, {
             method: "POST",
             headers: {
               "Authorization": `Bearer ${token}`,
