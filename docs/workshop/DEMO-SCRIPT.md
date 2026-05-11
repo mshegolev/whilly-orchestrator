@@ -76,6 +76,44 @@ rm -rf whilly_logs/ .whilly_worktrees/ .whilly_workspaces/
 
 ---
 
+## GitHub Project task demo / Демо задачи из GitHub Project
+
+> **EN:** For the second demo, use one dedicated GitHub Project item instead
+> of the full backlog. The safe flow is: create or pick one Issue, add it to
+> Project 4, run `whilly github-projects sync-todo --existing-only`, move it to
+> `In Progress`, make the code or docs fix, commit to `main` with `Fixes #N`,
+> then move the Project status to `Done`.
+>
+> **RU:** Для второго демо бери один выделенный Project item, а не весь backlog.
+> Безопасный путь: создать или выбрать один Issue, добавить его в Project 4,
+> выполнить `whilly github-projects sync-todo --existing-only`, перевести в
+> `In Progress`, сделать fix, закоммитить в `main` с `Fixes #N`, затем перевести
+> Project status в `Done`.
+
+```bash
+PROJECT_URL="https://github.com/users/mshegolev/projects/4"
+STATE_FILE="/tmp/whilly-project-demo-state.json"
+
+whilly github-projects --state-file "$STATE_FILE" \
+  sync-todo "$PROJECT_URL" \
+  --repo mshegolev/whilly-orchestrator \
+  --existing-only
+
+whilly github-projects --state-file "$STATE_FILE" sync-status 245 "In Progress"
+
+# make the scoped fix, run validation, then:
+git commit -m "docs(workshop): add github project demo cue" -m "Fixes #245"
+git push
+
+whilly github-projects --state-file "$STATE_FILE" sync-status 245 "Done"
+```
+
+**Recording cue:** keep a split-screen layout: left side Project/Issue status,
+right side terminal commands, bottom strip `git log -1 --oneline` and validation
+output. This makes the causal chain visible without exposing tokens.
+
+---
+
 ## 🎬 Scene-by-scene cues / Поэпизодный план
 
 ### Scene 1 — Title card (0:00 → 0:15)

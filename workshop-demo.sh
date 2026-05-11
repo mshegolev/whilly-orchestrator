@@ -55,6 +55,26 @@
 #   --no-color           отключить ANSI-цвета (для логов CI / pipe в файл)
 #   --debug              `set -x`
 #   -h | --help          справка
+#
+# Переменные окружения:
+#   WHILLY_IMAGE_TAG=<x.y.z>
+#                        Опт-ин: использовать published `mshegolev/whilly:<x.y.z>`
+#                        вместо локальной сборки `whilly-demo:latest`. Скрипт
+#                        проверит manifest в registry, сделает `docker pull`
+#                        и пробросит образ в docker-compose.demo.yml через
+#                        WHILLY_IMAGE_TAG_REF. Unset → прежнее поведение
+#                        (`docker build` + локальный `whilly-demo:latest`).
+#                        Пример: `WHILLY_IMAGE_TAG=4.4.1 bash workshop-demo.sh --cli stub`.
+#   WHILLY_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+#                        Опционально: слать demo task notifications в Slack
+#                        (STARTED/DONE/FAILED с ссылкой на /llm-ops).
+#   SLACK_ACCESS_TOKEN=xoxb-...
+#                        Альтернатива webhook: bot token через Slack API.
+#                        Default channel: C0B1WT58EBE
+#   WHILLY_SLACK_NOTIFY_EVENTS=terminal|started|all|none
+#                        Какие task events слать в Slack. Default: terminal.
+#   WHILLY_PUBLIC_BASE_URL=http://127.0.0.1:8000
+#                        Base URL для Slack-ссылок на встроенный LLM Ops UI.
 
 set -euo pipefail
 
@@ -123,8 +143,8 @@ configure_cli_backend() {
       export LLM_PROVIDER="${LLM_PROVIDER:-claude}"  # для picker'а в entrypoint
       ;;
     opencode)
-      # opencode умеет любых providers. По умолчанию — OpenRouter free
-      # tier (DeepSeek, Llama-3.3-70b бесплатно).
+      # opencode умеет любых providers. Zero-key path: opencode/big-pickle
+      # на OpenCode Zen, без API keys и без `opencode auth login`.
       if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
         export OPENROUTER_API_KEY
         export OPENCODE_DEFAULT_PROVIDER="openrouter"
@@ -136,8 +156,7 @@ configure_cli_backend() {
         export GROQ_API_KEY
         export LLM_PROVIDER="${LLM_PROVIDER:-groq}"
       else
-        err "--cli opencode нужен один из: OPENROUTER_API_KEY (рекомендуется, free), ANTHROPIC_API_KEY, GROQ_API_KEY"
-        exit 1
+        export WHILLY_MODEL="${WHILLY_MODEL:-opencode/big-pickle}"
       fi
       export CLAUDE_BIN="/opt/whilly/docker/cli_adapter.py"
       export WHILLY_CLI="opencode"
@@ -243,7 +262,18 @@ configure_llm_backend() {
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly COMPOSE_FILE="$REPO_ROOT/docker-compose.demo.yml"
 readonly DOCKERFILE="$REPO_ROOT/Dockerfile.demo"
-readonly IMAGE_TAG="whilly-demo:latest"
+# WHILLY_IMAGE_TAG=<x.y.z> опт-ин на published `mshegolev/whilly:<x.y.z>`
+# вместо локально-собранного `whilly-demo:latest`. WHILLY_IMAGE_TAG_REF
+# экспортируется в env для docker-compose.demo.yml — там каждый
+# сервис объявлен как `image: ${WHILLY_IMAGE_TAG_REF:-whilly-demo:latest}`.
+# Unset → байт-в-байт прежнее поведение (`docker build` + local image).
+if [[ -n "${WHILLY_IMAGE_TAG:-}" ]]; then
+  IMAGE_TAG="mshegolev/whilly:${WHILLY_IMAGE_TAG}"
+  export WHILLY_IMAGE_TAG_REF="$IMAGE_TAG"
+else
+  IMAGE_TAG="whilly-demo:latest"
+fi
+readonly IMAGE_TAG
 # Все обращения к Postgres идут через `docker compose exec postgres psql -U ...`,
 # поэтому жёсткой DSN-константы тут не держим — нет риска утечки кред в логи /
 # в скриншот презентации. Если нужна host-side DSN — соберите её из env vars,
@@ -292,25 +322,79 @@ require_bin() {
   command -v "$1" >/dev/null 2>&1 || { err "missing required binary: $1"; exit 1; }
 }
 
+trim_spaces() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+load_repo_dotenv() {
+  local dotenv="$REPO_ROOT/.env"
+  [[ -f "$dotenv" ]] || return 0
+
+  local count=0 line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="$(trim_spaces "$line")"
+    [[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="$(trim_spaces "${line#export}")"
+    fi
+    [[ "$line" == *"="* ]] || continue
+
+    key="$(trim_spaces "${line%%=*}")"
+    value="$(trim_spaces "${line#*=}")"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ -z "${!key+x}" ]] || continue
+
+    if [[ ${#value} -ge 2 ]]; then
+      if [[ "${value:0:1}" == "\"" && "${value: -1}" == "\"" ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "${value:0:1}" == "'" && "${value: -1}" == "'" ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+    fi
+
+    export "$key=$value"
+    count=$((count + 1))
+  done < "$dotenv"
+
+  dim "loaded .env ($count var(s), existing shell env wins)"
+}
+
+# NOTE: The first line MUST be `local rc=$?` and the last line MUST be
+# `return $rc`. EXIT-trap functions inherit the script's exit status via $?,
+# but any subsequent command inside this body (warn/dim/compose down/...)
+# clobbers $? before the trap returns. Without snapshotting + restoring
+# the original rc, a failing demo (e.g. `exit 5` from the DONE-count
+# guard) would surface as rc=0 because the cleanup commands succeeded.
+# Treat the rc-capture pattern below as load-bearing.
+#
+# Cleanup also runs unconditionally on failure (unless --keep-running was
+# passed) so callers / CI never end up with an orphan whilly-demo-* stack.
+# Pre-failure logs can still be retrieved with `--keep-running`.
 cleanup_on_exit() {
   local rc=$?
   if (( KEEP_RUNNING )); then
     dim "(--keep-running set; стек оставлен в живых)"
     dim "Остановить вручную: ${COMPOSE[*]} -f $COMPOSE_FILE down -v"
-  elif (( rc != 0 )); then
-    warn "скрипт упал (rc=$rc); стек оставлен для диагностики"
-    dim "Логи: ${COMPOSE[*]} -f $COMPOSE_FILE logs"
-    dim "Остановить: ${COMPOSE[*]} -f $COMPOSE_FILE down -v"
   else
-    step "тушим стек"
+    if (( rc != 0 )); then
+      warn "скрипт упал (rc=$rc); тушим стек"
+      dim "Если нужно расследовать — перезапустите с --keep-running"
+    else
+      step "тушим стек"
+    fi
     compose down -v >/dev/null 2>&1 || true
     ok "стек остановлен"
   fi
+  return $rc
 }
 trap cleanup_on_exit EXIT
 
 # ─── 0. Pre-flight ───────────────────────────────────────────────────────────
 step "pre-flight"
+load_repo_dotenv
 require_bin docker
 detect_compose
 ok "compose CLI: ${COMPOSE[*]}"
@@ -343,6 +427,15 @@ if ! docker info >/dev/null 2>&1; then
 fi
 ok "docker daemon отвечает"
 
+if [[ -n "${WHILLY_SLACK_WEBHOOK_URL:-}${SLACK_WEBHOOK_URL:-}" ]]; then
+  ok "Slack task notifications включены через webhook (${WHILLY_SLACK_NOTIFY_EVENTS:-terminal})"
+elif [[ -n "${WHILLY_SLACK_ACCESS_TOKEN:-}${SLACK_ACCESS_TOKEN:-}" ]]; then
+  SLACK_TARGET_CHANNEL="${WHILLY_SLACK_CHANNEL:-${SLACK_CHANNEL:-C0B1WT58EBE}}"
+  ok "Slack task notifications включены через bot token → channel ${SLACK_TARGET_CHANNEL} (${WHILLY_SLACK_NOTIFY_EVENTS:-terminal})"
+else
+  dim "Slack task notifications выключены: задайте WHILLY_SLACK_WEBHOOK_URL или SLACK_ACCESS_TOKEN"
+fi
+
 [[ -f "$COMPOSE_FILE" ]] || { err "не найден $COMPOSE_FILE"; exit 1; }
 [[ -f "$DOCKERFILE" ]]   || { err "не найден $DOCKERFILE"; exit 1; }
 [[ -f "$REPO_ROOT/$PLAN_FILE" ]] || { err "не найден план $PLAN_FILE"; exit 1; }
@@ -353,23 +446,37 @@ step "сносим предыдущий demo-стек (если был)"
 compose down -v >/dev/null 2>&1 || true
 ok "чистая сцена"
 
-# ─── 1. Build ────────────────────────────────────────────────────────────────
-if (( SKIP_BUILD )); then
-  if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-    warn "--skip-build, но $IMAGE_TAG не найден локально — собираю всё равно"
-    SKIP_BUILD=0
-  else
-    step "пропускаем сборку (--skip-build)"
-    ok "используем существующий $IMAGE_TAG"
+# ─── 1. Build (или pull, если задан WHILLY_IMAGE_TAG) ────────────────────────
+if [[ -n "${WHILLY_IMAGE_TAG:-}" ]]; then
+  step "WHILLY_IMAGE_TAG=$WHILLY_IMAGE_TAG → используем $IMAGE_TAG (skip local build)"
+  # Fail-fast: если тег опечатан, упасть ДО `compose up`, а не после.
+  if ! docker manifest inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+    err "образ $IMAGE_TAG недоступен в registry (docker manifest inspect failed)"
+    err "проверьте https://hub.docker.com/r/mshegolev/whilly/tags"
+    exit 1
   fi
-fi
+  ok "manifest найден в registry"
+  step "пуллим $IMAGE_TAG"
+  docker pull "$IMAGE_TAG"
+  ok "образ загружен: $(docker image inspect -f '{{.Id}}' "$IMAGE_TAG" | head -c 19)…"
+else
+  if (( SKIP_BUILD )); then
+    if ! docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+      warn "--skip-build, но $IMAGE_TAG не найден локально — собираю всё равно"
+      SKIP_BUILD=0
+    else
+      step "пропускаем сборку (--skip-build)"
+      ok "используем существующий $IMAGE_TAG"
+    fi
+  fi
 
-if (( ! SKIP_BUILD )); then
-  step "собираем $IMAGE_TAG (через docker build, не compose build)"
-  # Используем именно `docker build`, чтобы не упереться в требование
-  # buildx >= 0.17, которое появляется в свежих compose v2.
-  docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" "$REPO_ROOT"
-  ok "образ собран: $(docker image inspect -f '{{.Id}}' "$IMAGE_TAG" | head -c 19)…"
+  if (( ! SKIP_BUILD )); then
+    step "собираем $IMAGE_TAG (через docker build, не compose build)"
+    # Используем именно `docker build`, чтобы не упереться в требование
+    # buildx >= 0.17, которое появляется в свежих compose v2.
+    docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" "$REPO_ROOT"
+    ok "образ собран: $(docker image inspect -f '{{.Id}}' "$IMAGE_TAG" | head -c 19)…"
+  fi
 fi
 
 # ─── 2. Postgres + control-plane ─────────────────────────────────────────────
@@ -442,11 +549,11 @@ while :; do
     ok "поймано: $active активных задач у $uniq разных воркеров — параллель!"
     break
   fi
-  # Если все уже DONE — параллель пролетела слишком быстро (stub Claude
-  # отрабатывает за ~50ms). Покажем итоговый расклад.
+  # Если все уже DONE — параллель пролетела слишком быстро или выбран
+  # один worker. Покажем итоговый расклад.
   done_count="$(compose_psql -c "SELECT COUNT(*) FROM tasks WHERE plan_id='$PLAN_ID' AND status='DONE';" 2>/dev/null | tr -d '[:space:]')"
   if [[ "${done_count:-0}" -ge 2 ]]; then
-    warn "параллель пролетела слишком быстро (stub Claude молниеносный) — показываю итоговое распределение"
+    warn "параллель не поймана в активном окне — показываю итоговое распределение"
     break
   fi
   if (( $(date +%s) >= deadline )); then
@@ -515,14 +622,45 @@ if ! printf '%s\n' "$non_terminal_rows" \
 fi
 ok "все seeded задачи в терминальном статусе"
 
+# ─── 7.6. DONE-count guard for VAL-CROSS-BACKCOMPAT-005 ─────────────────────
+# Round-4 finding: even with the terminal-state guard the demo could exit 0
+# with only 2/5 DONE (when the seeded plan was undersized OR tasks were
+# marked FAILED/SKIPPED). VAL-CROSS-BACKCOMPAT-005 explicitly requires the
+# `--cli stub` demo to drain 5 tasks DONE within 5 minutes. We re-query the
+# tasks table for ALL rows and pipe into the same helper with --min-done 5;
+# the helper prints a `DONE=N PENDING=N ...` summary on stdout (asserted by
+# tests/integration/test_workshop_demo_drains_5_tasks.py) and exits non-zero
+# if DONE < 5 even when every row is terminal.
+step "проверяем что >= 5 задач DONE (VAL-CROSS-BACKCOMPAT-005)"
+all_status_rows="$(
+  compose_psql -c "
+    SELECT id || '|' || status
+      FROM tasks
+     WHERE plan_id='$PLAN_ID'
+     ORDER BY id;
+  " 2>/dev/null || true
+)"
+demo_min_done=5  # default --min-done 5 per VAL-CROSS-BACKCOMPAT-005
+if [[ "${WHILLY_DEMO_INJECT_FAILURE:-}" == "min-done-999" ]]; then
+  warn "WHILLY_DEMO_INJECT_FAILURE=min-done-999 — forcing DONE-count guard to fail (expect rc=5)"
+  demo_min_done=999
+fi
+if ! printf '%s\n' "$all_status_rows" \
+     | bash "$REPO_ROOT/scripts/check_demo_tasks_terminal.sh" \
+            --min-done "$demo_min_done" --plan "$PLAN_ID"; then
+  err "demo aborted: DONE-count below $demo_min_done (see breakdown above)"
+  exit 5
+fi
+ok "плановое количество DONE достигнуто (>= $demo_min_done)"
+
 # ─── 8. Done ─────────────────────────────────────────────────────────────────
 echo
 ok "демо завершено"
 if (( caught_parallel )); then
   echo "${C_GREEN}Параллельность подтверждена:${C_RESET} обе задачи были у разных воркеров одновременно."
 else
-  echo "${C_YELLOW}Параллельность не зафиксирована «вживую»${C_RESET} — задачи короткие, stub-Claude отдаёт ответ за ~50ms."
-  echo "Сделайте паузу в fake_claude.sh (sleep 3) или используйте реальный Claude, чтобы поймать middle frame на сцене."
+  echo "${C_YELLOW}Параллельность не зафиксирована «вживую»${C_RESET} — активное окно было слишком коротким или запущен один worker."
+  echo "Запустите с --workers 2 и более длинными задачами, чтобы поймать middle frame на сцене."
 fi
 
 if (( KEEP_RUNNING )); then

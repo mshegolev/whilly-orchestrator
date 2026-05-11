@@ -1,0 +1,26 @@
+name = "Billing GraphQL API"
+project_type = "graphql_api"
+environment = "dev"
+
+[[task_sources]]
+kind = "github"
+ref = "owner/api#42"
+
+[[repositories]]
+id = "api"
+role = "code"
+provider = "github"
+repo_full_name = "owner/api"
+clone_url = "https://github.com/owner/api.git"
+default_branch = "main"
+
+[[repositories]]
+id = "api-tests"
+role = "tests"
+path = "tests/graphql"
+writable = true
+
+[human_loop]
+enabled = true
+required_steps = ["generate-api-autotests"]
+approval_channel = "github-pr"

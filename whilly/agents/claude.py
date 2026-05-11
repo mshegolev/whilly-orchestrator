@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 from whilly.agents.base import AgentResult, AgentUsage, COMPLETION_MARKER, spawn_with_eagain_retry
+from whilly.adapters.runner import proxy
 
 log = logging.getLogger("whilly")
 
@@ -30,13 +31,19 @@ DEFAULT_MODEL = "claude-opus-4-6[1m]"
 DEFAULT_BIN = "claude"
 
 
+DEFAULT_DISALLOWED_TOOLS = "Write,Edit,MultiEdit,NotebookEdit,Bash"
+
+
 class ClaudeBackend:
     """Claude Code CLI subprocess wrapper.
 
     Configuration via env:
-        CLAUDE_BIN            override the binary path (default: ``claude``)
-        WHILLY_CLAUDE_SAFE    when truthy, use ``--permission-mode acceptEdits``
-                              instead of ``--dangerously-skip-permissions``
+        CLAUDE_BIN                 override the binary path (default: ``claude``)
+        WHILLY_CLAUDE_SAFE         when truthy, add ``--permission-mode acceptEdits``
+                                   (stacks on top of the default-deny denylist)
+        WHILLY_AGENT_ALLOW_SHELL   when truthy, restore the legacy
+                                   ``--dangerously-skip-permissions`` behavior
+                                   and drop the default tool denylist
     """
 
     name = "claude"
@@ -49,16 +56,30 @@ class ClaudeBackend:
     def _permission_args(self, safe_mode: bool | None = None) -> list[str]:
         """Return the permission-related CLI args.
 
-        Defaults to ``--dangerously-skip-permissions`` so Bash/test commands
-        run fully autonomously. Set ``safe_mode=True`` (or
-        ``WHILLY_CLAUDE_SAFE=1``) to revert to ``--permission-mode acceptEdits``
-        (requires an attached TTY).
+        Default posture (since v4.7.0) is **deny-by-default**: argv carries
+        ``--disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash`` and OMITS
+        ``--dangerously-skip-permissions``. To restore the legacy
+        ``--dangerously-skip-permissions`` behavior, set
+        ``WHILLY_AGENT_ALLOW_SHELL=1`` — this drops the denylist and grants the
+        agent its full unattended shell power.
+
+        ``WHILLY_CLAUDE_SAFE=1`` still adds ``--permission-mode acceptEdits``
+        and stacks on top of the default-deny denylist (acceptEdits + denylist
+        both present).
         """
         if safe_mode is None:
             safe_mode = os.environ.get("WHILLY_CLAUDE_SAFE") in ("1", "true", "yes")
+        allow_shell = os.environ.get("WHILLY_AGENT_ALLOW_SHELL") in ("1", "true", "yes")
+
+        if allow_shell:
+            if safe_mode:
+                return ["--permission-mode", "acceptEdits"]
+            return ["--dangerously-skip-permissions"]
+
+        args: list[str] = ["--disallowedTools", DEFAULT_DISALLOWED_TOOLS]
         if safe_mode:
-            return ["--permission-mode", "acceptEdits"]
-        return ["--dangerously-skip-permissions"]
+            args.extend(["--permission-mode", "acceptEdits"])
+        return args
 
     # ── Protocol surface ───────────────────────────────────────────────────
 
@@ -188,7 +209,8 @@ class ClaudeBackend:
         ``exit_code=-2`` when the binary cannot be found — never raises.
         """
         start = time.monotonic()
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
         try:
             proc = spawn_with_eagain_retry(
                 lambda: subprocess.run(
@@ -198,6 +220,7 @@ class ClaudeBackend:
                     timeout=timeout,
                     cwd=str(cwd) if cwd else None,
                     check=False,
+                    env=proxy.spawn_env_for_claude(model=resolved),
                 )
             )
         except subprocess.TimeoutExpired:
@@ -243,7 +266,8 @@ class ClaudeBackend:
         format Claude CLI also writes JSONL events live — events appear in the
         log as soon as the model produces them, not only at the end.
         """
-        cmd = self.build_command(prompt, model=model)
+        resolved = self.normalize_model(model or self.default_model())
+        cmd = self.build_command(prompt, model=resolved)
 
         if log_file:
             log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +277,7 @@ class ClaudeBackend:
                 "# whilly agent preamble\n"
                 f"# timestamp : {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"# backend   : {self.name}\n"
-                f"# model     : {model or self.default_model()}\n"
+                f"# model     : {resolved}\n"
                 f"# cwd       : {cwd or 'inherited'}\n"
                 f"# cmd       : {' '.join(cmd[:2])} ... -p <prompt {len(prompt)} chars>\n"
                 "# note      : claude --output-format stream-json пишет JSONL events live (tail -f работает).\n"
@@ -270,6 +294,7 @@ class ClaudeBackend:
                 stdout=stdout_target,
                 stderr=subprocess.STDOUT,
                 cwd=str(cwd) if cwd else None,
+                env=proxy.spawn_env_for_claude(model=resolved),
             )
         )
 

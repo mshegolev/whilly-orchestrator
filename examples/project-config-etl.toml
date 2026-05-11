@@ -1,0 +1,43 @@
+name = "ETL release verification"
+project_type = "etl"
+description = "Verify an ETL release through QA/STLC."
+environment = "STAGE"
+
+[[task_sources]]
+kind = "jira"
+ref = "PROJ-123"
+
+[[repositories]]
+id = "etl-code"
+role = "code"
+provider = "gitlab"
+repo_full_name = "data/etl-code"
+clone_url = "https://git.example.com/data/etl-code.git"
+ref = "release-tag"
+ref_type = "tag"
+
+[[repositories]]
+id = "deploy"
+role = "deployment"
+provider = "gitlab"
+repo_full_name = "ops/deployment"
+clone_url = "https://git.example.com/ops/deployment.git"
+default_branch = "main"
+
+[[repositories]]
+id = "tests"
+role = "tests"
+path = "~/etl_testing"
+suite = "etl_suite"
+writable = true
+
+[human_loop]
+enabled = true
+approval_channel = "slack:#qa-release"
+instructions = "QA approves the test plan, STAGE deploy, and release decision."
+
+[release_policy]
+success_state = "Deploy"
+
+[outputs]
+release_context = "out/etl-release-context.json"

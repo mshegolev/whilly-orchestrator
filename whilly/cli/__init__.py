@@ -7,9 +7,20 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly plan ...``      → :mod:`whilly.cli.plan`
 * ``whilly run ...``       → :mod:`whilly.cli.run`
 * ``whilly dashboard ...`` → :mod:`whilly.cli.dashboard`
+* ``whilly server ...``    → :mod:`whilly.cli.server`
 * ``whilly init ...``      → :mod:`whilly.cli.init`
 * ``whilly worker ...``    → :mod:`whilly.cli.worker`
+* ``whilly logs ...``      → :mod:`whilly.log_viewer`
 * ``whilly forge ...``     → :mod:`whilly.forge`
+* ``whilly jira ...``      → :mod:`whilly.cli.jira`
+* ``whilly qa-release ...`` → :mod:`whilly.cli.qa_release`
+* ``whilly project-config ...`` → :mod:`whilly.cli.project_config`
+* ``whilly github-projects ...`` → :mod:`whilly.cli.github_projects`
+* ``whilly compliance ...`` → :mod:`whilly.cli.compliance`
+* ``whilly tui ...`` → :mod:`whilly.cli.tui`
+* ``whilly rollback ...`` → :mod:`whilly.cli.rollback`
+* ``whilly update ...`` → :mod:`whilly.cli.update`
+* ``whilly feedback ...`` → :mod:`whilly.cli.feedback`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
@@ -36,6 +47,7 @@ Legacy invocation                    v4 dispatch
 ``whilly --headless``                Sets ``WHILLY_HEADLESS=1``; stripped from argv
 ``whilly --init "desc"``             ``whilly init "desc"``
 ``whilly --prd-wizard [SLUG]``       ``whilly init --interactive [--slug SLUG] [SLUG]``
+``whilly --from-jira KEY [--go]``    ``whilly jira import KEY [--run]``
 ``whilly --resume``                  No-op (Postgres state survives restarts)
 ``whilly --reset PLAN``              ``whilly plan reset PLAN --keep-tasks --yes``
 ``whilly --all``                     No-op (use ``whilly run --plan <id>`` per plan)
@@ -52,11 +64,48 @@ v4.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
-__all__ = ["main", "run_plan_command"]
+__all__ = ["main", "run_plan_command", "validate_schema"]
+
+
+def validate_schema(plan: dict[str, Any] | str | os.PathLike[str]) -> None:
+    """Legacy v3 plan-shape validator (M1 VAL-SEC-023..026).
+
+    Accepts either a decoded plan dict or a path to a v3-shaped
+    ``tasks.json``. Validates every task ``id`` against the canonical
+    regex via :func:`whilly.core.task_id.validate_task_id`. Raises
+    :class:`ValueError` naming the offending id when validation fails;
+    callers that imported a malformed plan dict get an exception before
+    any downstream side effect.
+
+    The shape check is deliberately narrow: this is the legacy
+    ``cli.validate_schema`` shim referenced in ``CLAUDE.md``. The v4
+    plan import path lives in
+    :mod:`whilly.adapters.filesystem.plan_io` and applies the same
+    validator to every task on the way in.
+    """
+    from whilly.core.task_id import validate_task_id
+
+    if isinstance(plan, dict):
+        data = plan
+    else:
+        data = json.loads(Path(plan).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("plan must decode to a JSON object")
+    raw_tasks = data.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        raise ValueError("'tasks' must be a JSON array")
+    for index, task in enumerate(raw_tasks):
+        if not isinstance(task, dict):
+            raise ValueError(f"task at index {index} is not a JSON object")
+        if "id" in task:
+            validate_task_id(task["id"])
 
 
 _HELP_TEXT = """\
@@ -68,18 +117,35 @@ Commands:
   plan        Manage plans (import, export, show, reset, apply).
   run         Run a local worker that claims tasks from a plan.
   dashboard   Live TUI dashboard for an in-flight plan.
+  server      FastAPI control plane and web dashboard.
   init        Interactive PRD wizard → plan import.
   worker      Run a remote worker against a control-plane URL.
               `whilly worker register` mints a per-worker bearer token.
+  admin       Operator CLI (`admin bootstrap mint|revoke|list`,
+              `admin worker revoke`).
+  logs        Show per-task prompts, LLM events, and raw model output.
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
+  jira        Import Jira issues into Whilly plans.
+  qa-release  Collect Jira release verification context and linked artifacts.
+  project-config Validate domain configs and generate adaptive plans.
+  github-projects Sync GitHub Projects v2 items and statuses.
+  compliance Generate target-doc compliance reports.
+  tui         Browserless operator console mirroring the web dashboard.
+  rollback   Create/list rollback points, run Git preflight checks, and restore with confirmation.
+  update     Check for newer Whilly versions and run explicit package updates.
+  feedback   Create a GitHub issue with a Whilly bug or idea report.
+  pr-feedback Poll open PRs for a plan and emit review events
+              (`pr-feedback poll --plan <id>`).
 
 Run `whilly <command> --help` for command-specific options.
 
-Legacy v3 flag forms (`whilly --tasks PATH`, `whilly --init …`,
-`whilly --prd-wizard`, `whilly --resume`, `whilly --reset PLAN`,
-`whilly --all`, `--workspace`/`--worktree` opt-ins, and the
-`--no-workspace`/`--no-worktree` no-ops) are accepted for backwards
-compatibility and routed to the v4 subcommand surface above.
+Legacy v3 flag forms (`whilly --tasks PATH`, `whilly --init …` with
+optional `--plan` / `--go` follow-ons, `whilly --prd-wizard`,
+`whilly --resume`, `whilly --reset PLAN`, `whilly --all`,
+`whilly --headless`, `whilly --from-jira KEY [--go]`,
+`--workspace`/`--worktree` opt-ins, and the `--no-workspace`/
+`--no-worktree` no-ops) are accepted for backwards compatibility and
+routed to the v4 subcommand surface above.
 """
 
 
@@ -111,6 +177,7 @@ _LEGACY_VERB_FLAGS: frozenset[str] = frozenset(
         "--headless",
         "--init",
         "--prd-wizard",
+        "--from-jira",
         "--resume",
         "--reset",
         "--all",
@@ -242,6 +309,26 @@ def _apply_legacy_shim(args: list[str]) -> tuple[list[str] | None, int | None]:
         new_args += passthrough
         return new_args, None
 
+    if head == "--from-jira":
+        # v3: ``whilly --from-jira ABC-123 --go`` fetched one Jira issue
+        # into tasks.json and immediately started execution. v4 routes the
+        # source adapter through the explicit ``jira import`` command; the
+        # old ``--go`` modifier maps to ``--run`` and remains otherwise a
+        # no-op for import-only calls.
+        if len(rest) < 2 or rest[1].startswith("-"):
+            sys.stderr.write("whilly: --from-jira requires a Jira key or browse URL (e.g. `ABC-123`).\n")
+            return None, 2
+        tail: list[str] = []
+        run_requested = False
+        for token in rest[2:]:
+            if token == "--go":
+                run_requested = True
+            else:
+                tail.append(token)
+        if run_requested and "--run" not in tail:
+            tail.insert(0, "--run")
+        return ["jira", "import", rest[1], *tail], None
+
     if head == "--resume":
         # v3 reloaded ``.whilly_state.json`` and continued the
         # in-process loop. v4's state is in Postgres, so re-running
@@ -328,16 +415,73 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.dashboard import run_dashboard_command
 
         return run_dashboard_command(rest)
+    if cmd == "server":
+        from whilly.cli.server import run_server_command
+
+        return run_server_command(rest)
     if cmd == "init":
         from whilly.cli.init import run_init_command
 
         return run_init_command(rest)
+    if cmd == "admin":
+        # Lazy import: the admin subcommand pulls asyncpg via
+        # :mod:`whilly.adapters.db`, which we want to avoid for the
+        # ``whilly --help`` fast path.
+        from whilly.cli.admin import run_admin_command
+
+        return run_admin_command(rest)
+    if cmd == "logs":
+        from whilly.log_viewer import resolve_log_dir, run_logs_command
+
+        return run_logs_command(rest, resolve_log_dir())
     if cmd == "forge":
         # Lazy import keeps ``whilly --help`` fast — the forge package
         # transitively imports asyncpg + the PRD generator stack.
         from whilly.forge.intake import run_forge_command
 
         return run_forge_command(rest)
+    if cmd == "jira":
+        from whilly.cli.jira import run_jira_command
+
+        return run_jira_command(rest)
+    if cmd == "qa-release":
+        from whilly.cli.qa_release import run_qa_release_command
+
+        return run_qa_release_command(rest)
+    if cmd == "project-config":
+        from whilly.cli.project_config import run_project_config_command
+
+        return run_project_config_command(rest)
+    if cmd == "github-projects":
+        from whilly.cli.github_projects import run_github_projects_command
+
+        return run_github_projects_command(rest)
+    if cmd == "compliance":
+        from whilly.cli.compliance import run_compliance_command
+
+        return run_compliance_command(rest)
+    if cmd == "tui":
+        from whilly.cli.tui import run_tui_command
+
+        return run_tui_command(rest)
+    if cmd == "pr-feedback":
+        # Lazy import keeps ``whilly --help`` fast — the pr_feedback
+        # module transitively imports asyncpg via TaskRepository.
+        from whilly.cli import pr_feedback as _pr_feedback_module
+
+        return _pr_feedback_module.run_pr_feedback_command(rest)
+    if cmd == "rollback":
+        from whilly.cli.rollback import run_rollback_command
+
+        return run_rollback_command(rest)
+    if cmd == "update":
+        from whilly.cli.update import run_update_command
+
+        return run_update_command(rest)
+    if cmd == "feedback":
+        from whilly.cli.feedback import run_feedback_command
+
+        return run_feedback_command(rest)
     if cmd == "worker":
         # Sub-dispatch ``whilly worker register ...`` and
         # ``whilly worker connect ...`` to their handlers before falling

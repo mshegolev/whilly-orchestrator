@@ -1,0 +1,187 @@
+/* =========================================================================
+   Whilly Design System — colors_and_type.css
+   Tokens shared by the WUI (HTMX dashboard) and the TUI (Rich Live).
+   Everything is monospaced; nothing is rounded; there are no gradients.
+   ========================================================================= */
+
+/* ---- Base tokens (LIGHT / paper-on-ink) -------------------------------- */
+:root,
+:root[data-theme="light"] {
+  /* Surface */
+  --bg:               #f7f8fa;   /* page */
+  --surface:          #ffffff;   /* panels, tables, buttons */
+  --surface-strong:   #f1f3f6;   /* panel headers, table headers, identity panel */
+
+  /* Type */
+  --text:             #1b1f24;   /* primary ink */
+  --muted:            #5b6470;   /* labels, hints, hotkey strip */
+
+  /* Lines (always 1px solid) */
+  --line:             #d7dce2;   /* internal dividers, cell bottoms */
+  --line-strong:      #aeb6c2;   /* panel + table outer borders */
+
+  /* Semantic (kept identical in light + dark so statuses are predictable) */
+  --accent:           #0f766e;   /* teal — primary, focus rings */
+  --ok:               #16703c;   /* DONE, online, approved */
+  --warn:             #a15c07;   /* CLAIMED, IN_PROGRESS, pending review */
+  --danger:           #b42318;   /* FAILED, rejected, critical priority */
+  --info:             #0969da;   /* informational, links if any */
+
+  /* Selection */
+  --select-bg:        var(--text);
+  --select-fg:        var(--surface);
+}
+
+/* ---- DARK / phosphor-grey on bone -------------------------------------- */
+:root[data-theme="dark"],
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:             #111315;
+    --surface:        #171a1d;
+    --surface-strong: #202428;
+    --text:           #eceff3;
+    --muted:          #a6adb7;
+    --line:           #343a40;
+    --line-strong:    #59616b;
+    /* Semantics deliberately unchanged. */
+  }
+}
+
+/* ---- TYPE: one family, two specimens ----------------------------------- */
+
+/* The canonical Whilly font stack — chosen from the system monospace
+   ladder so the WUI looks consistent on macOS, Windows, and Linux without
+   shipping a webfont. To override, drop a `.woff2` into fonts/ and prepend
+   it to --font-mono. */
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  src: url("fonts/DejaVuSansMono.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  src: url("fonts/DejaVuSansMono-Oblique.ttf") format("truetype");
+  font-weight: 400; font-style: italic; font-display: swap;
+}
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  src: url("fonts/DejaVuSansMono-Bold.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "DejaVu Sans Mono";
+  src: url("fonts/DejaVuSansMono-BoldOblique.ttf") format("truetype");
+  font-weight: 700; font-style: italic; font-display: swap;
+}
+:root {
+  --font-mono: "DejaVu Sans Mono", ui-monospace, SFMono-Regular, "SF Mono",
+               Menlo, Consolas, "Liberation Mono", "Cascadia Mono",
+               monospace;
+
+  /* Type ramp (px so it matches the 13/1.45 body of the live dashboard) */
+  --t-xs:   11px;   /* table sub-labels, mobile chrome */
+  --t-sm:   12px;   /* muted, mobile field labels */
+  --t-body: 13px;   /* default body */
+  --t-md:   15px;   /* h2 — same family, just bigger */
+  --t-lg:   18px;   /* h1 */
+  --t-xl:   24px;   /* boot screen / login title */
+  --t-2xl:  32px;   /* TUI banner */
+
+  /* Letterspacing for the UPPERCASE table headers / metric labels */
+  --tracking-cap: 0.04em;
+
+  /* Line heights */
+  --lh-tight: 1.2;
+  --lh-body:  1.45;
+  --lh-code:  1.55;
+
+  /* Weights — TUI uses normal + bold only; no 500/600 except in semantic
+     badges where the table mixes them with color. */
+  --w-regular: 400;
+  --w-bold:    700;
+}
+
+/* ---- Spacing & shape --------------------------------------------------- */
+:root {
+  --pad-cell:    6px 8px;
+  --pad-header:  7px 10px;
+  --pad-button:  4px 8px;
+  --gap-controls: 8px;
+  --gap-hotkeys: 2px 18px;
+
+  --radius-none: 0;
+  --radius-btn:  2px;            /* sole rounded element */
+  --radius-card: 4px;            /* mobile reflow cards only */
+
+  --shell-max:   1440px;
+  --shell-pad:   14px 18px;
+
+  --hairline:    1px solid var(--line);
+  --hairline-strong: 1px solid var(--line-strong);
+
+  /* Focus ring — always visible, keyboard-first */
+  --focus-ring: 0 0 0 2px var(--accent);
+}
+
+/* ---- Semantic mappings (use these in components) ----------------------- */
+:root {
+  --fg-1: var(--text);
+  --fg-2: var(--muted);
+  --fg-accent: var(--accent);
+  --bg-1: var(--bg);
+  --bg-2: var(--surface);
+  --bg-3: var(--surface-strong);
+
+  /* Typography elements as CSS vars — shortcuts for component CSS */
+  --h1: var(--w-bold) var(--t-lg)/var(--lh-tight) var(--font-mono);
+  --h2: var(--w-bold) var(--t-md)/var(--lh-tight) var(--font-mono);
+  --p:  var(--w-regular) var(--t-body)/var(--lh-body) var(--font-mono);
+  --code: var(--w-regular) var(--t-body)/var(--lh-code) var(--font-mono);
+  --label: var(--w-bold) var(--t-xs)/var(--lh-tight) var(--font-mono);
+}
+
+/* ---- Base reset (only what's needed; lift directly into UI kits) ------- */
+html, body { background: var(--bg-1); color: var(--fg-1); }
+body { font: var(--p); font-variant-numeric: tabular-nums; }
+* { box-sizing: border-box; }
+::selection { background: var(--select-bg); color: var(--select-fg); }
+
+/* ---- Status colors (type-only, not fills) ------------------------------ */
+.status-DONE,      .status-done,
+.status-online,    .review-approved          { color: var(--ok); }
+.status-FAILED,    .status-failed,
+.status-offline,   .review-rejected,
+.priority-critical                            { color: var(--danger); }
+.status-CLAIMED,   .status-claimed,
+.status-IN_PROGRESS, .status-in_progress,
+.review-pending,   .review-changes_requested,
+.priority-high                                { color: var(--warn); }
+.status-PENDING,   .status-pending,
+.status-SKIPPED,   .status-skipped,
+.priority-low                                 { color: var(--muted); opacity: .85; }
+.status-BLOCKED,   .status-HUMAN_LOOP,
+.status-blocked,   .status-human_loop         { color: var(--info); }
+.priority-medium                              { color: inherit; }
+
+/* ---- CRT scanline texture (optional, opt-in via .crt-scanlines) ------- */
+.crt-scanlines {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 2px,
+    color-mix(in srgb, var(--text) 6%, transparent) 2px,
+    color-mix(in srgb, var(--text) 6%, transparent) 3px
+  );
+}
+
+/* ---- Caret blink (TUI prompt) ----------------------------------------- */
+@keyframes whilly-caret {
+  50% { opacity: 0; }
+}
+.caret {
+  display: inline-block;
+  width: 1ch;
+  background: currentColor;
+  color: transparent;
+  animation: whilly-caret 1s step-end infinite;
+}

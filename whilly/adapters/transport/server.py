@@ -151,19 +151,27 @@ requests.
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 import os
 import secrets
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Final
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import status as status_module
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
+from whilly.core.models import Task, TaskStatus
+from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE
+from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE
+from whilly.security.secret_lint import SECRET_LINT_BLOCKED_EVENT_TYPE
 from whilly.api.event_flusher import (
     DEFAULT_BATCH_LIMIT as EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
 )
@@ -177,30 +185,91 @@ from whilly.api.event_flusher import (
     EVENT_FLUSHER_TASK_NAME,
     EventFlusher,
 )
+from whilly.api.sse import (
+    EVENT_NOTIFY_LISTENER_TASK_NAME,
+    EventNotifyBroker,
+    _ListenerState,
+    event_notify_listener_loop,
+)
+from whilly.api.dashboard import render_dashboard as render_dashboard_view
+from whilly.api.dashboard_token import (
+    DEFAULT_DASHBOARD_SCOPES,
+    DEFAULT_TTL_SECONDS as DASHBOARD_TOKEN_DEFAULT_TTL,
+    EVENTS_STREAM_SCOPE,
+    TASKS_READ_SCOPE,
+    DashboardTokenError,
+    generate_dashboard_secret,
+    mint_dashboard_token,
+    verify_dashboard_token,
+)
+from whilly.api.metrics import (
+    METRICS_PATH,
+    METRICS_REFRESH_TASK_NAME,
+    REFRESH_INTERVAL_DEFAULT_SECONDS as METRICS_REFRESH_INTERVAL_DEFAULT_SECONDS,
+    check_metrics_token,
+    claim_long_poll_duration_seconds,
+    claims_total,
+    completes_total,
+    fails_total,
+    instrument_app,
+    metrics_refresh_loop,
+    render_metrics,
+    resolve_metrics_token,
+)
+from whilly.api.tasks_api import (
+    DEFAULT_LIMIT as TASKS_API_DEFAULT_LIMIT,
+    MAX_LIMIT as TASKS_API_MAX_LIMIT,
+    CursorDecodeError,
+    list_tasks as list_tasks_payload,
+)
+from whilly.api.sse_endpoint import (
+    DASHBOARD_DEFAULT_ORIGIN,
+    REPLAY_LIMIT as SSE_REPLAY_LIMIT,
+    _authenticate_stream_request,
+    _parse_last_event_id,
+    stream_event_source,
+)
 from whilly.adapters.transport.auth import (
     BOOTSTRAP_TOKEN_ENV,
     WORKER_TOKEN_ENV,
-    AuthDependency,
     IdentityBindingAuthDependency,
     hash_bearer_token,
-    make_bootstrap_auth,
+    make_admin_auth,
     make_db_bearer_auth,
+    make_db_bootstrap_auth,
 )
 from whilly.adapters.transport.schemas import (
     ClaimRequest,
     ClaimResponse,
     CompleteRequest,
     CompleteResponse,
+    ControlPauseRequest,
+    ControlStateResponse,
     ErrorResponse,
     FailRequest,
     FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    HumanReviewDecisionRequest,
+    ListTaskEventsResponse,
     RegisterRequest,
     RegisterResponse,
+    RepairTaskRequest,
+    RepairTaskResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskEventItem,
+    TaskEventRequest,
+    TaskEventResponse,
     TaskPayload,
+)
+from whilly.pipeline.events import PipelineTaskEvent
+from whilly.pipeline.human_review import (
+    HUMAN_REVIEW_REQUIRED,
+)
+from whilly.pipeline.human_review_decisions import (
+    HumanReviewDecisionCommand,
+    record_human_review_decision as record_review_decision,
 )
 
 __all__ = [
@@ -293,6 +362,18 @@ HEARTBEAT_TIMEOUT_DEFAULT_SECONDS: Final[int] = 2 * 60
 #: stays fast.
 OFFLINE_WORKER_SWEEP_INTERVAL_DEFAULT_SECONDS: Final[float] = 30.0
 
+LLM_OPS_UI_MAX_PREVIEW_CHARS: Final[int] = 80_000
+LLM_OPS_UI_MAX_RAW_LINES: Final[int] = 160
+DIAGNOSTIC_EVENT_PREFIXES: Final[tuple[str, ...]] = (
+    "llm.",
+    "pipeline.stage.",
+    "verification.",
+    "ci.",
+    "repair.",
+    "human_review.",
+)
+WORKER_HUMAN_REVIEW_EVENT_TYPES: Final[frozenset[str]] = frozenset({HUMAN_REVIEW_REQUIRED})
+
 #: Number of bytes of entropy used by :func:`secrets.token_urlsafe` for the
 #: per-worker bearer token. 32 bytes ≈ 256 bits — well above the threshold
 #: where rainbow / dictionary attacks become irrelevant, so plain SHA-256
@@ -319,6 +400,102 @@ _WORKER_ID_PREFIX: Final[str] = "w-"
 #: to ``__version__``.
 _API_TITLE: Final[str] = "Whilly Control Plane"
 _API_VERSION: Final[str] = "4.0.0-dev"
+
+
+def _decode_json_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
+
+
+def _decode_json_array(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return decoded if isinstance(decoded, list) else []
+    return []
+
+
+def _html_page(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{ font: 14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; margin: 24px; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 16px; }}
+    th, td {{ border-bottom: 1px solid #8884; padding: 8px; text-align: left; vertical-align: top; }}
+    code, pre {{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }}
+    pre {{ border: 1px solid #8884; border-radius: 8px; overflow: auto; padding: 12px; max-height: 520px; }}
+    .muted {{ color: #777; }}
+    .ok {{ color: #178a43; }}
+    .bad {{ color: #b42318; }}
+    a {{ color: #2563eb; }}
+  </style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+    )
+
+
+def _artifact_path(raw: str | None) -> Path | None:
+    if not raw:
+        return None
+    base = Path(os.environ.get("WHILLY_LOG_DIR") or "whilly_logs").expanduser()
+    base = base if base.is_absolute() else Path.cwd() / base
+    candidate = Path(raw).expanduser()
+    candidate = candidate if candidate.is_absolute() else Path.cwd() / candidate
+    try:
+        candidate.resolve().relative_to(base.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def _read_preview(path: Path | None, *, raw_jsonl: bool = False) -> tuple[str, str]:
+    if path is None:
+        return "not configured", ""
+    if not path.is_file():
+        return f"missing: {path}", ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if raw_jsonl:
+        lines = text.splitlines()
+        text = "\n".join(lines[:LLM_OPS_UI_MAX_RAW_LINES])
+        suffix = (
+            f"\n\n... truncated after {LLM_OPS_UI_MAX_RAW_LINES} lines ..."
+            if len(lines) > LLM_OPS_UI_MAX_RAW_LINES
+            else ""
+        )
+        return str(path), text + suffix
+    if len(text) > LLM_OPS_UI_MAX_PREVIEW_CHARS:
+        return str(path), text[:LLM_OPS_UI_MAX_PREVIEW_CHARS] + "\n\n... truncated ..."
+    return str(path), text
+
+
+def _control_state_response(state: Any) -> ControlStateResponse:
+    return ControlStateResponse(
+        paused=bool(state.paused),
+        pause_reason=state.pause_reason,
+        paused_by=state.paused_by,
+        paused_at=state.paused_at,
+        updated_at=state.updated_at,
+    )
 
 
 async def _visibility_sweep_loop(
@@ -503,6 +680,20 @@ def _generate_worker_id() -> str:
     return f"{_WORKER_ID_PREFIX}{secrets.token_urlsafe(_WORKER_ID_ENTROPY_BYTES)}"
 
 
+def _generate_worker_token() -> str:
+    """Mint a per-worker bearer token safe for argv handoff.
+
+    ``whilly worker connect`` execs into ``whilly-worker`` passing the
+    bearer as ``--token <value>``. Argparse treats any value beginning
+    with ``-`` as a flag, so we reject that tiny subset at generation
+    time to keep handoff deterministic.
+    """
+    token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+    while token.startswith("-"):
+        token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+    return token
+
+
 def _resolve_optional_token(arg: str | None, env_name: str) -> str | None:
     """Resolve an *optional* token from an explicit kwarg or the environment.
 
@@ -588,6 +779,10 @@ def create_app(
     event_batch_limit: int = EVENT_FLUSHER_DEFAULT_BATCH_LIMIT,
     event_drain_timeout_seconds: float = EVENT_FLUSHER_DEFAULT_DRAIN_TIMEOUT_SECONDS,
     event_checkpoint_dir: str | None = None,
+    dsn: str | None = None,
+    sse_ping_seconds: int = 15,
+    metrics_token: str | None = None,
+    metrics_refresh_interval_seconds: float = METRICS_REFRESH_INTERVAL_DEFAULT_SECONDS,
 ) -> FastAPI:
     """Build a FastAPI control-plane app bound to ``pool`` and the configured tokens.
 
@@ -720,7 +915,13 @@ def create_app(
     # ``POST /workers/register`` is the only thing that can mint
     # per-worker tokens, so without it the cluster cannot grow.
     legacy_worker_token = _resolve_optional_token(worker_token, WORKER_TOKEN_ENV)
-    resolved_bootstrap_token = _resolve_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
+    # M2: ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` is now *optional* — the
+    # primary surface is per-operator rows in ``bootstrap_tokens``
+    # (migration 009) consulted by :func:`make_db_bootstrap_auth`. A
+    # missing env var is fine when the operator has minted at least
+    # one bootstrap-token row; the env var is kept as a one-minor-
+    # version legacy fallback (logs a deprecation warning on hit).
+    legacy_bootstrap_token = _resolve_optional_token(bootstrap_token, BOOTSTRAP_TOKEN_ENV)
     # Construct the repository once at app build time. The repo is a
     # thin wrapper around the pool, so reusing one instance across all
     # requests is both correct and cheaper than instantiating per
@@ -733,7 +934,99 @@ def create_app(
     # bearer surface (TASK-101); legacy ``WHILLY_WORKER_TOKEN`` rides
     # along as the optional one-minor-version fallback.
     bearer_dep: IdentityBindingAuthDependency = make_db_bearer_auth(repo, legacy_token=legacy_worker_token)
-    bootstrap_dep: AuthDependency = make_bootstrap_auth(resolved_bootstrap_token)
+    # M2: bootstrap dep is DB-backed (``bootstrap_tokens`` table) with
+    # the env var as the legacy fallback. The dep stashes
+    # ``request.state.bootstrap_owner_email`` /
+    # ``bootstrap_is_admin`` so the register handler can attribute
+    # the new ``workers`` row to the operator who minted the token.
+    bootstrap_dep: IdentityBindingAuthDependency = make_db_bootstrap_auth(repo, legacy_token=legacy_bootstrap_token)
+    # M2: admin dep gates ``/api/v1/admin/*`` routes — same DB lookup
+    # but requires ``is_admin=true`` on the bootstrap-token row. 401
+    # on missing/invalid bearer, 403 on known non-admin operator.
+    admin_dep: IdentityBindingAuthDependency = make_admin_auth(repo, legacy_token=legacy_bootstrap_token)
+
+    dashboard_token_secret: bytes = generate_dashboard_secret()
+    dashboard_token_ttl_raw = (os.environ.get("WHILLY_DASHBOARD_TOKEN_TTL_SECONDS") or "").strip()
+    if dashboard_token_ttl_raw:
+        try:
+            dashboard_token_ttl = int(dashboard_token_ttl_raw)
+        except ValueError:
+            raise RuntimeError(
+                f"create_app: WHILLY_DASHBOARD_TOKEN_TTL_SECONDS must be an integer, got {dashboard_token_ttl_raw!r}"
+            ) from None
+    else:
+        dashboard_token_ttl = DASHBOARD_TOKEN_DEFAULT_TTL
+
+    def _dashboard_token_from_request(request: Request) -> str | None:
+        query_token = (request.query_params.get("token") or "").strip()
+        if query_token:
+            return query_token
+        authorization = request.headers.get("authorization")
+        if authorization is None:
+            return None
+        prefix = "bearer "
+        if not authorization[: len(prefix)].lower() == prefix:
+            return None
+        token = authorization[len(prefix) :].strip()
+        # Dashboard tokens are JWT-shaped. Do not reinterpret ordinary worker
+        # bearer misses as dashboard-token attempts; that would change legacy
+        # 401/403 behavior on existing worker-auth routes.
+        if token.count(".") != 2:
+            return None
+        return token
+
+    async def _authenticate_dashboard_token(request: Request, *, expected_scope: str) -> bool:
+        token = _dashboard_token_from_request(request)
+        if token is None:
+            return False
+        try:
+            verify_dashboard_token(token, dashboard_token_secret, expected_scope=expected_scope)
+        except DashboardTokenError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"invalid dashboard token: {exc}",
+            ) from None
+        return True
+
+    async def _authenticate_tasks_read_request(request: Request) -> None:
+        authorization = request.headers.get("authorization")
+        auth_exc: HTTPException | None = None
+        if authorization is not None:
+            try:
+                await bearer_dep(request, authorization)
+                return
+            except HTTPException as exc:
+                auth_exc = exc
+        if await _authenticate_dashboard_token(request, expected_scope=TASKS_READ_SCOPE):
+            return
+        if auth_exc is not None:
+            raise auth_exc
+        await bearer_dep(request, None)
+
+    async def _authenticate_events_stream_request(request: Request) -> None:
+        authorization = request.headers.get("authorization")
+        auth_exc: HTTPException | None = None
+        if authorization is not None:
+            try:
+                await _authenticate_stream_request(
+                    repo=repo,
+                    authorization=authorization,
+                    legacy_worker_token=legacy_worker_token,
+                    legacy_bootstrap_token=legacy_bootstrap_token,
+                )
+                return
+            except HTTPException as exc:
+                auth_exc = exc
+        if await _authenticate_dashboard_token(request, expected_scope=EVENTS_STREAM_SCOPE):
+            return
+        if auth_exc is not None:
+            raise auth_exc
+        await _authenticate_stream_request(
+            repo=repo,
+            authorization=None,
+            legacy_worker_token=legacy_worker_token,
+            legacy_bootstrap_token=legacy_bootstrap_token,
+        )
 
     # Event flusher (TASK-106). Construction is cheap and non-async — it
     # just allocates an :class:`asyncio.Queue` and stashes config. The
@@ -741,6 +1034,13 @@ def create_app(
     flusher_checkpoint_dir = (
         event_checkpoint_dir if event_checkpoint_dir is not None else os.environ.get("WHILLY_EVENT_FLUSHER_STATE_DIR")
     )
+    listener_dsn = dsn if dsn is not None else os.environ.get("WHILLY_DATABASE_URL")
+    if metrics_refresh_interval_seconds <= 0:
+        raise ValueError(
+            f"create_app: metrics_refresh_interval_seconds must be > 0, "
+            f"got {metrics_refresh_interval_seconds!r}; a zero or negative interval would tight-loop the database."
+        )
+    resolved_metrics_token = resolve_metrics_token(metrics_token)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -754,6 +1054,7 @@ def create_app(
         app.state.repo = repo
         app.state.bearer_dep = bearer_dep
         app.state.bootstrap_dep = bootstrap_dep
+        app.state.admin_dep = admin_dep
         logger.info("Whilly control-plane app started")
         # Background-task rendezvous (PRD FR-1.4, TASK-025a). The sweep
         # loop checks this event between sleeps; lifespan teardown sets
@@ -792,6 +1093,27 @@ def create_app(
         # lifespan cycles (test harnesses re-entering the same app)
         # don't accumulate stale references.
         repo.attach_event_flusher(flusher)
+        # M3 SSE listener (m3-sse-listener / VAL-M3-SSE-LISTENER-001..901).
+        # The broker fans NOTIFY payloads out to per-subscriber queues
+        # owned by ``GET /events/stream`` handlers. The dedicated
+        # asyncpg connection lives inside :func:`event_notify_listener_loop`
+        # so it never returns to the pool (LISTEN is session-scoped).
+        event_notify_broker = EventNotifyBroker()
+        app.state.event_notify_broker = event_notify_broker
+        # ``app.state.event_notify_queue`` is the contract surface in
+        # VAL-M3-SSE-LISTENER-004; it points at a fresh broker-owned
+        # queue so dashboard probes can subscribe without going through
+        # the broker API. The actual fan-out targets the per-subscriber
+        # queues created by :meth:`EventNotifyBroker.subscribe`.
+        app.state.event_notify_queue = asyncio.Queue()
+        # State-coupled listener_connected flag (VAL-M3-HEALTH-902).
+        # The supervisor task auto-reconnects forever, so ``task.done()``
+        # never reflects a transient pg_terminate_backend window. The
+        # ``_ListenerState.connected`` boolean — toggled True after
+        # ``add_listener`` succeeds and False in the loop's finally
+        # block — is the source of truth ``/health`` reads.
+        event_notify_listener_state = _ListenerState()
+        app.state.event_notify_listener_state = event_notify_listener_state
         try:
             # ``asyncio.TaskGroup`` owns the periodic background sweeps
             # for the duration of the app's lifespan. Tasks are created
@@ -814,7 +1136,7 @@ def create_app(
             #
             # See PRD R-1 / SC-2 for the layered-recovery rationale.
             async with asyncio.TaskGroup() as tg:
-                tg.create_task(
+                visibility_sweep_task = tg.create_task(
                     _visibility_sweep_loop(
                         repo,
                         sweep_interval=sweep_interval_seconds,
@@ -823,7 +1145,7 @@ def create_app(
                     ),
                     name="whilly-visibility-sweep",
                 )
-                tg.create_task(
+                offline_worker_sweep_task = tg.create_task(
                     _offline_worker_sweep_loop(
                         repo,
                         sweep_interval=offline_worker_sweep_interval_seconds,
@@ -842,6 +1164,37 @@ def create_app(
                     name=EVENT_FLUSHER_TASK_NAME,
                 )
                 app.state.event_flusher_task = event_flusher_task
+                # M3 SSE listener — owned by the same TaskGroup so a
+                # crash unwinds the whole supervision boundary; ``stop``
+                # is the shared ``sweep_stop`` event so a single signal
+                # tears down sweeps + flusher + listener at once
+                # (VAL-M3-SSE-LISTENER-008).
+                event_notify_listener_task = tg.create_task(
+                    event_notify_listener_loop(
+                        event_notify_broker,
+                        listener_dsn,
+                        sweep_stop,
+                        state=event_notify_listener_state,
+                    ),
+                    name=EVENT_NOTIFY_LISTENER_TASK_NAME,
+                )
+                app.state.event_notify_listener_task = event_notify_listener_task
+                metrics_refresh_task = tg.create_task(
+                    metrics_refresh_loop(
+                        pool,
+                        sweep_stop,
+                        interval=metrics_refresh_interval_seconds,
+                    ),
+                    name=METRICS_REFRESH_TASK_NAME,
+                )
+                app.state.metrics_refresh_task = metrics_refresh_task
+                app.state.background_tasks = [
+                    visibility_sweep_task,
+                    offline_worker_sweep_task,
+                    event_flusher_task,
+                    event_notify_listener_task,
+                    metrics_refresh_task,
+                ]
                 try:
                     yield
                 finally:
@@ -876,6 +1229,16 @@ def create_app(
             app.state.event_flusher = None
             app.state.event_queue = None
             app.state.event_flusher_task = None
+            try:
+                event_notify_broker.drop_all()
+            except Exception:
+                logger.exception("event_notify_broker drop_all raised on shutdown")
+            app.state.event_notify_broker = None
+            app.state.event_notify_queue = None
+            app.state.event_notify_listener_task = None
+            app.state.event_notify_listener_state = None
+            app.state.metrics_refresh_task = None
+            app.state.background_tasks = None
             # Drop the repo's flusher reference so subsequent lifespan
             # cycles (e.g. test harnesses re-entering the same app)
             # don't pick up the now-defunct queue / coroutine.
@@ -889,53 +1252,113 @@ def create_app(
         # /docs (Swagger UI) and /openapi.json on FastAPI defaults —
         # operators expect them there, no reason to relocate.
     )
+    from whilly.api.dashboard import FileLogStore
+    from whilly.api.static_mount import mount_static_assets
+
+    mount_static_assets(app)
+    app.state.log_store = FileLogStore(Path("whilly_logs"))
+    instrument_app(app)
+
+    async def _probe_pool() -> tuple[bool, str | None]:
+        try:
+            async with pool.acquire() as conn:
+                result: Any = await conn.fetchval("SELECT 1")
+        except Exception as exc:
+            logger.warning("Health check failed: %s", exc)
+            return False, str(exc)
+        if result != 1:
+            return False, f"unexpected SELECT 1 result: {result!r}"
+        return True, None
+
+    def _listener_connected() -> bool:
+        state = getattr(app.state, "event_notify_listener_state", None)
+        if state is not None:
+            return bool(state.connected)
+        task = getattr(app.state, "event_notify_listener_task", None)
+        if task is None:
+            return False
+        return not task.done()
+
+    def _queue_depth() -> int:
+        flusher: EventFlusher | None = getattr(app.state, "event_flusher", None)
+        if flusher is None:
+            return 0
+        try:
+            return int(flusher.queue.qsize())
+        except Exception:
+            return 0
 
     @app.get(
         HEALTH_PATH,
-        # Hidden from /docs because operators reach it from kube probes,
-        # not from the API surface — keeps the OpenAPI schema focused
-        # on worker-facing endpoints (TASK-021b/c).
         include_in_schema=False,
     )
     async def health() -> JSONResponse:
         """Liveness/readiness probe — pings the asyncpg pool with ``SELECT 1``.
 
-        Returns 200 with ``{"status": "ok"}`` when the pool is reachable
-        and Postgres responds to ``SELECT 1``; 503 with
-        ``{"status": "unavailable", "detail": ...}`` on any
-        :class:`Exception` raised by ``acquire()`` / ``fetchval()``.
-
-        We catch :class:`Exception` (not :class:`BaseException`) so
-        cancellation / KeyboardInterrupt still propagates — health
-        endpoints should not swallow process-level signals.
+        Body extended to include ``db_reachable`` / ``listener_connected``
+        / ``queue_depth`` per VAL-M3-HEALTH-901 while preserving the
+        v4.3.1 ``status: ok | unavailable`` field for backwards
+        compatibility.
         """
-        try:
-            async with pool.acquire() as conn:
-                result: Any = await conn.fetchval("SELECT 1")
-        except Exception as exc:
-            # ``logger.warning`` rather than ``error`` because a single
-            # failed health-check is the *signal* operators want to see;
-            # noisy ``error`` lines pollute the alert path when the
-            # outage is already obvious from the 503.
-            logger.warning("Health check failed: %s", exc)
-            return JSONResponse(
-                {"status": "unavailable", "detail": str(exc)},
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
-        if result != 1:
-            # Defensive: SELECT 1 always returns 1 against a live
-            # Postgres. If we somehow get something else (proxy
-            # rewriting queries, mocked pool returning the wrong type)
-            # we surface it as 503 rather than pretending the system is
-            # healthy.
-            return JSONResponse(
-                {
-                    "status": "unavailable",
-                    "detail": f"unexpected SELECT 1 result: {result!r}",
-                },
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        ok, detail = await _probe_pool()
+        body: dict[str, Any] = {
+            "status": "ok" if ok else "unavailable",
+            "db_reachable": ok,
+            "listener_connected": _listener_connected(),
+            "queue_depth": _queue_depth(),
+        }
+        if not ok:
+            body["detail"] = detail
+            return JSONResponse(body, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return JSONResponse(body)
+
+    @app.get(
+        "/health/live",
+        include_in_schema=False,
+    )
+    async def health_live() -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    @app.get(
+        "/health/ready",
+        include_in_schema=False,
+    )
+    async def health_ready() -> JSONResponse:
+        ok, detail = await _probe_pool()
+        listener_ok = _listener_connected()
+        body: dict[str, Any] = {
+            "status": "ok" if (ok and listener_ok) else "unavailable",
+            "db_reachable": ok,
+            "listener_connected": listener_ok,
+            "queue_depth": _queue_depth(),
+        }
+        if not (ok and listener_ok):
+            if detail is not None:
+                body["detail"] = detail
+            return JSONResponse(body, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return JSONResponse(body)
+
+    @app.get(
+        METRICS_PATH,
+        include_in_schema=False,
+    )
+    async def metrics_endpoint(request: Request) -> Response:
+        """Prometheus exposition endpoint, gated by ``WHILLY_METRICS_TOKEN``.
+
+        Fail-closed when the token env var is unset (VAL-M3-METRICS-020):
+        the handler returns 401 with a clear error rather than serving
+        public metrics. ``check_metrics_token`` performs the
+        constant-time comparison.
+        """
+        authorization = request.headers.get("authorization")
+        if not check_metrics_token(authorization, expected_token=resolved_metrics_token):
+            return JSONResponse(
+                {"error": "unauthorized", "detail": "metrics scrape requires bearer token"},
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                headers={"WWW-Authenticate": 'Bearer realm="metrics"'},
+            )
+        body, content_type = render_metrics()
+        return Response(content=body, media_type=content_type)
 
     @app.post(
         REGISTER_PATH,
@@ -943,7 +1366,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
         dependencies=[Depends(bootstrap_dep)],
     )
-    async def register_worker(payload: RegisterRequest) -> RegisterResponse:
+    async def register_worker(request: Request, payload: RegisterRequest) -> RegisterResponse:
         """Mint a fresh worker identity and return its bearer token (PRD FR-1.1).
 
         Gated by the *bootstrap* token (cluster-join secret) — the
@@ -970,10 +1393,28 @@ def create_app(
         the OpenAPI spec automatically.
         """
         worker_id = _generate_worker_id()
-        plaintext_token = secrets.token_urlsafe(_TOKEN_ENTROPY_BYTES)
+        plaintext_token = _generate_worker_token()
         token_hash = _hash_token(plaintext_token)
+        # M2: when the bootstrap auth dep resolved a per-operator token
+        # (``bootstrap_tokens`` row), bind the new ``workers`` row to
+        # the operator's email — the dep stashed it on
+        # ``request.state.bootstrap_owner_email``. This wins over any
+        # client-supplied ``payload.owner_email`` so an operator
+        # cannot register a worker under someone else's identity by
+        # spoofing the body. Legacy env-fallback path leaves
+        # ``bootstrap_owner_email`` as ``None`` and we fall through to
+        # the explicit body field for backwards compatibility.
+        bootstrap_owner_email: str | None = getattr(request.state, "bootstrap_owner_email", None)
+        resolved_owner_email = bootstrap_owner_email if bootstrap_owner_email is not None else payload.owner_email
+        bootstrap_token_hash: str | None = getattr(request.state, "bootstrap_token_hash", None)
         try:
-            await repo.register_worker(worker_id, payload.hostname, token_hash)
+            await repo.register_worker(
+                worker_id,
+                payload.hostname,
+                token_hash,
+                resolved_owner_email,
+                bootstrap_token_hash=bootstrap_token_hash,
+            )
         except asyncpg.UniqueViolationError:
             # Defensive: 64 bits of entropy makes this nearly impossible.
             # If it does fire we surface a 500 rather than retrying with
@@ -1030,6 +1471,17 @@ def create_app(
         _require_token_owner(request, worker_id)
         ok = await repo.update_heartbeat(worker_id)
         return HeartbeatResponse(ok=ok)
+
+    @app.get(
+        "/workers/control-state",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(bearer_dep)],
+        include_in_schema=False,
+    )
+    async def worker_control_state(request: Request) -> ControlStateResponse:
+        """Worker-readable global pause state for safe-boundary checks."""
+
+        return _control_state_response(await repo.get_control_state())
 
     @app.post(
         CLAIM_PATH,
@@ -1088,39 +1540,42 @@ def create_app(
         # bearer cannot claim a task on behalf of worker B even though
         # the path carries no identity.
         _require_token_owner(request, payload.worker_id)
+        # M2 mission (VAL-M2-ADMIN-AUTH-011): forward the
+        # operator's ``owner_email`` (stashed by the per-worker
+        # bearer auth dep on ``request.state.authenticated_owner_email``)
+        # so the CLAIM event payload attributes the action to the
+        # operator. ``None`` on the legacy fallback path leaves the
+        # payload key omitted, preserving the v4.4.0 baseline shape.
+        authenticated_owner_email: str | None = getattr(request.state, "authenticated_owner_email", None)
         deadline = time.monotonic() + claim_long_poll_timeout
-        while True:
-            claimed = await repo.claim_task(payload.worker_id, payload.plan_id)
-            if claimed is not None:
-                # Hot path: claim succeeded. Wrap the domain Task in
-                # the wire-format payload — ``plan`` is intentionally
-                # left ``None``: the AC scope is "Task | 204", and a
-                # plan-name lookup would expand the task footprint.
-                # TASK-022b1 / future work can populate it if needed.
-                logger.info(
-                    "claim: worker=%s plan=%s task=%s",
-                    payload.worker_id,
-                    payload.plan_id,
-                    claimed.id,
+        start = time.monotonic()
+        try:
+            while True:
+                claimed = await repo.claim_task(
+                    payload.worker_id, payload.plan_id, owner_email=authenticated_owner_email
                 )
-                return ClaimResponse(task=TaskPayload.from_task(claimed))
+                if claimed is not None:
+                    logger.info(
+                        "claim: worker=%s plan=%s task=%s",
+                        payload.worker_id,
+                        payload.plan_id,
+                        claimed.id,
+                    )
+                    claims_total.labels(plan_id=payload.plan_id, worker_id=payload.worker_id).inc()
+                    return ClaimResponse(task=TaskPayload.from_task(claimed))
 
-            now = time.monotonic()
-            if now >= deadline:
-                # Long-poll budget exhausted. 204 No Content is the AC
-                # contract: the worker should re-issue the claim
-                # immediately (TASK-022b1's behaviour on 204).
-                logger.debug(
-                    "claim: timeout (no PENDING tasks) worker=%s plan=%s",
-                    payload.worker_id,
-                    payload.plan_id,
-                )
-                return Response(status_code=status.HTTP_204_NO_CONTENT)
+                now = time.monotonic()
+                if now >= deadline:
+                    logger.debug(
+                        "claim: timeout (no PENDING tasks) worker=%s plan=%s",
+                        payload.worker_id,
+                        payload.plan_id,
+                    )
+                    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-            # Cap the sleep at the time remaining to the deadline so
-            # the *total* wait time never exceeds ``claim_long_poll_timeout``
-            # — even when the interval doesn't divide the budget evenly.
-            await asyncio.sleep(min(claim_poll_interval, deadline - now))
+                await asyncio.sleep(min(claim_poll_interval, deadline - now))
+        finally:
+            claim_long_poll_duration_seconds.observe(time.monotonic() - start)
 
     @app.post(
         "/tasks/{task_id}/complete",
@@ -1208,7 +1663,280 @@ def create_app(
             updated.version,
             payload.cost_usd,
         )
+        plan_id = await _lookup_plan_id_for_task(pool, updated.id)
+        if plan_id is not None:
+            completes_total.labels(plan_id=plan_id, worker_id=payload.worker_id).inc()
         return CompleteResponse(task=TaskPayload.from_task(updated))
+
+    @app.post(
+        "/api/v1/tasks/{task_id}/human-review",
+        response_model=TaskEventResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": TaskEventResponse,
+                "description": "Human-review decision recorded.",
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Task does not exist.",
+            },
+        },
+        dependencies=[Depends(admin_dep)],
+    )
+    async def record_human_review_decision(
+        request: Request,
+        task_id: str,
+        payload: HumanReviewDecisionRequest,
+    ) -> TaskEventResponse | JSONResponse:
+        """Append an admin-authorised human-review decision event."""
+
+        operator = getattr(request.state, "bootstrap_owner_email", None)
+        try:
+            await record_review_decision(
+                repo,
+                HumanReviewDecisionCommand(
+                    task_id=task_id,
+                    decision=payload.decision,
+                    reviewer=payload.reviewer,
+                    source="admin_api",
+                    stage_id=payload.stage_id or "",
+                    comment=payload.comment,
+                    evidence=payload.evidence,
+                    requested_changes=tuple(payload.requested_changes),
+                    operator=operator or "",
+                ),
+            )
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        return TaskEventResponse()
+
+    @app.get(
+        "/tasks/{task_id}/events",
+        response_model=ListTaskEventsResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": ListTaskEventsResponse,
+                "description": "Ordered task events.",
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Task does not exist.",
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def list_task_events(
+        request: Request,
+        task_id: str,
+        event_prefix: str | None = Query(default=None, max_length=64),
+    ) -> ListTaskEventsResponse | JSONResponse:
+        """Return persisted diagnostic/audit events for a task."""
+
+        authenticated_worker_id = getattr(request.state, "authenticated_worker_id", None)
+        if authenticated_worker_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="task event reads require an identity-bound worker bearer token",
+            )
+        try:
+            claim_owner = await repo.task_claim_owner(task_id)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        if claim_owner != authenticated_worker_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"worker {authenticated_worker_id!r} cannot read task {task_id!r} events",
+            )
+        try:
+            rows = await repo.list_task_events(task_id, event_prefix=event_prefix)
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        return ListTaskEventsResponse(events=[TaskEventItem.model_validate(row) for row in rows])
+
+    @app.post(
+        "/tasks/{task_id}/events",
+        response_model=TaskEventResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": TaskEventResponse,
+                "description": "Diagnostic task event appended.",
+            },
+            status.HTTP_400_BAD_REQUEST: {
+                "model": ErrorResponse,
+                "description": "Only known diagnostic event families are accepted on this endpoint.",
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Task does not exist.",
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def record_task_event(
+        request: Request, task_id: str, payload: TaskEventRequest
+    ) -> TaskEventResponse | JSONResponse:
+        """Append a non-state-changing diagnostic event for a task."""
+
+        _require_token_owner(request, payload.worker_id)
+        if payload.event_type.startswith("human_review.") and payload.event_type not in WORKER_HUMAN_REVIEW_EVENT_TYPES:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_event_type",
+                    detail="worker diagnostic endpoint accepts only human_review.required from the human_review.* family",
+                ).model_dump(exclude_none=True),
+            )
+        if not payload.event_type.startswith(DIAGNOSTIC_EVENT_PREFIXES):
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_event_type",
+                    detail=(
+                        "diagnostic endpoint accepts only llm.*, pipeline.stage.*, "
+                        "verification.*, ci.*, repair.*, and human_review.* event types"
+                    ),
+                ).model_dump(exclude_none=True),
+            )
+        try:
+            await repo.record_task_event(
+                task_id,
+                payload.event_type,
+                payload.payload,
+                detail=payload.detail,
+            )
+        except ValueError:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content=ErrorResponse(
+                    error="task_not_found",
+                    detail=f"unknown task_id={task_id!r}",
+                ).model_dump(exclude_none=True),
+            )
+        logger.debug(
+            "record_task_event: worker=%s task=%s event_type=%s",
+            payload.worker_id,
+            task_id,
+            payload.event_type,
+        )
+        return TaskEventResponse()
+
+    @app.post(
+        "/tasks/{task_id}/repair",
+        response_model=RepairTaskResponse,
+        responses={
+            status.HTTP_200_OK: {
+                "model": RepairTaskResponse,
+                "description": "Dependency-free repair task inserted.",
+            },
+            status.HTTP_400_BAD_REQUEST: {
+                "model": ErrorResponse,
+                "description": "Repair task payload is invalid.",
+            },
+            status.HTTP_409_CONFLICT: {
+                "model": ErrorResponse,
+                "description": (
+                    "Optimistic-locking conflict — original task version moved or the task no longer exists."
+                ),
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def request_repair_task(
+        request: Request, task_id: str, payload: RepairTaskRequest
+    ) -> RepairTaskResponse | JSONResponse:
+        """Insert one deterministic repair task requested by the task's worker."""
+
+        _require_token_owner(request, payload.worker_id)
+        if payload.repair_task.dependencies:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_repair_task",
+                    detail="invalid_repair_task: remote repair tasks must not declare dependencies",
+                ).model_dump(exclude_none=True),
+            )
+        if payload.event.task_id != task_id:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content=ErrorResponse(
+                    error="invalid_repair_task",
+                    detail="invalid_repair_task: repair request event task_id must match original task",
+                ).model_dump(exclude_none=True),
+            )
+
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT status, version, claimed_by FROM tasks WHERE id = $1",
+                task_id,
+            )
+        if row is None:
+            return _conflict_response(VersionConflictError(task_id, payload.orig_task_version, None, None))
+        actual_status = TaskStatus(row["status"])
+        actual_version = int(row["version"])
+        if actual_version != payload.orig_task_version:
+            return _conflict_response(
+                VersionConflictError(task_id, payload.orig_task_version, actual_version, actual_status)
+            )
+        claimed_by = row["claimed_by"]
+        if claimed_by is not None and claimed_by != payload.worker_id:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content=ErrorResponse(
+                    error="forbidden",
+                    detail=f"task {task_id!r} is claimed by worker {claimed_by!r}",
+                ).model_dump(exclude_none=True),
+            )
+
+        orig_task = Task(id=task_id, status=actual_status, version=actual_version)
+        repair_payload = payload.repair_task
+        repair_task = Task(
+            id=repair_payload.id,
+            status=TaskStatus.PENDING,
+            dependencies=tuple(repair_payload.dependencies or ()),
+            key_files=tuple(repair_payload.key_files),
+            priority=repair_payload.priority,
+            description=repair_payload.description,
+            acceptance_criteria=tuple(repair_payload.acceptance_criteria),
+            test_steps=tuple(repair_payload.test_steps),
+            prd_requirement=repair_payload.prd_requirement,
+            repo_target_id=repair_payload.repo_target_id,
+        )
+        event_payload = payload.event
+        event = PipelineTaskEvent(
+            task_id=event_payload.task_id,
+            event_type=event_payload.event_type,
+            payload=dict(event_payload.payload),
+            detail=event_payload.detail,
+        )
+        try:
+            inserted = await repo.insert_repair_task(orig_task, repair_task, event)
+        except ValueError:
+            return _conflict_response(VersionConflictError(task_id, payload.orig_task_version, None, None))
+        logger.info(
+            "request_repair_task: worker=%s orig_task=%s repair_task=%s",
+            payload.worker_id,
+            task_id,
+            inserted.id,
+        )
+        return RepairTaskResponse(repair_task_id=inserted.id)
 
     @app.post(
         "/tasks/{task_id}/fail",
@@ -1247,8 +1975,25 @@ def create_app(
         # Token-owner check (TASK-101 scrutiny round-1 fix): worker A's
         # bearer cannot fail a task on behalf of worker B.
         _require_token_owner(request, payload.worker_id)
+        prelude_event_type: str | None = None
+        prelude_payload: dict[str, Any] | None = None
+        security_prelude_events = {
+            PROMPT_INJECTION_BLOCKED_EVENT_TYPE,
+            SHELL_COMMAND_BLOCKED_EVENT_TYPE,
+            SECRET_LINT_BLOCKED_EVENT_TYPE,
+        }
+        if payload.detail and payload.detail.get("event_type") in security_prelude_events:
+            prelude_event_type = str(payload.detail["event_type"])
+            prelude_payload = dict(payload.detail)
         try:
-            updated = await repo.fail_task(task_id, payload.version, payload.reason)
+            updated = await repo.fail_task(
+                task_id,
+                payload.version,
+                payload.reason,
+                detail=payload.detail,
+                prelude_event_type=prelude_event_type,
+                prelude_payload=prelude_payload,
+            )
         except VersionConflictError as exc:
             logger.info(
                 "fail_task conflict: worker=%s task=%s expected_version=%d actual_version=%s actual_status=%s",
@@ -1266,6 +2011,13 @@ def create_app(
             updated.version,
             payload.reason,
         )
+        plan_id = await _lookup_plan_id_for_task(pool, updated.id)
+        if plan_id is not None:
+            fails_total.labels(
+                plan_id=plan_id,
+                worker_id=payload.worker_id,
+                reason=payload.reason,
+            ).inc()
         return FailResponse(task=TaskPayload.from_task(updated))
 
     @app.post(
@@ -1356,7 +2108,7 @@ def create_app(
         # slots in here without touching the response shape.
     )
     async def get_plan(plan_id: str) -> JSONResponse:
-        """Return ``{id, name, github_issue_ref, prd_file}`` for a single plan (VAL-FORGE-012).
+        """Return plan metadata for a single plan (VAL-FORGE-012).
 
         404 if the plan does not exist. The ``github_issue_ref`` field
         is ``null`` for plans created via ``whilly init`` (no GitHub
@@ -1375,7 +2127,41 @@ def create_app(
         """
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, name, github_issue_ref, prd_file FROM plans WHERE id = $1",
+                "SELECT id, name, github_issue_ref, prd_file, verification_commands FROM plans WHERE id = $1",
+                plan_id,
+            )
+            origin_row = await conn.fetchrow(
+                """
+                SELECT
+                    wi.origin_system,
+                    wi.origin_ref,
+                    wi.external_url,
+                    wi.title,
+                    wi.content_hash,
+                    po.prd_file,
+                    po.decomposition_mode
+                FROM plan_origins po
+                JOIN work_intents wi ON wi.id = po.work_intent_id
+                WHERE po.plan_id = $1
+                ORDER BY po.created_at ASC
+                LIMIT 1
+                """,
+                plan_id,
+            )
+            repo_target_rows = await conn.fetch(
+                """
+                SELECT
+                    rt.id,
+                    rt.provider,
+                    rt.repo_full_name,
+                    rt.clone_url,
+                    rt.default_branch,
+                    rt.credential_policy
+                FROM plan_repo_targets prt
+                JOIN repo_targets rt ON rt.id = prt.repo_target_id
+                WHERE prt.plan_id = $1
+                ORDER BY prt.is_default DESC, rt.id ASC
+                """,
                 plan_id,
             )
         if row is None:
@@ -1383,16 +2169,331 @@ def create_app(
                 {"error": "not_found", "detail": f"plan {plan_id!r} not found"},
                 status_code=status.HTTP_404_NOT_FOUND,
             )
+        origin = None
+        if origin_row is not None:
+            origin = {
+                "system": origin_row["origin_system"],
+                "ref": origin_row["origin_ref"],
+                "url": origin_row["external_url"],
+                "title": origin_row["title"],
+                "content_hash": origin_row["content_hash"],
+                "prd_file": origin_row["prd_file"],
+                "decomposition_mode": origin_row["decomposition_mode"],
+            }
         return JSONResponse(
             {
                 "id": row["id"],
                 "name": row["name"],
                 "github_issue_ref": row["github_issue_ref"],
                 "prd_file": row["prd_file"],
+                "verification_commands": _decode_json_array(row["verification_commands"]),
+                "origin": origin,
+                "repo_targets": [dict(repo_target) for repo_target in repo_target_rows],
             }
         )
 
+    @app.get(
+        "/api/v1/admin/health",
+        # Anchor route for the M2 ``/api/v1/admin/*`` namespace. The
+        # full admin surface (mint / revoke / list bootstrap tokens,
+        # revoke worker, etc.) lands in the m2-admin-cli feature,
+        # which appends routes onto the same prefix gated by the same
+        # ``admin_dep``. This minimal probe lets validators assert the
+        # 401/403/200 envelope (VAL-M2-ADMIN-AUTH-008/-010) end-to-end
+        # without requiring the CLI surface to be in place yet.
+        dependencies=[Depends(admin_dep)],
+        include_in_schema=False,
+    )
+    async def admin_health(request: Request) -> JSONResponse:
+        owner = getattr(request.state, "bootstrap_owner_email", None)
+        return JSONResponse({"status": "ok", "owner": owner})
+
+    @app.get(
+        "/api/v1/admin/workers/control-state",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(admin_dep)],
+    )
+    async def get_workers_control_state(request: Request) -> ControlStateResponse:
+        """Return the global worker pause/resume state."""
+
+        return _control_state_response(await repo.get_control_state())
+
+    @app.post(
+        "/api/v1/admin/workers/pause",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(admin_dep)],
+    )
+    async def pause_workers(request: Request, payload: ControlPauseRequest) -> ControlStateResponse:
+        """Activate the soft global worker stop-crane."""
+
+        operator = getattr(request.state, "bootstrap_owner_email", None)
+        return _control_state_response(await repo.pause_workers(reason=payload.reason, operator=operator))
+
+    @app.post(
+        "/api/v1/admin/workers/resume",
+        response_model=ControlStateResponse,
+        dependencies=[Depends(admin_dep)],
+    )
+    async def resume_workers(request: Request) -> ControlStateResponse:
+        """Clear the soft global worker stop-crane."""
+
+        operator = getattr(request.state, "bootstrap_owner_email", None)
+        return _control_state_response(await repo.resume_workers(operator=operator))
+
+    @app.get(
+        "/api/v1/tasks",
+        # Tags + summary surface in /docs (VAL-M3-TASKS-API-001) so the
+        # operator can discover the endpoint alongside /api/v1/plans.
+        # Worker bearer auth uses the same gate as the steady-state RPC
+        # surface. The anonymous dashboard can also use its short-lived,
+        # read-only dashboard token so HTMX fragments do not need worker
+        # credentials in the browser.
+        tags=["tasks"],
+        summary="List tasks for a plan with pagination + status filter",
+    )
+    async def list_tasks_endpoint(
+        request: Request,
+        plan_id: str = Query(..., min_length=1, max_length=256),
+        status: str | None = Query(default=None, max_length=32),
+        limit: int = Query(default=TASKS_API_DEFAULT_LIMIT, gt=0, le=TASKS_API_MAX_LIMIT),
+        cursor: str | None = Query(default=None, max_length=2048),
+    ) -> JSONResponse:
+        await _authenticate_tasks_read_request(request)
+
+        status_filter: TaskStatus | None
+        if status is None:
+            status_filter = None
+        else:
+            try:
+                status_filter = TaskStatus(status)
+            except ValueError:
+                valid = sorted(member.value for member in TaskStatus)
+                raise HTTPException(
+                    status_code=status_module.HTTP_400_BAD_REQUEST,
+                    detail=f"invalid status: {status!r}; expected one of {valid}",
+                ) from None
+
+        try:
+            payload = await list_tasks_payload(
+                pool,
+                plan_id=plan_id,
+                status_filter=status_filter,
+                limit=limit,
+                cursor=cursor,
+            )
+        except CursorDecodeError as exc:
+            raise HTTPException(
+                status_code=status_module.HTTP_400_BAD_REQUEST,
+                detail=f"invalid cursor: {exc}",
+            ) from None
+
+        cors_origin = (
+            request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
+        )
+        headers = {
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+        return JSONResponse(payload, headers=headers)
+
+    @app.get(
+        "/llm-ops",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def llm_ops_index(task_id: str | None = None) -> Response:
+        """Minimal browser UI for LLM Ops task traces and artifacts."""
+
+        if task_id:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT event_type, payload, detail, created_at
+                    FROM events
+                    WHERE task_id = $1 AND event_type LIKE 'llm.%'
+                    ORDER BY id
+                    """,
+                    task_id,
+                )
+            if not rows:
+                return _html_page(
+                    f"LLM Ops - {task_id}",
+                    f'<p><a href="/llm-ops">← all tasks</a></p><h1>{html.escape(task_id)}</h1>'
+                    '<p class="bad">No LLM Ops events found for this task.</p>',
+                )
+
+            latest = _decode_json_value(rows[-1]["detail"]) or _decode_json_value(rows[-1]["payload"])
+            prompt_label, prompt_text = _read_preview(_artifact_path(latest.get("prompt_path")))
+            summary_label, summary_text = _read_preview(_artifact_path(latest.get("summary_path")))
+            raw_label, raw_text = _read_preview(_artifact_path(latest.get("raw_log_path")), raw_jsonl=True)
+            final_label, final_text = _read_preview(_artifact_path(latest.get("final_path")))
+            event_items = []
+            for row in rows:
+                payload = _decode_json_value(row["payload"])
+                event_items.append(
+                    "<tr>"
+                    f"<td>{html.escape(str(row['created_at']))}</td>"
+                    f"<td><code>{html.escape(row['event_type'])}</code></td>"
+                    f"<td>{html.escape(str(payload.get('status', '')))}</td>"
+                    f"<td>{html.escape(str(payload.get('provider', '')))}</td>"
+                    f"<td>{html.escape(str(payload.get('model', '')))}</td>"
+                    "</tr>"
+                )
+            body = f"""
+<p><a href="/llm-ops">← all tasks</a> · <a href="/">dashboard</a></p>
+<h1>LLM Ops: {html.escape(task_id)}</h1>
+<table>
+  <thead><tr><th>Time</th><th>Event</th><th>Status</th><th>Provider</th><th>Model</th></tr></thead>
+  <tbody>{"".join(event_items)}</tbody>
+</table>
+<h2>Prompt <span class="muted">{html.escape(prompt_label)}</span></h2>
+<pre>{html.escape(prompt_text)}</pre>
+<h2>Summary <span class="muted">{html.escape(summary_label)}</span></h2>
+<pre>{html.escape(summary_text)}</pre>
+<h2>Raw CLI Stream <span class="muted">{html.escape(raw_label)}</span></h2>
+<pre>{html.escape(raw_text)}</pre>
+<h2>Final Output <span class="muted">{html.escape(final_label)}</span></h2>
+<pre>{html.escape(final_text)}</pre>
+"""
+            return _html_page(f"LLM Ops - {task_id}", body)
+
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (e.task_id)
+                    e.task_id,
+                    t.status AS task_status,
+                    e.event_type,
+                    e.payload,
+                    e.created_at
+                FROM events e
+                LEFT JOIN tasks t ON t.id = e.task_id
+                WHERE e.task_id IS NOT NULL AND e.event_type LIKE 'llm.%'
+                ORDER BY e.task_id, e.id DESC
+                """
+            )
+        rows = sorted(rows, key=lambda row: row["created_at"], reverse=True)
+        body_rows = []
+        for row in rows:
+            payload = _decode_json_value(row["payload"])
+            status_class = "ok" if payload.get("status") == "success" else ""
+            body_rows.append(
+                "<tr>"
+                f'<td><a href="/llm-ops?task_id={html.escape(row["task_id"])}">'
+                f"{html.escape(row['task_id'])}</a></td>"
+                f"<td>{html.escape(str(row['task_status'] or ''))}</td>"
+                f'<td class="{status_class}">{html.escape(str(payload.get("status", "")))}</td>'
+                f"<td>{html.escape(str(payload.get('provider', '')))}</td>"
+                f"<td>{html.escape(str(payload.get('model', '')))}</td>"
+                f"<td>{html.escape(str(payload.get('usage', {}).get('duration_ms', '')))}</td>"
+                f"<td>{html.escape(str(row['created_at']))}</td>"
+                "</tr>"
+            )
+        body = f"""
+<p><a href="/">dashboard</a></p>
+<h1>LLM Ops</h1>
+<p class="muted">Task-level LLM traces from Postgres events plus files from WHILLY_LOG_DIR.</p>
+<table>
+  <thead>
+    <tr><th>Task</th><th>Task Status</th><th>LLM Status</th><th>Provider</th><th>Model</th><th>Duration ms</th><th>Updated</th></tr>
+  </thead>
+  <tbody>{"".join(body_rows)}</tbody>
+</table>
+"""
+        return _html_page("LLM Ops", body)
+
+    @app.get(
+        "/",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def dashboard_index(
+        request: Request,
+        fragment: str | None = None,
+        task_id: str | None = None,
+    ) -> Response:
+        events_token = None
+        if fragment is None:
+            events_token = mint_dashboard_token(
+                dashboard_token_secret,
+                ttl_seconds=dashboard_token_ttl,
+                scope=DEFAULT_DASHBOARD_SCOPES,
+            )
+        return await render_dashboard_view(
+            request=request,
+            pool=pool,
+            fragment=fragment,
+            events_token=events_token,
+            task_id=task_id,
+        )
+
+    @app.get(
+        "/events/stream",
+        include_in_schema=True,
+    )
+    async def events_stream(request: Request) -> Response:
+        from sse_starlette.event import ServerSentEvent
+        from sse_starlette.sse import EventSourceResponse
+
+        await _authenticate_events_stream_request(request)
+
+        last_event_id_header = request.headers.get("last-event-id")
+        last_event_id = _parse_last_event_id(last_event_id_header)
+
+        broker: EventNotifyBroker | None = getattr(request.app.state, "event_notify_broker", None)
+        if broker is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="event broker not initialised",
+            )
+
+        generator = stream_event_source(
+            request=request,
+            pool=pool,
+            broker=broker,
+            last_event_id=last_event_id,
+            replay_limit=SSE_REPLAY_LIMIT,
+        )
+
+        cors_origin = (
+            request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
+        )
+        response_headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+
+        return EventSourceResponse(
+            generator,
+            ping=sse_ping_seconds,
+            ping_message_factory=lambda: ServerSentEvent(event="ping", data=""),
+            headers=response_headers,
+        )
+
     return app
+
+
+async def _lookup_plan_id_for_task(pool: asyncpg.Pool, task_id: str) -> str | None:
+    """Look up the ``plan_id`` for a task by its primary key.
+
+    Used by the metrics counter wiring on the complete / fail success
+    paths — :class:`whilly.core.models.Task` does not carry the
+    ``plan_id`` field, and the metric labels need it. Returns ``None``
+    on lookup failure (row gone, transient asyncpg error) so a missing
+    label never crashes the success path of the RPC.
+    """
+    try:
+        async with pool.acquire() as conn:
+            return await conn.fetchval("SELECT plan_id FROM tasks WHERE id = $1", task_id)
+    except Exception:
+        logger.exception("metrics: plan_id lookup failed for task_id=%r", task_id)
+        return None
 
 
 def _require_token_owner(request: Request, claimed_worker_id: str) -> None:
@@ -1445,6 +2546,14 @@ def _require_token_owner(request: Request, claimed_worker_id: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(f"token owner {authenticated!r} cannot act as worker {claimed_worker_id!r}"),
         )
+
+
+def _put_if_non_empty(payload: dict[str, Any], key: str, value: Any) -> None:
+    if value is None:
+        return
+    text = str(value).strip()
+    if text:
+        payload[key] = text
 
 
 def _conflict_response(exc: VersionConflictError) -> JSONResponse:

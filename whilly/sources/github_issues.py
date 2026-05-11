@@ -25,6 +25,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from whilly.security.secret_lint import SECRET_PATTERNS, scan_text
+from whilly.security.prompt_sanitizer import sanitize_external_text
 from whilly.task_manager import Task
 
 log = logging.getLogger("whilly")
@@ -43,14 +45,6 @@ PRIORITY_LABELS = {
     "priority:medium": "medium",
     "priority:low": "low",
 }
-
-# Heuristic regex to detect leaked secrets in issue body — best effort warning.
-_SECRET_PATTERNS = [
-    re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access key id
-    re.compile(r"ghp_[A-Za-z0-9]{36,}"),  # GitHub PAT
-    re.compile(r"sk-[A-Za-z0-9]{32,}"),  # OpenAI / generic SK
-    re.compile(r"xox[abposr]-[A-Za-z0-9-]{10,}"),  # Slack tokens
-]
 
 
 @dataclass
@@ -206,12 +200,26 @@ def _extract_inline_field(body: str, field_name: str) -> list[str]:
 
 
 def _detect_secrets(text: str) -> list[str]:
-    """Return names of secret pattern matches found in text. Best effort."""
+    """Return shared secret pattern ids found in text. Best effort."""
+    if scan_text(text, field_path="github_issue.body") is None:
+        return []
+
     hits: list[str] = []
-    for rx in _SECRET_PATTERNS:
-        if rx.search(text):
-            hits.append(rx.pattern)
+    matched_spans: list[tuple[int, int]] = []
+    for secret_pattern in SECRET_PATTERNS:
+        for match in secret_pattern.regex.finditer(text):
+            span = match.span()
+            if _overlaps_any(span, matched_spans):
+                continue
+            hits.append(secret_pattern.pattern_id)
+            matched_spans.append(span)
+            break
     return hits
+
+
+def _overlaps_any(span: tuple[int, int], existing_spans: list[tuple[int, int]]) -> bool:
+    start, end = span
+    return any(start < existing_end and existing_start < end for existing_start, existing_end in existing_spans)
 
 
 def _priority_from_labels(labels: list[dict]) -> str:
@@ -243,17 +251,23 @@ def issue_to_task(issue: dict) -> tuple[Task, list[str]]:
             snippet = snippet[:480].rsplit("\n", 1)[0] + "\n…"
         description_short = f"{title}\n\n{snippet}"
 
+    fenced_description = sanitize_external_text(description_short, scope="gh_issue_description")
+    fenced_acceptance = [
+        sanitize_external_text(item, scope="gh_issue_acceptance") for item in _extract_section(body, "Acceptance")
+    ]
+    fenced_test_steps = [sanitize_external_text(item, scope="gh_issue_test") for item in _extract_section(body, "Test")]
+
     task = Task(
         id=f"GH-{number}",
         phase="GH-Issues",
         category="github-issue",
         priority=_priority_from_labels(labels),
-        description=description_short,
+        description=fenced_description,
         status="pending",
         dependencies=_extract_inline_field(body, "Depends"),
         key_files=_extract_inline_field(body, "Files"),
-        acceptance_criteria=_extract_section(body, "Acceptance"),
-        test_steps=_extract_section(body, "Test"),
+        acceptance_criteria=fenced_acceptance,
+        test_steps=fenced_test_steps,
         prd_requirement=url,
     )
     return task, _detect_secrets(body)
@@ -268,6 +282,29 @@ def _build_source_block(source: GitHubIssuesSource) -> dict:
         "repo": source.repo_full,
         "label": source.label,
         "fetched_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+    }
+
+
+def _repo_target_id(source: GitHubIssuesSource) -> str:
+    return f"github:{source.repo_full}"
+
+
+def _build_origin_block(source: GitHubIssuesSource) -> dict:
+    return {
+        "system": "github_issues",
+        "ref": f"{source.repo_full}:{source.label}",
+        "url": f"https://github.com/{source.repo_full}/issues",
+        "title": f"GitHub issues {source.repo_full} label={source.label}",
+        "decomposition_mode": "source_adapter",
+    }
+
+
+def _build_repo_target_block(source: GitHubIssuesSource) -> dict:
+    return {
+        "id": _repo_target_id(source),
+        "provider": "github",
+        "repo_full_name": source.repo_full,
+        "clone_url": f"https://github.com/{source.repo_full}.git",
     }
 
 
@@ -322,8 +359,10 @@ def merge_into_plan(
     existing_by_id = {t.get("id"): t for t in existing_tasks}
 
     fetched_ids: set[str] = set()
+    repo_target_id = _repo_target_id(source)
     for raw in issues:
         task, secret_hits = issue_to_task(raw)
+        task.repo_target_id = repo_target_id
         fetched_ids.add(task.id)
         if secret_hits:
             stats.secret_warnings.append(f"{task.id}: matched patterns {secret_hits}")
@@ -341,6 +380,7 @@ def merge_into_plan(
                 "dependencies",
             ):
                 cur[field_name] = getattr(task, field_name)
+            cur["repo_target_id"] = repo_target_id
             stats.updated += 1
         else:
             existing_tasks.append(task.to_dict())
@@ -360,6 +400,10 @@ def merge_into_plan(
     if not existing.get("project"):
         existing["project"] = source.project_name
     existing["source"] = _build_source_block(source)
+    existing["origin"] = _build_origin_block(source)
+    repo_targets = [target for target in existing.get("repo_targets", []) if target.get("id") != repo_target_id]
+    repo_targets.insert(0, _build_repo_target_block(source))
+    existing["repo_targets"] = repo_targets
     existing["tasks"] = existing_tasks
 
     _atomic_write_json(plan_path, existing)

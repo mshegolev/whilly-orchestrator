@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whilly-orchestrator"
-version = "4.4.0"
+version = "4.6.4"
 description = "Whilly v4.0 — distributed orchestrator with Postgres-backed task queue, FastAPI control plane, and remote workers"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -55,6 +55,19 @@ server = [
     "uvicorn[standard]>=0.27",
     "alembic>=1.13",
     "sqlalchemy[asyncio]>=2.0",
+    "sse-starlette>=2.0",
+    "jinja2>=3.1",
+    "prometheus-fastapi-instrumentator>=7.1.0",
+    "prometheus-client>=0.20",
+]
+# Optional LLM Ops export stack. The core Whilly trace files + Postgres
+# events work without these packages; install this extra when exporting
+# spans to Langfuse, Phoenix, or a generic OTLP/HTTP collector.
+llmops = [
+    "opentelemetry-api>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+    "traceloop-sdk>=0.41",
 ]
 # Convenience: install both deployment shapes in one go (e.g. for an
 # all-in-one demo or for CI that drives both the server and a remote
@@ -64,6 +77,9 @@ dev = [
     "whilly-orchestrator[worker,server]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.6",
+    "pytest-rerunfailures>=14.0",
+    "freezegun>=1.4",
     "testcontainers>=4.0",
     "ruff==0.11.5",
     # mypy 1.11.0 (Aug 2024) is the first release with PEP 695 ``type``-statement
@@ -97,7 +113,14 @@ include = ["whilly", "whilly.*"]
 exclude = ["tests*", "whilly_worker*"]
 
 [tool.setuptools.package-data]
-whilly = ["py.typed"]
+whilly = [
+    "py.typed",
+    "api/templates/*.html",
+    "api/templates/*.j2",
+    "api/static/*.css",
+    "api/static/*.js",
+    "api/static/fonts/*.ttf",
+]
 
 [tool.ruff]
 line-length = 120

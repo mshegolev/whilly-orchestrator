@@ -61,16 +61,22 @@ asyncpg + JSONB
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
 
 import asyncpg
 
-from whilly.core.models import PlanId, Priority, Task, TaskId, TaskStatus, WorkerId
+from whilly.core.models import PlanId, Priority, RepoTarget, Task, TaskId, TaskStatus, WorkerId
 from whilly.core.state_machine import Transition
+from whilly.pipeline.events import PipelineTaskEvent
+from whilly.pipeline.sinks import PlanPRContext
 
 if TYPE_CHECKING:  # pragma: no cover — type-only import to avoid import cycles.
     from whilly.api.event_flusher import EventRecord
@@ -80,12 +86,24 @@ __all__ = [
     "BUDGET_EXCEEDED_EVENT_TYPE",
     "BUDGET_EXCEEDED_REASON",
     "BUDGET_EXCEEDED_THRESHOLD_PCT",
+    "BootstrapTokenRecord",
+    "ControlState",
     "EventFlusherProtocol",
     "PLAN_APPLIED_EVENT_TYPE",
+    "PR_EVENT_TYPES",
+    "PR_ITERATION_COMPLETED_EVENT_TYPE",
+    "PR_ITERATION_REQUESTED_EVENT_TYPE",
+    "PR_MERGED_EVENT_TYPE",
+    "PR_OPENED_EVENT_TYPE",
+    "PR_OPEN_FAILED_EVENT_TYPE",
+    "PR_REVIEW_APPROVED_EVENT_TYPE",
+    "PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE",
     "TASK_CREATED_EVENT_TYPE",
     "TASK_SKIPPED_EVENT_TYPE",
     "TaskRepository",
     "VersionConflictError",
+    "WORKER_REGISTERED_EVENT_TYPE",
+    "hash_bootstrap_token",
 ]
 
 
@@ -169,6 +187,56 @@ TASK_CREATED_EVENT_TYPE: str = "task.created"
 # gate iteration completes.
 PLAN_APPLIED_EVENT_TYPE: str = "plan.applied"
 
+# Canonical event_type literals for the M2 PR-review feedback loop
+# (mission ``m2-pr-review-feedback``, feature
+# ``m2-alembic-pull-requests-and-events``). Each literal is the
+# audit-log identifier the corresponding M2 producer / poller /
+# iterate path emits — names are dotted lower-case for parity with
+# the existing plan-scoped event types (``plan.budget_exceeded``,
+# ``task.skipped``, ...). The reverse-DNS-style ``pr.review.*``
+# suffixes mirror GitHub's own ``reviewDecision`` taxonomy verbatim
+# (``APPROVED`` → ``pr.review.approved``,
+# ``CHANGES_REQUESTED`` → ``pr.review.changes_requested``) so an
+# operator-side ``jq '.event_type | startswith("pr.")'`` filter
+# captures the entire surface.
+PR_OPENED_EVENT_TYPE: str = "pr.opened"
+PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE: str = "pr.review.changes_requested"
+PR_REVIEW_APPROVED_EVENT_TYPE: str = "pr.review.approved"
+PR_ITERATION_REQUESTED_EVENT_TYPE: str = "pr.iteration.requested"
+PR_ITERATION_COMPLETED_EVENT_TYPE: str = "pr.iteration.completed"
+PR_MERGED_EVENT_TYPE: str = "pr.merged"
+PR_OPEN_FAILED_EVENT_TYPE: str = "pr.open_failed"
+
+# Closed-set tuple over the M2 PR event taxonomy (mission
+# ``m2-pr-review-feedback``). :meth:`TaskRepository.emit_pr_event`
+# rejects unknown event_types at the application layer to keep the
+# round-trip contract auditable from a single literal site — adding a
+# new PR event in the future requires extending this tuple
+# explicitly. The order is the documented event-sequence ordering
+# from VAL-PR-021 (``pr.opened`` → ``pr.review.changes_requested``
+# → ``pr.iteration.requested`` → ``pr.iteration.completed`` →
+# ``pr.review.approved`` → ``pr.merged``).
+PR_EVENT_TYPES: tuple[str, ...] = (
+    PR_OPENED_EVENT_TYPE,
+    PR_REVIEW_CHANGES_REQUESTED_EVENT_TYPE,
+    PR_REVIEW_APPROVED_EVENT_TYPE,
+    PR_ITERATION_REQUESTED_EVENT_TYPE,
+    PR_ITERATION_COMPLETED_EVENT_TYPE,
+    PR_MERGED_EVENT_TYPE,
+    PR_OPEN_FAILED_EVENT_TYPE,
+)
+
+
+# Canonical event_type literal for "worker registered" audit events
+# (M2 fix-feature VAL-M2-ADMIN-AUTH-903). Emitted exactly once per
+# successful ``POST /workers/register`` carrying the originating
+# bootstrap-token hash so an operator can answer "which bootstrap
+# minted this worker?" via SQL on ``events.payload->>'bootstrap_token_hash'``
+# without bisecting logs. Plaintext NEVER reaches the payload —
+# only the SHA-256 hex digest produced by
+# :func:`whilly.adapters.transport.auth.hash_bearer_token`.
+WORKER_REGISTERED_EVENT_TYPE: str = "worker.registered"
+
 
 # Quantum used to coerce a Python float-ish ``cost_usd`` into a stable
 # Decimal with the same precision as the ``plans.spent_usd`` /
@@ -225,6 +293,13 @@ _PRIORITY_RANK_SQL: str = (
     "CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"
 )
 
+_HUMAN_REVIEW_REQUIRED_RELEASE_REASON_SQL = "human_review_required"
+_HUMAN_REVIEW_REQUIRED_EVENT_SQL = "human_review.required"
+_HUMAN_REVIEW_APPROVED_EVENT_SQL = "human_review.approved"
+_HUMAN_REVIEW_REJECTED_EVENT_SQL = "human_review.rejected"
+_HUMAN_REVIEW_CHANGES_REQUESTED_EVENT_SQL = "human_review.changes_requested"
+_CONTROL_STATE_ID = "global"
+
 
 # Atomic claim. The CTE locks one PENDING row with SKIP LOCKED so concurrent
 # claimers pick different rows; the outer UPDATE flips the row to CLAIMED in
@@ -251,6 +326,51 @@ WITH picked AS (
       -- ``IS NULL OR ...`` short-circuits in Postgres so the strict
       -- comparison never runs against NULL.
       AND (p.budget_usd IS NULL OR p.spent_usd < p.budget_usd)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM events review_release
+        WHERE review_release.task_id = t.id
+          AND review_release.event_type = '{Transition.RELEASE.value}'
+          AND review_release.payload->>'reason' = '{_HUMAN_REVIEW_REQUIRED_RELEASE_REASON_SQL}'
+          AND COALESCE(
+            (
+                SELECT CASE
+                  WHEN review_decision.event_type = '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+                    AND review_decision.payload->>'decision' = 'approved'
+                    AND btrim(COALESCE(review_decision.payload->>'reviewer', '')) != ''
+                  THEN '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+                  WHEN review_decision.event_type = '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+                  THEN 'human_review.invalid_approval'
+                  ELSE review_decision.event_type
+                END
+                FROM events review_decision
+                WHERE review_decision.task_id = t.id
+                  AND review_decision.event_type IN (
+                    '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}',
+                    '{_HUMAN_REVIEW_REJECTED_EVENT_SQL}',
+                    '{_HUMAN_REVIEW_CHANGES_REQUESTED_EVENT_SQL}'
+                  )
+                  AND (review_decision.created_at, review_decision.id)
+                    > (review_release.created_at, review_release.id)
+                  AND COALESCE(review_decision.payload->>'stage_id', '') = COALESCE(
+                    (
+                      SELECT review_required.payload->>'stage_id'
+                      FROM events review_required
+                      WHERE review_required.task_id = t.id
+                        AND review_required.event_type = '{_HUMAN_REVIEW_REQUIRED_EVENT_SQL}'
+                        AND (review_required.created_at, review_required.id)
+                          < (review_release.created_at, review_release.id)
+                      ORDER BY review_required.created_at DESC, review_required.id DESC
+                      LIMIT 1
+                    ),
+                    ''
+                  )
+                ORDER BY review_decision.created_at DESC, review_decision.id DESC
+                LIMIT 1
+            ),
+            ''
+          ) <> '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
+      )
     ORDER BY {_PRIORITY_RANK_SQL}, t.id
     -- ``FOR UPDATE OF t`` locks the *tasks* row only — not the
     -- single ``plans`` row that every concurrent claimer joins
@@ -286,6 +406,11 @@ RETURNING
     tasks.test_steps,
     tasks.prd_requirement,
     tasks.version,
+    (
+        SELECT trt.repo_target_id
+        FROM task_repo_targets trt
+        WHERE trt.task_id = tasks.id
+    ) AS repo_target_id,
     -- ``claimed_at`` is added to RETURNING (M1 fix
     -- VAL-CROSS-BACKCOMPAT-909) so the CLAIM event payload can
     -- carry the post-update timestamp without an extra SELECT
@@ -352,7 +477,12 @@ RETURNING
     tasks.acceptance_criteria,
     tasks.test_steps,
     tasks.prd_requirement,
-    tasks.version
+    tasks.version,
+    (
+        SELECT trt.repo_target_id
+        FROM task_repo_targets trt
+        WHERE trt.task_id = tasks.id
+    ) AS repo_target_id
 """
 
 
@@ -471,6 +601,102 @@ VALUES (NULL, $1, $2, $3::jsonb)
 _INSERT_TASK_EVENT_WITH_PLAN_SQL: str = """
 INSERT INTO events (task_id, plan_id, event_type, payload)
 VALUES ($1, $2, $3, $4::jsonb)
+"""
+
+
+# Generic task+plan event insert with optional detail. Used for diagnostic
+# events such as ``llm.run_started`` / ``llm.run_finished`` where the task
+# state does not change, but operators still need the row anchored to both
+# the task and its parent plan for audit queries.
+_INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL: str = """
+INSERT INTO events (task_id, plan_id, event_type, payload, detail)
+VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+"""
+
+
+_INSERT_REPAIR_TASK_SQL: str = """
+INSERT INTO tasks (
+    id,
+    plan_id,
+    status,
+    dependencies,
+    key_files,
+    priority,
+    description,
+    acceptance_criteria,
+    test_steps,
+    prd_requirement,
+    version
+)
+VALUES (
+    $1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8::jsonb, $9::jsonb, $10, $11
+)
+"""
+
+
+_UPSERT_REPAIR_TASK_REPO_TARGET_SQL: str = """
+INSERT INTO task_repo_targets (task_id, repo_target_id)
+VALUES ($1, $2)
+ON CONFLICT (task_id) DO UPDATE
+SET repo_target_id = EXCLUDED.repo_target_id
+"""
+
+
+_SELECT_TASK_WITH_REPO_TARGET_SQL: str = """
+SELECT
+    tasks.id,
+    tasks.status,
+    tasks.dependencies,
+    tasks.key_files,
+    tasks.priority,
+    tasks.description,
+    tasks.acceptance_criteria,
+    tasks.test_steps,
+    tasks.prd_requirement,
+    tasks.version,
+    (
+        SELECT trt.repo_target_id
+        FROM task_repo_targets trt
+        WHERE trt.task_id = tasks.id
+    ) AS repo_target_id
+FROM tasks
+WHERE tasks.id = $1
+"""
+
+
+_SELECT_TASK_PLAN_ID_SQL: str = """
+SELECT plan_id
+FROM tasks
+WHERE id = $1
+"""
+
+
+_SELECT_TASK_CLAIM_OWNER_SQL: str = """
+SELECT claimed_by
+FROM tasks
+WHERE id = $1
+"""
+
+
+_LIST_TASK_EVENTS_SQL: str = """
+SELECT id, task_id, plan_id, event_type, payload, detail, created_at
+FROM events
+WHERE task_id = $1
+  AND ($2::text IS NULL OR event_type LIKE $2 || '%')
+ORDER BY created_at ASC, id ASC
+"""
+
+
+_SELECT_REPO_TARGET_SQL: str = """
+SELECT
+    id,
+    provider,
+    repo_full_name,
+    clone_url,
+    default_branch,
+    credential_policy
+FROM repo_targets
+WHERE id = $1
 """
 
 
@@ -642,8 +868,8 @@ WHERE worker_id = $1
 # it ever does happen, the unique-violation surface lets the caller retry
 # with a fresh id rather than silently overwriting another worker's row.
 _INSERT_WORKER_SQL: str = """
-INSERT INTO workers (worker_id, hostname, token_hash)
-VALUES ($1, $2, $3)
+INSERT INTO workers (worker_id, hostname, token_hash, owner_email)
+VALUES ($1, $2, $3, $4)
 """
 
 
@@ -657,6 +883,21 @@ VALUES ($1, $2, $3)
 # a NULL never equals anything in SQL.
 _LOOKUP_WORKER_BY_TOKEN_HASH_SQL: str = """
 SELECT worker_id
+FROM workers
+WHERE token_hash = $1
+LIMIT 1
+"""
+
+
+# M2 mission: identity-binding lookup that ALSO returns ``owner_email``
+# so the bearer auth dep can stash both the ``worker_id`` (for
+# cross-worker bearer enforcement, VAL-AUTH-024) and the operator's
+# email (for events.payload attribution, VAL-M2-ADMIN-AUTH-011) in a
+# single round-trip. Same single-row guarantees as
+# :data:`_LOOKUP_WORKER_BY_TOKEN_HASH_SQL` (partial UNIQUE index on
+# ``token_hash`` + ``LIMIT 1`` defence-in-depth).
+_LOOKUP_WORKER_IDENTITY_BY_TOKEN_HASH_SQL: str = """
+SELECT worker_id, owner_email
 FROM workers
 WHERE token_hash = $1
 LIMIT 1
@@ -903,6 +1144,230 @@ _RESET_COUNT_TASKS_SQL: str = "SELECT COUNT(*)::int AS c FROM tasks WHERE plan_i
 _RESET_DELETE_PLAN_SQL: str = "DELETE FROM plans WHERE id = $1"
 
 
+# Per-user bootstrap-token table (M2 mission, migration 009). Replaces the
+# single shared ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` env-var sentinel with a
+# per-operator row keyed by SHA-256 hex digest of the plaintext bearer.
+# Plaintext NEVER reaches Postgres (PRD NFR-3 — mirrors the
+# ``workers.token_hash`` discipline). The PK on ``token_hash`` enforces
+# uniqueness at the schema level (VAL-M2-BOOTSTRAP-REPO-011).
+_INSERT_BOOTSTRAP_TOKEN_SQL: str = """
+INSERT INTO bootstrap_tokens (token_hash, owner_email, expires_at, is_admin)
+VALUES ($1, $2, $3, $4)
+"""
+
+
+# Idempotent revocation: ``COALESCE(revoked_at, NOW())`` preserves the
+# original ``revoked_at`` if the row was already revoked (re-revoking
+# a token does not clobber the audit timestamp — VAL-M2-BOOTSTRAP-
+# REPO-004). The UPDATE matches even already-revoked rows so the
+# caller can rely on the no-op semantics without a separate SELECT
+# pre-check.
+_REVOKE_BOOTSTRAP_TOKEN_SQL: str = """
+UPDATE bootstrap_tokens
+SET revoked_at = COALESCE(revoked_at, NOW())
+WHERE token_hash = $1
+"""
+
+
+# Active-token lookup: filters out revoked + expired rows so the caller
+# never has to re-evaluate the active-window predicate. ``expires_at IS
+# NULL OR expires_at > NOW()`` mirrors the schema documentation (NULL =
+# never expires). The bound parameter is the SHA-256 hex digest of the
+# presented plaintext (computed by the caller via
+# :func:`hash_bootstrap_token`); a miss returns ``None`` and the auth
+# layer surfaces 401 (VAL-M2-BOOTSTRAP-REPO-006/007/008).
+_LOOKUP_BOOTSTRAP_TOKEN_OWNER_SQL: str = """
+SELECT owner_email, is_admin
+FROM bootstrap_tokens
+WHERE token_hash = $1
+  AND revoked_at IS NULL
+  AND (expires_at IS NULL OR expires_at > NOW())
+LIMIT 1
+"""
+
+
+# Per-operator listing: default returns active+non-expired rows only
+# (VAL-M2-BOOTSTRAP-REPO-009); when ``$1`` is true, the
+# ``include_revoked`` branch returns every row (revoked + expired
+# included) for forensic audits (VAL-M2-BOOTSTRAP-REPO-906). Plaintext
+# is never returned — the row carries only metadata
+# (``token_hash`` / ``owner_email`` / timestamps / ``is_admin``).
+_LIST_ACTIVE_BOOTSTRAP_TOKENS_SQL: str = """
+SELECT token_hash, owner_email, created_at, expires_at, revoked_at, is_admin
+FROM bootstrap_tokens
+WHERE
+    $1::bool = true
+    OR (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW()))
+ORDER BY created_at DESC, token_hash
+"""
+
+
+_OWNER_EMAIL_RE: re.Pattern[str] = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+# Admin worker revocation (M2 mission, VAL-M2-ADMIN-CLI-011/012). One-shot
+# CTE that:
+#   1. Flips ``workers.token_hash`` to NULL (so subsequent bearer auth
+#      lookups against that hash miss → 401), AND marks the row offline
+#      so the dashboard / online-count query reflects reality. Filtered
+#      by ``worker_id`` so the UPDATE matches at most one row.
+#   2. Releases every CLAIMED / IN_PROGRESS task previously owned by
+#      that worker back to PENDING — clearing ``claimed_by`` /
+#      ``claimed_at``, incrementing ``version``.
+#   3. Writes one RELEASE audit event per released task carrying
+#      ``payload = {"reason": "admin_revoked", "version": <new>,
+#      "worker_id": <wid>, "task_id": <id>, "plan_id": <pid>}`` —
+#      same enriched shape pinned by VAL-CROSS-BACKCOMPAT-912 for
+#      every other RELEASE producer.
+#
+# Returned rows are the per-task release records so the JSONL audit
+# sink can mirror them after the transaction commits (matches the
+# pattern used by ``release_stale_tasks`` /
+# ``release_offline_workers``). The presence/absence of any returned
+# row also tells the caller whether the worker existed AND was
+# revoked: a missing ``worker_id`` matches zero rows in the
+# ``revoked_worker`` CTE, which short-circuits the rest of the
+# pipeline so no spurious RELEASE rows can land.
+_REVOKE_WORKER_BEARER_SQL: str = """
+WITH revoked_worker AS (
+    UPDATE workers
+    SET token_hash = NULL,
+        status = 'offline'
+    WHERE worker_id = $1
+    RETURNING worker_id
+),
+released AS (
+    UPDATE tasks
+    SET status = 'PENDING',
+        claimed_by = NULL,
+        claimed_at = NULL,
+        version = tasks.version + 1,
+        updated_at = NOW()
+    FROM revoked_worker
+    WHERE tasks.claimed_by = revoked_worker.worker_id
+      AND tasks.status IN ('CLAIMED', 'IN_PROGRESS')
+    RETURNING tasks.id, tasks.version, tasks.plan_id, revoked_worker.worker_id
+),
+inserted AS (
+    INSERT INTO events (task_id, plan_id, event_type, payload)
+    SELECT
+        id,
+        plan_id,
+        $2,
+        jsonb_build_object(
+            'reason', $3::text,
+            'version', version,
+            'worker_id', worker_id,
+            'task_id', id,
+            'plan_id', plan_id
+        )
+    FROM released
+    RETURNING task_id
+)
+SELECT
+    released.id AS task_id,
+    released.plan_id,
+    released.version,
+    released.worker_id
+FROM released
+"""
+
+
+# Probe used to differentiate "worker did not exist" from "worker existed
+# but had no in-flight tasks" after :data:`_REVOKE_WORKER_BEARER_SQL`
+# runs. Returns one row when the worker_id is in the ``workers`` table,
+# zero otherwise.
+_PROBE_WORKER_EXISTS_SQL: str = """
+SELECT 1 FROM workers WHERE worker_id = $1 LIMIT 1
+"""
+
+_ENSURE_CONTROL_STATE_SQL: str = """
+INSERT INTO control_state (id)
+VALUES ($1)
+ON CONFLICT (id) DO NOTHING
+"""
+
+_SELECT_CONTROL_STATE_SQL: str = """
+SELECT id, paused, pause_reason, paused_by, paused_at, updated_at
+FROM control_state
+WHERE id = $1
+"""
+
+_IS_WORKERS_PAUSED_SQL: str = """
+SELECT paused
+FROM control_state
+WHERE id = $1
+"""
+
+_PAUSE_WORKERS_SQL: str = """
+INSERT INTO control_state (id, paused, pause_reason, paused_by, paused_at, updated_at)
+VALUES ($1, TRUE, NULLIF($2, ''), NULLIF($3, ''), NOW(), NOW())
+ON CONFLICT (id) DO UPDATE
+SET paused = TRUE,
+    pause_reason = EXCLUDED.pause_reason,
+    paused_by = EXCLUDED.paused_by,
+    paused_at = EXCLUDED.paused_at,
+    updated_at = NOW()
+RETURNING id, paused, pause_reason, paused_by, paused_at, updated_at
+"""
+
+_RESUME_WORKERS_SQL: str = """
+INSERT INTO control_state (id, paused, pause_reason, paused_by, paused_at, updated_at)
+VALUES ($1, FALSE, NULL, NULL, NULL, NOW())
+ON CONFLICT (id) DO UPDATE
+SET paused = FALSE,
+    pause_reason = NULL,
+    paused_by = NULL,
+    paused_at = NULL,
+    updated_at = NOW()
+RETURNING id, paused, pause_reason, paused_by, paused_at, updated_at
+"""
+
+
+def hash_bootstrap_token(plaintext: str) -> str:
+    """Return the canonical SHA-256 hex digest of a bootstrap-token plaintext.
+
+    Centralised here so the repository's mint / lookup paths share one
+    encoding with any future caller (admin CLI, FastAPI auth dep). The
+    ``utf-8`` byte encoding matches :func:`hash_bearer_token` in
+    :mod:`whilly.adapters.transport.auth` — the two namespaces are
+    deliberately distinct (workers vs. operators) but use the same
+    primitive so a future migration to a salted scheme touches one
+    helper per namespace, not the call sites.
+    """
+    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class BootstrapTokenRecord:
+    """Immutable view of one ``bootstrap_tokens`` row.
+
+    Returned by :meth:`TaskRepository.list_bootstrap_tokens`. Carries
+    only metadata — the plaintext bearer is never reachable from the
+    DB (PRD NFR-3) and is therefore absent from this record by
+    design (VAL-M2-BOOTSTRAP-REPO-010).
+    """
+
+    token_hash: str
+    owner_email: str
+    created_at: datetime
+    expires_at: datetime | None
+    revoked_at: datetime | None
+    is_admin: bool
+
+
+@dataclass(frozen=True)
+class ControlState:
+    """Current global operator control state."""
+
+    id: str
+    paused: bool
+    pause_reason: str | None
+    paused_by: str | None
+    paused_at: datetime | None
+    updated_at: datetime
+
+
 class VersionConflictError(Exception):
     """Optimistic-locking mismatch on a :class:`TaskRepository` mutation.
 
@@ -986,7 +1451,30 @@ def _row_to_task(row: asyncpg.Record) -> Task:
         test_steps=tuple(test_steps),
         prd_requirement=row["prd_requirement"],
         version=row["version"],
+        repo_target_id=_optional_record_string(row, "repo_target_id"),
     )
+
+
+def _row_to_control_state(row: asyncpg.Record) -> ControlState:
+    """Map a ``control_state`` row to the immutable repository value."""
+
+    return ControlState(
+        id=row["id"],
+        paused=bool(row["paused"]),
+        pause_reason=row["pause_reason"],
+        paused_by=row["paused_by"],
+        paused_at=row["paused_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _optional_record_string(row: asyncpg.Record, key: str) -> str:
+    """Return optional string column from an asyncpg record."""
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 class TaskRepository:
@@ -1112,7 +1600,56 @@ class TaskRepository:
         """
         self._event_flusher = event_flusher
 
-    async def claim_task(self, worker_id: WorkerId, plan_id: PlanId) -> Task | None:
+    async def get_control_state(self) -> ControlState:
+        """Return the singleton global worker control state.
+
+        The row is created on first read so fresh databases start in the
+        natural unpaused state without a separate seed migration.
+        """
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(_ENSURE_CONTROL_STATE_SQL, _CONTROL_STATE_ID)
+                row = await conn.fetchrow(_SELECT_CONTROL_STATE_SQL, _CONTROL_STATE_ID)
+        if row is None:  # pragma: no cover - impossible after insert in one transaction
+            raise RuntimeError("control_state singleton was not created")
+        return _row_to_control_state(row)
+
+    async def pause_workers(self, *, reason: str | None = None, operator: str | None = None) -> ControlState:
+        """Set the global worker stop-crane state to paused."""
+
+        reason_text = (reason or "").strip()
+        operator_text = (operator or "").strip()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_PAUSE_WORKERS_SQL, _CONTROL_STATE_ID, reason_text, operator_text)
+        logger.info("pause_workers: operator=%s reason=%s", operator_text or None, reason_text or None)
+        return _row_to_control_state(row)
+
+    async def resume_workers(self, *, operator: str | None = None) -> ControlState:
+        """Clear the global worker stop-crane state."""
+
+        operator_text = (operator or "").strip()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_RESUME_WORKERS_SQL, _CONTROL_STATE_ID)
+        logger.info("resume_workers: operator=%s", operator_text or None)
+        return _row_to_control_state(row)
+
+    async def is_workers_paused(self) -> bool:
+        """Return whether the global worker stop-crane is currently active."""
+
+        async with self._pool.acquire() as conn:
+            value = await conn.fetchval(_IS_WORKERS_PAUSED_SQL, _CONTROL_STATE_ID)
+        if value is None:
+            return (await self.get_control_state()).paused
+        return bool(value)
+
+    async def claim_task(
+        self,
+        worker_id: WorkerId,
+        plan_id: PlanId,
+        *,
+        owner_email: str | None = None,
+    ) -> Task | None:
         """Atomically claim one ``PENDING`` task from ``plan_id`` for ``worker_id``.
 
         Returns the post-update :class:`Task` (status ``CLAIMED``,
@@ -1139,6 +1676,13 @@ class TaskRepository:
         INSERT-side FK fires and asyncpg surfaces
         :class:`asyncpg.exceptions.ForeignKeyViolationError`.
         """
+        if await self.is_workers_paused():
+            logger.info(
+                "claim_task: global pause active, skipping claim for plan=%s worker=%s",
+                plan_id,
+                worker_id,
+            )
+            return None
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(_CLAIM_SQL, plan_id, worker_id)
@@ -1167,6 +1711,17 @@ class TaskRepository:
                     "claimed_at": claimed_at.isoformat() if claimed_at is not None else None,
                     "version": row["version"],
                 }
+                # M2 mission (VAL-M2-ADMIN-AUTH-011): when the
+                # request was authenticated by a registered worker
+                # whose row carries ``owner_email``, attribute the
+                # CLAIM event to the operator. The handler resolves
+                # the value from ``request.state.authenticated_owner_email``
+                # (see :func:`make_db_bearer_auth`); legacy /
+                # unattributed callers pass ``None`` and the key is
+                # omitted to preserve the v4.4.0 baseline payload
+                # shape on registrations that predate migration 008.
+                if owner_email is not None:
+                    payload_dict["owner_email"] = owner_email
                 payload = json.dumps(payload_dict)
                 await conn.execute(
                     _INSERT_EVENT_SQL,
@@ -1250,6 +1805,124 @@ class TaskRepository:
             payload=payload_dict,
         )
         return started_task
+
+    async def record_task_event(
+        self,
+        task_id: TaskId,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Append a diagnostic event for ``task_id`` without changing state.
+
+        This is intentionally separate from the state-transition methods:
+        LLM Ops events describe what the worker did during a run, while
+        ``claim_task`` / ``complete_task`` / ``fail_task`` remain the only
+        methods that mutate task status. ``detail`` is for larger structured
+        metadata such as artifact paths; raw transcripts stay on disk.
+        """
+
+        payload_dict = payload or {}
+        payload_json = json.dumps(payload_dict)
+        detail_json = json.dumps(detail) if detail is not None else None
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(_SELECT_TASK_PLAN_ID_SQL, task_id)
+                if row is None:
+                    raise ValueError(f"record_task_event: unknown task_id={task_id!r}")
+                plan_id = row["plan_id"]
+                await conn.execute(
+                    _INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL,
+                    task_id,
+                    plan_id,
+                    event_type,
+                    payload_json,
+                    detail_json,
+                )
+        self._emit_jsonl(event_type, task_id=task_id, plan_id=plan_id, payload=payload_dict)
+
+    async def list_task_events(
+        self,
+        task_id: TaskId,
+        *,
+        event_prefix: str | None = None,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return persisted events for ``task_id`` in audit-log order."""
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_TASK_PLAN_ID_SQL, task_id)
+            if row is None:
+                raise ValueError(f"list_task_events: unknown task_id={task_id!r}")
+            rows = await conn.fetch(_LIST_TASK_EVENTS_SQL, task_id, event_prefix)
+
+        return tuple(
+            {
+                "id": row["id"],
+                "task_id": row["task_id"],
+                "plan_id": row["plan_id"],
+                "event_type": row["event_type"],
+                "payload": _decode_jsonb(row["payload"]) or {},
+                "detail": _decode_jsonb(row["detail"]) if row["detail"] is not None else None,
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        )
+
+    async def insert_repair_task(self, orig_task: Task, repair_task: Task, event: PipelineTaskEvent) -> Task:
+        """Insert a deterministic repair task and its requested event atomically."""
+
+        event_payload = dict(event.payload)
+        event_detail_json = json.dumps(event.detail) if event.detail is not None else None
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                plan_row = await conn.fetchrow(_SELECT_TASK_PLAN_ID_SQL, orig_task.id)
+                if plan_row is None:
+                    raise ValueError(f"insert_repair_task: unknown orig_task_id={orig_task.id!r}")
+                plan_id = plan_row["plan_id"]
+                await conn.execute(
+                    _INSERT_REPAIR_TASK_SQL,
+                    repair_task.id,
+                    plan_id,
+                    repair_task.status.value,
+                    json.dumps(list(repair_task.dependencies)),
+                    json.dumps(list(repair_task.key_files)),
+                    repair_task.priority.value,
+                    repair_task.description,
+                    json.dumps(list(repair_task.acceptance_criteria)),
+                    json.dumps(list(repair_task.test_steps)),
+                    repair_task.prd_requirement,
+                    repair_task.version,
+                )
+                if repair_task.repo_target_id:
+                    await conn.execute(
+                        _UPSERT_REPAIR_TASK_REPO_TARGET_SQL,
+                        repair_task.id,
+                        repair_task.repo_target_id,
+                    )
+                await conn.execute(
+                    _INSERT_TASK_EVENT_WITH_PLAN_AND_DETAIL_SQL,
+                    event.task_id,
+                    plan_id,
+                    event.event_type,
+                    json.dumps(event_payload),
+                    event_detail_json,
+                )
+                row = await conn.fetchrow(_SELECT_TASK_WITH_REPO_TARGET_SQL, repair_task.id)
+                if row is None:  # pragma: no cover - insert above guarantees this unless FK cascade races
+                    raise RuntimeError(f"insert_repair_task: inserted task vanished: {repair_task.id!r}")
+                inserted = _row_to_task(row)
+        self._emit_jsonl(event.event_type, task_id=event.task_id, plan_id=plan_id, payload=event_payload)
+        return inserted
+
+    async def task_claim_owner(self, task_id: TaskId) -> str | None:
+        """Return the current ``claimed_by`` worker for ``task_id``."""
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_TASK_CLAIM_OWNER_SQL, task_id)
+        if row is None:
+            raise ValueError(f"task_claim_owner: unknown task_id={task_id!r}")
+        return row["claimed_by"]
 
     async def complete_task(
         self,
@@ -1441,6 +2114,8 @@ class TaskRepository:
         reason: str,
         *,
         detail: dict[str, Any] | None = None,
+        prelude_event_type: str | None = None,
+        prelude_payload: dict[str, Any] | None = None,
     ) -> Task:
         """Atomically transition ``task_id`` from ``CLAIMED`` | ``IN_PROGRESS`` → ``FAILED``.
 
@@ -1468,6 +2143,11 @@ class TaskRepository:
         ``events.payload`` (``version`` / ``reason``); ``detail`` is
         free-form caller diagnostics.
 
+        ``prelude_event_type`` / ``prelude_payload`` let security guards
+        append a companion audit event in the same transaction immediately
+        before the canonical ``FAIL`` row. If the optimistic-lock update
+        loses the race, neither event is inserted.
+
         Per-task TRIZ hook
         ~~~~~~~~~~~~~~~~~~
         After the FAIL transition commits, the method optionally
@@ -1481,11 +2161,27 @@ class TaskRepository:
         fail modes (claude absent, timeout, malformed JSON, claude
         non-zero exit).
         """
+        prelude_payload_dict: dict[str, Any] | None = None
+        prelude_task_id: TaskId | None = None
+        prelude_plan_id: PlanId | None = None
+
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(_FAIL_SQL, task_id, version)
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
+
+                if prelude_event_type is not None:
+                    prelude_payload_dict = dict(prelude_payload or {})
+                    await conn.execute(
+                        _INSERT_TASK_EVENT_WITH_PLAN_SQL,
+                        row["id"],
+                        row["plan_id"],
+                        prelude_event_type,
+                        json.dumps(prelude_payload_dict),
+                    )
+                    prelude_task_id = row["id"]
+                    prelude_plan_id = row["plan_id"]
 
                 # FAIL event payload (v4.4.0 enriched shape;
                 # VAL-CROSS-BACKCOMPAT-911). The v4.3.1 baseline already
@@ -1524,6 +2220,13 @@ class TaskRepository:
                 fail_task_id = row["id"]
                 fail_plan_id = row["plan_id"]
         # JSONL mirror after transaction commit (VAL-CROSS-BACKCOMPAT-907).
+        if prelude_event_type is not None and prelude_payload_dict is not None:
+            self._emit_jsonl(
+                prelude_event_type,
+                task_id=prelude_task_id,
+                plan_id=prelude_plan_id,
+                payload=prelude_payload_dict,
+            )
         self._emit_jsonl(
             Transition.FAIL.value,
             task_id=fail_task_id,
@@ -2137,6 +2840,9 @@ class TaskRepository:
         worker_id: WorkerId,
         hostname: str,
         token_hash: str,
+        owner_email: str | None = None,
+        *,
+        bootstrap_token_hash: str | None = None,
     ) -> None:
         """Insert a new row in ``workers`` for a freshly-registered worker (PRD FR-1.1).
 
@@ -2170,8 +2876,34 @@ class TaskRepository:
             layer that doesn't need it.
         """
         async with self._pool.acquire() as conn:
-            await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash)
-        logger.info("register_worker: registered worker %s on %s", worker_id, hostname)
+            async with conn.transaction():
+                await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash, owner_email)
+                event_payload: dict[str, Any] = {
+                    "worker_id": worker_id,
+                    "hostname": hostname,
+                }
+                if owner_email is not None:
+                    event_payload["owner_email"] = owner_email
+                if bootstrap_token_hash is not None:
+                    event_payload["bootstrap_token_hash"] = bootstrap_token_hash
+                await conn.execute(
+                    _INSERT_EVENT_SQL,
+                    None,
+                    WORKER_REGISTERED_EVENT_TYPE,
+                    json.dumps(event_payload),
+                )
+        logger.info(
+            "register_worker: registered worker %s on %s (owner_email=%s)",
+            worker_id,
+            hostname,
+            owner_email if owner_email is not None else "<none>",
+        )
+        self._emit_jsonl(
+            WORKER_REGISTERED_EVENT_TYPE,
+            task_id=None,
+            plan_id=None,
+            payload=event_payload,
+        )
 
     async def get_worker_id_by_token_hash(self, token_hash: str) -> WorkerId | None:
         """Resolve a presented bearer's hash to the owning ``worker_id`` (TASK-101).
@@ -2210,6 +2942,24 @@ class TaskRepository:
         # the asyncpg-returned ``str`` is already the right shape — no
         # constructor wrapping needed.
         return row
+
+    async def get_worker_identity_by_token_hash(self, token_hash: str) -> tuple[WorkerId, str | None] | None:
+        """Resolve a presented bearer's hash to ``(worker_id, owner_email)`` (M2).
+
+        Same single-round-trip lookup as
+        :meth:`get_worker_id_by_token_hash` but also returns
+        ``workers.owner_email`` (NULL → ``None``) so the per-worker
+        bearer auth dep can stash both identifiers on
+        ``request.state`` in one SQL hit. Returning ``None`` keeps
+        the same "not found" semantics — the auth layer surfaces
+        every miss as 401 regardless of the underlying cause
+        (revoked, deleted, or never minted).
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_LOOKUP_WORKER_IDENTITY_BY_TOKEN_HASH_SQL, token_hash)
+        if row is None:
+            return None
+        return (row["worker_id"], row["owner_email"])
 
     async def update_heartbeat(self, worker_id: WorkerId) -> bool:
         """Stamp ``workers.last_heartbeat = NOW()`` for ``worker_id``.
@@ -2255,6 +3005,558 @@ class TaskRepository:
             return False
         logger.debug("update_heartbeat: worker %s last_heartbeat refreshed", worker_id)
         return True
+
+    async def mint_bootstrap_token(
+        self,
+        plaintext: str,
+        owner_email: str,
+        *,
+        expires_at: datetime | None = None,
+        is_admin: bool = False,
+    ) -> str:
+        """Mint a per-operator bootstrap token (M2 mission, migration 009).
+
+        Hashes ``plaintext`` via :func:`hash_bootstrap_token` (SHA-256
+        hex digest over UTF-8 bytes) and inserts a single
+        ``bootstrap_tokens`` row with the resulting hash, the operator's
+        email, the optional TTL (``expires_at=None`` means never
+        expires — VAL-M2-BOOTSTRAP-REPO-001), and the admin flag.
+
+        Plaintext NEVER reaches Postgres (VAL-M2-BOOTSTRAP-REPO-002 /
+        PRD NFR-3); the caller is responsible for handing the
+        plaintext back to the operator (e.g. printing it once on the
+        admin CLI).
+
+        Validation
+        ----------
+        * ``plaintext`` must be non-empty after stripping whitespace
+          (VAL-M2-BOOTSTRAP-REPO-903): the bootstrap-auth lookup path
+          rejects empty bearers at the HTTP layer too, but pinning
+          the contract at the data layer prevents an operator from
+          accidentally minting an unusable row.
+        * ``owner_email`` must match a minimal ``local@domain.tld``
+          shape (VAL-M2-BOOTSTRAP-REPO-904). The check is intentionally
+          minimal — the token is operator-keyed, not used for SMTP
+          delivery — so we accept anything that isn't obviously
+          malformed.
+
+        Returns
+        -------
+        str
+            The SHA-256 hex digest stored in the row's ``token_hash``
+            column. Lets the caller emit a "token <hash>" audit line
+            without re-hashing, and gives the admin CLI a stable id
+            to pass to :meth:`revoke_bootstrap_token` later.
+
+        Raises
+        ------
+        ValueError
+            If ``plaintext`` strips to empty, or ``owner_email`` does
+            not match the minimal email shape.
+        asyncpg.UniqueViolationError
+            If the token_hash already exists (VAL-M2-BOOTSTRAP-
+            REPO-011 — PK uniqueness; in practice only collidable on
+            duplicate plaintext from the caller).
+        """
+        if not plaintext or not plaintext.strip():
+            raise ValueError("mint_bootstrap_token: plaintext must be non-empty")
+        normalized_email = owner_email.strip()
+        if not _OWNER_EMAIL_RE.match(normalized_email):
+            raise ValueError(f"mint_bootstrap_token: owner_email {owner_email!r} is not a valid email shape")
+        token_hash = hash_bootstrap_token(plaintext)
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                _INSERT_BOOTSTRAP_TOKEN_SQL,
+                token_hash,
+                normalized_email,
+                expires_at,
+                is_admin,
+            )
+        logger.info(
+            "mint_bootstrap_token: minted token for owner=%s is_admin=%s expires_at=%s",
+            normalized_email,
+            is_admin,
+            expires_at.isoformat() if expires_at is not None else "<never>",
+        )
+        return token_hash
+
+    async def revoke_bootstrap_token(self, token_hash: str) -> None:
+        """Mark a bootstrap-token row as revoked (M2 mission, migration 009).
+
+        Sets ``revoked_at = NOW()`` for the matching active row.
+        Idempotent: re-revoking an already-revoked token is a no-op
+        (the ``COALESCE(revoked_at, NOW())`` guard preserves the
+        original timestamp — VAL-M2-BOOTSTRAP-REPO-004). A missing
+        ``token_hash`` is silently accepted (no error) so the admin
+        CLI can be re-run without checking the row first.
+
+        No transaction wrapper, no audit-event row: the bootstrap-
+        token table has its own ``revoked_at`` column that serves as
+        the per-row audit timestamp; an additional ``events`` write
+        would duplicate the signal without adding context.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(_REVOKE_BOOTSTRAP_TOKEN_SQL, token_hash)
+        logger.info("revoke_bootstrap_token: token_hash=%s revoked", token_hash)
+
+    async def get_bootstrap_token_owner(self, plaintext: str) -> tuple[str, bool] | None:
+        """Resolve a presented plaintext bearer to ``(owner_email, is_admin)``.
+
+        Hashes the plaintext via :func:`hash_bootstrap_token` and
+        consults :data:`_LOOKUP_BOOTSTRAP_TOKEN_OWNER_SQL`, which
+        filters out revoked + expired rows at the SQL layer. Returns
+        ``None`` for any of:
+
+        * the hash is not in the table (VAL-M2-BOOTSTRAP-REPO-008);
+        * the matching row is revoked (``revoked_at IS NOT NULL`` —
+          VAL-M2-BOOTSTRAP-REPO-006);
+        * the matching row has expired (``expires_at <= NOW()`` —
+          VAL-M2-BOOTSTRAP-REPO-007);
+        * the plaintext is empty / whitespace-only (defensive: an
+          empty bearer is meaningless and we reject it before
+          hashing so we never index the empty-string hash).
+
+        Returning ``None`` rather than raising keeps the auth dep
+        simple: every miss surface is a 401 from the wire's
+        perspective, so distinguishing them at this layer would only
+        leak information to the caller.
+        """
+        if not plaintext or not plaintext.strip():
+            return None
+        token_hash = hash_bootstrap_token(plaintext)
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_LOOKUP_BOOTSTRAP_TOKEN_OWNER_SQL, token_hash)
+        if row is None:
+            return None
+        return (row["owner_email"], bool(row["is_admin"]))
+
+    async def list_bootstrap_tokens(
+        self,
+        *,
+        include_revoked: bool = False,
+    ) -> list[BootstrapTokenRecord]:
+        """List bootstrap-token metadata rows.
+
+        Default (``include_revoked=False``): returns only currently
+        active rows — ``revoked_at IS NULL`` AND ``(expires_at IS
+        NULL OR expires_at > NOW())`` (VAL-M2-BOOTSTRAP-REPO-009).
+        Set ``include_revoked=True`` for forensic audits — the
+        return set then includes revoked + expired rows
+        (VAL-M2-BOOTSTRAP-REPO-906).
+
+        Plaintext is NEVER returned: each :class:`BootstrapTokenRecord`
+        carries metadata only (VAL-M2-BOOTSTRAP-REPO-010). The
+        ``token_hash`` column is the stable id callers use to feed
+        :meth:`revoke_bootstrap_token`; everything else is
+        operational context (owner, lifecycle timestamps, admin
+        bit).
+
+        Ordering is newest-first by ``created_at`` with ``token_hash``
+        as a deterministic tiebreaker so admin-CLI output is stable
+        across re-runs.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(_LIST_ACTIVE_BOOTSTRAP_TOKENS_SQL, include_revoked)
+        return [
+            BootstrapTokenRecord(
+                token_hash=row["token_hash"],
+                owner_email=row["owner_email"],
+                created_at=row["created_at"],
+                expires_at=row["expires_at"],
+                revoked_at=row["revoked_at"],
+                is_admin=bool(row["is_admin"]),
+            )
+            for row in rows
+        ]
+
+    async def revoke_worker_bearer(self, worker_id: WorkerId) -> tuple[bool, int]:
+        """Revoke a worker's bearer token and release any in-flight tasks.
+
+        Implements the data-side half of ``whilly admin worker revoke``
+        (M2 mission, VAL-M2-ADMIN-CLI-011/012). Atomically:
+
+        1. Sets ``workers.token_hash = NULL`` for the matching row so
+           subsequent steady-state RPCs that present the revoked
+           plaintext bearer fail at the per-worker bearer auth dep
+           (``token_hash IS NULL`` cannot match any presented hash —
+           NULL ≠ anything under SQL three-valued logic). Also flips
+           the worker's ``status`` to ``offline`` so dashboards and
+           the online-count metric reflect the revocation immediately.
+        2. Releases every CLAIMED / IN_PROGRESS task previously owned
+           by that worker back to ``PENDING`` — clearing
+           ``claimed_by`` / ``claimed_at`` and incrementing
+           ``version`` so a peer worker can re-claim cleanly.
+        3. Writes one ``RELEASE`` event per released task carrying
+           ``payload = {"reason": "admin_revoked", "version": <new>,
+           "worker_id": <wid>, "task_id": <id>, "plan_id": <pid>}``
+           — matches the v4.4.0 enriched payload shape pinned by
+           VAL-CROSS-BACKCOMPAT-912.
+
+        All three writes happen inside a single transaction so a
+        crash between steps cannot leave the worker un-revoked but
+        tasks released, or vice versa.
+
+        Returns
+        -------
+        tuple[bool, int]
+            ``(found, released_count)``: ``found`` is ``True`` when
+            ``worker_id`` matched a row in ``workers``; ``False``
+            when the worker is unknown to the control plane.
+            ``released_count`` is the number of in-flight tasks
+            released (0 when the worker had no claims, or when
+            ``found`` is ``False``). Letting the caller distinguish
+            the two cases lets the admin CLI exit non-zero with a
+            clear "worker not found" message (VAL-M2-ADMIN-CLI-013)
+            without an extra round-trip.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    _REVOKE_WORKER_BEARER_SQL,
+                    worker_id,
+                    Transition.RELEASE.value,
+                    "admin_revoked",
+                )
+                if rows:
+                    found = True
+                else:
+                    probe = await conn.fetchval(_PROBE_WORKER_EXISTS_SQL, worker_id)
+                    found = probe is not None
+        released = len(rows)
+        if found:
+            logger.info(
+                "revoke_worker_bearer: worker=%s revoked, released %d task(s)",
+                worker_id,
+                released,
+            )
+        else:
+            logger.info("revoke_worker_bearer: worker=%s not found", worker_id)
+        for row in rows:
+            self._emit_jsonl(
+                Transition.RELEASE.value,
+                task_id=row["task_id"],
+                plan_id=row["plan_id"],
+                payload={
+                    "worker_id": row["worker_id"],
+                    "task_id": row["task_id"],
+                    "plan_id": row["plan_id"],
+                    "version": row["version"],
+                    "reason": "admin_revoked",
+                },
+            )
+        return (found, released)
+
+    async def emit_pr_event(
+        self,
+        event_type: str,
+        *,
+        plan_id: PlanId | None,
+        task_id: TaskId | None,
+        payload: dict[str, Any],
+    ) -> int:
+        """Record one PR-feedback audit row in Postgres + JSONL mirror (M2).
+
+        The canonical entry point for every M2 ``pr.*`` event
+        producer (the post-COMPLETE PR opener, the poller, the
+        re-iterate path). Inserts one row into ``events`` carrying
+        the supplied ``event_type`` / ``task_id`` / ``plan_id`` /
+        ``payload`` triple and, after the Postgres transaction
+        commits, mirrors the same payload to the JSONL audit sink so
+        Postgres ``events.detail`` and the JSONL
+        ``payload`` keys round-trip byte-identically (VAL-PR-004).
+
+        ``event_type`` must be one of :data:`PR_EVENT_TYPES`. Anything
+        else raises :class:`ValueError` before any I/O — keeps the
+        audit-log surface auditable from a single literal site and
+        prevents typos (``pr.opend``) from silently falling through
+        to a no-op match against the events insert path.
+
+        ``plan_id`` is required for plan-scoped events (every PR
+        event that has a parent plan, which in practice is all of
+        them) — passing ``None`` is permitted only when the producer
+        legitimately has no plan reference (e.g. a poll-cycle
+        diagnostics event). The column itself is nullable in the
+        schema; we don't enforce a required value here so a future
+        global-scope PR event (e.g. ``pr.poller.started``) can land
+        without a code change.
+
+        ``task_id`` mirrors ``plan_id``: required for per-task events
+        (``pr.opened``, ``pr.review.*``, ``pr.iteration.*``,
+        ``pr.merged``), optional for the rare plan-scoped variant.
+        Producers should pass the *originating* task id — for
+        ``pr.iteration.requested`` that is the original task
+        (``payload['orig_task_id']``); the new follow-up task id
+        rides on the payload as ``new_task_id``.
+
+        Why is the helper not split into per-event-type methods?
+            Every PR event shares the exact same insert path
+            (``_INSERT_TASK_EVENT_WITH_PLAN_SQL`` + JSONL mirror) and
+            the same payload-shape contract. Splitting into
+            ``emit_pr_opened`` / ``emit_pr_review_approved`` / ...
+            would duplicate the JSONL-mirror discipline at six call
+            sites without adding compile-time safety (the payload
+            fields are still untyped JSON). One helper with a
+            closed-set ``event_type`` argument is the cheaper
+            ergonomics; a future M3+ feature can add typed wrappers
+            on top if the producer surface justifies it.
+
+        Returns
+        -------
+        int
+            The newly-inserted ``events.id``. Producers persist this
+            id alongside the ``pull_requests`` row when correlating
+            audit events with PR state transitions (e.g. the poller
+            updates ``pull_requests.last_seen_review_id`` keyed off
+            the ``pr.review.*`` event ids). Mirrors the existing
+            ``next_ready`` / ``release_stale_tasks`` shape — methods
+            that perform mutations return the salient post-update
+            value rather than the raw asyncpg row.
+
+        Raises
+        ------
+        ValueError
+            ``event_type`` is not in :data:`PR_EVENT_TYPES`.
+        """
+        if event_type not in PR_EVENT_TYPES:
+            raise ValueError(
+                f"emit_pr_event: event_type={event_type!r} is not one of {PR_EVENT_TYPES!r}",
+            )
+        payload_json = json.dumps(payload)
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                event_id = await conn.fetchval(
+                    """
+                    INSERT INTO events (task_id, plan_id, event_type, payload)
+                    VALUES ($1, $2, $3, $4::jsonb)
+                    RETURNING id
+                    """,
+                    task_id,
+                    plan_id,
+                    event_type,
+                    payload_json,
+                )
+        # JSONL mirror after commit so a rolled-back insert never
+        # leaks an orphaned line (VAL-CROSS-BACKCOMPAT-907 +
+        # VAL-PR-004). The mirror payload is the *same dict* the
+        # caller supplied — no reshape — so a pytest assertion
+        # comparing ``events.payload`` to the JSONL ``payload`` key
+        # round-trips byte-identically.
+        self._emit_jsonl(
+            event_type,
+            task_id=task_id,
+            plan_id=plan_id,
+            payload=payload,
+        )
+        logger.info(
+            "emit_pr_event: event_type=%s plan=%s task=%s event_id=%s",
+            event_type,
+            plan_id,
+            task_id,
+            event_id,
+        )
+        return int(event_id)
+
+    async def get_plan_github_issue_ref(self, plan_id: PlanId) -> str | None:
+        """Return ``plans.github_issue_ref`` for ``plan_id`` (or ``None``).
+
+        Used by the post-COMPLETE PR opener hook (M2) to gate hook
+        firing on the canonical issue ref the forge intake recorded
+        when the plan was created. ``None`` is returned both when the
+        plan does not exist and when the row exists but
+        ``github_issue_ref`` is ``NULL`` — the hook treats both as
+        "no issue ref" and skips opening a PR (VAL-PR-008).
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT github_issue_ref FROM plans WHERE id = $1",
+                plan_id,
+            )
+        if row is None:
+            return None
+        ref = row["github_issue_ref"]
+        return None if ref is None else str(ref)
+
+    async def get_plan_pr_context(self, plan_id: PlanId) -> PlanPRContext:
+        """Return PR routing/provenance context for ``plan_id``.
+
+        The post-COMPLETE PR hook needs the legacy ``plans.github_issue_ref``
+        plus optional plan-origin provenance so project-config plans can use a
+        stricter sink-stage policy instead of the historical issue-ref fallback.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    p.github_issue_ref,
+                    COALESCE(wi.origin_system, '') AS origin_system,
+                    COALESCE(wi.origin_ref, '') AS origin_ref,
+                    COALESCE(po.decomposition_mode, '') AS decomposition_mode
+                FROM plans p
+                LEFT JOIN plan_origins po ON po.plan_id = p.id
+                LEFT JOIN work_intents wi ON wi.id = po.work_intent_id
+                WHERE p.id = $1
+                ORDER BY po.created_at ASC NULLS LAST
+                LIMIT 1
+                """,
+                plan_id,
+            )
+        if row is None:
+            return PlanPRContext()
+        github_issue_ref = row["github_issue_ref"]
+        return PlanPRContext(
+            github_issue_ref=None if github_issue_ref is None else str(github_issue_ref),
+            origin_system=row["origin_system"],
+            origin_ref=row["origin_ref"],
+            decomposition_mode=row["decomposition_mode"],
+        )
+
+    async def get_repo_target(self, repo_target_id: str) -> RepoTarget | None:
+        """Return the repository target identified by ``repo_target_id``."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_REPO_TARGET_SQL, repo_target_id)
+        if row is None:
+            return None
+        return RepoTarget(
+            id=row["id"],
+            provider=row["provider"],
+            repo_full_name=row["repo_full_name"],
+            clone_url=row["clone_url"],
+            default_branch=row["default_branch"],
+            credential_policy=row["credential_policy"],
+        )
+
+    async def insert_pull_request(
+        self,
+        *,
+        plan_id: PlanId,
+        task_id: TaskId,
+        pr_number: int,
+        pr_url: str,
+        branch: str,
+        head_sha: str | None,
+        state: str = "open",
+        repo_target_id: str | None = None,
+    ) -> int:
+        """Insert one ``pull_requests`` row and return the new ``id``.
+
+        Used by the post-COMPLETE PR opener hook (VAL-PR-005). The row's
+        ``state`` defaults to ``"open"``; failure paths that opt to
+        record a row instead of skipping it pass ``state="failed"``.
+        Repo-aware deployments pass ``repo_target_id`` so two target
+        repositories under the same plan can both have PR ``#1`` without
+        colliding. Legacy callers leave it ``None`` and retain the old
+        plan+number uniqueness.
+        """
+        async with self._pool.acquire() as conn:
+            new_id = await conn.fetchval(
+                """
+                INSERT INTO pull_requests
+                    (plan_id, task_id, repo_target_id, pr_number, pr_url, branch, head_sha, state)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING id
+                """,
+                plan_id,
+                task_id,
+                repo_target_id,
+                pr_number,
+                pr_url,
+                branch,
+                head_sha,
+                state,
+            )
+        logger.info(
+            "insert_pull_request: plan=%s task=%s repo_target=%s pr_number=%s state=%s id=%s",
+            plan_id,
+            task_id,
+            repo_target_id,
+            pr_number,
+            state,
+            new_id,
+        )
+        return int(new_id)
+
+    async def list_open_pull_requests(self, plan_id: PlanId) -> list[dict[str, Any]]:
+        """Return every ``pull_requests`` row for ``plan_id`` whose ``state='open'``.
+
+        Used by the M2 PR-feedback poller (mission
+        ``m2-pr-review-feedback``, feature
+        ``m2-pr-feedback-poller``) to enumerate the PRs that still
+        warrant a ``gh pr view``/``gh api …/reviews``/``…/comments``
+        cycle. Rows are returned as plain dicts so the poller can be
+        unit-tested with a fake repo without depending on
+        :class:`asyncpg.Record`. Ordered by ``id`` ascending so a poll
+        cycle is deterministic across restarts.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, plan_id, task_id, repo_target_id, pr_number, pr_url, branch, head_sha,
+                       state, review_decision, last_seen_review_id,
+                       last_seen_check_run_id, last_synced_at
+                FROM pull_requests
+                WHERE plan_id = $1 AND state = 'open'
+                ORDER BY id
+                """,
+                plan_id,
+            )
+        return [dict(row) for row in rows]
+
+    async def update_pull_request_state(self, pr_id: int, state: str) -> None:
+        """Update ``pull_requests.state`` (and ``updated_at``) for ``pr_id``.
+
+        Used by the M2 poller when ``gh pr view`` reports
+        ``state='MERGED'`` so the row no longer matches the
+        ``state='open'`` filter on the next poll cycle (VAL-PR-024
+        — ``pr.merged`` event must not re-emit on subsequent polls).
+        Permissible values are constrained at the DB layer by the
+        ``ck_pull_requests_state_valid`` CHECK; the application layer
+        rejects unknown states by deferring to the constraint rather
+        than re-implementing the closed set here.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE pull_requests SET state = $1, updated_at = NOW() WHERE id = $2",
+                state,
+                pr_id,
+            )
+
+    async def advance_pull_request_cursor(
+        self,
+        pr_id: int,
+        *,
+        last_seen_review_id: int | None,
+        last_seen_check_run_id: int | None,
+    ) -> None:
+        """Advance the per-PR poll cursor and stamp ``last_synced_at``.
+
+        Called once per successfully-polled PR row at the end of each
+        poll cycle (M2 ``pr-feedback-poller``). The cursor advance is
+        the idempotency hinge for VAL-PR-012: after the first
+        successful poll, ``last_seen_review_id`` is the highest review
+        id observed by ``gh api …/reviews`` so the next cycle can
+        skip review rows it already emitted events for. Identical
+        semantics for ``last_seen_check_run_id`` against the check-run
+        rollup. Both arguments must be supplied — pass the
+        pre-existing column value to leave a cursor unchanged for
+        ``None`` / empty responses. ``last_synced_at`` always advances
+        to ``NOW()`` so an operator can answer "when did the poller
+        last touch this PR?" with a single ``SELECT`` regardless of
+        whether any new reviews / checks were observed in the cycle.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE pull_requests
+                SET last_seen_review_id = $1,
+                    last_seen_check_run_id = $2,
+                    last_synced_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $3
+                """,
+                last_seen_review_id,
+                last_seen_check_run_id,
+                pr_id,
+            )
 
     async def reset_plan(self, plan_id: PlanId, *, keep_tasks: bool) -> int:
         """Reset every task in ``plan_id`` to ``PENDING`` (or wipe the plan).

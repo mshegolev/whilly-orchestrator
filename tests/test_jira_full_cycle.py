@@ -18,6 +18,9 @@ from whilly.jira_board import DEFAULT_JIRA_STATUS_MAPPING, JiraBoardClient, _ext
 from whilly.sources.jira import (
     JiraAuth,
     _flatten_adf,
+    _jira_get,
+    _jira_rest_path,
+    _parse_flat_yaml_settings,
     fetch_single_jira_issue,
     issue_to_task_dict,
     parse_jira_key,
@@ -124,7 +127,11 @@ def test_issue_to_task_dict_maps_fields():
     assert d["priority"] == "high"
     assert d["jira_key"] == "ABC-123"
     assert d["url"] == "https://company.atlassian.net/browse/ABC-123"
-    assert d["acceptance_criteria"] == ["login works", "redirect correct"]
+    # M1 sanitizer wraps each acceptance entry in <UNTRUSTED kind=...> fences.
+    assert len(d["acceptance_criteria"]) == 2
+    assert "login works" in d["acceptance_criteria"][0]
+    assert d["acceptance_criteria"][0].startswith("<UNTRUSTED kind=jira_acceptance>")
+    assert "redirect correct" in d["acceptance_criteria"][1]
     label_names = [label["name"] for label in d["labels"]]
     assert "whilly:ready" in label_names
     assert "priority:high" in label_names
@@ -198,6 +205,115 @@ def test_jira_auth_surfaces_missing_fields(monkeypatch):
     monkeypatch.setattr(cfg_mod, "_toml_sections_cache", {"jira": {}})
     with pytest.raises(RuntimeError, match="unconfigured"):
         JiraAuth.from_config()
+
+
+def test_jira_auth_reads_company_settings_yaml_without_printing_values(tmp_path, monkeypatch):
+    settings = tmp_path / "company.yml"
+    settings.write_text(
+        "\n".join(
+            [
+                'JIRA_URL: "https://jira.example.test"',
+                "JIRA_TOKEN: secret-token",
+                "EMAIL_USER: qa@example.test",
+                "JIRA_VERIFY_SSL: false",
+                "JIRA_CA_FILE: /tmp/corporate-ca.pem",
+                "JIRA_AUTH_SCHEME: bearer",
+                "JIRA_API_VERSION: 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for var in ("JIRA_SERVER_URL", "JIRA_USERNAME", "JIRA_API_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("WHILLY_COMPANY_SETTINGS_FILE", str(settings))
+    monkeypatch.setattr(cfg_mod, "_toml_sections_cache", {"jira": {}})
+
+    auth = JiraAuth.from_config()
+
+    assert auth.server_url == "https://jira.example.test"
+    assert auth.username == "qa@example.test"
+    assert auth.token == "secret-token"
+    assert auth.verify_ssl is False
+    assert auth.ca_file == "/tmp/corporate-ca.pem"
+    assert auth.auth_scheme == "bearer"
+    assert auth.api_version == "2"
+
+
+def test_bearer_jira_auth_does_not_require_username(monkeypatch):
+    for var in ("JIRA_SERVER_URL", "JIRA_USERNAME", "JIRA_API_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("JIRA_SERVER_URL", "https://jira.example.test")
+    monkeypatch.setenv("JIRA_API_TOKEN", "secret-token")
+    monkeypatch.setenv("JIRA_AUTH_SCHEME", "bearer")
+    monkeypatch.setattr(cfg_mod, "_toml_sections_cache", {"jira": {}})
+
+    auth = JiraAuth.from_config()
+
+    assert auth.username == ""
+    assert auth.auth_scheme == "bearer"
+
+
+def test_jira_get_uses_custom_ssl_context_when_verification_disabled(monkeypatch):
+    from whilly.sources import jira as jira_mod
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["timeout"] = timeout
+        captured["context"] = context
+        return _FakeResponse(b'{"ok": true}')
+
+    monkeypatch.setattr(jira_mod, "urlopen", fake_urlopen)
+
+    payload = _jira_get(
+        JiraAuth(server_url="https://jira.example.test", username="qa", token="token", verify_ssl=False),
+        "/rest/api/3/myself",
+        timeout=3,
+    )
+
+    assert payload == {"ok": True}
+    assert captured["timeout"] == 3
+    assert captured["context"] is not None
+
+
+def test_jira_get_sends_bearer_header(monkeypatch):
+    from whilly.sources import jira as jira_mod
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["authorization"] = req.get_header("Authorization")
+        return _FakeResponse(b'{"ok": true}')
+
+    monkeypatch.setattr(jira_mod, "urlopen", fake_urlopen)
+
+    payload = _jira_get(
+        JiraAuth(server_url="https://jira.example.test", username="", token="secret-token", auth_scheme="bearer"),
+        "/rest/api/3/myself",
+    )
+
+    assert payload == {"ok": True}
+    assert captured["authorization"] == "Bearer secret-token"
+
+
+def test_jira_rest_path_uses_configured_api_version():
+    auth = JiraAuth(server_url="https://jira.example.test", username="qa", token="token", api_version="2")
+
+    assert _jira_rest_path(auth, "issue/ABC-1") == "/rest/api/2/issue/ABC-1"
+
+
+def test_parse_flat_yaml_settings_handles_urls_and_quotes():
+    parsed = _parse_flat_yaml_settings(
+        """
+        JIRA_URL: "https://jira.example.test"
+        JIRA_TOKEN: token:with:colon
+        EMAIL_USER: qa@example.test # comment
+        """
+    )
+
+    assert parsed["JIRA_URL"] == "https://jira.example.test"
+    assert parsed["JIRA_TOKEN"] == "token:with:colon"
+    assert parsed["EMAIL_USER"] == "qa@example.test"
 
 
 # ─── JiraBoardClient ───────────────────────────────────────────────────────────

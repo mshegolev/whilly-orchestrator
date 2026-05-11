@@ -379,6 +379,23 @@ async def test_intake_happy_path_creates_plan_and_flips_label(
             plan_id,
         )
         assert isinstance(tasks_count_value, int) and tasks_count_value >= 0
+        origin_row = await conn.fetchrow(
+            """
+            SELECT wi.origin_system, wi.origin_ref, po.prd_file
+            FROM plan_origins po
+            JOIN work_intents wi ON wi.id = po.work_intent_id
+            WHERE po.plan_id = $1
+            """,
+            plan_id,
+        )
+        assert origin_row is not None
+        assert origin_row["origin_system"] == "github_issue"
+        assert origin_row["origin_ref"] == "owner/repo/123"
+        assert origin_row["prd_file"]
+        repo_target = await conn.fetchval(
+            "SELECT repo_target_id FROM task_repo_targets WHERE task_id = 'TASK-FAKE-001'"
+        )
+        assert repo_target == "github:owner/repo"
 
 
 # ── VAL-FORGE-007: idempotent re-run ─────────────────────────────────────
@@ -677,6 +694,9 @@ async def test_api_plans_endpoint_exposes_github_issue_ref(
             body = resp.json()
             assert body["id"] == slug
             assert body["github_issue_ref"] == "owner/repo/127"
+            assert body["origin"]["system"] == "github_issue"
+            assert body["origin"]["ref"] == "owner/repo/127"
+            assert body["repo_targets"][0]["id"] == "github:owner/repo"
 
             # VAL-FORGE-012 regression: pre-existing plans (no ref) get NULL.
             async with db_pool.acquire() as conn:
@@ -687,7 +707,10 @@ async def test_api_plans_endpoint_exposes_github_issue_ref(
                 )
             plain = await client.get("/api/v1/plans/plain-plan")
             assert plain.status_code == 200
-            assert plain.json()["github_issue_ref"] is None
+            plain_body = plain.json()
+            assert plain_body["github_issue_ref"] is None
+            assert plain_body["origin"] is None
+            assert plain_body["repo_targets"] == []
 
             # 404 for missing plan id.
             missing = await client.get("/api/v1/plans/does-not-exist")

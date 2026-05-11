@@ -112,32 +112,46 @@ from whilly.adapters.transport.schemas import (
     ClaimResponse,
     CompleteRequest,
     CompleteResponse,
+    ControlStateResponse,
     ErrorResponse,
     FailRequest,
     FailResponse,
     HeartbeatRequest,
     HeartbeatResponse,
+    ListTaskEventsResponse,
+    PlanPayload,
     RegisterRequest,
     RegisterResponse,
+    RepairTaskRequest,
+    RepairTaskResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskEventItem,
+    TaskEventRequest,
+    TaskEventResponse,
 )
-from whilly.core.models import Task, TaskId, TaskStatus
+from whilly.core.models import Plan, Task, TaskId, TaskStatus
 
 __all__ = [
     "CLAIM_PATH",
     "DEFAULT_BACKOFF_SCHEDULE",
     "DEFAULT_TIMEOUT_SECONDS",
     "REGISTER_PATH",
+    "CONTROL_STATE_PATH",
+    "PLAN_PATH_PREFIX",
     "AuthError",
     "HTTPClientError",
     "RemoteWorkerClient",
     "ServerError",
     "VersionConflictError",
     "complete_path",
+    "control_state_path",
     "fail_path",
     "heartbeat_path",
+    "plan_path",
+    "repair_path",
     "release_path",
+    "task_event_path",
 ]
 
 #: Path of the cluster-join RPC on the control plane. Mirrors
@@ -158,6 +172,10 @@ REGISTER_PATH: Final[str] = "/workers/register"
 #: the server module). The server-side constant pins the parity with an
 #: integration test in :mod:`tests.integration.test_transport_claim`.
 CLAIM_PATH: Final[str] = "/tasks/claim"
+
+CONTROL_STATE_PATH: Final[str] = "/workers/control-state"
+
+PLAN_PATH_PREFIX: Final[str] = "/api/v1/plans"
 
 
 def heartbeat_path(worker_id: str) -> str:
@@ -216,6 +234,30 @@ def release_path(task_id: str) -> str:
     shutdown release.
     """
     return f"/tasks/{task_id}/release"
+
+
+def repair_path(task_id: str) -> str:
+    """Return the remote repair-task request endpoint path for ``task_id``."""
+
+    return f"/tasks/{task_id}/repair"
+
+
+def task_event_path(task_id: str) -> str:
+    """Return the diagnostic-event endpoint path for ``task_id``."""
+
+    return f"/tasks/{task_id}/events"
+
+
+def control_state_path() -> str:
+    """Return the worker-readable global control-state endpoint path."""
+
+    return CONTROL_STATE_PATH
+
+
+def plan_path(plan_id: str) -> str:
+    """Return the plan metadata endpoint path for ``plan_id``."""
+
+    return f"{PLAN_PATH_PREFIX}/{plan_id}"
 
 
 # ``T`` is the pydantic response schema being parsed in :meth:`RemoteWorkerClient._parse_response`.
@@ -463,6 +505,7 @@ class RemoteWorkerClient:
         path: str,
         *,
         json: Mapping[str, Any] | None = None,
+        params: Mapping[str, Any] | None = None,
         bootstrap: bool = False,
     ) -> httpx.Response:
         """Issue an HTTP request with retry + typed-exception failure handling.
@@ -478,6 +521,8 @@ class RemoteWorkerClient:
             ``base_url + path`` round-trips cleanly.
         json:
             Optional JSON body. ``None`` means an empty request body.
+        params:
+            Optional query-string parameters.
         bootstrap:
             If True, swap the per-worker bearer header for the
             bootstrap token on this request. Only meaningful for
@@ -535,7 +580,7 @@ class RemoteWorkerClient:
         last_exc: Exception | None = None
         for attempt in range(total_attempts):
             try:
-                response = await self._client.request(method, path, json=json, headers=headers)
+                response = await self._client.request(method, path, json=json, params=params, headers=headers)
             except (httpx.ConnectError, httpx.TimeoutException) as exc:
                 # Transport-level failure: log + maybe sleep + retry.
                 # We log at INFO not WARNING because a single transient
@@ -798,7 +843,7 @@ class RemoteWorkerClient:
         response = await self._request(
             "POST",
             REGISTER_PATH,
-            json=request.model_dump(),
+            json=request.model_dump(exclude_none=True),
             bootstrap=True,
         )
         return await self._parse_response(response, RegisterResponse)
@@ -855,6 +900,51 @@ class RemoteWorkerClient:
             json=request.model_dump(),
         )
         return await self._parse_response(response, HeartbeatResponse)
+
+    async def control_state(self) -> ControlStateResponse:
+        """Read whether the control plane has globally paused workers."""
+
+        response = await self._request("GET", control_state_path())
+        return await self._parse_response(response, ControlStateResponse)
+
+    async def get_plan(self, plan_id: str) -> Plan:
+        """Fetch task-free plan metadata from the control plane."""
+
+        response = await self._request("GET", plan_path(plan_id))
+        payload = await self._parse_plan_payload(response)
+        return payload.to_plan()
+
+    @staticmethod
+    async def _parse_plan_payload(response: httpx.Response) -> PlanPayload:
+        """Validate plan metadata while ignoring server-only plan fields."""
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                f"server returned non-JSON body for PlanPayload: {body[:200]}",
+                status_code=response.status_code,
+                response_body=body,
+            ) from exc
+        if not isinstance(payload, Mapping):
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: server response did not contain a plan object",
+                status_code=response.status_code,
+                response_body=body,
+            )
+        plan_payload = {key: payload[key] for key in ("id", "name", "verification_commands") if key in payload}
+        try:
+            return PlanPayload.model_validate(plan_payload)
+        except ValidationError as exc:
+            body = response.text
+            raise ServerError(
+                f"{response.request.method} {response.request.url.path}: "
+                f"server response did not match PlanPayload: {exc.error_count()} validation error(s)",
+                status_code=response.status_code,
+                response_body=body,
+            ) from exc
 
     async def claim(self, worker_id: str, plan_id: str) -> Task | None:
         """Long-poll for the next PENDING task in ``plan_id`` (``POST /tasks/claim``, PRD FR-1.3).
@@ -1055,12 +1145,75 @@ class RemoteWorkerClient:
         )
         return await self._parse_response(response, CompleteResponse)
 
+    async def record_event(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        event_type: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> TaskEventResponse:
+        """Append a diagnostic task event (``POST /tasks/{task_id}/events``)."""
+
+        request = TaskEventRequest(
+            worker_id=worker_id,
+            event_type=event_type,
+            payload=payload or {},
+            detail=detail,
+        )
+        response = await self._request(
+            "POST",
+            task_event_path(task_id),
+            json=request.model_dump(exclude_none=True),
+        )
+        return await self._parse_response(response, TaskEventResponse)
+
+    async def list_task_events(
+        self,
+        task_id: TaskId,
+        *,
+        event_prefix: str | None = None,
+    ) -> tuple[TaskEventItem, ...]:
+        """Return task events from ``GET /tasks/{task_id}/events``."""
+
+        params = {"event_prefix": event_prefix} if event_prefix is not None else None
+        response = await self._request("GET", task_event_path(task_id), params=params)
+        parsed = await self._parse_response(response, ListTaskEventsResponse)
+        return tuple(parsed.events)
+
+    async def request_repair(
+        self,
+        task_id: TaskId,
+        worker_id: str,
+        version: int,
+        repair_task: Mapping[str, Any],
+        event: Mapping[str, Any],
+    ) -> str:
+        """Request insertion of a deterministic repair task for ``task_id``."""
+
+        request = RepairTaskRequest(
+            worker_id=worker_id,
+            orig_task_version=version,
+            repair_task=repair_task,
+            event=event,
+        )
+        response = await self._request(
+            "POST",
+            repair_path(task_id),
+            json=request.model_dump(exclude_none=True),
+        )
+        parsed = await self._parse_response(response, RepairTaskResponse)
+        return parsed.repair_task_id
+
     async def fail(
         self,
         task_id: TaskId,
         worker_id: str,
         version: int,
         reason: str,
+        *,
+        detail: dict[str, Any] | None = None,
     ) -> FailResponse:
         """Mark ``task_id`` ``FAILED`` (``POST /tasks/{task_id}/fail``, PRD FR-2.4).
 
@@ -1116,11 +1269,11 @@ class RemoteWorkerClient:
         RuntimeError
             If called outside the ``async with`` block.
         """
-        request = FailRequest(worker_id=worker_id, version=version, reason=reason)
+        request = FailRequest(worker_id=worker_id, version=version, reason=reason, detail=detail)
         response = await self._request(
             "POST",
             fail_path(task_id),
-            json=request.model_dump(),
+            json=request.model_dump(exclude_none=True),
         )
         return await self._parse_response(response, FailResponse)
 

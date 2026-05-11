@@ -15,7 +15,7 @@ the existing v3 tests have one either).
 from __future__ import annotations
 
 from whilly.core.models import Plan, Priority, Task, TaskStatus
-from whilly.core.prompts import PROMISE_MARKER, build_task_prompt
+from whilly.core.prompts import PROMISE_MARKER, build_task_prompt, prompt_description_nonce
 
 
 def _make_task(**overrides: object) -> Task:
@@ -57,6 +57,17 @@ def test_prompt_inlines_description_and_acceptance_and_test_steps() -> None:
     assert "AC1: pure" in prompt
     assert "AC2: deterministic" in prompt
     assert "pytest tests/unit/test_prompts.py" in prompt
+
+
+def test_prompt_wraps_description_in_whilly_envelope() -> None:
+    task = _make_task()
+    plan = _make_plan(tasks=(task,))
+    nonce = prompt_description_nonce(task_id=task.id, plan_id=plan.id)
+
+    prompt = build_task_prompt(task, plan)
+
+    assert f"BEGIN-WHILLY-DESC-{nonce}" in prompt
+    assert f"END-WHILLY-DESC-{nonce}" in prompt
 
 
 def test_prompt_demands_promise_marker() -> None:

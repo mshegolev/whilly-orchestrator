@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {% if events_token %}<meta name="whilly-events-token" content="{{ events_token }}">{% endif %}
+  <title>Whilly Control Plane</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"
+          crossorigin="anonymous"
+          defer></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.4/sse.js"
+          crossorigin="anonymous"
+          defer></script>
+  <style>
+    :root {
+      --whilly-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --bg: #f7f8fa;
+      --surface: #ffffff;
+      --surface-strong: #f1f3f6;
+      --text: #1b1f24;
+      --muted: #5b6470;
+      --line: #d7dce2;
+      --line-strong: #aeb6c2;
+      --accent: #0f766e;
+      --danger: #b42318;
+      --warn: #a15c07;
+      --ok: #16703c;
+      --info: #0969da;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111315;
+        --surface: #171a1d;
+        --surface-strong: #202428;
+        --text: #eceff3;
+        --muted: #a6adb7;
+        --line: #343a40;
+        --line-strong: #59616b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body.operator-console {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font-family: var(--whilly-mono);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-x: hidden;
+    }
+    .operator-shell {
+      width: min(1440px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding-block: 14px 18px;
+    }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 1.15rem; line-height: 1.2; }
+    h2 { font-size: 0.95rem; line-height: 1.2; }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line-strong);
+    }
+    .operator-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .operator-primary-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .operator-controls input,
+    .operator-controls button,
+    .operator-identity-panel summary {
+      min-height: 32px;
+      margin: 0;
+      padding: 4px 8px;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      border-radius: 2px;
+      font: inherit;
+      white-space: nowrap;
+    }
+    .operator-controls button,
+    .operator-identity-panel summary {
+      cursor: pointer;
+    }
+    .operator-controls button:hover,
+    .operator-controls button:focus-visible,
+    .operator-identity-panel summary:hover,
+    .operator-identity-panel summary:focus-visible {
+      color: var(--surface);
+      background: var(--text);
+      outline: none;
+    }
+    .operator-identity-panel {
+      min-width: min(100%, 18rem);
+      margin: 0;
+    }
+    .operator-identity-panel summary {
+      list-style-position: inside;
+      background: var(--surface-strong);
+    }
+    .operator-identity-fields {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+    }
+    .operator-identity-fields input {
+      width: 100%;
+    }
+    .surface-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      margin-block: 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+    }
+    .surface-tabs button {
+      margin: 0;
+      padding: 6px 10px;
+      color: var(--text);
+      background: transparent;
+      border: 0;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      font: inherit;
+      cursor: pointer;
+    }
+    .surface-tabs button:last-child { border-right: 0; }
+    .surface-tabs button[aria-selected="true"] {
+      color: var(--surface);
+      background: var(--text);
+    }
+    .operator-surface[hidden] { display: none; }
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(90px, 1fr));
+      margin-block: 8px 12px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+    }
+    .metric-cell {
+      min-width: 0;
+      margin: 0;
+      padding: 8px 10px;
+      border-right: 1px solid var(--line);
+    }
+    .metric-cell:last-child { border-right: 0; }
+    .metric-cell header {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+    }
+    .metric-cell .value {
+      margin-top: 2px;
+      font-size: 1.05rem;
+      font-weight: bold;
+      font-variant-numeric: tabular-nums;
+    }
+    .surface-panel {
+      margin-block: 8px 12px;
+      padding: 0;
+    }
+    .surface-panel > header {
+      padding: 7px 10px;
+      color: var(--text);
+      background: var(--surface-strong);
+      border: 1px solid var(--line-strong);
+      border-bottom: 0;
+    }
+    .table-wrapper { overflow-x: auto; }
+    code { font-family: var(--whilly-mono); color: inherit; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      font-variant-numeric: tabular-nums;
+    }
+    th, td {
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    th {
+      color: var(--muted);
+      background: var(--surface-strong);
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.72rem;
+    }
+    tbody tr:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+    tbody tr.review-row-selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .status, .priority, .review {
+      display: inline-block;
+      padding: 0;
+      border-radius: 0;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .status-online, .status-DONE, .status-done { color: var(--ok); }
+    .status-offline, .status-FAILED, .status-failed { color: var(--danger); }
+    .status-PENDING, .status-pending { color: var(--muted); }
+    .status-CLAIMED, .status-claimed,
+    .status-IN_PROGRESS, .status-in_progress { color: var(--warn); }
+    .priority-critical { color: var(--danger); }
+    .priority-high { color: var(--warn); }
+    .priority-medium { color: inherit; }
+    .priority-low { opacity: 0.7; }
+    .review-approved { color: var(--ok); }
+    .review-pending, .review-changes_requested { color: var(--warn); }
+    .review-rejected { color: var(--danger); }
+    .review-actions {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .review-actions button {
+      min-width: 2rem;
+      min-height: 32px;
+      padding: 4px 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 2px;
+      color: var(--text);
+      background: var(--surface);
+      font: inherit;
+      cursor: pointer;
+    }
+    .review-actions button:hover,
+    .review-actions button:focus-visible {
+      color: var(--surface);
+      background: var(--text);
+      outline: none;
+    }
+    .review-actions button[data-review-decision="approved"] { border-color: var(--ok); }
+    .review-actions button[data-review-decision="rejected"] { border-color: var(--danger); }
+    .review-actions button[data-review-decision="changes_requested"] { border-color: var(--warn); }
+    .empty-state { opacity: 0.65; }
+    .hotkeys, .polling-state, .control-state { opacity: 0.72; }
+    .hotkeys {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 18px;
+    }
+    .polling-state[aria-live] {
+      min-width: 4.5rem;
+      padding: 5px 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      text-align: center;
+    }
+    .control-state[aria-live] {
+      min-width: 8rem;
+      padding: 5px 8px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      text-align: center;
+    }
+    .control-state[data-workers-paused="true"] {
+      color: var(--warn);
+      border-color: var(--warn);
+    }
+    body[data-dashboard-state="stopped"] .polling-state {
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+    .error-banner {
+      margin-block: 10px;
+      padding: 10px;
+      border: 1px solid var(--danger);
+      background: var(--surface);
+    }
+    .error-banner button { margin-top: 0.5rem; }
+    footer {
+      margin-top: 12px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+    @media (max-width: 900px) {
+      .operator-shell { width: calc(100vw - 16px); padding-block: 8px; }
+      .metric-strip { grid-template-columns: repeat(2, 1fr); }
+      .topbar { display: block; }
+      h1 { font-size: 1rem; }
+      .hotkeys { margin-block: 4px 8px; }
+      .operator-controls { grid-template-columns: 1fr; }
+      .surface-tabs button { flex: 1 0 11rem; text-align: left; }
+      table { font-size: 0.85rem; }
+      table th, table td { padding: 0.4rem; }
+      #surface-compliance .table-wrapper,
+      #surface-plans_tasks .table-wrapper,
+      #surface-workers .table-wrapper,
+      #surface-events .table-wrapper {
+        overflow-x: visible;
+      }
+      #review-gaps,
+      #tasks,
+      #workers,
+      #events {
+        display: block;
+        width: 100%;
+        border: 0;
+        background: transparent;
+      }
+      #review-gaps thead,
+      #tasks thead,
+      #workers thead,
+      #events thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      #review-gaps tbody,
+      #tasks tbody,
+      #workers tbody,
+      #events tbody {
+        display: grid;
+        gap: 8px;
+      }
+      #review-gaps tbody tr[data-filter-text],
+      #tasks tbody tr[data-filter-text],
+      #workers tbody tr[data-filter-text],
+      #events tbody tr[data-filter-text] {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 4px;
+        width: 100%;
+        margin: 0 0 8px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+      #review-gaps tbody tr[data-filter-text][hidden],
+      #tasks tbody tr[data-filter-text][hidden],
+      #workers tbody tr[data-filter-text][hidden],
+      #events tbody tr[data-filter-text][hidden] {
+        display: none;
+      }
+      #review-gaps td[data-mobile-label],
+      #tasks td[data-mobile-label],
+      #workers td[data-mobile-label],
+      #events td[data-mobile-label] {
+        display: grid;
+        grid-template-columns: minmax(84px, 32%) minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        min-width: 0;
+        padding: 4px 8px;
+        border-bottom: 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      #review-gaps td[data-mobile-label]::before,
+      #tasks td[data-mobile-label]::before,
+      #workers td[data-mobile-label]::before,
+      #events td[data-mobile-label]::before {
+        content: attr(data-mobile-label);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.2;
+      }
+      #review-gaps td[data-mobile-label="Actions"] {
+        display: block;
+        padding: 8px;
+        border-top: 1px solid var(--line);
+      }
+      #review-gaps td[data-mobile-label="Actions"]::before {
+        display: block;
+        margin-bottom: 4px;
+      }
+      #review-gaps .review-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        white-space: normal;
+      }
+      #review-gaps .review-actions button {
+        min-width: 44px;
+        min-height: 44px;
+        padding: 8px;
+      }
+      #review-gaps code,
+      #review-gaps time,
+      #tasks code,
+      #tasks time,
+      #workers code,
+      #workers time,
+      #events code,
+      #events time {
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      #tasks td[data-mobile-label="Review"] code {
+        display: block;
+        margin-top: 4px;
+      }
+      #review-gaps-empty,
+      #tasks-empty,
+      #workers-empty,
+      #events-empty {
+        display: block;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: var(--surface);
+      }
+      #review-gaps-empty td,
+      #tasks-empty td,
+      #workers-empty td,
+      #events-empty td {
+        display: block;
+        padding: 8px;
+        white-space: normal;
+        border-bottom: 0;
+      }
+    }
+  </style>
+</head>
+<body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
+  <main class="operator-shell">
+    <header class="topbar">
+      <hgroup>
+        <h1>Whilly Control Plane</h1>
+        <p class="hotkeys">
+          <span>q=quit</span>
+          <span>r=refresh</span>
+          <span>R=resume workers</span>
+          <span>{{ surface_switch_hotkey_label }}</span>
+          <span>/=filter</span>
+          <span>p=pause workers</span>
+          <span>j/k=select</span>
+          <span>a=Approve review</span>
+          <span>x=Reject review</span>
+          <span>c=Changes</span>
+        </p>
+      </hgroup>
+      <div class="operator-controls">
+        <div class="operator-primary-controls">
+          <input id="dashboard-filter"
+                 type="search"
+                 autocomplete="off"
+                 placeholder="Filter tasks, workers, events"
+                 aria-label="Filter dashboard rows">
+          <button id="dashboard-pause-workers" type="button" data-control-action="pause">Pause workers</button>
+          <button id="dashboard-resume-workers" type="button" data-control-action="resume">Resume workers</button>
+          <small id="polling-state" class="polling-state" aria-live="polite">Live</small>
+          <small id="worker-control-state"
+                 class="control-state"
+                 data-workers-paused="{{ 'true' if control_state.paused else 'false' }}"
+                 aria-live="polite">
+            {{ "Workers paused" if control_state.paused else "Workers running" }}
+          </small>
+        </div>
+        <details id="operator-identity-panel" class="operator-identity-panel">
+          <summary>Operator identity</summary>
+          <div class="operator-identity-fields">
+            <input id="dashboard-admin-token"
+                   type="password"
+                   autocomplete="off"
+                   placeholder="Admin bearer"
+                   aria-label="Admin bearer token for review actions">
+            <input id="dashboard-reviewer"
+                   type="email"
+                   autocomplete="email"
+                   placeholder="Reviewer email"
+                   aria-label="Reviewer identity for review actions">
+          </div>
+        </details>
+      </div>
+    </header>
+
+    {% if error %}
+      <article id="error-banner" class="error-banner" role="alert">
+        <header><strong>Control plane unavailable</strong></header>
+        <p>{{ error }}</p>
+        <button type="button"
+                hx-get="/"
+                hx-target="body"
+                hx-swap="outerHTML"
+                hx-trigger="click">Retry</button>
+      </article>
+    {% endif %}
+
+    <nav class="surface-tabs" aria-label="Operator views">
+      {% for surface, label in surfaces %}
+        <button type="button"
+                data-surface-tab="{{ surface }}"
+                aria-controls="surface-{{ surface }}"
+                aria-selected="{{ 'true' if loop.first else 'false' }}">
+          {{ loop.index }} {{ label }}
+        </button>
+      {% endfor %}
+    </nav>
+
+    <section class="surface-panel queue-health-panel" aria-label="Queue health">
+      <header><h2>Overview · Queue health</h2></header>
+      <section class="metric-strip"
+               id="summary"
+               hx-get="/"
+               hx-trigger="every 5s, whilly:reviewDecision from:body, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-select="#summary"
+               hx-target="#summary"
+               hx-swap="outerHTML">
+        <article class="metric-cell"><header>Tasks</header><div class="value">{{ summary.total_tasks }}</div></article>
+        <article class="metric-cell"><header>Active</header><div class="value">{{ summary.tasks_by_status.get("IN_PROGRESS", 0) + summary.tasks_by_status.get("CLAIMED", 0) }}</div></article>
+        <article class="metric-cell"><header>Pending</header><div class="value">{{ summary.tasks_by_status.get("PENDING", 0) }}</div></article>
+        <article class="metric-cell"><header>Done</header><div class="value">{{ summary.tasks_by_status.get("DONE", 0) }}</div></article>
+        <article class="metric-cell"><header>Failed</header><div class="value">{{ summary.failed_tasks }}</div></article>
+        <article class="metric-cell"><header>Review</header><div class="value">{{ summary.open_review_gaps }}</div></article>
+        <article class="metric-cell"><header>Workers</header><div class="value">{{ summary.workers_online }}/{{ summary.workers_total }}</div></article>
+      </section>
+    </section>
+
+    <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview">
+      <header><h2>Overview</h2></header>
+      <div class="table-wrapper">
+        <table id="overview-status" role="grid">
+          <thead>
+            <tr>
+              <th scope="col">Metric</th>
+              <th scope="col">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Tasks</td><td>{{ summary.total_tasks }}</td></tr>
+            <tr><td>Workers</td><td>{{ summary.workers_online }}/{{ summary.workers_total }} online</td></tr>
+            <tr><td>Failed tasks</td><td>{{ summary.failed_tasks }}</td></tr>
+            <tr><td>Review gaps</td><td>{{ summary.open_review_gaps }}</td></tr>
+            {% for status, count in summary.tasks_by_status.items()|sort %}
+              <tr><td>{{ status }}</td><td>{{ count }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" hidden>
+      <header><h2>Compliance - Human review / verification gaps</h2></header>
+      <div class="table-wrapper">
+        {% set review_columns = table_columns.review_gaps %}
+        <table id="review-gaps"
+               role="grid"
+               hx-get="/"
+               hx-trigger="whilly:reviewDecision from:body, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
+               hx-select="#review-gaps"
+               hx-target="#review-gaps"
+               hx-swap="outerHTML">
+          <thead>
+            <tr>
+              {% for column in review_columns %}
+                <th scope="col">{{ column.label_for("wui") }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% if review_gaps %}
+              {% for gap in review_gaps %}
+                <tr id="review-gap-{{ gap.task_id }}"
+                    data-filter-text="{{ gap.task_id }} {{ gap.plan_id }} {{ gap.reason }} {{ gap.stage_id }} {{ gap.reviewer or '' }} {{ gap.approval_channel }}"
+                    data-review-task="{{ gap.task_id }}"
+                    data-review-stage="{{ gap.stage_id }}"
+                    data-review-actionable="{{ 'true' if gap.actionable else 'false' }}"
+                    aria-selected="false">
+                  <td data-mobile-label="{{ review_columns[0].label_for("wui") }}"><code>{{ gap.task_id }}</code></td>
+                  <td data-mobile-label="{{ review_columns[1].label_for("wui") }}">{{ gap.plan_id }}</td>
+                  <td data-mobile-label="{{ review_columns[2].label_for("wui") }}">{{ gap.reason }}</td>
+                  <td data-mobile-label="{{ review_columns[3].label_for("wui") }}">{{ gap.stage_id if gap.stage_id else "—" }}</td>
+                  <td data-mobile-label="{{ review_columns[4].label_for("wui") }}">{{ gap.reviewer if gap.reviewer else "—" }}</td>
+                  <td data-mobile-label="{{ review_columns[5].label_for("wui") }}">
+                    {% if gap.actionable %}
+                      <span class="review-actions" aria-label="Human review actions">
+                        <button type="button"
+                                data-review-decision="approved"
+                                aria-label="Approve review for {{ gap.task_id }}"
+                                title="Approve review (a)">A Approve</button>
+                        <button type="button"
+                                data-review-decision="rejected"
+                                aria-label="Reject review for {{ gap.task_id }}"
+                                title="Reject review - comment required (x)">X Reject</button>
+                        <button type="button"
+                                data-review-decision="changes_requested"
+                                aria-label="Request changes for {{ gap.task_id }}"
+                                title="Request changes - details required (c)">C Changes</button>
+                      </span>
+                    {% else %}
+                      <span class="empty-state">read-only</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr id="review-gaps-empty">
+                <td colspan="{{ review_columns|length }}"><em class="empty-state">No human review or verification gaps.</em></td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="surface-plans_tasks" class="operator-surface surface-panel" data-surface="plans_tasks" hidden>
+      <header><h2>Plans/Tasks</h2></header>
+      <div class="table-wrapper">
+        {% include "_tasks_table.html" %}
+      </div>
+    </section>
+
+    <section id="surface-workers" class="operator-surface surface-panel" data-surface="workers" hidden>
+      <header><h2>Workers</h2></header>
+      <div class="table-wrapper">
+        {% include "_workers_table.html" %}
+      </div>
+    </section>
+
+    <section id="surface-events" class="operator-surface surface-panel" data-surface="events" hidden>
+      <header><h2>Events</h2></header>
+      <div class="table-wrapper">
+        {% set event_columns = table_columns.events %}
+        <table id="events" role="grid">
+          <thead>
+            <tr>
+              {% for column in event_columns %}
+                <th scope="col">{{ column.label_for("wui") }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% if events %}
+              {% for event in events %}
+                <tr id="event-{{ event.event_id }}"
+                    data-filter-text="{{ event.event_id }} {{ event.task_id or '' }} {{ event.plan_id or '' }} {{ event.event_type }} {{ event.detail }}">
+                  <td data-mobile-label="{{ event_columns[0].label_for("wui") }}"><code>{{ event.event_id }}</code></td>
+                  <td data-mobile-label="{{ event_columns[1].label_for("wui") }}">{{ event.task_id if event.task_id else "—" }}</td>
+                  <td data-mobile-label="{{ event_columns[2].label_for("wui") }}">{{ event.plan_id if event.plan_id else "—" }}</td>
+                  <td data-mobile-label="{{ event_columns[3].label_for("wui") }}">{{ event.event_type }}</td>
+                  <td data-mobile-label="{{ event_columns[4].label_for("wui") }}"><time datetime="{{ format_iso(event.created_at) }}">{{ format_human(event.created_at) }}</time></td>
+                </tr>
+              {% endfor %}
+            {% else %}
+              <tr id="events-empty">
+                <td colspan="{{ event_columns|length }}"><em class="empty-state">No events recorded.</em></td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <small>Whilly v{{ version }} &middot; rendered {{ rendered_at_human }}</small>
+    </footer>
+  </main>
+  <script>
+    (() => {
+      const DASHBOARD_STATE_KEY = "whilly.operator.dashboard.state.v1";
+      const surfaceOrder = {{ surface_order_json | safe }};
+      const workerControlRoutePrefix = "{{ wui_route_prefixes.worker_control }}";
+      const taskHumanReviewRoutePrefix = "{{ wui_route_prefixes.task_human_review }}";
+      const restorableFocusIds = new Set(["dashboard-filter", "dashboard-admin-token", "dashboard-reviewer"]);
+      const filter = document.getElementById("dashboard-filter");
+      const pollingState = document.getElementById("polling-state");
+      const workerControlState = document.getElementById("worker-control-state");
+      let dashboardStopped = false;
+      let manualRefreshRequested = false;
+      let selectedReviewIndex = 0;
+      let restoringDashboardState = false;
+      const liveStreams = new Set();
+
+      function isEditableTarget(target) {
+        if (!target) return false;
+        const tag = target.tagName;
+        return target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+      }
+
+      function readDashboardState() {
+        try {
+          const raw = window.sessionStorage?.getItem(DASHBOARD_STATE_KEY);
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch {
+          return {};
+        }
+      }
+
+      function focusedDashboardInputId() {
+        const active = document.activeElement;
+        if (!active?.id || !restorableFocusIds.has(active.id)) return "";
+        return active.id;
+      }
+
+      function saveDashboardState() {
+        if (restoringDashboardState) return;
+        try {
+          window.sessionStorage?.setItem(DASHBOARD_STATE_KEY, JSON.stringify({
+            surface: currentSurface(),
+            filterText: filter?.value || "",
+            selectedReviewIndex,
+            focusId: focusedDashboardInputId(),
+          }));
+        } catch {
+          // Browser storage can be unavailable in private or embedded contexts.
+        }
+      }
+
+      function restoreDashboardFocus(focusId) {
+        if (!focusId || !restorableFocusIds.has(focusId)) return;
+        const target = document.getElementById(focusId);
+        const panel = target?.closest("details");
+        if (panel) panel.open = true;
+        if (target && typeof target.focus === "function") target.focus();
+      }
+
+      function restoreDashboardState() {
+        const state = readDashboardState();
+        restoringDashboardState = true;
+        try {
+          const surface = surfaceOrder.includes(state.surface) ? state.surface : "overview";
+          setSurface(surface);
+          if (filter && typeof state.filterText === "string") filter.value = state.filterText;
+          const index = Number.parseInt(String(state.selectedReviewIndex ?? "0"), 10);
+          selectedReviewIndex = Number.isFinite(index) ? Math.max(0, index) : 0;
+          applyFilter();
+          restoreDashboardFocus(state.focusId);
+        } finally {
+          restoringDashboardState = false;
+        }
+      }
+
+      function setSurface(surface) {
+        document.querySelectorAll("[data-surface]").forEach((section) => {
+          section.hidden = section.dataset.surface !== surface;
+        });
+        document.querySelectorAll("[data-surface-tab]").forEach((button) => {
+          button.setAttribute("aria-selected", String(button.dataset.surfaceTab === surface));
+        });
+        saveDashboardState();
+      }
+
+      function currentSurface() {
+        const selected = document.querySelector("[data-surface-tab][aria-selected='true']");
+        return selected?.dataset.surfaceTab || "overview";
+      }
+
+      function isComplianceSurface() {
+        return currentSurface() === "compliance";
+      }
+
+      function applyFilter() {
+        const needle = (filter?.value || "").trim().toLowerCase();
+        document.querySelectorAll("tbody tr[data-filter-text]").forEach((row) => {
+          row.hidden = Boolean(needle) && !row.dataset.filterText.toLowerCase().includes(needle);
+        });
+        selectReviewRow(selectedReviewIndex);
+        saveDashboardState();
+      }
+
+      function refreshDashboard() {
+        if (dashboardStopped) return;
+        saveDashboardState();
+        if (window.htmx) {
+          manualRefreshRequested = true;
+          window.htmx.ajax("GET", "/", { target: "body", swap: "outerHTML" });
+          return;
+        }
+        window.location.reload();
+      }
+
+      function closeLiveStreams() {
+        liveStreams.forEach((source) => {
+          if (source && typeof source.close === "function") source.close();
+        });
+        liveStreams.clear();
+        document.body.removeAttribute("sse-connect");
+      }
+
+      function quitDashboard() {
+        dashboardStopped = true;
+        closeLiveStreams();
+        document.body.dataset.dashboardState = "stopped";
+        setPollingStatus("Stopped", true);
+      }
+
+      function setPollingStatus(text, isError = false) {
+        if (!pollingState) return;
+        pollingState.textContent = text;
+        pollingState.dataset.state = isError ? "error" : "ok";
+      }
+
+      function setWorkerControlStatus(paused) {
+        if (!workerControlState) return;
+        workerControlState.dataset.workersPaused = String(paused);
+        workerControlState.textContent = paused ? "Workers paused" : "Workers running";
+      }
+
+      function actionableReviewRows() {
+        return Array.from(document.querySelectorAll('#review-gaps tbody tr[data-review-actionable="true"]'))
+          .filter((row) => !row.hidden);
+      }
+
+      function selectReviewRow(index) {
+        const rows = actionableReviewRows();
+        document.querySelectorAll("#review-gaps tbody tr[data-review-task]").forEach((row) => {
+          row.classList.remove("review-row-selected");
+          row.setAttribute("aria-selected", "false");
+        });
+        if (!rows.length) {
+          selectedReviewIndex = 0;
+          return null;
+        }
+        selectedReviewIndex = Math.max(0, Math.min(index, rows.length - 1));
+        const selected = rows[selectedReviewIndex];
+        selected.classList.add("review-row-selected");
+        selected.setAttribute("aria-selected", "true");
+        saveDashboardState();
+        return selected;
+      }
+
+      function selectedReviewRow() {
+        return selectReviewRow(selectedReviewIndex);
+      }
+
+      function refreshReviewFragments() {
+        saveDashboardState();
+        if (window.htmx) {
+          manualRefreshRequested = true;
+          window.htmx.trigger(document.body, "whilly:reviewDecision");
+          return;
+        }
+        refreshDashboard();
+      }
+
+      async function submitControlAction(action) {
+        if (dashboardStopped) return;
+        const adminToken = document.getElementById("dashboard-admin-token");
+        const token = (adminToken?.value || "").trim();
+        if (!token) {
+          setPollingStatus("Admin token required", true);
+          adminToken?.focus();
+          return;
+        }
+        const payload = {};
+        if (action === "pause") {
+          const reason = window.prompt("Pause reason", "");
+          if (reason === null) return;
+          if (reason.trim()) payload.reason = reason.trim();
+        }
+        setPollingStatus(action === "pause" ? "Pausing" : "Resuming");
+        try {
+          const response = await fetch(`${workerControlRoutePrefix}${action}`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            let detail = response.statusText;
+            try {
+              const body = await response.json();
+              detail = body.detail || body.error || detail;
+            } catch {
+              detail = response.statusText;
+            }
+            setPollingStatus(`Control ${response.status}: ${detail}`, true);
+            return;
+          }
+          const state = await response.json();
+          setWorkerControlStatus(Boolean(state.paused));
+          setPollingStatus(state.paused ? "Workers paused" : "Workers resumed");
+          refreshDashboard();
+        } catch (error) {
+          setPollingStatus(`Control error: ${error}`, true);
+        }
+      }
+
+      async function submitReviewDecision(row, decision) {
+        if (!row) {
+          setPollingStatus("No review row selected", true);
+          return;
+        }
+        const adminToken = document.getElementById("dashboard-admin-token");
+        const reviewerInput = document.getElementById("dashboard-reviewer");
+        const token = (adminToken?.value || "").trim();
+        const reviewer = (reviewerInput?.value || "").trim();
+        if (!token) {
+          setPollingStatus("Admin token required", true);
+          adminToken?.focus();
+          return;
+        }
+        if (!reviewer) {
+          setPollingStatus("Reviewer required", true);
+          reviewerInput?.focus();
+          return;
+        }
+        const taskId = row.dataset.reviewTask || "";
+        const payload = { decision, reviewer };
+        if (row.dataset.reviewStage) payload.stage_id = row.dataset.reviewStage;
+        if (decision === "rejected") {
+          const comment = window.prompt("Reject review: enter required comment", "");
+          if (comment === null) {
+            setPollingStatus("Reject canceled");
+            return;
+          }
+          if (!comment.trim()) {
+            setPollingStatus("Reject requires a comment", true);
+            return;
+          }
+          payload.comment = comment.trim();
+        }
+        if (decision === "changes_requested") {
+          const requested = window.prompt("Request changes: describe required changes", "");
+          if (requested === null) {
+            setPollingStatus("Changes canceled");
+            return;
+          }
+          if (!requested.trim()) {
+            setPollingStatus("Changes requires details", true);
+            return;
+          }
+          payload.requested_changes = [requested.trim()];
+        }
+        setPollingStatus("Recording");
+        try {
+          const response = await fetch(`${taskHumanReviewRoutePrefix}${encodeURIComponent(taskId)}/human-review`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            let detail = response.statusText;
+            try {
+              const body = await response.json();
+              detail = body.detail || body.error || detail;
+            } catch {
+              detail = response.statusText;
+            }
+            setPollingStatus(
+              `Review not recorded: ${detail}. Check admin token, reviewer, and selected row, then retry.`,
+              true
+            );
+            return;
+          }
+          const recordedMessages = {
+            approved: "Review recorded: approved",
+            rejected: "Review recorded: rejected",
+            changes_requested: "Review recorded: changes requested",
+          };
+          setPollingStatus(recordedMessages[decision] || `Review recorded: ${decision}`);
+          refreshReviewFragments();
+        } catch (error) {
+          setPollingStatus(
+            `Review not recorded: ${error}. Check admin token, reviewer, and selected row, then retry.`,
+            true
+          );
+        }
+      }
+
+      function isManualLiveIntent(event, triggerType = "") {
+        const type = triggerType || event?.detail?.requestConfig?.triggeringEvent?.type || "";
+        return manualRefreshRequested || type === "click";
+      }
+
+      function markManualLiveRequest(event) {
+        manualRefreshRequested = false;
+      }
+
+      filter?.addEventListener("input", applyFilter);
+      document.querySelectorAll("[data-surface-tab]").forEach((button) => {
+        button.addEventListener("click", () => setSurface(button.dataset.surfaceTab));
+      });
+      document.body.addEventListener("click", (event) => {
+        const controlButton = event.target.closest?.("[data-control-action]");
+        if (controlButton) {
+          event.preventDefault();
+          submitControlAction(controlButton.dataset.controlAction);
+          return;
+        }
+        const actionButton = event.target.closest?.("[data-review-decision]");
+        if (actionButton) {
+          const row = actionButton.closest("tr[data-review-task]");
+          event.preventDefault();
+          submitReviewDecision(row, actionButton.dataset.reviewDecision);
+          return;
+        }
+        const reviewRow = event.target.closest?.("#review-gaps tbody tr[data-review-actionable='true']");
+        if (reviewRow) {
+          const rows = actionableReviewRows();
+          selectedReviewIndex = Math.max(0, rows.indexOf(reviewRow));
+          selectReviewRow(selectedReviewIndex);
+        }
+      });
+      document.body.addEventListener("htmx:sseOpen", (event) => {
+        const source = event.detail?.source || event.detail?.eventSource;
+        if (source) liveStreams.add(source);
+      });
+      document.body.addEventListener("htmx:beforeRequest", (event) => {
+        const triggerType = event.detail?.requestConfig?.triggeringEvent?.type || "";
+        if (dashboardStopped) {
+          manualRefreshRequested = false;
+          event.preventDefault();
+          return;
+        }
+        saveDashboardState();
+        if (isManualLiveIntent(event, triggerType)) markManualLiveRequest(event);
+      });
+      document.body.addEventListener("htmx:afterRequest", () => {
+        manualRefreshRequested = false;
+      });
+      document.body.addEventListener("htmx:sendError", () => {
+        manualRefreshRequested = false;
+      });
+      document.body.addEventListener("htmx:afterSwap", () => {
+        restoreDashboardState();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (isEditableTarget(event.target)) return;
+        if (event.key === "q" || event.key === "Q") {
+          event.preventDefault();
+          quitDashboard();
+        } else if (event.key === "r") {
+          event.preventDefault();
+          refreshDashboard();
+        } else if (event.key === "R") {
+          event.preventDefault();
+          submitControlAction("resume");
+        } else if (event.key === "p" || event.key === "P") {
+          event.preventDefault();
+          submitControlAction("pause");
+        } else if (isComplianceSurface() && (event.key === "j" || event.key === "J")) {
+          event.preventDefault();
+          selectReviewRow(selectedReviewIndex + 1);
+        } else if (isComplianceSurface() && (event.key === "k" || event.key === "K")) {
+          event.preventDefault();
+          selectReviewRow(selectedReviewIndex - 1);
+        } else if (isComplianceSurface() && (event.key === "a" || event.key === "A")) {
+          event.preventDefault();
+          submitReviewDecision(selectedReviewRow(), "approved");
+        } else if (isComplianceSurface() && (event.key === "x" || event.key === "X")) {
+          event.preventDefault();
+          submitReviewDecision(selectedReviewRow(), "rejected");
+        } else if (isComplianceSurface() && (event.key === "c" || event.key === "C")) {
+          event.preventDefault();
+          submitReviewDecision(selectedReviewRow(), "changes_requested");
+        } else if (event.key === "/") {
+          event.preventDefault();
+          filter?.focus();
+        } else if (/^[1-5]$/.test(event.key)) {
+          event.preventDefault();
+          setSurface(surfaceOrder[Number(event.key) - 1]);
+        }
+      });
+      restoreDashboardState();
+    })();
+  </script>
+</body>
+</html>

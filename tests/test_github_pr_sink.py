@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 
 from whilly.sinks import github_pr as gp
+from whilly import github_pr as legacy_gp
 from whilly.sinks.github_pr import (
     GitHubPRSink,
     PRResult,
@@ -17,6 +18,7 @@ from whilly.sinks.github_pr import (
     open_pr_for_task,
     render_pr_body,
 )
+from whilly.rollback.models import PreflightReport, ProtectionSignal, WorktreeState
 from whilly.task_manager import Task
 
 
@@ -98,7 +100,9 @@ class TestRenderBody:
         t = _make_task(prd_requirement="https://example.com/spec/123")
         body = render_pr_body(t)
         assert "Closes #" not in body
-        assert "Implements [GH-42](https://example.com/spec/123)" in body
+        # M1 sanitizer fences external prd_requirement URLs in the PR body.
+        assert "Implements [GH-42](" in body
+        assert "https://example.com/spec/123" in body
 
     def test_without_any_url(self):
         t = _make_task(prd_requirement="")
@@ -122,6 +126,24 @@ class _Proc:
         self.stderr = stderr
 
 
+def _preflight_report(repo: Path, *, blockers: tuple[str, ...] = ()) -> PreflightReport:
+    return PreflightReport(
+        operation="push",
+        worktree=WorktreeState(
+            repo_root=repo,
+            branch="main",
+            head_sha="abc123",
+            upstream=None,
+            dirty=bool(blockers),
+            dirty_entries=(" M app.py",) if blockers else (),
+        ),
+        backup_points=(),
+        protection=ProtectionSignal(status="unknown", reason="not requested"),
+        blockers=blockers,
+        warnings=("no rollback point at current HEAD",),
+    )
+
+
 class TestOpenPRForTask:
     def test_happy_path(self, tmp_path: Path):
         worktree = tmp_path
@@ -129,7 +151,11 @@ class TestOpenPRForTask:
         pr = _Proc(0, "https://github.com/foo/bar/pull/77\n")
 
         with patch.object(gp, "_run", side_effect=[push, pr]) as mock_run:
-            result = open_pr_for_task(_make_task(), worktree_path=worktree)
+            result = open_pr_for_task(
+                _make_task(),
+                worktree_path=worktree,
+                preflight_builder=lambda repo, **_: _preflight_report(Path(repo)),
+            )
 
         assert result.ok is True
         assert result.pr_url == "https://github.com/foo/bar/pull/77"
@@ -139,6 +165,52 @@ class TestOpenPRForTask:
         assert first_cmd[0] == "git"
         assert "push" in first_cmd
 
+    def test_push_preflight_receives_computed_target_ref_before_git_push(self, tmp_path: Path):
+        worktree = tmp_path
+        events: list[tuple[str, object]] = []
+
+        def fake_preflight(repo, *, operation, target_ref=None, **_kwargs):
+            events.append(("preflight", operation, target_ref))
+            return _preflight_report(Path(repo))
+
+        def fake_run(cmd, cwd, timeout=60):  # noqa: ARG001
+            events.append(("run", list(cmd)))
+            if cmd[:2] == ["git", "push"]:
+                return _Proc(0)
+            return _Proc(0, "https://github.com/foo/bar/pull/77\n")
+
+        with patch.object(gp, "_run", side_effect=fake_run):
+            result = open_pr_for_task(
+                _make_task(),
+                worktree_path=worktree,
+                branch_prefix="team",
+                preflight_builder=fake_preflight,
+            )
+
+        assert result.ok is True
+        assert events[0] == ("preflight", "push", "team/GH-42")
+        assert events[1] == ("run", ["git", "push", "origin", "HEAD:team/GH-42", "--force-with-lease"])
+
+    def test_push_preflight_blocker_skips_push_and_pr_create(self, tmp_path: Path):
+        captured: list[list[str]] = []
+
+        def fake_run(cmd, cwd, timeout=60):  # noqa: ARG001
+            captured.append(list(cmd))
+            return _Proc(0)
+
+        with patch.object(gp, "_run", side_effect=fake_run):
+            result = open_pr_for_task(
+                _make_task(),
+                worktree_path=tmp_path,
+                preflight_builder=lambda repo, **_: _preflight_report(Path(repo), blockers=("dirty worktree",)),
+            )
+
+        assert result.ok is False
+        assert result.branch == "whilly/GH-42"
+        assert result.failure_mode == "rollback_preflight_failed"
+        assert result.reason == "rollback preflight failed: dirty worktree"
+        assert captured == []
+
     def test_missing_worktree(self, tmp_path: Path):
         result = open_pr_for_task(_make_task(), worktree_path=tmp_path / "missing")
         assert result.ok is False
@@ -147,7 +219,11 @@ class TestOpenPRForTask:
     def test_push_failure(self, tmp_path: Path):
         push = _Proc(1, "", "fatal: permission denied\n")
         with patch.object(gp, "_run", return_value=push):
-            result = open_pr_for_task(_make_task(), worktree_path=tmp_path)
+            result = open_pr_for_task(
+                _make_task(),
+                worktree_path=tmp_path,
+                preflight_builder=lambda repo, **_: _preflight_report(Path(repo)),
+            )
         assert result.ok is False
         assert "git push failed" in result.reason
 
@@ -155,7 +231,11 @@ class TestOpenPRForTask:
         push = _Proc(0)
         pr = _Proc(1, "", "validation failed\n")
         with patch.object(gp, "_run", side_effect=[push, pr]):
-            result = open_pr_for_task(_make_task(), worktree_path=tmp_path)
+            result = open_pr_for_task(
+                _make_task(),
+                worktree_path=tmp_path,
+                preflight_builder=lambda repo, **_: _preflight_report(Path(repo)),
+            )
         assert result.ok is False
         assert "gh pr create failed" in result.reason
 
@@ -164,7 +244,11 @@ class TestOpenPRForTask:
         pr_fail = _Proc(1, "", "a pull request already exists for this branch")
         view = _Proc(0, json.dumps({"url": "https://github.com/foo/bar/pull/12"}))
         with patch.object(gp, "_run", side_effect=[push, pr_fail, view]):
-            result = open_pr_for_task(_make_task(), worktree_path=tmp_path)
+            result = open_pr_for_task(
+                _make_task(),
+                worktree_path=tmp_path,
+                preflight_builder=lambda repo, **_: _preflight_report(Path(repo)),
+            )
         assert result.ok is True
         assert result.pr_url == "https://github.com/foo/bar/pull/12"
 
@@ -172,7 +256,12 @@ class TestOpenPRForTask:
         push = _Proc(0)
         pr = _Proc(0, "https://x/pr/1\n")
         with patch.object(gp, "_run", side_effect=[push, pr]) as mock_run:
-            open_pr_for_task(_make_task(), worktree_path=tmp_path, draft=True)
+            open_pr_for_task(
+                _make_task(),
+                worktree_path=tmp_path,
+                draft=True,
+                preflight_builder=lambda repo, **_: _preflight_report(Path(repo)),
+            )
         gh_cmd = mock_run.call_args_list[1].args[0]
         assert "--draft" in gh_cmd
 
@@ -186,3 +275,11 @@ class TestGitHubPRSinkClass:
         assert m.call_args.kwargs["base"] == "develop"
         assert m.call_args.kwargs["draft"] is True
         assert m.call_args.kwargs["branch_prefix"] == "whilly"
+
+
+class TestLegacyModuleShim:
+    def test_legacy_import_path_reexports_public_pr_sink_api(self):
+        assert legacy_gp.GitHubPRSink is gp.GitHubPRSink
+        assert legacy_gp.PRResult is gp.PRResult
+        assert legacy_gp.open_pr_for_task is gp.open_pr_for_task
+        assert legacy_gp.render_pr_body is gp.render_pr_body
