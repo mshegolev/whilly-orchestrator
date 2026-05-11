@@ -1,0 +1,127 @@
+{# Patched Admin surface — drop into whilly/api/templates/_admin.html
+
+   Context vars expected:
+     admin.slack          {token, channel, template, notify_on:{...}}
+     admin.sources        list of {kind, url, existing_only, status}
+     admin.repos          list of {name, branch, default, protected_files}
+     admin.paused         bool
+     theme                "light" | "dark" | "auto"
+#}
+<section class="panel">
+  <header>Admin · Slack</header>
+  <div class="body">
+    <form class="form-grid"
+          hx-post="/admin/slack" hx-swap="none"
+          hx-on::after-request="document.body.dispatchEvent(new CustomEvent('whilly:toast', {detail:'Slack config saved'}))">
+      <label for="ad-tok">Bot token</label>
+      <input id="ad-tok" class="inp" type="password" name="token" value="{{ admin.slack.token }}" placeholder="xoxb-…" />
+
+      <label for="ad-ch">Channel</label>
+      <input id="ad-ch" class="inp" name="channel" value="{{ admin.slack.channel }}" placeholder="C0B1WT58EBE" />
+
+      <label for="ad-tpl">Template</label>
+      <input id="ad-tpl" class="inp full" name="template" value="{{ admin.slack.template }}" />
+
+      <label>Notify on</label>
+      <div style="display:flex;gap:14px;flex-wrap:wrap">
+        {% for key, label in [
+          ('complete','task.complete'),
+          ('fail','task.fail'),
+          ('human_loop','human_loop.required'),
+          ('paused','workers.paused')
+        ] %}
+          <label style="display:inline-flex;gap:6px;align-items:center">
+            <input type="checkbox" name="notify_{{ key }}"
+                   {% if admin.slack.notify_on[key] %}checked{% endif %} />
+            {{ label }}
+          </label>
+        {% endfor %}
+      </div>
+
+      <div class="full" style="display:flex;gap:8px">
+        <button class="btn ok" type="submit">Save</button>
+        <button class="btn" type="button"
+                hx-post="/admin/slack/test" hx-swap="none">Send test message</button>
+      </div>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <header>Admin · Task sources</header>
+  <div class="body">
+    <table class="tbl">
+      <thead><tr><th>Kind</th><th>URL/Project</th><th>Existing-only</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for s in admin.sources %}
+          <tr>
+            <td data-l="Kind">{{ s.kind }}</td>
+            <td data-l="URL/Project"><code style="white-space:normal;word-break:break-all">{{ s.url }}</code></td>
+            <td data-l="Existing-only">{{ '✓' if s.existing_only else '—' }}</td>
+            <td data-l="Status">
+              <strong class="s s-{{ 'DONE' if s.status == 'ok' else 'CLAIMED' }}">
+                {{ 'OK' if s.status == 'ok' else 'WARN' }}
+              </strong>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="padding:10px;border-top:1px solid var(--line)">
+      <button class="btn"
+              hx-get="/admin/sources/new" hx-target="closest .panel" hx-swap="afterend">+ Add source</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header>Admin · Repo targets</header>
+  <div class="body">
+    <table class="tbl">
+      <thead><tr><th>Repo</th><th>Branch</th><th>Default</th><th>Protected</th></tr></thead>
+      <tbody>
+        {% for r in admin.repos %}
+          <tr>
+            <td data-l="Repo"><code>{{ r.name }}</code></td>
+            <td data-l="Branch"><code>{{ r.branch }}</code></td>
+            <td data-l="Default">{{ '✓' if r.default else '—' }}</td>
+            <td data-l="Protected">{{ r.protected_files|join(', ') }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="padding:10px;border-top:1px solid var(--line)">
+      <button class="btn"
+              hx-get="/admin/repos/new" hx-target="closest .panel" hx-swap="afterend">+ Add repo</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header>Admin · Cluster control</header>
+  <div class="body">
+    <div class="form-grid">
+      <label>Workers</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        {% if admin.paused %}
+          <button class="btn ok" hx-post="/admin/workers/resume" hx-swap="none">R Resume workers</button>
+        {% else %}
+          <button class="btn warn" hx-post="/admin/workers/pause" hx-swap="none">P Pause workers</button>
+        {% endif %}
+        <button class="btn danger" hx-post="/admin/tasks/abort_all"
+                hx-confirm="Abort every running task? This is irreversible." hx-swap="none">■ Abort all tasks</button>
+      </div>
+
+      <label>Theme</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        {% for t in ['light','dark','auto'] %}
+          <button class="btn {% if theme == t %}ok{% endif %}"
+                  onclick="document.documentElement.setAttribute('data-theme','{{ t }}');
+                           try { localStorage.setItem('whilly:theme','{{ t }}'); } catch(_){}">
+            {{ t }}
+          </button>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</section>
