@@ -145,8 +145,23 @@ enable_board_sync = true                     # perform Jira transitions
 Then:
 
 ```bash
-whilly --from-jira ABC-123 --go
-whilly --from-jira https://company.atlassian.net/browse/ABC-123 --go
+whilly jira import ABC-123
+# writes out/jira-ABC-123.json with plan_id=jira-abc-123
+
+whilly jira import ABC-123 --import-db
+whilly run --plan jira-abc-123
+
+# one-shot import + run
+whilly jira import ABC-123 --run
+whilly jira import https://company.atlassian.net/browse/ABC-123 --run
+```
+
+If Jira settings are missing and the command runs in a terminal, Whilly asks
+for the missing values. When the API token/PAT is missing, it opens the Jira
+Cloud token page in your browser. In non-interactive shells, use:
+
+```bash
+whilly jira import ABC-123 --interactive-config
 ```
 
 While the task runs, whilly transitions the Jira ticket in step with its internal status — the mapping (overridable via `[jira.status_mapping]`):
