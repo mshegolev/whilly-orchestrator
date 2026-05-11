@@ -15,6 +15,25 @@ Scope is additive only:
 - Block D: rollback and safety net.
 - Preserve v5.0 backcompat, especially `bash workshop-demo.sh --cli stub`.
 
+## Current v1.1 Operator UI Parity Evidence
+
+The active operator UI contract is intentionally narrow and shared across WUI
+and TUI:
+
+- Active surfaces: Overview, Compliance, Plans/Tasks, Workers, Events.
+- Shared surface hotkey copy: `1-5=switch`.
+- Worker controls: `/api/v1/admin/workers/*`.
+- Human-review decisions: `/api/v1/tasks/*/human-review`.
+- `_logs.html`: routeable noncanonical fragment behind `?fragment=logs`, not
+  visible canonical navigation.
+- `_admin.html` and `_prd.html`: quarantined inactive WUI fragments until their
+  backend routes and matching TUI capabilities are deliberately wired.
+
+Focused verification for this contract lives in
+`tests/unit/test_operator_views.py`, `tests/unit/test_tui.py`,
+`tests/unit/test_wui_contract_static.py`, and
+`tests/integration/test_htmx_dashboard.py`.
+
 ## Last Closed Feature
 
 `publish-whilly-worker-4-6-1-and-fix-dashboard-sse-401`

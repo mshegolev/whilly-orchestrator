@@ -2,21 +2,27 @@
 
 ## v1.1 UI parity completion (Started: 2026-05-11)
 
-**Phases planned:** 4 phases, 0 plans
+**Phases completed:** 7 phases, 12 plans
 
 **Goal:**
 Close the post-v1.0 WUI/TUI interface gap introduced by inactive WUI artifacts, stale routes, and
 missing UI methods so every active operator interface path is canonical, reachable, and verified.
+The milestone also tracks urgent operator-adoption follow-ups needed for real usage on another
+machine: update checks, feedback reporting, and Jira-driven work routing.
 
 **Planned phases:**
 - Phase 13: Canonical UI parity contract.
+- Phase 13.1: Version update checks and manual/automatic update modes.
+- Phase 13.2: GitHub feedback issue reporter.
 - Phase 14: WUI method and fragment wiring.
 - Phase 15: TUI capability parity.
 - Phase 16: UI parity verification and docs.
+- Phase 17: Jira work classification and code readiness routing.
 
 **Active artifacts:**
 - `.planning/ROADMAP.md`
 - `.planning/REQUIREMENTS.md`
+- `.planning/v1.1-MILESTONE-AUDIT.md`
 
 ---
 

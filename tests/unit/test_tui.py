@@ -26,10 +26,13 @@ from whilly.operator_views import (
     OperatorTable,
     OperatorTableColumn,
     OperatorTaskRow,
+    OperatorUiArtifactStatus,
     ReviewGap,
     WorkerRow,
+    operator_surface_items,
     operator_surface_hotkey_help,
     operator_surface_hotkeys,
+    operator_wui_artifacts,
 )
 
 
@@ -247,6 +250,30 @@ def test_tui_surface_keys_derive_from_operator_contract() -> None:
     handle_tui_key(state, "6")
     assert state.surface is OperatorSurface.EVENTS
     assert operator_surface_hotkey_help() in tui_module.build_tui_parser().description
+
+
+def test_tui_covers_active_wui_navigation_and_excludes_noncanonical_fragments() -> None:
+    surface_items = operator_surface_items()
+    rendered = _render_to_text(render_tui(_snapshot(), TuiState()))
+
+    assert tuple(tui_module._SURFACE_BY_KEY.values()) == tuple(surface for surface, _label in surface_items)
+    for index, (_surface, label) in enumerate(surface_items, start=1):
+        assert f"{index} {label}" in rendered
+
+    nonactive_paths = {
+        artifact.path
+        for artifact in operator_wui_artifacts()
+        if artifact.status is not OperatorUiArtifactStatus.ACTIVE
+    }
+    assert nonactive_paths == {
+        "whilly/api/templates/_logs.html",
+        "whilly/api/templates/_admin.html",
+        "whilly/api/templates/_prd.html",
+    }
+    rendered_lower = rendered.lower()
+    assert "logs" not in rendered_lower
+    assert "admin" not in rendered_lower
+    assert "prd" not in rendered_lower
 
 
 @pytest.mark.asyncio

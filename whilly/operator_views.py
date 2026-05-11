@@ -188,20 +188,20 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
     OperatorUiArtifact(
         "whilly/api/templates/_logs.html",
         OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL,
-        reason="Routeable by ?fragment=logs but not in canonical nav/TUI parity yet.",
-        followup_phase="14",
+        reason="Routeable by ?fragment=logs with backend coverage; kept out of canonical nav until TUI parity expands.",
+        followup_phase="15",
     ),
     OperatorUiArtifact(
         "whilly/api/templates/_admin.html",
         OperatorUiArtifactStatus.INACTIVE_QUARANTINED,
-        reason="Contains admin controls with unsupported /admin/* routes.",
-        followup_phase="14",
+        reason="Quarantined from active WUI because it still references unsupported admin routes.",
+        followup_phase="future",
     ),
     OperatorUiArtifact(
         "whilly/api/templates/_prd.html",
         OperatorUiArtifactStatus.INACTIVE_QUARANTINED,
-        reason="Contains PRD controls with unsupported /prd/* routes.",
-        followup_phase="14",
+        reason="Quarantined from active WUI because it still references unsupported PRD routes.",
+        followup_phase="future",
     ),
     OperatorUiArtifact("whilly/api/static/whilly-hotkeys.js", OperatorUiArtifactStatus.ACTIVE),
 )

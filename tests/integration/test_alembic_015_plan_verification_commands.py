@@ -79,11 +79,10 @@ async def _fetchrow(dsn: str, sql: str, *args: Any) -> asyncpg.Record | None:
         await conn.close()
 
 
-def test_015_is_head_revision() -> None:
+def test_015_revision_links_from_014() -> None:
     cfg = _build_alembic_config("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
 
-    assert script.get_current_head() == "015_plan_verification_commands"
     revision = script.get_revision("015_plan_verification_commands")
     assert revision is not None
     assert revision.down_revision == "014_control_state"
