@@ -13,7 +13,7 @@ interface path is canonical, reachable, and verified across TUI and WUI.
 
 ## Phases
 
-- [ ] **Phase 13: Canonical UI parity contract** - Define the shared source of truth for surfaces,
+- [x] **Phase 13: Canonical UI parity contract** - Define the shared source of truth for surfaces, (completed 2026-05-11)
   hotkeys, actions, routes, and orphan-artifact checks.
 - [ ] **Phase 14: WUI method and fragment wiring** - Make active WUI static/templates use current
   DOM/API contracts and wire or quarantine logs/admin/PRD fragments.
@@ -28,7 +28,7 @@ interface path is canonical, reachable, and verified across TUI and WUI.
 **Goal**: Establish one testable contract for operator UI surfaces, hotkeys, actions, selectors, and routes.
 **Depends on**: v1.0 archive
 **Requirements**: UI-01, UI-02
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 **Canonical refs**: `.planning/REQUIREMENTS.md`, `whilly/operator_views.py`,
 `whilly/cli/tui.py`, `whilly/api/templates/index.html.j2`,
 `whilly/api/static/whilly-hotkeys.js`, `tests/unit/test_tui.py`,
@@ -43,7 +43,7 @@ interface path is canonical, reachable, and verified across TUI and WUI.
 
 Plans:
 - [x] 13-01-PLAN.md - Define shared operator UI surface/action contract and make active TUI/WUI consume it.
-- [ ] 13-02-PLAN.md - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards.
+- [x] 13-02-PLAN.md - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards.
 
 ### Phase 14: WUI method and fragment wiring
 **Goal**: Ensure every active WUI fragment/control has a current server method, supported route, auth behavior, and test.
@@ -100,7 +100,7 @@ Phases execute in numeric order. v1.1 continues after archived v1.0 Phase 12.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 13. Canonical UI parity contract | 1/2 | In Progress | - |
+| 13. Canonical UI parity contract | 2/2 | Complete   | 2026-05-11 |
 | 14. WUI method and fragment wiring | 0/0 | Pending | - |
 | 15. TUI capability parity | 0/0 | Pending | - |
 | 16. UI parity verification and docs | 0/0 | Pending | - |

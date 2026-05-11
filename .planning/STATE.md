@@ -6,14 +6,14 @@ current_phase: "13"
 current_phase_name: Canonical UI parity contract
 current_plan: "02"
 status: in_progress
-last_updated: "2026-05-11T10:24:20Z"
+last_updated: "2026-05-11T10:41:56Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -31,12 +31,12 @@ human control, and verification before claiming success.
 Current Milestone: v1.1
 Phase: 13 - Canonical UI parity contract
 Plan: 02 - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards
-Status: In progress
+Status: Complete
 Last Activity: 2026-05-11
-Last Activity Description: Completed 13-01-PLAN.md; UI-01 now has a canonical operator UI
-surface/action contract consumed by active TUI and WUI code.
+Last Activity Description: Completed 13-02-PLAN.md; UI-02 now has WUI artifact classification,
+canonical static hotkeys, and static/rendered stale-pattern guards.
 
-Progress: [#####-----] 50%
+Progress: [##########] 100%
 
 ## Active Scope
 
@@ -54,12 +54,19 @@ Progress: [#####-----] 50%
   literal map.
 - Active WUI dashboard JavaScript receives surface order, hotkey copy, and route prefixes through
   dashboard context.
+- Phase 13 Plan 02 classifies templates and static JavaScript only; CSS, fonts, and images remain
+  outside the UI-02 artifact scope.
+- `_logs.html` remains routeable but noncanonical with Phase 14 follow-up, while `_admin.html` and
+  `_prd.html` remain inactive quarantined artifacts.
+- `whilly/api/static/whilly-hotkeys.js` is now active after replacing stale `1-7` selectors and
+  `/admin/workers/*` routes with the canonical five-surface API contract.
 
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 13 | 01 | 9 min | 3 | 7 |
+| 13 | 02 | 8 min | 3 | 4 |
 
 ## Previous Milestone
 
@@ -78,5 +85,4 @@ Archives:
 
 ## Next Step
 
-Run `$gsd-execute-phase 13` or execute
-`.planning/phases/13-canonical-ui-parity-contract/13-02-PLAN.md` for UI-02 static/rendered stale-pattern guards.
+Run `$gsd-plan-phase 14` or `$gsd-discuss-phase 14` for WUI method and fragment wiring.
