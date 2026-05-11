@@ -83,6 +83,20 @@ class OperatorActionSpec:
     medium_note: str = ""
 
 
+class OperatorUiArtifactStatus(str, Enum):
+    ACTIVE = "active"
+    ROUTEABLE_NONCANONICAL = "routeable_noncanonical"
+    INACTIVE_QUARANTINED = "inactive_quarantined"
+
+
+@dataclass(frozen=True)
+class OperatorUiArtifact:
+    path: str
+    status: OperatorUiArtifactStatus
+    reason: str = ""
+    followup_phase: str = ""
+
+
 OPERATOR_SURFACE_LABELS: Final[Mapping[OperatorSurface, str]] = {
     OperatorSurface.OVERVIEW: "Overview",
     OperatorSurface.COMPLIANCE: "Compliance",
@@ -165,6 +179,33 @@ OPERATOR_WUI_ROUTE_PREFIXES: Final[Mapping[str, str]] = {
     "worker_control": "/api/v1/admin/workers/",
     "task_human_review": "/api/v1/tasks/",
 }
+
+
+OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
+    OperatorUiArtifact("whilly/api/templates/index.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/_tasks_table.html", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/_workers_table.html", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/_logs.html", OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL,
+        reason="Routeable by ?fragment=logs but not in canonical nav/TUI parity yet.",
+        followup_phase="14",
+    ),
+    OperatorUiArtifact(
+        "whilly/api/templates/_admin.html",
+        OperatorUiArtifactStatus.INACTIVE_QUARANTINED,
+        reason="Contains admin controls with unsupported /admin/* routes.",
+        followup_phase="14",
+    ),
+    OperatorUiArtifact(
+        "whilly/api/templates/_prd.html",
+        OperatorUiArtifactStatus.INACTIVE_QUARANTINED,
+        reason="Contains PRD controls with unsupported /prd/* routes.",
+        followup_phase="14",
+    ),
+    OperatorUiArtifact("whilly/api/static/whilly-hotkeys.js", OperatorUiArtifactStatus.INACTIVE_QUARANTINED,
+        reason="Static hotkey file still contains pre-contract selectors/routes; Task 2 fixes it before Phase 13 completes.",
+        followup_phase="13",
+    ),
+)
 
 
 OPERATOR_TABLE_COLUMNS: Final[Mapping[OperatorTable, tuple[OperatorTableColumn, ...]]] = {
@@ -259,6 +300,15 @@ def operator_wui_route_prefixes() -> Mapping[str, str]:
     """Return canonical WUI route prefixes used by active operator controls."""
 
     return OPERATOR_WUI_ROUTE_PREFIXES
+
+
+def operator_wui_artifacts(
+    status: OperatorUiArtifactStatus | str | None = None,
+) -> tuple[OperatorUiArtifact, ...]:
+    if status is None:
+        return OPERATOR_WUI_ARTIFACTS
+    artifact_status = status if isinstance(status, OperatorUiArtifactStatus) else OperatorUiArtifactStatus(status)
+    return tuple(artifact for artifact in OPERATOR_WUI_ARTIFACTS if artifact.status is artifact_status)
 
 
 def operator_table_columns(table: OperatorTable | str, medium: OperatorMedium) -> tuple[OperatorTableColumn, ...]:
@@ -739,6 +789,7 @@ __all__ = [
     "OPERATOR_ACTIONS",
     "OPERATOR_SURFACE_LABELS",
     "OPERATOR_TABLE_COLUMNS",
+    "OPERATOR_WUI_ARTIFACTS",
     "OPERATOR_WUI_ROUTE_PREFIXES",
     "OPERATOR_WUI_SELECTORS",
     "TASKS_LIMIT",
@@ -754,6 +805,8 @@ __all__ = [
     "OperatorTable",
     "OperatorTableColumn",
     "OperatorTaskRow",
+    "OperatorUiArtifact",
+    "OperatorUiArtifactStatus",
     "ReviewGap",
     "WorkerRow",
     "build_operator_snapshot",
@@ -766,6 +819,7 @@ __all__ = [
     "operator_surface_items",
     "operator_table_columns",
     "operator_table_labels",
+    "operator_wui_artifacts",
     "operator_wui_route_prefixes",
     "operator_wui_selectors",
 ]
