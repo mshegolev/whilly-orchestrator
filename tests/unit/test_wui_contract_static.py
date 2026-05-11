@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 
 from whilly.operator_views import (
@@ -99,3 +100,12 @@ def test_static_hotkeys_file_uses_current_contract() -> None:
         assert pattern not in javascript_text
     for regex in BANNED_ACTIVE_WUI_REGEXES:
         assert re.search(regex, javascript_text) is None
+
+
+def test_setuptools_includes_wui_static_package_data() -> None:
+    pyproject = tomllib.loads((_project_root() / "pyproject.toml").read_text())
+    package_data = pyproject["tool"]["setuptools"]["package-data"]["whilly"]
+
+    assert "api/static/*.css" in package_data
+    assert "api/static/*.js" in package_data
+    assert "api/static/fonts/*.ttf" in package_data
