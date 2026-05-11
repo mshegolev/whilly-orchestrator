@@ -11,7 +11,8 @@ Public surface mirrors :mod:`whilly.sources.github_issues`::
     from whilly.sources.jira import fetch_single_jira_issue
     plan_path, stats = fetch_single_jira_issue("ABC-123", out_path="tasks.json")
 
-CLI entry point: ``whilly --from-jira ABC-123 [--go]`` (see cli.py).
+CLI entry point: ``whilly jira import ABC-123 [--import-db|--run]``.
+The legacy ``whilly --from-jira ABC-123 [--go]`` form is still routed there.
 
 Uses only stdlib (``urllib.request``) so Jira access works without ``requests``
 being installed.

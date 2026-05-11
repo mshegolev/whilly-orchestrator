@@ -36,7 +36,7 @@ whilly --from-github whilly:ready --go
 # One specific issue or Jira ticket
 whilly --from-issue owner/repo/42 --go           # slash form — shell-safe
 whilly --from-issue 'owner/repo#42' --go         # '#' form, quote in zsh/bash
-whilly --from-jira ABC-123 --go                  # single Jira ticket
+whilly jira import ABC-123 --run                 # single Jira ticket
 ```
 
 ## Task sources
@@ -45,11 +45,17 @@ whilly --from-jira ABC-123 --go                  # single Jira ticket
 |------|--------|-------|
 | `--from-github <label>` | GitHub issues by label | `all`/`*`/`-` = no filter |
 | `--from-issue <ref>` | one GitHub issue | `owner/repo/N`, `owner/repo#N`, or URL |
-| `--from-jira <key>` | one Jira ticket | `ABC-123` or browse URL; auth via `[jira]` |
+| `jira import <key>` | one Jira ticket | `ABC-123` or browse URL; auth via `[jira]`; legacy `--from-jira <key> --go` still works |
 | `--from-project <url>` | GitHub Projects v2 board | full board items |
 | `--from-issues-project <url> --repo o/r` | Projects board filtered by issue repo | |
 
 Every source writes to an idempotent plan file (`tasks-…json`); re-running refreshes description/priority/labels without losing status.
+
+For Jira, `whilly jira import` validates auth before fetching. If `JIRA_SERVER_URL`,
+`JIRA_USERNAME`, or `JIRA_API_TOKEN` is missing, an interactive terminal prompts
+for it. Missing PAT opens the Jira Cloud API token page; non-interactive runs
+print the exact variables and the same URL. Use `--no-interactive-config` to
+force instructions-only behavior.
 
 ## Lifecycle sync
 

@@ -12,6 +12,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly worker ...``    → :mod:`whilly.cli.worker`
 * ``whilly logs ...``      → :mod:`whilly.log_viewer`
 * ``whilly forge ...``     → :mod:`whilly.forge`
+* ``whilly jira ...``      → :mod:`whilly.cli.jira`
 * ``whilly qa-release ...`` → :mod:`whilly.cli.qa_release`
 * ``whilly project-config ...`` → :mod:`whilly.cli.project_config`
 * ``whilly github-projects ...`` → :mod:`whilly.cli.github_projects`
@@ -46,6 +47,7 @@ Legacy invocation                    v4 dispatch
 ``whilly --headless``                Sets ``WHILLY_HEADLESS=1``; stripped from argv
 ``whilly --init "desc"``             ``whilly init "desc"``
 ``whilly --prd-wizard [SLUG]``       ``whilly init --interactive [--slug SLUG] [SLUG]``
+``whilly --from-jira KEY [--go]``    ``whilly jira import KEY [--run]``
 ``whilly --resume``                  No-op (Postgres state survives restarts)
 ``whilly --reset PLAN``              ``whilly plan reset PLAN --keep-tasks --yes``
 ``whilly --all``                     No-op (use ``whilly run --plan <id>`` per plan)
@@ -123,6 +125,7 @@ Commands:
               `admin worker revoke`).
   logs        Show per-task prompts, LLM events, and raw model output.
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
+  jira        Import Jira issues into Whilly plans.
   qa-release  Collect Jira release verification context and linked artifacts.
   project-config Validate domain configs and generate adaptive plans.
   github-projects Sync GitHub Projects v2 items and statuses.
@@ -139,9 +142,10 @@ Run `whilly <command> --help` for command-specific options.
 Legacy v3 flag forms (`whilly --tasks PATH`, `whilly --init …` with
 optional `--plan` / `--go` follow-ons, `whilly --prd-wizard`,
 `whilly --resume`, `whilly --reset PLAN`, `whilly --all`,
-`whilly --headless`, `--workspace`/`--worktree` opt-ins, and the
-`--no-workspace`/`--no-worktree` no-ops) are accepted for backwards
-compatibility and routed to the v4 subcommand surface above.
+`whilly --headless`, `whilly --from-jira KEY [--go]`,
+`--workspace`/`--worktree` opt-ins, and the `--no-workspace`/
+`--no-worktree` no-ops) are accepted for backwards compatibility and
+routed to the v4 subcommand surface above.
 """
 
 
@@ -173,6 +177,7 @@ _LEGACY_VERB_FLAGS: frozenset[str] = frozenset(
         "--headless",
         "--init",
         "--prd-wizard",
+        "--from-jira",
         "--resume",
         "--reset",
         "--all",
@@ -304,6 +309,26 @@ def _apply_legacy_shim(args: list[str]) -> tuple[list[str] | None, int | None]:
         new_args += passthrough
         return new_args, None
 
+    if head == "--from-jira":
+        # v3: ``whilly --from-jira ABC-123 --go`` fetched one Jira issue
+        # into tasks.json and immediately started execution. v4 routes the
+        # source adapter through the explicit ``jira import`` command; the
+        # old ``--go`` modifier maps to ``--run`` and remains otherwise a
+        # no-op for import-only calls.
+        if len(rest) < 2 or rest[1].startswith("-"):
+            sys.stderr.write("whilly: --from-jira requires a Jira key or browse URL (e.g. `ABC-123`).\n")
+            return None, 2
+        tail: list[str] = []
+        run_requested = False
+        for token in rest[2:]:
+            if token == "--go":
+                run_requested = True
+            else:
+                tail.append(token)
+        if run_requested and "--run" not in tail:
+            tail.insert(0, "--run")
+        return ["jira", "import", rest[1], *tail], None
+
     if head == "--resume":
         # v3 reloaded ``.whilly_state.json`` and continued the
         # in-process loop. v4's state is in Postgres, so re-running
@@ -415,6 +440,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.forge.intake import run_forge_command
 
         return run_forge_command(rest)
+    if cmd == "jira":
+        from whilly.cli.jira import run_jira_command
+
+        return run_jira_command(rest)
     if cmd == "qa-release":
         from whilly.cli.qa_release import run_qa_release_command
 
