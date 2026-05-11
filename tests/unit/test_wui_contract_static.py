@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
-from whilly.operator_views import OperatorUiArtifactStatus, operator_wui_artifacts
+from whilly.operator_views import (
+    OperatorUiArtifactStatus,
+    operator_surface_items,
+    operator_wui_artifacts,
+    operator_wui_route_prefixes,
+    operator_wui_selectors,
+)
 
 
 BANNED_ACTIVE_WUI_PATTERNS = ("1-7", "/^[1-7]$/", ".tabs [data-key]")
@@ -50,12 +57,7 @@ def test_wui_artifacts_are_classified() -> None:
     assert prd_artifact.followup_phase == "14"
 
     hotkeys_artifact = artifacts_by_path["whilly/api/static/whilly-hotkeys.js"]
-    assert hotkeys_artifact.status is OperatorUiArtifactStatus.INACTIVE_QUARANTINED
-    assert (
-        hotkeys_artifact.reason
-        == "Static hotkey file still contains pre-contract selectors/routes; Task 2 fixes it before Phase 13 completes."
-    )
-    assert hotkeys_artifact.followup_phase == "13"
+    assert hotkeys_artifact.status is OperatorUiArtifactStatus.ACTIVE
 
 
 def test_non_active_wui_artifacts_have_reason_and_followup() -> None:
@@ -73,3 +75,27 @@ def test_active_wui_artifacts_reject_stale_patterns() -> None:
             assert pattern not in text
         for regex in BANNED_ACTIVE_WUI_REGEXES:
             assert re.search(regex, text) is None
+
+
+def test_static_hotkeys_file_uses_current_contract() -> None:
+    project_root = _project_root()
+    javascript_text = (project_root / "whilly/api/static/whilly-hotkeys.js").read_text()
+    surface_values = [surface.value for surface, _label in operator_surface_items()]
+    assert json.dumps(surface_values) in javascript_text
+
+    surface_key_regex = f"/^[1-{len(surface_values)}]$/"
+    assert surface_key_regex in javascript_text
+
+    selectors = operator_wui_selectors()
+    assert selectors["surface_tab"].removesuffix("]") + '="' in javascript_text
+    assert selectors["filter"] in javascript_text
+    assert selectors["review_actionable_row"] in javascript_text
+
+    worker_prefix = operator_wui_route_prefixes()["worker_control"]
+    assert f"{worker_prefix}pause" in javascript_text
+    assert f"{worker_prefix}resume" in javascript_text
+
+    for pattern in BANNED_ACTIVE_WUI_PATTERNS:
+        assert pattern not in javascript_text
+    for regex in BANNED_ACTIVE_WUI_REGEXES:
+        assert re.search(regex, javascript_text) is None
