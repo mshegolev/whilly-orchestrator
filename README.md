@@ -433,6 +433,43 @@ block.
 | `whilly forge intake owner/repo/N` | GitHub Issue → Whilly plan + label transition. |
 | `whilly github-projects sync-todo <url> --repo owner/name [--existing-only]` | GitHub Projects v2 Todo items → Issues/tasks or existing-Issue sync state. |
 | `whilly github-projects sync-status <issue> "Done"` | Move a synced Project item through the Status field. |
+| `whilly feedback --kind bug|idea --title ... --body ...` | Create a GitHub Issue with a Whilly bug or idea report. |
+
+### Leave Feedback
+
+Use `whilly feedback` when something breaks or when you want to leave an idea
+while testing Whilly on another machine. It creates a GitHub Issue through the
+GitHub CLI and redacts known secret patterns from the report body.
+
+One-time GitHub setup:
+
+```bash
+gh auth login
+gh auth status
+```
+
+Preview the issue command without creating anything:
+
+```bash
+whilly feedback \
+  --kind bug \
+  --title "Install failed on a fresh machine" \
+  --body "What happened, what command you ran, and any relevant log lines." \
+  --dry-run
+```
+
+Create the issue:
+
+```bash
+whilly feedback \
+  --kind bug \
+  --title "Install failed on a fresh machine" \
+  --body "What happened, what command you ran, and any relevant log lines."
+```
+
+Ideas use the same command with `--kind idea`. The default target repository is
+`mshegolev/whilly-orchestrator`; override it with `--repo owner/repo` or
+`WHILLY_FEEDBACK_REPO=owner/repo`.
 
 ## Configuration
 
