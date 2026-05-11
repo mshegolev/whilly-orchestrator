@@ -52,6 +52,9 @@ docker ps
 If `docker compose` is unavailable but `docker-compose` exists, use
 `docker-compose` in the commands below.
 
+You do not need localhost.run / LHR credentials for a fully local setup. Those
+are only for public tunnel exposure with `--profile funnel`.
+
 ## 3. Generate Local Env Files
 
 Preferred path from a fresh clone:
