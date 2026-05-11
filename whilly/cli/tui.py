@@ -31,6 +31,8 @@ from whilly.operator_views import (
     WorkerRow,
     fetch_operator_snapshot,
     filter_snapshot,
+    operator_surface_hotkey_help,
+    operator_surface_hotkeys,
     operator_surface_items,
     operator_table_columns,
 )
@@ -58,13 +60,7 @@ EXIT_ENVIRONMENT_ERROR: Final[int] = 2
 
 KeySource = Callable[[], Awaitable[str | None]]
 
-_SURFACE_BY_KEY: Final[dict[str, OperatorSurface]] = {
-    "1": OperatorSurface.OVERVIEW,
-    "2": OperatorSurface.COMPLIANCE,
-    "3": OperatorSurface.PLANS_TASKS,
-    "4": OperatorSurface.WORKERS,
-    "5": OperatorSurface.EVENTS,
-}
+_SURFACE_BY_KEY: Final[dict[str, OperatorSurface]] = dict(operator_surface_hotkeys())
 
 
 @dataclass
@@ -81,11 +77,12 @@ class TuiState:
 
 
 def build_tui_parser() -> argparse.ArgumentParser:
+    surface_hotkey_help = operator_surface_hotkey_help()
     parser = argparse.ArgumentParser(
         prog="whilly tui",
         description=(
             "Browserless operator interface. Hotkeys: q=quit, r=refresh, R=resume workers, "
-            "1-5=switch, /=filter, p=pause workers."
+            f"{surface_hotkey_help}, /=filter, p=pause workers."
         ),
     )
     parser.add_argument("--plan", dest="plan_id", default=None, help="Optional plan id filter.")
@@ -377,7 +374,7 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     filter_part = f"filter: {state.filter_text}" if state.filter_text else "filter: -"
     error_part = f" error: {state.last_error}" if state.last_error else ""
     table.caption = (
-        f"hotkeys: q=quit  r=refresh  R=resume workers  1-5=switch  /=filter  p=pause workers  "
+        f"hotkeys: q=quit  r=refresh  R=resume workers  {operator_surface_hotkey_help()}  /=filter  p=pause workers  "
         f"j/k=select  a=Approve review  x=Reject review  c=Changes  {filter_part}  "
         f"mode: {mode}  rendered: {snapshot.rendered_at.strftime('%H:%M:%S')}{error_part}"
     )
