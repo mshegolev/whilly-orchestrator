@@ -37,8 +37,10 @@ from whilly.operator_views import (
     OperatorSnapshot,
     OperatorTable,
     fetch_operator_snapshot,
+    operator_surface_hotkey_help,
     operator_surface_items,
     operator_table_columns,
+    operator_wui_route_prefixes,
 )
 
 logger = logging.getLogger(__name__)
@@ -287,6 +289,8 @@ async def render_dashboard(
         logger.warning("dashboard fetch failed: %s", exc)
         error = f"{type(exc).__name__}: {exc}"
 
+    surface_items = operator_surface_items()
+    surface_order = [surface.value for surface, _label in surface_items]
     context: dict[str, Any] = {
         "request": request,
         "snapshot": snapshot,
@@ -296,7 +300,11 @@ async def render_dashboard(
         "review_gaps": snapshot.review_gaps,
         "control_state": snapshot.control_state,
         "summary": snapshot.summary,
-        "surfaces": [(surface.value, label) for surface, label in operator_surface_items()],
+        "surfaces": [(surface.value, label) for surface, label in surface_items],
+        "surface_order": surface_order,
+        "surface_order_json": json.dumps(surface_order),
+        "surface_switch_hotkey_label": operator_surface_hotkey_help(),
+        "wui_route_prefixes": operator_wui_route_prefixes(),
         "table_columns": {
             "tasks": operator_table_columns(OperatorTable.TASKS, "wui"),
             "workers": operator_table_columns(OperatorTable.WORKERS, "wui"),
