@@ -31,3 +31,18 @@ def test_main_dispatches_tui_command(monkeypatch) -> None:
 
     assert main(["tui", "--plan", "P1"]) == 23
     assert called["argv"] == ["--plan", "P1"]
+
+
+def test_main_dispatches_update_command(monkeypatch) -> None:
+    import whilly.cli.update as update_cli
+
+    called: dict[str, list[str]] = {}
+
+    def fake_run(argv: list[str]) -> int:
+        called["argv"] = argv
+        return 29
+
+    monkeypatch.setattr(update_cli, "run_update_command", fake_run)
+
+    assert main(["update", "check"]) == 29
+    assert called["argv"] == ["check"]

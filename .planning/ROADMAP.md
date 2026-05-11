@@ -9,12 +9,17 @@ after pulling `feat(wui): adopt 90s/TUI design system (#270)`.
 ## Current Milestone: v1.1 UI parity completion
 
 Close inactive WUI artifacts, stale routes, and missing UI methods so every active operator
-interface path is canonical, reachable, and verified across TUI and WUI.
+interface path is canonical, reachable, and verified across TUI and WUI. Phase 13.1 is an urgent
+inserted product lifecycle addition for version update checks and safe package updates before
+continuing WUI/TUI parity work.
 
 ## Phases
 
 - [x] **Phase 13: Canonical UI parity contract** - Define the shared source of truth for surfaces, (completed 2026-05-11)
   hotkeys, actions, routes, and orphan-artifact checks.
+- [x] **Phase 13.1: Version update checks and manual/automatic update modes (INSERTED)** - Add (completed 2026-05-11)
+  classic package-update behavior: check for newer versions, run a manual update, and support an
+  explicit automatic update policy.
 - [ ] **Phase 14: WUI method and fragment wiring** - Make active WUI static/templates use current
   DOM/API contracts and wire or quarantine logs/admin/PRD fragments.
 - [ ] **Phase 15: TUI capability parity** - Add or adjust TUI surfaces/help so it matches every
@@ -44,6 +49,28 @@ interface path is canonical, reachable, and verified across TUI and WUI.
 Plans:
 - [x] 13-01-PLAN.md - Define shared operator UI surface/action contract and make active TUI/WUI consume it.
 - [x] 13-02-PLAN.md - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards.
+
+### Phase 13.1: Version update checks and manual/automatic update modes (INSERTED)
+
+**Goal:** Give operators a safe, explicit way to detect newer Whilly releases and either update
+manually or opt into automatic update behavior that follows classic package-manager expectations.
+**Requirements**: UPD-01, UPD-02, UPD-03, UPD-04
+**Depends on:** Phase 13
+**Plans:** 1/1 plans complete
+**Canonical refs**: `pyproject.toml`, `whilly/__init__.py`, `whilly/cli/__init__.py`,
+`whilly/cli/__main__.py`, `whilly/cli/*`, `tests/unit/`
+**Success Criteria** (what must be TRUE):
+  1. A CLI command can report the installed Whilly version, the latest available version, and
+     whether an update is available without mutating the environment.
+  2. A manual update command performs an explicit operator-requested package update, with dry-run
+     and clear command/error output for pip, pipx, or unsupported install contexts.
+  3. Automatic update mode is opt-in, configurable, and constrained by policy so Whilly never
+     silently upgrades itself during unrelated commands.
+  4. Tests cover newer, current, unavailable-network, unsupported-installer, manual-update, and
+     auto-update policy paths without depending on live package indexes.
+
+Plans:
+- [x] 13.1-01-PLAN.md - Implement version check, manual update, and opt-in auto-update modes.
 
 ### Phase 14: WUI method and fragment wiring
 **Goal**: Ensure every active WUI fragment/control has a current server method, supported route, auth behavior, and test.
@@ -101,6 +128,7 @@ Phases execute in numeric order. v1.1 continues after archived v1.0 Phase 12.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 13. Canonical UI parity contract | 2/2 | Complete   | 2026-05-11 |
+| 13.1. Version update checks and manual/automatic update modes | 1/1 | Complete | 2026-05-11 |
 | 14. WUI method and fragment wiring | 0/0 | Pending | - |
 | 15. TUI capability parity | 0/0 | Pending | - |
 | 16. UI parity verification and docs | 0/0 | Pending | - |
