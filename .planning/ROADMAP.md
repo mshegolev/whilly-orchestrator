@@ -28,6 +28,7 @@ interface path is canonical, reachable, and verified across TUI and WUI.
 **Goal**: Establish one testable contract for operator UI surfaces, hotkeys, actions, selectors, and routes.
 **Depends on**: v1.0 archive
 **Requirements**: UI-01, UI-02
+**Plans:** 2 plans
 **Canonical refs**: `.planning/REQUIREMENTS.md`, `whilly/operator_views.py`,
 `whilly/cli/tui.py`, `whilly/api/templates/index.html.j2`,
 `whilly/api/static/whilly-hotkeys.js`, `tests/unit/test_tui.py`,
@@ -39,6 +40,10 @@ interface path is canonical, reachable, and verified across TUI and WUI.
      `/admin/workers/*` actions in active WUI code.
   4. Orphan WUI templates/static files are either covered by the contract or explicitly marked
      inactive.
+
+Plans:
+- [ ] 13-01-PLAN.md - Define shared operator UI surface/action contract and make active TUI/WUI consume it.
+- [ ] 13-02-PLAN.md - Classify WUI artifacts, fix static hotkeys, and add static/rendered stale-pattern guards.
 
 ### Phase 14: WUI method and fragment wiring
 **Goal**: Ensure every active WUI fragment/control has a current server method, supported route, auth behavior, and test.
@@ -95,7 +100,7 @@ Phases execute in numeric order. v1.1 continues after archived v1.0 Phase 12.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 13. Canonical UI parity contract | 0/0 | Pending | - |
+| 13. Canonical UI parity contract | 0/2 | Pending | - |
 | 14. WUI method and fragment wiring | 0/0 | Pending | - |
 | 15. TUI capability parity | 0/0 | Pending | - |
 | 16. UI parity verification and docs | 0/0 | Pending | - |
