@@ -1,5 +1,25 @@
 # Milestones
 
+## v1.1 UI parity completion (Started: 2026-05-11)
+
+**Phases planned:** 4 phases, 0 plans
+
+**Goal:**
+Close the post-v1.0 WUI/TUI interface gap introduced by inactive WUI artifacts, stale routes, and
+missing UI methods so every active operator interface path is canonical, reachable, and verified.
+
+**Planned phases:**
+- Phase 13: Canonical UI parity contract.
+- Phase 14: WUI method and fragment wiring.
+- Phase 15: TUI capability parity.
+- Phase 16: UI parity verification and docs.
+
+**Active artifacts:**
+- `.planning/ROADMAP.md`
+- `.planning/REQUIREMENTS.md`
+
+---
+
 ## v1.0 milestone (Shipped: 2026-05-08)
 
 **Phases completed:** 12 phases, 25 plans, 0 tasks
