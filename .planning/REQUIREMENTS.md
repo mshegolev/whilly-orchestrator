@@ -7,7 +7,7 @@
 
 ### Canonical UI Contract
 
-- [ ] **UI-01**: Operator can rely on one canonical surface/action contract shared by
+- [x] **UI-01**: Operator can rely on one canonical surface/action contract shared by
   `whilly/operator_views.py`, `whilly/cli/tui.py`, `whilly/api/templates/index.html.j2`, and active
   WUI hotkey code.
 - [ ] **UI-02**: Repository tests fail when WUI templates or static files reference non-canonical
@@ -59,7 +59,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UI-01 | Phase 13 | Pending |
+| UI-01 | Phase 13 | Complete |
 | UI-02 | Phase 13 | Pending |
 | WUI-01 | Phase 14 | Pending |
 | WUI-02 | Phase 14 | Pending |
