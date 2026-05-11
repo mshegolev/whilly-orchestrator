@@ -69,6 +69,7 @@ successful completion.
 | Page | When to read |
 |---|---|
 | **[Getting Started]({{ site.baseurl }}/Getting-Started)** | First time here — eight practical walkthroughs |
+| **[OpenCode Developer Guide]({{ site.baseurl }}/OpenCode-Developer-Guide)** | Run workers with OpenCode and set `WHILLY_MODEL` |
 | **[Full Usage Reference]({{ site.baseurl }}/Whilly-Usage)** | Every CLI flag, env var, and config field |
 | **[GitHub Integration Guide]({{ site.baseurl }}/GitHub-Integration-Guide)** | Setting up Projects v2 + board sync |
 | **[Current vs Target]({{ site.baseurl }}/Current-vs-Target)** | Alignment status against the target documentation pack |

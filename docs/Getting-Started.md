@@ -7,6 +7,9 @@ nav_order: 2
 
 Step-by-step walkthroughs for the most common flows. If you want the full flag/config reference, see [`Whilly-Usage.md`](./Whilly-Usage.md).
 
+For OpenCode runs, including the free `opencode/big-pickle` model and where to
+set `WHILLY_MODEL`, see [`OpenCode-Developer-Guide.md`](./OpenCode-Developer-Guide.md).
+
 ---
 
 ## 0. Install (one-time)
