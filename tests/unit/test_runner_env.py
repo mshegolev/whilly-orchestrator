@@ -37,6 +37,7 @@ def test_base_runner_env_allowlist_contract_is_exact() -> None:
         "SSL_CERT_FILE",
         "REQUESTS_CA_BUNDLE",
         "NODE_EXTRA_CA_CERTS",
+        "WHILLY_CLI",
         "WHILLY_MODEL",
         "CLAUDE_BIN",
         "WHILLY_OPENCODE_BIN",
@@ -53,6 +54,7 @@ def test_build_runner_env_copies_only_allowlisted_base_names() -> None:
         "PATH": "/usr/bin",
         "HOME": "/home/operator",
         "LANG": "C.UTF-8",
+        "WHILLY_CLI": "opencode",
         "WHILLY_MODEL": "claude-opus-4-6[1m]",
         "UNRELATED_FLAG": "do-not-forward",
         "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
@@ -64,6 +66,7 @@ def test_build_runner_env_copies_only_allowlisted_base_names() -> None:
         "HOME": "/home/operator",
         "LANG": "C.UTF-8",
         "PATH": "/usr/bin",
+        "WHILLY_CLI": "opencode",
         "WHILLY_MODEL": "claude-opus-4-6[1m]",
     }
     assert list(env) == sorted(env)

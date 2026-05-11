@@ -164,6 +164,29 @@ def test_build_env_inactive_uses_scrubbed_runner_env() -> None:
     assert "SLACK_ACCESS_TOKEN" not in result
 
 
+def test_build_env_for_cli_adapter_forwards_whilly_cli_without_provider_key() -> None:
+    """cli_adapter needs WHILLY_CLI, while opencode/big-pickle remains zero-key."""
+    parent = {
+        "PATH": "/usr/bin",
+        "CLAUDE_BIN": "/opt/whilly/docker/cli_adapter.py",
+        "WHILLY_CLI": "opencode",
+        "WHILLY_MODEL": "opencode/big-pickle",
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+        "OPENCODE_API_KEY": "should-not-be-needed",
+        "WHILLY_DATABASE_URL": "postgres://user:pass@example/db",
+    }
+    settings = ProxySettings(url=None)
+
+    result = build_subprocess_env(parent, settings, model="opencode/big-pickle")
+
+    assert result == {
+        "CLAUDE_BIN": "/opt/whilly/docker/cli_adapter.py",
+        "PATH": "/usr/bin",
+        "WHILLY_CLI": "opencode",
+        "WHILLY_MODEL": "opencode/big-pickle",
+    }
+
+
 def test_build_env_active_injects_https_proxy_and_no_proxy() -> None:
     """When proxy is on, HTTPS_PROXY and NO_PROXY layer over the scrubbed env."""
     parent = {

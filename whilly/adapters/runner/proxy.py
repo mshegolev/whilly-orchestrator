@@ -135,7 +135,12 @@ def build_subprocess_env(
     from ``settings``. Existing values in ``parent_env`` are overridden so
     the operator's CLI/env override always wins.
     """
-    result = build_runner_env(parent_env, required_env=required_env, model=model, backend="claude")
+    result = build_runner_env(
+        parent_env,
+        required_env=required_env,
+        model=model,
+        backend=_runner_backend(parent_env),
+    )
     # Bind to a local so the truthy check narrows for the type checker
     # without an `assert` — assertions are stripped under ``python -O``,
     # so a real branch is the safer guard.
@@ -144,6 +149,13 @@ def build_subprocess_env(
         result["HTTPS_PROXY"] = url
         result["NO_PROXY"] = settings.no_proxy
     return result
+
+
+def _runner_backend(parent_env: Mapping[str, str]) -> str:
+    """Return credential-inference backend for the spawned coding-agent process."""
+
+    cli = parent_env.get("WHILLY_CLI", "").strip().lower()
+    return cli or "claude"
 
 
 def spawn_env_for_claude(
