@@ -158,7 +158,12 @@ services:
       WHILLY_DATABASE_URL: postgresql://${POSTGRES_USER:-whilly}:${POSTGRES_PASSWORD:-whilly}@postgres:5432/${POSTGRES_DB:-whilly}
     volumes:
       - funnel_url_volume:/funnel
-      - "${LHR_SSH_KEY_PATH:?must-be-set-on-VPS-see-AGENTS.md}:/etc/whilly-funnel/ssh-key:ro"
+      # Keep this default non-required at compose parse time. Docker Compose
+      # interpolates all services before applying profiles, so `${VAR:?...}`
+      # here would break fully local runs that do not start `--profile funnel`.
+      # The sidecar entrypoint validates the key path when the funnel profile
+      # is actually enabled.
+      - "${LHR_SSH_KEY_PATH:-/tmp/whilly-lhr-ssh-key-not-configured}:/etc/whilly-funnel/ssh-key:ro"
     # Mission §4 cap: ~32 MB image; allow 64 MB headroom for psql + ssh.
     mem_limit: 64m
     mem_reservation: 16m
