@@ -647,7 +647,7 @@ docker-compose -f docker-compose.worker.yml --env-file .env.worker up -d \
 
 # Confirm 3 distinct container names (whilly-orchestrator-worker-1..3)
 # and 3 worker_ids in the control-plane audit log.
-docker ps --filter name=worker --format '{{.Names}}'
+docker ps --filter name=worker --format '{% raw %}{{.Names}}{% endraw %}'
 ```
 
 All workers share the same `WHILLY_CONTROL_URL` and bootstrap token
