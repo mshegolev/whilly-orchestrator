@@ -10,6 +10,14 @@ Step-by-step walkthroughs for the most common flows. If you want the full flag/c
 For OpenCode runs, including the free `opencode/big-pickle` model and where to
 set `WHILLY_MODEL`, see [`OpenCode-Developer-Guide.md`](./OpenCode-Developer-Guide.md).
 
+If the repo is already cloned and you want an agent to bring it up locally,
+send it [`Agent-Local-Whilly-Setup.md`](./Agent-Local-Whilly-Setup.md).
+The fast path in that runbook is:
+
+```bash
+python3 -m whilly.cli quick-setup --yes
+```
+
 ---
 
 ## 0. Install (one-time)
