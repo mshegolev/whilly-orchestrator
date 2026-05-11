@@ -36,6 +36,21 @@ class OperatorTable(str, Enum):
     EVENTS = "events"
 
 
+class OperatorAction(str, Enum):
+    """Stable operator action identifiers shared by TUI and web renderers."""
+
+    QUIT = "quit"
+    REFRESH = "refresh"
+    FILTER_FOCUS = "filter.focus"
+    WORKERS_PAUSE = "workers.pause"
+    WORKERS_RESUME = "workers.resume"
+    REVIEW_SELECT_NEXT = "review.select_next"
+    REVIEW_SELECT_PREVIOUS = "review.select_previous"
+    REVIEW_APPROVE = "review.approve"
+    REVIEW_REJECT = "review.reject"
+    REVIEW_CHANGES_REQUESTED = "review.changes_requested"
+
+
 OperatorMedium = Literal["tui", "wui"]
 
 
@@ -57,12 +72,98 @@ class OperatorTableColumn:
         raise ValueError(f"unsupported operator medium: {medium}")
 
 
+@dataclass(frozen=True)
+class OperatorActionSpec:
+    action: OperatorAction
+    label: str
+    hotkeys: tuple[str, ...] = ()
+    surfaces: tuple[OperatorSurface, ...] = ()
+    wui_selector: str = ""
+    wui_route_prefix: str = ""
+    medium_note: str = ""
+
+
 OPERATOR_SURFACE_LABELS: Final[Mapping[OperatorSurface, str]] = {
     OperatorSurface.OVERVIEW: "Overview",
     OperatorSurface.COMPLIANCE: "Compliance",
     OperatorSurface.PLANS_TASKS: "Plans/Tasks",
     OperatorSurface.WORKERS: "Workers",
     OperatorSurface.EVENTS: "Events",
+}
+
+
+OPERATOR_ACTIONS: Final[tuple[OperatorActionSpec, ...]] = (
+    OperatorActionSpec(OperatorAction.QUIT, "Quit", ("q", "Q")),
+    OperatorActionSpec(OperatorAction.REFRESH, "Refresh", ("r",)),
+    OperatorActionSpec(OperatorAction.FILTER_FOCUS, "Focus filter", ("/",), wui_selector="#dashboard-filter"),
+    OperatorActionSpec(
+        OperatorAction.WORKERS_PAUSE,
+        "Pause workers",
+        ("p", "P"),
+        wui_selector="[data-control-action='pause']",
+        wui_route_prefix="/api/v1/admin/workers/",
+    ),
+    OperatorActionSpec(
+        OperatorAction.WORKERS_RESUME,
+        "Resume workers",
+        ("R",),
+        wui_selector="[data-control-action='resume']",
+        wui_route_prefix="/api/v1/admin/workers/",
+    ),
+    OperatorActionSpec(
+        OperatorAction.REVIEW_SELECT_NEXT,
+        "Select next review gap",
+        ("j", "J"),
+        surfaces=(OperatorSurface.COMPLIANCE,),
+        wui_selector='#review-gaps tbody tr[data-review-actionable="true"]',
+    ),
+    OperatorActionSpec(
+        OperatorAction.REVIEW_SELECT_PREVIOUS,
+        "Select previous review gap",
+        ("k", "K"),
+        surfaces=(OperatorSurface.COMPLIANCE,),
+        wui_selector='#review-gaps tbody tr[data-review-actionable="true"]',
+    ),
+    OperatorActionSpec(
+        OperatorAction.REVIEW_APPROVE,
+        "Approve review",
+        ("a", "A"),
+        surfaces=(OperatorSurface.COMPLIANCE,),
+        wui_selector="[data-review-decision='approved']",
+        wui_route_prefix="/api/v1/tasks/",
+    ),
+    OperatorActionSpec(
+        OperatorAction.REVIEW_REJECT,
+        "Reject review",
+        ("x", "X"),
+        surfaces=(OperatorSurface.COMPLIANCE,),
+        wui_selector="[data-review-decision='rejected']",
+        wui_route_prefix="/api/v1/tasks/",
+    ),
+    OperatorActionSpec(
+        OperatorAction.REVIEW_CHANGES_REQUESTED,
+        "Request changes",
+        ("c", "C"),
+        surfaces=(OperatorSurface.COMPLIANCE,),
+        wui_selector="[data-review-decision='changes_requested']",
+        wui_route_prefix="/api/v1/tasks/",
+    ),
+)
+
+
+OPERATOR_WUI_SELECTORS: Final[Mapping[str, str]] = {
+    "surface_tab": "[data-surface-tab]",
+    "surface_panel": "[data-surface]",
+    "filter": "#dashboard-filter",
+    "worker_control": "[data-control-action]",
+    "review_decision": "[data-review-decision]",
+    "review_actionable_row": '#review-gaps tbody tr[data-review-actionable="true"]',
+}
+
+
+OPERATOR_WUI_ROUTE_PREFIXES: Final[Mapping[str, str]] = {
+    "worker_control": "/api/v1/admin/workers/",
+    "task_human_review": "/api/v1/tasks/",
 }
 
 
@@ -128,6 +229,36 @@ def operator_surface_items() -> tuple[tuple[OperatorSurface, str], ...]:
     """Return operator surfaces and labels in shared display order."""
 
     return tuple((surface, OPERATOR_SURFACE_LABELS[surface]) for surface in OperatorSurface)
+
+
+def operator_surface_hotkeys() -> tuple[tuple[str, OperatorSurface], ...]:
+    """Return surface switch hotkeys in shared display order."""
+
+    return tuple((str(index), surface) for index, (surface, _label) in enumerate(operator_surface_items(), start=1))
+
+
+def operator_surface_hotkey_help() -> str:
+    """Return compact operator help text for surface switching."""
+
+    return f"1-{len(operator_surface_hotkeys())}=switch"
+
+
+def operator_action_specs() -> tuple[OperatorActionSpec, ...]:
+    """Return shared operator action specs."""
+
+    return OPERATOR_ACTIONS
+
+
+def operator_wui_selectors() -> Mapping[str, str]:
+    """Return canonical WUI selectors used by active operator controls."""
+
+    return OPERATOR_WUI_SELECTORS
+
+
+def operator_wui_route_prefixes() -> Mapping[str, str]:
+    """Return canonical WUI route prefixes used by active operator controls."""
+
+    return OPERATOR_WUI_ROUTE_PREFIXES
 
 
 def operator_table_columns(table: OperatorTable | str, medium: OperatorMedium) -> tuple[OperatorTableColumn, ...]:
@@ -605,13 +736,18 @@ def _matches_gap(row: ReviewGap, needle: str) -> bool:
 
 __all__ = [
     "EVENTS_LIMIT",
+    "OPERATOR_ACTIONS",
     "OPERATOR_SURFACE_LABELS",
     "OPERATOR_TABLE_COLUMNS",
+    "OPERATOR_WUI_ROUTE_PREFIXES",
+    "OPERATOR_WUI_SELECTORS",
     "TASKS_LIMIT",
     "WORKERS_LIMIT",
     "ComplianceSummary",
     "EventRow",
     "HumanReviewState",
+    "OperatorAction",
+    "OperatorActionSpec",
     "OperatorMedium",
     "OperatorSnapshot",
     "OperatorSurface",
@@ -624,7 +760,12 @@ __all__ = [
     "fetch_operator_snapshot",
     "filter_snapshot",
     "human_review_states_from_events",
+    "operator_action_specs",
+    "operator_surface_hotkey_help",
+    "operator_surface_hotkeys",
     "operator_surface_items",
     "operator_table_columns",
     "operator_table_labels",
+    "operator_wui_route_prefixes",
+    "operator_wui_selectors",
 ]
