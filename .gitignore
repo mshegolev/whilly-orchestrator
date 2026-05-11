@@ -31,6 +31,7 @@ whilly.toml
 .DS_Store
 *.swp
 .claude/
+.serena/
 .remember/
 
 # Whilly runtime artifacts
