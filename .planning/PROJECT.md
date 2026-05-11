@@ -18,8 +18,9 @@ and verification before claiming success.
 ## Current State
 
 v1.0 shipped on 2026-05-08 with 12 completed phases, 25 completed plans, and 23/23 v1
-requirements covered. The current active roadmap is intentionally empty until the next milestone is
-defined.
+requirements covered. v1.1 is complete and audited: 7 phases, 12 plans, and 23/23 v1.1
+requirements covered. It closes UI parity gaps and adds the operator-adoption controls needed to
+run Whilly on another machine against real Jira/GitLab work.
 
 The shipped v1.0 scope includes:
 
@@ -36,9 +37,12 @@ The shipped v1.0 scope includes:
 
 ## Current Milestone: v1.1 UI parity completion
 
+**Status:** Complete, pending archive/commit/tag.
+
 **Goal:** Close the post-v1.0 WUI/TUI interface gap introduced by inactive WUI artifacts, stale
 routes, and missing UI methods so every active operator interface path is canonical, reachable, and
-verified.
+verified. The milestone also tracks urgent operator-adoption follow-ups for update checks, feedback
+reporting, and Jira-driven work routing.
 
 **Target features:**
 - One canonical TUI/WUI surface, hotkey, action, and route contract.
@@ -46,6 +50,8 @@ verified.
 - Logs, admin, and PRD UI fragments are either fully wired with backend methods and TUI parity or
   explicitly quarantined from active UI scope.
 - Focused parity tests fail when a WUI/TUI surface, route, or hotkey drifts.
+- Jira-driven work intake can classify incoming issues, persist task history, reread Jira/GitLab
+  links, and gate autonomous execution on code/test readiness.
 
 ## Requirements
 
@@ -71,12 +77,14 @@ verified.
 
 ### Active
 
-- [ ] Close stale WUI hotkey and route drift from the `feat(wui): adopt 90s/TUI design system`
+- [x] Close stale WUI hotkey and route drift from the `feat(wui): adopt 90s/TUI design system`
   commit.
-- [ ] Ensure every active WUI fragment/control has a supported server method and corresponding
+- [x] Ensure every active WUI fragment/control has a supported server method and corresponding
   TUI capability or an explicit documented exclusion.
-- [ ] Add tests that prevent orphan WUI partials/static files from drifting away from the canonical
+- [x] Add tests that prevent orphan WUI partials/static files from drifting away from the canonical
   operator UI contract.
+- [x] Add Jira work classification, comment-driven approval, GitLab link refresh, and code/test
+  readiness gates before autonomous Jira polling.
 
 ### Out of Scope
 
@@ -124,6 +132,8 @@ verified.
 | Keep rollback restore operator-triggered and confirmation-gated | Prevents silent destructive branch mutation | Good |
 | Make CI polling explicit and bounded repair budgeted | Avoids claims of continuous polling, auto-merge, production recovery, or unbounded repair | Good |
 | Defer semantic memory from current scope | Deterministic events, task history, PR evidence, and verification logs remain authoritative | Good |
+| Treat hotfix as urgency, not a primary Jira work kind | Hotfix can apply to bugs, tasks, or DevOps changes and should add safety gates instead of changing the whole taxonomy | Good |
+| Gate autonomous Jira work on code/test readiness | Linked repos, GitLab refs, unit tests, and verification commands must be known before workers mutate code | Good |
 
 ---
-*Last updated: 2026-05-11 after starting v1.1 UI parity completion milestone*
+*Last updated: 2026-05-11 after completing v1.1 milestone audit*

@@ -66,6 +66,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -697,6 +698,86 @@ SELECT
     credential_policy
 FROM repo_targets
 WHERE id = $1
+"""
+
+
+_UPSERT_JIRA_WORK_SESSION_SQL: str = """
+INSERT INTO jira_work_sessions (
+    issue_key,
+    plan_id,
+    state,
+    work_kind,
+    urgency,
+    readiness_verdict,
+    summary_hash,
+    description_hash,
+    link_set_hash,
+    last_seen_comment_id,
+    raw_snapshot
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+ON CONFLICT (issue_key) DO UPDATE
+SET plan_id = EXCLUDED.plan_id,
+    state = EXCLUDED.state,
+    work_kind = EXCLUDED.work_kind,
+    urgency = EXCLUDED.urgency,
+    readiness_verdict = EXCLUDED.readiness_verdict,
+    summary_hash = EXCLUDED.summary_hash,
+    description_hash = EXCLUDED.description_hash,
+    link_set_hash = EXCLUDED.link_set_hash,
+    last_seen_comment_id = EXCLUDED.last_seen_comment_id,
+    raw_snapshot = EXCLUDED.raw_snapshot,
+    updated_at = NOW()
+RETURNING
+    issue_key,
+    plan_id,
+    state,
+    work_kind,
+    urgency,
+    readiness_verdict,
+    summary_hash,
+    description_hash,
+    link_set_hash,
+    last_seen_comment_id,
+    raw_snapshot,
+    created_at,
+    updated_at
+"""
+
+
+_SELECT_JIRA_WORK_SESSION_SQL: str = """
+SELECT
+    issue_key,
+    plan_id,
+    state,
+    work_kind,
+    urgency,
+    readiness_verdict,
+    summary_hash,
+    description_hash,
+    link_set_hash,
+    last_seen_comment_id,
+    raw_snapshot,
+    created_at,
+    updated_at
+FROM jira_work_sessions
+WHERE issue_key = $1
+"""
+
+
+_INSERT_JIRA_WORK_EVENT_SQL: str = """
+INSERT INTO jira_work_events (issue_key, event_type, command, payload)
+VALUES ($1, $2, $3, $4::jsonb)
+RETURNING id
+"""
+
+
+_LIST_JIRA_WORK_EVENTS_SQL: str = """
+SELECT id, issue_key, event_type, command, payload, created_at
+FROM jira_work_events
+WHERE issue_key = $1
+ORDER BY created_at ASC, id ASC
+LIMIT $2
 """
 
 
@@ -1468,6 +1549,39 @@ def _row_to_control_state(row: asyncpg.Record) -> ControlState:
     )
 
 
+def _row_to_jira_work_session(row: asyncpg.Record) -> dict[str, Any]:
+    """Map a ``jira_work_sessions`` row to JSON-serializable state."""
+
+    return {
+        "issue_key": row["issue_key"],
+        "plan_id": row["plan_id"],
+        "state": row["state"],
+        "work_kind": row["work_kind"],
+        "urgency": row["urgency"],
+        "readiness_verdict": row["readiness_verdict"],
+        "summary_hash": row["summary_hash"],
+        "description_hash": row["description_hash"],
+        "link_set_hash": row["link_set_hash"],
+        "last_seen_comment_id": row["last_seen_comment_id"],
+        "raw_snapshot": _decode_jsonb(row["raw_snapshot"]) or {},
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _row_to_jira_work_event(row: asyncpg.Record) -> dict[str, Any]:
+    """Map a ``jira_work_events`` row to JSON-serializable event state."""
+
+    return {
+        "id": int(row["id"]),
+        "issue_key": row["issue_key"],
+        "event_type": row["event_type"],
+        "command": row["command"],
+        "payload": _decode_jsonb(row["payload"]) or {},
+        "created_at": row["created_at"],
+    }
+
+
 def _optional_record_string(row: asyncpg.Record, key: str) -> str:
     """Return optional string column from an asyncpg record."""
     try:
@@ -1642,6 +1756,85 @@ class TaskRepository:
         if value is None:
             return (await self.get_control_state()).paused
         return bool(value)
+
+    async def upsert_jira_work_session(
+        self,
+        *,
+        issue_key: str,
+        plan_id: str = "",
+        state: str = "classified",
+        work_kind: str = "",
+        urgency: str = "normal",
+        readiness_verdict: str = "",
+        summary_hash: str = "",
+        description_hash: str = "",
+        link_set_hash: str = "",
+        last_seen_comment_id: str = "",
+        raw_snapshot: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist the latest Jira issue snapshot and routing state."""
+
+        normalized_issue_key = issue_key.strip().upper()
+        if not normalized_issue_key:
+            raise ValueError("issue_key must be non-empty")
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                _UPSERT_JIRA_WORK_SESSION_SQL,
+                normalized_issue_key,
+                plan_id.strip(),
+                state.strip() or "classified",
+                work_kind.strip(),
+                urgency.strip() or "normal",
+                readiness_verdict.strip(),
+                summary_hash.strip(),
+                description_hash.strip(),
+                link_set_hash.strip(),
+                last_seen_comment_id.strip(),
+                json.dumps(dict(raw_snapshot or {})),
+            )
+        if row is None:  # pragma: no cover - RETURNING always yields one row
+            raise RuntimeError("jira work session upsert returned no row")
+        return _row_to_jira_work_session(row)
+
+    async def get_jira_work_session(self, issue_key: str) -> dict[str, Any] | None:
+        """Return persisted Jira work state for ``issue_key`` if present."""
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(_SELECT_JIRA_WORK_SESSION_SQL, issue_key.strip().upper())
+        return None if row is None else _row_to_jira_work_session(row)
+
+    async def append_jira_work_event(
+        self,
+        *,
+        issue_key: str,
+        event_type: str,
+        command: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Append one Jira work history event and return its id."""
+
+        normalized_issue_key = issue_key.strip().upper()
+        normalized_event_type = event_type.strip()
+        if not normalized_issue_key:
+            raise ValueError("issue_key must be non-empty")
+        if not normalized_event_type:
+            raise ValueError("event_type must be non-empty")
+        async with self._pool.acquire() as conn:
+            event_id = await conn.fetchval(
+                _INSERT_JIRA_WORK_EVENT_SQL,
+                normalized_issue_key,
+                normalized_event_type,
+                command.strip(),
+                json.dumps(dict(payload or {})),
+            )
+        return int(event_id)
+
+    async def list_jira_work_events(self, issue_key: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        """List Jira work events for ``issue_key`` in append order."""
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(_LIST_JIRA_WORK_EVENTS_SQL, issue_key.strip().upper(), max(1, min(limit, 500)))
+        return [_row_to_jira_work_event(row) for row in rows]
 
     async def claim_task(
         self,

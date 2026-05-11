@@ -57,6 +57,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "013_work_intents_repo_targets",
     "014_control_state",
     "015_plan_verification_commands",
+    "016_jira_work_sessions",
 )
 
 
@@ -142,7 +143,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "015_plan_verification_commands"
+    assert head_version == "016_jira_work_sessions"
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -298,7 +299,9 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                     'repo_targets',
                     'plan_repo_targets',
                     'task_repo_targets',
-                    'control_state'
+                    'control_state',
+                    'jira_work_sessions',
+                    'jira_work_events'
                   )
                 """,
             )
@@ -317,6 +320,8 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
         "plan_repo_targets",
         "task_repo_targets",
         "control_state",
+        "jira_work_sessions",
+        "jira_work_events",
     }
 
     control_state_columns = [
@@ -353,6 +358,21 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(verification_commands_column_count) == 1
 
+    jira_work_tables = {
+        row["table_name"]
+        for row in asyncio.run(
+            _fetchall(
+                empty_postgres_dsn,
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN ('jira_work_sessions', 'jira_work_events')
+                """,
+            )
+        )
+    }
+    assert jira_work_tables == {"jira_work_sessions", "jira_work_events"}
+
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
 
@@ -370,7 +390,17 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN ('workers', 'plans', 'tasks', 'events', 'bootstrap_tokens', 'funnel_url', 'control_state')
+                  AND table_name IN (
+                    'workers',
+                    'plans',
+                    'tasks',
+                    'events',
+                    'bootstrap_tokens',
+                    'funnel_url',
+                    'control_state',
+                    'jira_work_sessions',
+                    'jira_work_events'
+                  )
                 """,
             )
         )
@@ -389,8 +419,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "015_plan_verification_commands"
+    assert first_version == "016_jira_work_sessions"
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "015_plan_verification_commands"
+    assert second_version == "016_jira_work_sessions"

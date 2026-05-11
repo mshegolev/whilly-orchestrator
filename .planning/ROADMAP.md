@@ -10,8 +10,9 @@ after pulling `feat(wui): adopt 90s/TUI design system (#270)`.
 
 Close inactive WUI artifacts, stale routes, and missing UI methods so every active operator
 interface path is canonical, reachable, and verified across TUI and WUI. Phases 13.1 and 13.2 are
-urgent inserted product lifecycle additions for version updates and GitHub feedback reporting
-before continuing WUI/TUI parity work.
+urgent inserted product lifecycle additions for version updates and GitHub feedback reporting.
+Phase 17 adds the Jira-driven operator workflow foundation: classification, one-shot polling,
+state persistence, repo hints, and code/test readiness gates.
 
 ## Phases
 
@@ -22,12 +23,15 @@ before continuing WUI/TUI parity work.
   explicit automatic update policy.
 - [x] **Phase 13.2: GitHub feedback issue reporter (INSERTED)** - Add (completed 2026-05-11)
   a fast `whilly feedback` command for explicit GitHub bug/idea reports.
-- [ ] **Phase 14: WUI method and fragment wiring** - Make active WUI static/templates use current
+- [x] **Phase 14: WUI method and fragment wiring** - Make active WUI static/templates use current (completed 2026-05-11)
   DOM/API contracts and wire or quarantine logs/admin/PRD fragments.
-- [ ] **Phase 15: TUI capability parity** - Add or adjust TUI surfaces/help so it matches every
+- [x] **Phase 15: TUI capability parity** - Add or adjust TUI surfaces/help so it matches every (completed 2026-05-11)
   canonical WUI capability.
-- [ ] **Phase 16: UI parity verification and docs** - Add focused regression coverage and update
+- [x] **Phase 16: UI parity verification and docs** - Add focused regression coverage and update (completed 2026-05-11)
   operator-facing planning/docs evidence.
+- [x] **Phase 17: Jira work classification and code readiness routing** - Classify incoming Jira (completed 2026-05-11)
+  work, route it through the correct operator flow, reread GitLab links, and block autonomous work
+  until code/test readiness is known.
 
 ## Phase Details
 
@@ -95,6 +99,7 @@ Plans:
 **Goal**: Ensure every active WUI fragment/control has a current server method, supported route, auth behavior, and test.
 **Depends on**: Phase 13
 **Requirements**: WUI-01, WUI-02, WUI-03
+**Plans:** 1/1 plans complete
 **Canonical refs**: `whilly/api/dashboard.py`, `whilly/adapters/transport/server.py`,
 `whilly/api/templates/_admin.html`, `whilly/api/templates/_logs.html`,
 `whilly/api/templates/_prd.html`, `whilly/api/templates/index.html.j2`,
@@ -107,10 +112,14 @@ Plans:
   4. Any fragment not ready for active use is quarantined from navigation and documented as inactive
      rather than silently shipping dead controls.
 
+Plans:
+- [x] 14-01-PLAN.md - Update WUI artifact classifications and active navigation guards.
+
 ### Phase 15: TUI capability parity
 **Goal**: Match TUI surfaces, commands, and help text to the canonical active WUI capabilities.
 **Depends on**: Phase 14
 **Requirements**: TUI-01, TUI-02
+**Plans:** 1/1 plans complete
 **Canonical refs**: `whilly/cli/tui.py`, `whilly/operator_views.py`,
 `whilly/log_viewer.py`, `whilly/prd_launcher.py`, `whilly/prd_generator.py`,
 `whilly/cli/admin.py`, `tests/unit/test_tui.py`
@@ -121,10 +130,14 @@ Plans:
      duplicating backend behavior.
   4. TUI state transitions remain deterministic and existing expert review hotkeys keep working.
 
+Plans:
+- [x] 15-01-PLAN.md - Pin TUI active navigation parity and noncanonical fragment exclusions.
+
 ### Phase 16: UI parity verification and docs
 **Goal**: Lock the fixed TUI/WUI contract with focused tests and concise documentation evidence.
 **Depends on**: Phase 15
 **Requirements**: QA-01, QA-02
+**Plans:** 1/1 plans complete
 **Canonical refs**: `.planning/REQUIREMENTS.md`, `.planning/ROADMAP.md`,
 `tests/unit/test_operator_views.py`, `tests/unit/test_tui.py`,
 `tests/integration/test_htmx_dashboard.py`, `tests/integration/test_control_state_admin_api.py`,
@@ -139,6 +152,45 @@ Plans:
   4. The milestone can be verified without relying on unrelated Docker-backed or repo-wide baseline
      tests.
 
+Plans:
+- [x] 16-01-PLAN.md - Update UI parity docs and add docs regression coverage.
+
+### Phase 17: Jira work classification and code readiness routing
+
+**Goal:** Make Jira-driven work safe to operate by classifying incoming issues, choosing the right
+workflow, persisting task history, rereading GitLab/Jira links, and proving code/test readiness
+before autonomous workers run.
+**Depends on:** Phase 16
+**Requirements**: JIRA-01, JIRA-02, JIRA-03, JIRA-04, JIRA-05, JIRA-06, JIRA-07
+**Plans:** 5/5 plans complete
+**Canonical refs**: `whilly/cli/jira.py`, `whilly/sources/jira.py`,
+`whilly/qa_release/collector.py`, `whilly/qa_release/models.py`,
+`docs/superpowers/specs/2026-05-11-jira-intake-system-design.md`,
+`.planning/phases/17-jira-work-classification-and-code-readiness-routing/17-CONTEXT.md`
+**Success Criteria** (what must be TRUE):
+  1. Incoming Jira issues are classified as `feature`, `bug`, `task`, or `devops`, with `hotfix`
+     stored as an urgency overlay instead of a separate work kind.
+  2. Each classification maps to an explicit flow: feature PRD/acceptance, bug reproduction and
+     regression test, hotfix risk/rollback/smoke, task checklist, or DevOps environment/dry-run
+     verification.
+  3. Jira watch/intake rereads description, comments, changelog, issue links, and remote links, and
+     persists task history/state in Postgres.
+  4. GitLab links from Jira are normalized into repo/ref/MR/pipeline hints and reconciled with
+     selected `repo_targets`.
+  5. A read-only code readiness probe checks linked repositories for relevant code context, unit
+     tests, and verification commands before Whilly proposes or starts autonomous execution.
+  6. Jira comments can approve, reclassify, ask/answer questions, continue, replan, or cancel work
+     through an auditable command protocol.
+  7. Focused tests cover classification confidence, routing decisions, Jira refresh deltas, GitLab
+     link parsing, readiness verdicts, and no-unit-tests gates.
+
+Plans:
+- [x] 17-01-PLAN.md - Implement work classification model and routing profiles.
+- [x] 17-02-PLAN.md - Add Jira watch session state and comment command protocol.
+- [x] 17-03-PLAN.md - Reuse Jira/GitLab link collection for refresh deltas and repo hints.
+- [x] 17-04-PLAN.md - Add read-only code readiness and unit-test detection.
+- [x] 17-05-PLAN.md - Wire CLI/operator documentation and end-to-end tests.
+
 ## Progress
 
 **Execution Order:**
@@ -149,9 +201,10 @@ Phases execute in numeric order. v1.1 continues after archived v1.0 Phase 12.
 | 13. Canonical UI parity contract | 2/2 | Complete   | 2026-05-11 |
 | 13.1. Version update checks and manual/automatic update modes | 1/1 | Complete | 2026-05-11 |
 | 13.2. GitHub feedback issue reporter | 1/1 | Complete | 2026-05-11 |
-| 14. WUI method and fragment wiring | 0/0 | Pending | - |
-| 15. TUI capability parity | 0/0 | Pending | - |
-| 16. UI parity verification and docs | 0/0 | Pending | - |
+| 14. WUI method and fragment wiring | 1/1 | Complete | 2026-05-11 |
+| 15. TUI capability parity | 1/1 | Complete | 2026-05-11 |
+| 16. UI parity verification and docs | 1/1 | Complete | 2026-05-11 |
+| 17. Jira work classification and code readiness routing | 5/5 | Complete | 2026-05-11 |
 
 ## Archives
 

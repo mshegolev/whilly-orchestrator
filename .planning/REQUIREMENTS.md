@@ -15,13 +15,13 @@
 
 ### WUI Methods And Fragments
 
-- [ ] **WUI-01**: Operator can use WUI keyboard shortcuts with current DOM selectors and supported
+- [x] **WUI-01**: Operator can use WUI keyboard shortcuts with current DOM selectors and supported
   `/api/v1/admin/*` worker endpoints; active WUI code does not post to stale `/admin/workers/*`
   routes.
-- [ ] **WUI-02**: Operator can reach every server-rendered WUI fragment that remains active in the
+- [x] **WUI-02**: Operator can reach every server-rendered WUI fragment that remains active in the
   repository from visible WUI navigation, or the fragment is explicitly quarantined from active UI
   scope.
-- [ ] **WUI-03**: Operator can use logs, admin, and PRD UI capabilities only when every visible
+- [x] **WUI-03**: Operator can use logs, admin, and PRD UI capabilities only when every visible
   control has a matching backend method, auth behavior, and integration test.
 
 ### Version Updates
@@ -47,18 +47,39 @@
 - [x] **FEED-03**: Feedback issue creation supports dry-run output and is covered by unit tests with
   mocked GitHub CLI execution.
 
+### Jira Work Routing
+
+- [x] **JIRA-01**: Operator can see how Whilly classified an incoming Jira issue as `feature`,
+  `bug`, `task`, or `devops`, with `hotfix` represented as urgency rather than a separate work kind.
+- [x] **JIRA-02**: Whilly chooses the correct flow from classification: feature PRD/acceptance,
+  bug reproduction/regression, hotfix risk/rollback/smoke, task checklist, or DevOps
+  environment/dry-run verification.
+- [x] **JIRA-03**: Whilly watch/intake rereads Jira summary, description, comments, changelog, issue
+  links, and remote links, and persists task history/state so comments remain part of future
+  context.
+- [x] **JIRA-04**: Whilly extracts GitLab and GitHub repository hints from Jira descriptions,
+  comments, linked issues, and remote links, including branch, tag, commit, merge request, blob, and
+  pipeline references.
+- [x] **JIRA-05**: Whilly runs a read-only code readiness probe for the selected repo/ref and reports
+  whether relevant unit tests and verification commands exist before autonomous execution starts.
+- [x] **JIRA-06**: Jira comment commands can approve, reclassify, continue, replan, cancel, or answer
+  Whilly questions with idempotent, auditable state transitions.
+- [x] **JIRA-07**: Tests cover classifier confidence, routing profiles, Jira refresh deltas,
+  GitLab/GitHub link normalization, readiness verdicts, missing-unit-test gates, and comment command
+  idempotency.
+
 ### TUI Parity
 
-- [ ] **TUI-01**: Operator can access the same canonical user-interface capabilities from TUI that
+- [x] **TUI-01**: Operator can access the same canonical user-interface capabilities from TUI that
   are exposed in active WUI navigation.
-- [ ] **TUI-02**: TUI help text and hotkeys match WUI for canonical shared actions, including
+- [x] **TUI-02**: TUI help text and hotkeys match WUI for canonical shared actions, including
   surface switching, filter, refresh, quit, worker pause/resume, and review decisions.
 
 ### Verification
 
-- [ ] **QA-01**: Focused tests verify TUI/WUI parity, WUI route coverage, and absence of stale
+- [x] **QA-01**: Focused tests verify TUI/WUI parity, WUI route coverage, and absence of stale
   `/admin/*` actions or disconnected `1-7` hotkey assumptions.
-- [ ] **QA-02**: Planning and documentation evidence record every intentional WUI-only or TUI-only
+- [x] **QA-02**: Planning and documentation evidence record every intentional WUI-only or TUI-only
   exclusion with a reason and a regression test.
 
 ## v2 Requirements
@@ -91,19 +112,26 @@
 | FEED-01 | Phase 13.2 | Complete |
 | FEED-02 | Phase 13.2 | Complete |
 | FEED-03 | Phase 13.2 | Complete |
-| WUI-01 | Phase 14 | Pending |
-| WUI-02 | Phase 14 | Pending |
-| WUI-03 | Phase 14 | Pending |
-| TUI-01 | Phase 15 | Pending |
-| TUI-02 | Phase 15 | Pending |
-| QA-01 | Phase 16 | Pending |
-| QA-02 | Phase 16 | Pending |
+| JIRA-01 | Phase 17 | Complete |
+| JIRA-02 | Phase 17 | Complete |
+| JIRA-03 | Phase 17 | Complete |
+| JIRA-04 | Phase 17 | Complete |
+| JIRA-05 | Phase 17 | Complete |
+| JIRA-06 | Phase 17 | Complete |
+| JIRA-07 | Phase 17 | Complete |
+| WUI-01 | Phase 14 | Complete |
+| WUI-02 | Phase 14 | Complete |
+| WUI-03 | Phase 14 | Complete |
+| TUI-01 | Phase 15 | Complete |
+| TUI-02 | Phase 15 | Complete |
+| QA-01 | Phase 16 | Complete |
+| QA-02 | Phase 16 | Complete |
 
 **Coverage:**
-- v1.1 requirements: 16 total
-- Mapped to phases: 16
+- v1.1 requirements: 23 total
+- Mapped to phases: 23
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-11*
-*Last updated: 2026-05-11 after completing Phase 13.2 feedback reporter*
+*Last updated: 2026-05-11 after adding Phase 17 Jira work routing requirements*

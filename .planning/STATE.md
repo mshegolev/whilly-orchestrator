@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: UI parity completion
-current_phase: "14"
-current_phase_name: WUI method and fragment wiring
+current_phase: null
+current_phase_name: null
 current_plan: null
-status: ready_for_planning
-last_updated: "2026-05-11T11:20:00Z"
+status: milestone_complete
+last_updated: "2026-05-11T17:20:00Z"
 last_activity: 2026-05-11
 progress:
-  total_phases: 6
-  completed_phases: 3
-  total_plans: 4
-  completed_plans: 4
-  percent: 50
+  total_phases: 7
+  completed_phases: 7
+  total_plans: 12
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State
@@ -24,19 +24,19 @@ See: `.planning/PROJECT.md` (updated 2026-05-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** v1.1 UI parity completion.
+**Current focus:** v1.1 UI parity completion, with Jira-driven work routing captured as the next
+product-flow follow-up.
 
 ## Current Position
 
 Current Milestone: v1.1
-Phase: 14 - WUI method and fragment wiring
-Plan: Not planned yet
-Status: Ready for planning
+Phase: Complete
+Plan: None
+Status: Milestone complete
 Last Activity: 2026-05-11
-Last Activity Description: Completed urgent Phase 13.2. Whilly now has `whilly feedback` for
-explicit GitHub bug/idea issue reports.
+Last Activity Description: Completed Phase 17 and v1.1 milestone audit.
 
-Progress: [#####-----] 50%
+Progress: [##########] 100%
 
 ## Active Scope
 
@@ -49,6 +49,8 @@ Progress: [#####-----] 50%
   update, or opt into automatic update behavior without hidden environment mutation.
 - A fast GitHub feedback channel so operators testing Whilly on another computer can report bugs
   or ideas directly from the CLI.
+- Jira-driven work routing that classifies incoming tasks, persists task history, rereads GitLab
+  links, and checks code/test readiness before autonomous worker execution.
 
 ## Recent Decisions
 
@@ -73,6 +75,22 @@ Progress: [#####-----] 50%
   environment.
 - Phase 13.2 keeps feedback explicit and single-channel: GitHub Issues via `gh`, no email/GitLab,
   and no automatic crash reporting.
+- Phase 17 treats `hotfix` as urgency over `feature`, `bug`, `task`, or `devops` instead of a fifth
+  work kind, because urgent production fixes can exist in more than one work category.
+- Phase 17 makes code readiness a gate: missing repo context, inaccessible GitLab links, or missing
+  unit-test strategy should ask the operator before workers run.
+- Phase 14 keeps `_logs.html` routeable but noncanonical with backend coverage, and keeps
+  `_admin.html`/`_prd.html` quarantined because their routes are not active supported WUI routes.
+- Phase 15 keeps TUI scoped to active WUI navigation only; logs/admin/PRD are explicit exclusions
+  until a future phase wires them as canonical capabilities.
+- Phase 16 updates operator docs to the current shared TUI/WUI hotkeys and pins the fragment
+  boundary with docs regression tests.
+- Phase 17 stores Jira routing metadata in `jira_work` plan JSON and Postgres session/event tables,
+  keeping classification, context hashes, and readiness verdicts available for later watch flows.
+- Phase 17 adds one-shot `whilly jira poll` for rereading Jira issue fields, comments, changelog,
+  linked issues, remote links, and repo hints; long-running watch can wrap that command.
+- Phase 17 keeps autonomous Jira `run` gated only when the operator provides a local
+  `--readiness-repo-path`; the override is explicit through `--allow-unready-run`.
 
 ## Accumulated Context
 
@@ -81,6 +99,7 @@ Progress: [#####-----] 50%
 - Phase 13.1 inserted after Phase 13: Version update checks and manual/automatic update modes
   (URGENT).
 - Phase 13.2 inserted after Phase 13.1: GitHub feedback issue reporter (URGENT).
+- Phase 17 added after Phase 16: Jira work classification and code readiness routing.
 
 ## Performance Metrics
 
@@ -90,6 +109,10 @@ Progress: [#####-----] 50%
 | 13 | 02 | 8 min | 3 | 4 |
 | 13.1 | 01 | focused | 3 | 6 |
 | 13.2 | 01 | focused | 3 | 6 |
+| 14 | 01 | focused | 2 | 2 |
+| 15 | 01 | focused | 2 | 1 |
+| 16 | 01 | focused | 2 | 4 |
+| 17 | 01-05 | focused | 5 | 12 |
 
 ## Previous Milestone
 
@@ -108,4 +131,4 @@ Archives:
 
 ## Next Step
 
-Run `$gsd-plan-phase 14` or `$gsd-discuss-phase 14` for WUI method and fragment wiring.
+Archive v1.1 with `$gsd-complete-milestone` after operator approval to commit/tag.

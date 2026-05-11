@@ -37,6 +37,7 @@ whilly --from-github whilly:ready --go
 whilly --from-issue owner/repo/42 --go           # slash form — shell-safe
 whilly --from-issue 'owner/repo#42' --go         # '#' form, quote in zsh/bash
 whilly jira import ABC-123 --run                 # single Jira ticket
+whilly jira intake ABC-123                       # interactive Jira + repo choice
 ```
 
 ## Task sources
@@ -46,6 +47,7 @@ whilly jira import ABC-123 --run                 # single Jira ticket
 | `--from-github <label>` | GitHub issues by label | `all`/`*`/`-` = no filter |
 | `--from-issue <ref>` | one GitHub issue | `owner/repo/N`, `owner/repo#N`, or URL |
 | `jira import <key>` | one Jira ticket | `ABC-123` or browse URL; auth via `[jira]`; legacy `--from-jira <key> --go` still works |
+| `jira intake <key>` | one Jira ticket + repo choice | interactive same/new/other repo selection, then PRD/context, plan preflight, autonomous run, or save-only |
 | `--from-project <url>` | GitHub Projects v2 board | full board items |
 | `--from-issues-project <url> --repo o/r` | Projects board filtered by issue repo | |
 
@@ -56,6 +58,47 @@ For Jira, `whilly jira import` validates auth before fetching. If `JIRA_SERVER_U
 for it. Missing PAT opens the Jira Cloud API token page; non-interactive runs
 print the exact variables and the same URL. Use `--no-interactive-config` to
 force instructions-only behavior.
+
+`whilly jira intake` is the safer daily driver when Jira does not imply a repo.
+It writes a top-level `repo_targets` block into the generated plan and sets each
+Jira task's `repo_target_id`. `--action plan` runs strict apply plus TRIZ
+preflight; `--action run` runs strict apply before starting a worker. For
+GitLab, pass or paste the clone URL:
+
+```bash
+whilly jira intake ABC-123 --repo-url git@gitlab.example:group/project.git --action prd
+```
+
+Every intake also writes a `jira_work` block into the plan JSON. It records the
+classified work kind (`feature`, `bug`, `task`, `devops`), `normal`/`hotfix`
+urgency, context hashes for later Jira refresh checks, and supported Jira
+comment commands such as `/whilly plan` and `/whilly run`.
+
+Before an autonomous run, point Whilly at a local checkout when you want a
+read-only code/test readiness gate:
+
+```bash
+whilly jira intake ABC-123 --repo-kind same --readiness-repo-path . --action run
+```
+
+The gate detects common test commands (`pytest`, `npm test`, `go test`,
+`mvn test`, `gradle test`, `cargo test`) and unit-test files. If the verdict is
+`needs_test_plan`, `needs_repo_choice`, `needs_human_context`, or `blocked`,
+`action=run` stops before importing/running unless you pass
+`--allow-unready-run`.
+
+To refresh an already-known Jira issue without starting work, run one poll
+cycle:
+
+```bash
+whilly jira poll ABC-123
+whilly jira poll ABC-123 --persist --plan-id jira-abc-123
+```
+
+`poll` rereads the issue, comments, changelog, linked issues, remote links, and
+GitLab/GitHub repo hints. With `--persist` it writes the snapshot into the
+Postgres `jira_work_sessions` / `jira_work_events` history tables. A long-running
+watcher can wrap this command in a scheduler or loop.
 
 ## Lifecycle sync
 
@@ -354,15 +397,31 @@ touching code. Available placeholders match the
 :class:`whilly.core.notifications.RunCompletedEvent` fields plus
 `{completed_at_iso}`.
 
+## Operator Dashboard Parity
+
+The active browser WUI and browserless TUI expose the same canonical operator
+surfaces: Overview, Compliance, Plans/Tasks, Workers, and Events. Shared surface
+copy is `1-5=switch`.
+
+Active worker controls use `/api/v1/admin/workers/*`; active review decisions
+use `/api/v1/tasks/*/human-review`. `_logs.html` remains a routeable
+noncanonical fragment behind `?fragment=logs`, but it is not visible navigation
+until TUI parity expands. `_admin.html` and `_prd.html` are quarantined inactive
+fragments because their old `/admin/*` and `/prd/*` controls are not supported
+active WUI routes.
+
 ## Keyboard Shortcuts
 
 | Key | Action |
 |-----|--------|
-| q | Graceful shutdown |
-| d | Task detail overlay |
-| l | Log viewer (last 30 lines) |
-| t | All tasks overview |
-| h | Help screen |
+| q | Quit the TUI / stop WUI live updates |
+| r | Refresh |
+| R | Resume workers |
+| 1-5 | Switch Overview, Compliance, Plans/Tasks, Workers, Events |
+| / | Focus filter |
+| p | Pause workers |
+| j / k | Select next/previous review gap on Compliance |
+| a / x / c | Approve, reject, or request changes for the selected review gap |
 
 (Windows: key listener is disabled; the dashboard itself still renders.)
 

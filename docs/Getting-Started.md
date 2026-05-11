@@ -111,7 +111,10 @@ What you'll see:
 3. For every task: card on the board moves **Todo → In Progress** when the agent picks it up, **→ In Review** when the agent finishes.
 4. After all tasks done: whilly pushes the branch; cards move **→ Done** per the `--post-merge` hook.
 
-Dashboard hotkeys: `q` quit, `d` task detail, `l` logs, `t` task overview, `h` help.
+Dashboard hotkeys: `q` quit, `r` refresh, `R` resume workers, `1-5=switch`
+between Overview, Compliance, Plans/Tasks, Workers, and Events, `/` filter,
+`p` pause workers, `j/k` select review gaps, and `a/x/c` approve, reject, or
+request changes.
 
 ---
 
@@ -155,6 +158,54 @@ whilly run --plan jira-abc-123
 whilly jira import ABC-123 --run
 whilly jira import https://company.atlassian.net/browse/ABC-123 --run
 ```
+
+For an interactive one-ticket workflow, use `jira intake`:
+
+```bash
+whilly jira intake ABC-123
+```
+
+It fetches the Jira ticket, asks which repository the work belongs to, writes
+`repo_targets` into the plan JSON, and then asks what to do next:
+
+- same repo: use the current checkout's `origin` remote, or paste a clone URL.
+- new repo: paste the clone URL for the repo you created for this work.
+- other repo: paste the clone URL for an existing target repo.
+
+The next-step choices are PRD/context first, plan preflight, autonomous run, or
+save-only. `plan` runs strict Decision Gate plus TRIZ/challenge preflight.
+`run` also starts with strict apply and only then launches the worker. Scripted
+equivalents:
+
+```bash
+whilly jira intake ABC-123 --repo-kind same --action prd
+whilly jira intake ABC-123 --repo-url git@gitlab.example:team/app.git --action run --max-iterations 1
+whilly jira intake ABC-123 --repo-kind skip --action save
+```
+
+`jira intake` classifies the issue as `feature`, `bug`, `task`, or `devops`,
+adds `normal`/`hotfix` urgency, and stores context hashes in `jira_work` for
+later Jira refresh checks. To require local test evidence before `run`, pass a
+checkout path:
+
+```bash
+whilly jira intake ABC-123 --repo-kind same --readiness-repo-path . --action run
+```
+
+If Whilly cannot find both a test command and unit-test files, it stops before
+the worker starts. Use `whilly jira readiness .` to inspect the verdict without
+running intake.
+
+To refresh the task later without starting work:
+
+```bash
+whilly jira poll ABC-123
+whilly jira poll ABC-123 --persist --plan-id jira-abc-123
+```
+
+`poll` rereads the issue, comments, changelog, linked issues, remote links, and
+repo hints. With `--persist`, it stores the latest snapshot and history event in
+Postgres.
 
 If Jira settings are missing and the command runs in a terminal, Whilly asks
 for the missing values. When the API token/PAT is missing, it opens the Jira
@@ -232,7 +283,7 @@ Iterates every `done` task in the plan, moves its card to `Done`, and transition
 | `Legacy .env detected` warning each run | `whilly --config migrate` |
 | Dashboard doesn't render | non-TTY stdout → auto-headless; run whilly in a real terminal. Workspace isolation is off by default since v3.3.0 (pass `--workspace` to opt in). |
 | Card doesn't move | `gh auth refresh -s project` (Projects scope) + `whilly --ensure-board-statuses` |
-| Windows: some hotkeys don't work | expected — `q/d/l/t/h` are POSIX-only; dashboard rendering still works |
+| Windows: some hotkeys don't work | expected — the TUI key listener is POSIX-first; dashboard rendering still works |
 | Task stuck "in_progress" across restarts | whilly resets stale in_progress tasks automatically on start |
 | Budget exceeded | `WHILLY_BUDGET_USD=N` caps spend; whilly stops at 100 %, warns at 80 % |
 
