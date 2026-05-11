@@ -9,11 +9,11 @@ status: ready_for_planning
 last_updated: "2026-05-11T11:20:00Z"
 last_activity: 2026-05-11
 progress:
-  total_phases: 5
-  completed_phases: 2
-  total_plans: 3
-  completed_plans: 3
-  percent: 40
+  total_phases: 6
+  completed_phases: 3
+  total_plans: 4
+  completed_plans: 4
+  percent: 50
 ---
 
 # Project State
@@ -33,10 +33,10 @@ Phase: 14 - WUI method and fragment wiring
 Plan: Not planned yet
 Status: Ready for planning
 Last Activity: 2026-05-11
-Last Activity Description: Completed urgent Phase 13.1. Whilly now has `whilly update check`,
-`whilly update install`, and `whilly update auto` with default-off automatic policy.
+Last Activity Description: Completed urgent Phase 13.2. Whilly now has `whilly feedback` for
+explicit GitHub bug/idea issue reports.
 
-Progress: [####------] 40%
+Progress: [#####-----] 50%
 
 ## Active Scope
 
@@ -47,6 +47,8 @@ Progress: [####------] 40%
 - Focused tests that prevent orphan WUI files or stale routes from drifting back in.
 - Version lifecycle controls so operators can check for a newer Whilly release, apply a manual
   update, or opt into automatic update behavior without hidden environment mutation.
+- A fast GitHub feedback channel so operators testing Whilly on another computer can report bugs
+  or ideas directly from the CLI.
 
 ## Recent Decisions
 
@@ -69,6 +71,8 @@ Progress: [####------] 40%
   silently upgrades Whilly.
 - Update tests mock PyPI and subprocess boundaries so verification does not mutate the local
   environment.
+- Phase 13.2 keeps feedback explicit and single-channel: GitHub Issues via `gh`, no email/GitLab,
+  and no automatic crash reporting.
 
 ## Accumulated Context
 
@@ -76,6 +80,7 @@ Progress: [####------] 40%
 
 - Phase 13.1 inserted after Phase 13: Version update checks and manual/automatic update modes
   (URGENT).
+- Phase 13.2 inserted after Phase 13.1: GitHub feedback issue reporter (URGENT).
 
 ## Performance Metrics
 
@@ -84,6 +89,7 @@ Progress: [####------] 40%
 | 13 | 01 | 9 min | 3 | 7 |
 | 13 | 02 | 8 min | 3 | 4 |
 | 13.1 | 01 | focused | 3 | 6 |
+| 13.2 | 01 | focused | 3 | 6 |
 
 ## Previous Milestone
 
