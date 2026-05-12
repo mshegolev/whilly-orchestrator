@@ -230,3 +230,117 @@ class TestSchedulerConfiguration:
         rule_data = {"id": "", "name": "Test", "jira_project_key": "TEST", "jql_filter": "project = TEST"}
         with pytest.raises(SchedulerConfigError, match="id"):
             _rule_from_dict(rule_data, "test")
+
+
+class TestSchedulerDocumentation:
+    """Test scheduler documentation generation."""
+
+    def test_generate_rule_markdown(self) -> None:
+        """Test markdown generation for a rule."""
+        from whilly.scheduler import SchedulerDocumentation
+
+        rule = SchedulerRule(
+            id="rule-1",
+            name="Test Rule",
+            jira_project_key="TEST",
+            jql_filter="project = TEST",
+            description="A test rule",
+        )
+
+        docs = SchedulerDocumentation()
+        markdown = docs.generate_rule_markdown(rule)
+
+        assert "Test Rule" in markdown
+        assert "project = TEST" in markdown
+        assert "rule-1" in markdown
+
+    def test_generate_rules_index(self) -> None:
+        """Test index generation for multiple rules."""
+        from whilly.scheduler import SchedulerDocumentation
+
+        rule1 = SchedulerRule(
+            id="rule-1",
+            name="Rule 1",
+            jira_project_key="TEST",
+            jql_filter="project = TEST",
+            enabled=True,
+        )
+        rule2 = SchedulerRule(
+            id="rule-2",
+            name="Rule 2",
+            jira_project_key="TEST",
+            jql_filter="project = TEST",
+            enabled=False,
+        )
+
+        docs = SchedulerDocumentation()
+        index = docs.generate_rules_index([rule1, rule2])
+
+        assert "Rule 1" in index
+        assert "Rule 2" in index
+        assert "Enabled Rules" in index
+        assert "Disabled Rules" in index
+
+
+class TestMCPRegistry:
+    """Test MCP registry."""
+
+    def test_register_and_get_tool(self) -> None:
+        """Test registering and retrieving a tool."""
+        from whilly.mcp import MCPRegistry, MCPTool, MCPToolParameter
+
+        registry = MCPRegistry()
+        tool = MCPTool(
+            name="test_tool",
+            description="A test tool",
+            category="testing",
+            parameters=[MCPToolParameter(name="arg1", type="string", description="Test arg")],
+        )
+
+        registry.register_tool(tool)
+        retrieved = registry.get_tool("test_tool")
+
+        assert retrieved is not None
+        assert retrieved.name == "test_tool"
+        assert retrieved.category == "testing"
+
+    def test_list_tools_by_category(self) -> None:
+        """Test listing tools by category."""
+        from whilly.mcp import MCPRegistry, MCPTool
+
+        registry = MCPRegistry()
+        tool1 = MCPTool(name="tool1", description="Test", category="jira")
+        tool2 = MCPTool(name="tool2", description="Test", category="jira")
+        tool3 = MCPTool(name="tool3", description="Test", category="github")
+
+        registry.register_tool(tool1)
+        registry.register_tool(tool2)
+        registry.register_tool(tool3)
+
+        jira_tools = registry.list_tools(category="jira")
+        assert len(jira_tools) == 2
+
+        github_tools = registry.list_tools(category="github")
+        assert len(github_tools) == 1
+
+
+class TestMCPProfiles:
+    """Test MCP profiles."""
+
+    def test_register_and_get_profile(self) -> None:
+        """Test registering and retrieving a profile."""
+        from whilly.mcp import MCPProfile, MCPProfileRegistry
+
+        registry = MCPProfileRegistry()
+        profile = MCPProfile(
+            name="test_profile",
+            description="A test profile",
+            tools=["tool1", "tool2"],
+        )
+
+        registry.register_profile(profile)
+        retrieved = registry.get_profile("test_profile")
+
+        assert retrieved is not None
+        assert retrieved.name == "test_profile"
+        assert len(retrieved.tools) == 2
