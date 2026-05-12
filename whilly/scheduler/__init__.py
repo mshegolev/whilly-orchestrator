@@ -1,5 +1,20 @@
 """Scheduler module for continuous JQL-based issue intake."""
 
+from whilly.scheduler.config import load_scheduler_config
+from whilly.scheduler.deduplicator import deduplicate_issues
+from whilly.scheduler.jql_executor import execute_jql
 from whilly.scheduler.models import SchedulerPollCycle, SchedulerRule
+from whilly.scheduler.repository import InMemorySchedulerRepository, SchedulerRepository
+from whilly.scheduler.worker import SchedulerWorker, run_scheduler_from_config
 
-__all__ = ["SchedulerRule", "SchedulerPollCycle"]
+__all__ = [
+    "SchedulerRule",
+    "SchedulerPollCycle",
+    "execute_jql",
+    "deduplicate_issues",
+    "load_scheduler_config",
+    "SchedulerRepository",
+    "InMemorySchedulerRepository",
+    "SchedulerWorker",
+    "run_scheduler_from_config",
+]
