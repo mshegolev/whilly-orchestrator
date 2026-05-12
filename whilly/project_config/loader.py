@@ -14,6 +14,8 @@ from whilly.project_config.models import (
     HumanLoopConfig,
     PipelineStepConfig,
     ProjectConfig,
+    ProjectMapConfig,
+    ProjectMapEntry,
     RepositoryConfig,
     SinkConfig,
     TaskSourceConfig,
@@ -449,3 +451,117 @@ def _sink_non_negative_int(value: Any, *, source: str, field: str) -> int:
 
 def _ci_status_sink_target(config: dict[str, str]) -> str:
     return _optional_string(config.get("target", config.get("command", config.get("ci_target", ""))))
+
+
+def load_project_map(path: str | Path) -> ProjectMapConfig:
+    """Load a JSON or TOML project map and return validated config."""
+
+    map_path = Path(path)
+    try:
+        if map_path.suffix.lower() == ".json":
+            raw = json.loads(map_path.read_text(encoding="utf-8"))
+        elif map_path.suffix.lower() in {".toml", ".tml"}:
+            raw = tomllib.loads(map_path.read_text(encoding="utf-8"))
+        else:
+            raise ProjectConfigError(f"{map_path}: expected .json or .toml project map")
+    except OSError as exc:
+        raise ProjectConfigError(f"cannot read project map {map_path}: {exc}") from exc
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise ProjectConfigError(f"project map {map_path} is not valid {map_path.suffix}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ProjectConfigError(f"{map_path}: top-level project map must be an object/table")
+    return project_map_from_dict(raw, source=str(map_path))
+
+
+def project_map_from_dict(raw: dict[str, Any], *, source: str = "<dict>") -> ProjectMapConfig:
+    """Convert a raw dict to a validated ProjectMapConfig."""
+
+    try:
+        version = _optional_string(raw.get("version", "1.0"))
+
+        mappings = []
+        raw_mappings = raw.get("mappings", [])
+        if not isinstance(raw_mappings, list):
+            raise ProjectConfigError(f"{source}: 'mappings' must be a list")
+
+        for i, entry_dict in enumerate(raw_mappings):
+            if not isinstance(entry_dict, dict):
+                raise ProjectConfigError(f"{source}: mapping[{i}] must be an object")
+
+            jira_key = _required_string(entry_dict, "jira_project_key", f"{source}:mappings[{i}]")
+            git_repo_ids = _string_tuple(
+                entry_dict.get("git_repository_ids", []), source=source, field=f"mappings[{i}].git_repository_ids"
+            )
+            git_repo_paths = _string_tuple(
+                entry_dict.get("git_repository_paths", []), source=source, field=f"mappings[{i}].git_repository_paths"
+            )
+            label_filters = _string_tuple(
+                entry_dict.get("issue_label_filters", []), source=source, field=f"mappings[{i}].issue_label_filters"
+            )
+            default_repo = _optional_string(entry_dict.get("default_repo_id", ""))
+            custom_fields = entry_dict.get("custom_field_mappings")
+            if custom_fields is None:
+                field_mappings = {}
+            else:
+                field_mappings = _string_dict(
+                    custom_fields, source=source, field=f"mappings[{i}].custom_field_mappings"
+                )
+
+            entry = ProjectMapEntry(
+                jira_project_key=jira_key,
+                git_repository_ids=git_repo_ids,
+                git_repository_paths=git_repo_paths,
+                issue_label_filters=label_filters,
+                default_repo_id=default_repo,
+                custom_field_mappings=field_mappings,
+            )
+            mappings.append(entry)
+
+        default_mapping = None
+        raw_default = raw.get("default_mapping")
+        if raw_default is not None:
+            if not isinstance(raw_default, dict):
+                raise ProjectConfigError(f"{source}: 'default_mapping' must be an object")
+
+            jira_key = _required_string(raw_default, "jira_project_key", f"{source}:default_mapping")
+            git_repo_ids = _string_tuple(
+                raw_default.get("git_repository_ids", []), source=source, field="default_mapping.git_repository_ids"
+            )
+            git_repo_paths = _string_tuple(
+                raw_default.get("git_repository_paths", []), source=source, field="default_mapping.git_repository_paths"
+            )
+            label_filters = _string_tuple(
+                raw_default.get("issue_label_filters", []), source=source, field="default_mapping.issue_label_filters"
+            )
+            default_repo = _optional_string(raw_default.get("default_repo_id", ""))
+            custom_fields = raw_default.get("custom_field_mappings")
+            if custom_fields is None:
+                field_mappings = {}
+            else:
+                field_mappings = _string_dict(
+                    custom_fields, source=source, field="default_mapping.custom_field_mappings"
+                )
+
+            default_mapping = ProjectMapEntry(
+                jira_project_key=jira_key,
+                git_repository_ids=git_repo_ids,
+                git_repository_paths=git_repo_paths,
+                issue_label_filters=label_filters,
+                default_repo_id=default_repo,
+                custom_field_mappings=field_mappings,
+            )
+
+        fallback_repos = _string_tuple(raw.get("fallback_repo_ids", []), source=source, field="fallback_repo_ids")
+
+        return ProjectMapConfig(
+            version=version,
+            mappings=tuple(mappings),
+            default_mapping=default_mapping,
+            fallback_repo_ids=fallback_repos,
+        )
+    except ProjectConfigError:
+        raise
+    except KeyError as exc:
+        raise ProjectConfigError(f"{source}: missing required project map field: {exc}") from exc
+    except (TypeError, ValueError) as exc:
+        raise ProjectConfigError(f"{source}: invalid project map configuration: {exc}") from exc

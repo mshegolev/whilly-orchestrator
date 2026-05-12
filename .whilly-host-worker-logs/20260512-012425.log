@@ -1,0 +1,4 @@
+worker_id: w-1yOl_UrOdPo
+token: pnaKU21mC3AXi2XdKd9OF55MvcPJljXFPH6pJ-Hngq8
+whilly worker connect: bearer stored in OS keychain (service='whilly', user=http://127.0.0.1:8000).
+whilly worker connect: registration succeeded and the bearer was persisted, but the 'whilly-worker' executable was not found on PATH. Install the worker package and re-run: whilly-worker --connect <url> --token <bearer> --plan <id>.
