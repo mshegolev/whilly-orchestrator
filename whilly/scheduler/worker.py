@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -142,8 +143,8 @@ class SchedulerWorker:
         return await loop.run_in_executor(None, lambda: execute_jql(jql, max_results=max_results))
 
 
-PollingCallback = callable[[SchedulerPollCycle], Any]
-IssuesFoundCallback = callable[[SchedulerRule, list[dict[str, Any]]], Any]
+PollingCallback = Callable[[SchedulerPollCycle], Any]
+IssuesFoundCallback = Callable[[SchedulerRule, list[dict[str, Any]]], Any]
 
 
 async def run_scheduler_from_config(

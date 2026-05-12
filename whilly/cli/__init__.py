@@ -488,6 +488,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.quick_setup import run_quick_setup_command
 
         return run_quick_setup_command(rest)
+    if cmd == "scheduler":
+        from whilly.cli.scheduler import run_scheduler_cli
+
+        return run_scheduler_cli(rest)
     if cmd == "worker":
         # Sub-dispatch ``whilly worker register ...`` and
         # ``whilly worker connect ...`` to their handlers before falling
