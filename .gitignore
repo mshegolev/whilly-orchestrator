@@ -72,3 +72,4 @@ htmlcov/
 # (Listed here so nobody re-adds it by muscle memory.)
 .env-v4
 .venv-v4/
+.env-backups/

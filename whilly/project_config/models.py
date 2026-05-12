@@ -121,6 +121,48 @@ class HumanLoopConfig:
 
 
 @dataclass(frozen=True)
+class ProjectMapEntry:
+    """Map a Jira project key to associated Git repositories.
+
+    Enables automatic repository resolution for issues in a specific Jira project.
+    """
+
+    jira_project_key: str
+    git_repository_ids: tuple[str, ...] = ()
+    git_repository_paths: tuple[str, ...] = ()
+    issue_label_filters: tuple[str, ...] = ()
+    default_repo_id: str = ""
+    custom_field_mappings: dict[str, str] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["custom_field_mappings"] = dict(self.custom_field_mappings or {})
+        return out
+
+
+@dataclass(frozen=True)
+class ProjectMapConfig:
+    """Global configuration for Jira project-to-Git repository mappings.
+
+    Used during autonomous task intake to automatically select the correct
+    repositories when creating a plan from a Jira issue.
+    """
+
+    version: str = "1.0"
+    mappings: tuple[ProjectMapEntry, ...] = ()
+    default_mapping: ProjectMapEntry | None = None
+    fallback_repo_ids: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "mappings": [entry.to_dict() for entry in self.mappings],
+            "default_mapping": self.default_mapping.to_dict() if self.default_mapping else None,
+            "fallback_repo_ids": list(self.fallback_repo_ids),
+        }
+
+
+@dataclass(frozen=True)
 class ProjectConfig:
     """Project-level configuration used to generate domain-adaptive plans."""
 

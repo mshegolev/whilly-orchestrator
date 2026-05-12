@@ -1,0 +1,1 @@
+whilly worker connect: control-plane server error for http://127.0.0.1:8000 after retries: POST /workers/register: server returned 500 after 4 attempts
