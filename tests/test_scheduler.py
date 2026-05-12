@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -344,3 +345,233 @@ class TestMCPProfiles:
         assert retrieved is not None
         assert retrieved.name == "test_profile"
         assert len(retrieved.tools) == 2
+
+
+class TestRateLimiter:
+    """Test rate limiting functionality."""
+
+    @pytest.mark.asyncio
+    async def test_exponential_backoff(self) -> None:
+        """Test exponential backoff calculation."""
+        from whilly.scheduler.rate_limit import RateLimiter, BackoffStrategy
+
+        limiter = RateLimiter(
+            strategy=BackoffStrategy.EXPONENTIAL,
+            initial_delay=1.0,
+            max_delay=60.0,
+        )
+
+        # Test exponential delays: 1, 2, 4, 8, 16, ...
+        assert limiter._calculate_delay(0) >= 1.0
+        assert limiter._calculate_delay(1) >= 2.0
+        assert limiter._calculate_delay(2) >= 4.0
+        assert limiter._calculate_delay(3) >= 8.0
+
+    @pytest.mark.asyncio
+    async def test_linear_backoff(self) -> None:
+        """Test linear backoff calculation."""
+        from whilly.scheduler.rate_limit import RateLimiter, BackoffStrategy
+
+        limiter = RateLimiter(
+            strategy=BackoffStrategy.LINEAR,
+            initial_delay=1.0,
+            max_delay=60.0,
+            jitter=False,
+        )
+
+        # Test linear delays: 1, 2, 3, 4, 5, ...
+        assert limiter._calculate_delay(0) == 1.0
+        assert limiter._calculate_delay(1) == 2.0
+        assert limiter._calculate_delay(2) == 3.0
+
+    @pytest.mark.asyncio
+    async def test_retry_with_success(self) -> None:
+        """Test successful call on first attempt."""
+        from whilly.scheduler.rate_limit import RateLimiter
+
+        limiter = RateLimiter()
+        call_count = 0
+
+        async def succeeds() -> int:
+            nonlocal call_count
+            call_count += 1
+            return 42
+
+        result = await limiter.call_with_retry(succeeds)
+        assert result == 42
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_poll_rate_limiter(self) -> None:
+        """Test poll-specific rate limiting."""
+        from whilly.scheduler.rate_limit import PollRateLimiter
+
+        limiter = PollRateLimiter(min_interval_seconds=0.1)
+
+        await limiter.wait_until_ready()
+        await limiter.wait_until_ready()
+
+        assert len(limiter.poll_times) == 2
+
+
+class TestWebhooks:
+    """Test webhook handling."""
+
+    def test_parse_webhook_event(self) -> None:
+        """Test parsing Jira webhook payload."""
+        from whilly.scheduler.webhooks import JiraWebhookEvent
+
+        payload = {
+            "webhookEvent": "jira:issue_created",
+            "issue": {
+                "key": "ACME-123",
+                "fields": {
+                    "summary": "Test issue",
+                    "status": {"name": "Open"},
+                    "project": {"key": "ACME"},
+                    "description": "Test description",
+                },
+            },
+        }
+
+        event = JiraWebhookEvent.from_jira_payload(payload)
+
+        assert event.issue_key == "ACME-123"
+        assert event.project_key == "ACME"
+        assert event.summary == "Test issue"
+        assert event.status == "Open"
+
+    def test_event_matches_rule(self) -> None:
+        """Test checking if event matches JQL rule."""
+        from whilly.scheduler.webhooks import JiraWebhookEvent
+
+        payload = {
+            "webhookEvent": "jira:issue_created",
+            "issue": {
+                "key": "ACME-123",
+                "fields": {
+                    "summary": "Bug",
+                    "status": {"name": "Open"},
+                    "project": {"key": "ACME"},
+                },
+            },
+        }
+
+        event = JiraWebhookEvent.from_jira_payload(payload)
+
+        assert event.matches_rule("project = ACME")
+        assert event.matches_rule("project = ACME AND status = Open")
+        assert not event.matches_rule("project = OTHER")
+
+    @pytest.mark.asyncio
+    async def test_webhook_handler(self) -> None:
+        """Test webhook event handler."""
+        from whilly.scheduler.webhooks import WebhookEventHandler, create_webhook_json_payload
+
+        handler = WebhookEventHandler()
+        handled_events = []
+
+        def callback(event):
+            handled_events.append(event)
+
+        handler.register_callback("jira:issue_created", callback)
+
+        payload_str = create_webhook_json_payload(
+            issue_key="TEST-1",
+            project_key="TEST",
+            summary="Test issue",
+        )
+        payload = json.loads(payload_str)
+
+        await handler.handle_event(payload)
+
+        assert len(handled_events) == 1
+        assert handled_events[0].issue_key == "TEST-1"
+
+
+class TestMetrics:
+    """Test metrics collection."""
+
+    def test_poll_metrics(self) -> None:
+        """Test poll metrics creation."""
+        from whilly.scheduler.metrics import PollMetrics
+
+        metrics = PollMetrics(
+            rule_id="rule-1",
+            success=True,
+            duration_seconds=1.5,
+            issues_found=10,
+            issues_unique=8,
+            issues_duplicated=2,
+        )
+
+        assert metrics.rule_id == "rule-1"
+        assert metrics.success is True
+        assert metrics.issues_found == 10
+
+        d = metrics.to_dict()
+        assert d["rule_id"] == "rule-1"
+        assert "timestamp" in d
+
+    def test_metrics_collector(self) -> None:
+        """Test metrics collection and aggregation."""
+        from whilly.scheduler.metrics import PollMetrics, MetricsCollector
+
+        collector = MetricsCollector()
+
+        m1 = PollMetrics(
+            rule_id="rule-1",
+            success=True,
+            duration_seconds=1.0,
+            issues_found=5,
+            issues_unique=5,
+        )
+        m2 = PollMetrics(
+            rule_id="rule-1",
+            success=True,
+            duration_seconds=2.0,
+            issues_found=10,
+            issues_unique=8,
+        )
+
+        collector.record_poll(m1)
+        collector.record_poll(m2)
+
+        summary = collector.get_summary()
+        assert summary["total_polls"] == 2
+        assert summary["successful_polls"] == 2
+        assert summary["total_issues_found"] == 15
+        assert summary["total_issues_unique"] == 13
+
+    def test_rule_summary(self) -> None:
+        """Test rule-specific metrics summary."""
+        from whilly.scheduler.metrics import PollMetrics, MetricsCollector
+
+        collector = MetricsCollector()
+
+        m1 = PollMetrics(
+            rule_id="rule-1",
+            success=True,
+            duration_seconds=1.0,
+            issues_found=5,
+            issues_unique=5,
+        )
+        m2 = PollMetrics(
+            rule_id="rule-2",
+            success=False,
+            duration_seconds=0.5,
+            issues_found=0,
+            issues_unique=0,
+            error_message="API error",
+        )
+
+        collector.record_poll(m1)
+        collector.record_poll(m2)
+
+        summary1 = collector.get_rule_summary("rule-1")
+        assert summary1["polls"] == 1
+        assert summary1["successful"] == 1
+
+        summary2 = collector.get_rule_summary("rule-2")
+        assert summary2["polls"] == 1
+        assert summary2["failed"] == 1
