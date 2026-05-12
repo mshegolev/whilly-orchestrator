@@ -7,6 +7,8 @@ from collections.abc import Iterable, Mapping
 BASE_RUNNER_ENV_ALLOWLIST = (
     "PATH",
     "HOME",
+    "USER",
+    "LOGNAME",
     "LANG",
     "LC_ALL",
     "LC_CTYPE",

@@ -285,6 +285,37 @@ def build_jira_parser() -> argparse.ArgumentParser:
     p_poll.add_argument("--plan-id", default="", help="Optional Whilly plan id to store with --persist.")
     p_poll.add_argument("--persist", action="store_true", help="Persist the refreshed snapshot to Postgres.")
     p_poll.add_argument("--json", action="store_true", help="Print the full snapshot as JSON.")
+    p_tui = sub.add_parser(
+        "tui",
+        help="Interactive TUI intake for a single Jira issue.",
+    )
+    p_tui.add_argument(
+        "jira_ref",
+        help="Jira key or browse URL, e.g. ABC-123 or https://jira.example/browse/ABC-123.",
+    )
+    p_tui.add_argument(
+        "--action",
+        choices=["prd", "plan", "run", "interactive", "save"],
+        default=None,
+        help="Non-interactive action (skips menu); useful for scripting.",
+    )
+    p_tui.add_argument(
+        "--plan-id",
+        dest="plan_id",
+        default=None,
+        help="Plan id to write into the JSON (default: jira-<key-lowercase>).",
+    )
+    p_tui.add_argument(
+        "--out",
+        default=None,
+        help="Output plan JSON path (default: out/jira-<KEY>.json).",
+    )
+    p_tui.add_argument(
+        "--timeout",
+        type=int,
+        default=15,
+        help="Per Jira HTTP request timeout in seconds (default: 15).",
+    )
     return parser
 
 
@@ -345,6 +376,21 @@ def run_jira_command(
         return _run_readiness(args)
     if args.action == "poll":
         return _run_poll(args, snapshot_collector=snapshot_collector or collect_jira_work_snapshot)
+    if args.action == "tui":
+        from whilly.cli.jira_tui import run_jira_tui_command
+
+        return run_jira_tui_command(
+            list(argv),
+            fetcher=fetcher or fetch_single_jira_issue,
+            plan_runner=plan_runner or _run_plan_command,
+            config_loader=config_loader,
+            config_reader=config_reader,
+            prompt=prompt,
+            secret_prompt=secret_prompt,
+            browser_opener=browser_opener,
+            environ=environ,
+            stdin_isatty=stdin_isatty,
+        )
     parser.error(f"unknown action {args.action!r}")  # pragma: no cover
     return EXIT_VALIDATION_ERROR
 
