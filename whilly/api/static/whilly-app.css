@@ -1,5 +1,5 @@
 /* UI Kit shared CSS — extends colors_and_type.css from the design system root. */
-@import url("../../colors_and_type.css");
+@import url("./whilly-design.css");
 
 html, body {
   margin: 0;

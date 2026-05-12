@@ -91,17 +91,22 @@ def log_event(
     """
     flusher: EventFlusher | None = getattr(app.state, "event_flusher", None)
     if flusher is None:
-        raise RuntimeError(
-            "log_event called before lifespan started: app.state.event_flusher is None. "
-            "Wrap your test in `async with app.router.lifespan_context(app):` or use "
-            "FastAPI's TestClient to enter the lifespan first."
+        # DEMO-9843: degrade gracefully instead of raising — the event is
+        # silently dropped with a warning.  Raising RuntimeError here was
+        # fragile during startup and test teardown races.
+        import logging as _logging
+
+        _logging.getLogger(__name__).warning(
+            "log_event('%s') dropped: app.state.event_flusher is None (lifespan not yet started or already shut down).",
+            event_type,
         )
+        return
     flusher.enqueue(
         EventRecord(
             event_type=event_type,
             task_id=task_id,
             plan_id=plan_id,
-            payload=payload or {},
+            payload=payload if payload is not None else {},
             detail=detail,
         )
     )
