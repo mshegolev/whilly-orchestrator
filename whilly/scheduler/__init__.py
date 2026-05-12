@@ -2,6 +2,7 @@
 
 from whilly.scheduler.config import load_scheduler_config
 from whilly.scheduler.deduplicator import deduplicate_issues
+from whilly.scheduler.docs import SchedulerDocumentation
 from whilly.scheduler.jql_executor import execute_jql
 from whilly.scheduler.models import SchedulerPollCycle, SchedulerRule
 from whilly.scheduler.repository import InMemorySchedulerRepository, SchedulerRepository
@@ -15,6 +16,7 @@ __all__ = [
     "load_scheduler_config",
     "SchedulerRepository",
     "InMemorySchedulerRepository",
+    "SchedulerDocumentation",
     "SchedulerWorker",
     "run_scheduler_from_config",
 ]
