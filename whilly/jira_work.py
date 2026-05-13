@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-WORK_KINDS: tuple[str, ...] = ("feature", "bug", "task", "devops")
+WORK_KINDS: tuple[str, ...] = ("feature", "bug", "task", "devops", "documentation")
 URGENCIES: tuple[str, ...] = ("normal", "hotfix")
 READINESS_VERDICTS: tuple[str, ...] = (
     "ready_for_testing",
@@ -94,6 +94,20 @@ _FEATURE_TYPES = {"story", "feature", "epic", "new feature"}
 _BUG_TYPES = {"bug", "defect"}
 _TASK_TYPES = {"task", "sub-task", "subtask", "chore"}
 _DEVOPS_TYPES = {"devops", "infrastructure", "infra"}
+_DOCUMENTATION_TYPES = {"documentation", "technical documentation", "docs"}
+_DOCUMENTATION_KEYWORDS = (
+    "document",
+    "documentation",
+    "confluence",
+    "wiki",
+    "write up",
+    "write-up",
+    "docs page",
+    "knowledge base",
+    "руководство",
+    "инструкция",
+    "описание",
+)
 _HOTFIX_PRIORITIES = {"highest", "blocker", "critical", "p0", "p1"}
 
 _FEATURE_KEYWORDS = (
@@ -168,7 +182,7 @@ def classify_jira_work(issue: Mapping[str, Any]) -> JiraWorkClassification:
 
     fields = _extract_issue_fields(issue)
     text = _classification_text(fields)
-    scores = {"feature": 0, "bug": 0, "task": 0, "devops": 0}
+    scores = {"feature": 0, "bug": 0, "task": 0, "devops": 0, "documentation": 0}
     signals: list[str] = []
 
     issue_type = fields.issue_type.lower()
@@ -184,11 +198,15 @@ def classify_jira_work(issue: Mapping[str, Any]) -> JiraWorkClassification:
     if issue_type in _DEVOPS_TYPES:
         scores["devops"] += 4
         signals.append(f"jira_type:{issue_type}")
+    if issue_type in _DOCUMENTATION_TYPES:
+        scores["documentation"] += 5
+        signals.append(f"jira_type:{issue_type}")
 
     _score_keywords(text, _FEATURE_KEYWORDS, "feature", scores, signals)
     _score_keywords(text, _BUG_KEYWORDS, "bug", scores, signals)
     _score_keywords(text, _TASK_KEYWORDS, "task", scores, signals)
     _score_keywords(text, _DEVOPS_KEYWORDS, "devops", scores, signals)
+    _score_keywords(text, _DOCUMENTATION_KEYWORDS, "documentation", scores, signals)
 
     label_text = " ".join(label.lower() for label in fields.labels)
     if label_text:
@@ -442,7 +460,8 @@ def _score_keywords(
 
 
 def _select_kind(scores: Mapping[str, int]) -> str:
-    ordered = ("bug", "devops", "feature", "task")
+    # documentation first so issuetype=Documentation wins over generic 'docs' keyword task hits
+    ordered = ("documentation", "bug", "devops", "feature", "task")
     best = max(ordered, key=lambda kind: scores.get(kind, 0))
     if scores.get(best, 0) <= 0:
         return "task"
@@ -486,6 +505,7 @@ def _recommended_flow(kind: str, urgency: str) -> str:
         "bug": "bug_repro",
         "task": "task_checklist",
         "devops": "devops_change",
+        "documentation": "documentation_publish",
     }[kind]
 
 
