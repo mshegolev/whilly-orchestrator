@@ -2567,6 +2567,98 @@ def create_app(
             headers=response_headers,
         )
 
+    @app.get(
+        "/api/v1/scheduler/status",
+        # Phase 3 TASK-SCH-026: surface scheduler health for ops tooling and
+        # the dashboard without forcing operators to query Postgres directly.
+        # Read-only — no auth required so the dashboard can fetch this freely
+        # (consistent with /api/v1/tasks read pattern via dashboard token).
+        tags=["scheduler"],
+        summary="Get scheduler rules and recent poll cycle metrics",
+    )
+    async def scheduler_status_endpoint(request: Request) -> JSONResponse:
+        """Return scheduler_rules + last N scheduler_poll_cycles.
+
+        Read-only; safe to expose to the dashboard. Returns empty arrays if
+        the scheduler tables do not exist yet (migration 017 not applied).
+        """
+        rules: list[dict[str, Any]] = []
+        cycles: list[dict[str, Any]] = []
+
+        async with pool.acquire() as conn:
+            try:
+                rule_rows = await conn.fetch(
+                    """
+                    SELECT id, name, enabled, jira_project_key,
+                           poll_interval_seconds, max_results_per_poll, created_at, updated_at
+                    FROM scheduler_rules
+                    ORDER BY id ASC
+                    LIMIT 100
+                    """
+                )
+                for row in rule_rows:
+                    rules.append(
+                        {
+                            "id": row["id"],
+                            "name": row["name"],
+                            "enabled": row["enabled"],
+                            "jira_project_key": row["jira_project_key"],
+                            "poll_interval_seconds": row["poll_interval_seconds"],
+                            "max_results_per_poll": row["max_results_per_poll"],
+                            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                            "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                        }
+                    )
+            except Exception:
+                # Table doesn't exist yet — migration 017 not applied. Return empty rules.
+                rules = []
+
+            try:
+                cycle_rows = await conn.fetch(
+                    """
+                    SELECT id, rule_id, status, started_at, finished_at,
+                           issues_seen, issues_new, issues_skipped, error_message
+                    FROM scheduler_poll_cycles
+                    ORDER BY started_at DESC
+                    LIMIT 25
+                    """
+                )
+                for row in cycle_rows:
+                    cycles.append(
+                        {
+                            "id": row["id"],
+                            "rule_id": row["rule_id"],
+                            "status": row["status"],
+                            "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+                            "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+                            "issues_seen": row["issues_seen"],
+                            "issues_new": row["issues_new"],
+                            "issues_skipped": row["issues_skipped"],
+                            "error_message": row["error_message"],
+                        }
+                    )
+            except Exception:
+                cycles = []
+
+        cors_origin = (
+            request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
+        )
+        headers = {
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+        return JSONResponse(
+            {
+                "rules": rules,
+                "rules_count": len(rules),
+                "enabled_count": sum(1 for r in rules if r["enabled"]),
+                "recent_cycles": cycles,
+            },
+            headers=headers,
+        )
+
     return app
 
 
