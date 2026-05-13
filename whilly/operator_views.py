@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Final, Literal
 
@@ -15,6 +15,9 @@ from whilly.pipeline.human_review import (
     HUMAN_REVIEW_REJECTED,
     HUMAN_REVIEW_REQUIRED,
 )
+
+
+UTC = timezone.utc
 
 
 class OperatorSurface(str, Enum):

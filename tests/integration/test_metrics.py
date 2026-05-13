@@ -24,7 +24,7 @@ import asyncio
 import importlib
 import re
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 import asyncpg
@@ -44,6 +44,8 @@ from whilly.api.metrics import (
     refresh_gauges,
     resolve_metrics_token,
 )
+
+UTC = timezone.utc
 
 pytestmark = DOCKER_REQUIRED
 

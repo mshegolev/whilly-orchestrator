@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+
+UTC = timezone.utc
 
 DEFAULT_DOC_ROOT = Path(__file__).resolve().parents[2] / "docs" / "target"
 _BOUNDED_CI_REPAIR_SCOPE = "No continuous polling, auto-merge, production recovery, or unbounded repair is claimed."

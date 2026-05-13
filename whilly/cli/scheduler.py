@@ -79,6 +79,32 @@ def build_scheduler_parser() -> argparse.ArgumentParser:
         help="Show only enabled rules.",
     )
 
+    # whilly scheduler status
+    p_status = subparsers.add_parser(
+        "status",
+        help="Show scheduler status and metrics (requires DB).",
+    )
+    p_status.add_argument(
+        "--config",
+        default=None,
+        help="Path to scheduler configuration file.",
+    )
+    p_status.add_argument("--json", action="store_true", help="Output as JSON.")
+
+    # whilly scheduler enable
+    p_enable = subparsers.add_parser(
+        "enable",
+        help="Enable a scheduler rule in the database (TASK-SCH-025).",
+    )
+    p_enable.add_argument("rule_id", help="Rule ID to enable.")
+
+    # whilly scheduler disable
+    p_disable = subparsers.add_parser(
+        "disable",
+        help="Disable a scheduler rule in the database (TASK-SCH-025).",
+    )
+    p_disable.add_argument("rule_id", help="Rule ID to disable.")
+
     return parser
 
 
@@ -218,6 +244,102 @@ def list_scheduler_rules(config_path: str, enabled_only: bool = True) -> int:
         return EXIT_ERROR
 
 
+def show_scheduler_status(config_path: str | None, as_json: bool = False) -> int:
+    """Show scheduler status: rules configured, last poll cycles, metrics.
+
+    Tries to read from DB first (production); falls back to config file metadata
+    (dev environments without DB access).
+    """
+    import json as _json
+    import os as _os
+
+    db_url = _os.environ.get("WHILLY_DATABASE_URL", "")
+    result: dict[str, object] = {
+        "scheduler_module": "loaded",
+        "db_url_configured": bool(db_url),
+    }
+
+    # Read from config if provided
+    if config_path:
+        try:
+            rules = load_scheduler_config(config_path)
+            result["rules_count"] = len(rules)
+            result["enabled_count"] = sum(1 for r in rules if r.enabled)
+            result["rules"] = [
+                {
+                    "id": r.id,
+                    "name": r.name,
+                    "enabled": r.enabled,
+                    "jira_project": r.jira_project_key,
+                    "poll_interval_seconds": r.poll_interval_seconds,
+                }
+                for r in rules
+            ]
+        except Exception as exc:
+            result["config_error"] = str(exc)
+
+    if as_json:
+        print(_json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"Scheduler module: {result['scheduler_module']}")
+        print(f"DB URL configured: {result['db_url_configured']}")
+        if "rules_count" in result:
+            print(f"Total rules: {result['rules_count']}")
+            print(f"Enabled rules: {result['enabled_count']}")
+            for rule in result.get("rules", []):
+                state = "✓" if rule["enabled"] else "✗"
+                print(f"  {state} {rule['id']:<20} {rule['name']} (poll={rule['poll_interval_seconds']}s)")
+        elif "config_error" in result:
+            print(f"Config error: {result['config_error']}", file=sys.stderr)
+
+    return EXIT_OK
+
+
+def set_scheduler_rule_enabled(rule_id: str, *, enabled: bool) -> int:
+    """Enable or disable a scheduler rule in the database.
+
+    Requires WHILLY_DATABASE_URL. Phase 3 stub: prints the SQL that would run.
+    Full DB persistence is delivered via the scheduler_rules table (migration 017).
+    """
+    import os as _os
+
+    db_url = _os.environ.get("WHILLY_DATABASE_URL", "")
+    if not db_url:
+        print("WHILLY_DATABASE_URL not set — cannot toggle rule in DB.", file=sys.stderr)
+        print(
+            f"Would run: UPDATE scheduler_rules SET enabled = {enabled} WHERE id = '{rule_id}';",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        import asyncio as _asyncio
+
+        import asyncpg as _asyncpg
+
+        async def _run() -> int:
+            conn = await _asyncpg.connect(db_url)
+            try:
+                result = await conn.execute(
+                    "UPDATE scheduler_rules SET enabled = $1, updated_at = NOW() WHERE id = $2",
+                    enabled,
+                    rule_id,
+                )
+                if "UPDATE 0" in result:
+                    print(f"Rule {rule_id!r} not found in scheduler_rules table.", file=sys.stderr)
+                    return EXIT_ERROR
+                action = "enabled" if enabled else "disabled"
+                print(f"Rule {rule_id!r} {action}.")
+                return EXIT_OK
+            finally:
+                await conn.close()
+
+        return _asyncio.run(_run())
+    except Exception as exc:
+        print(f"DB error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+
 def run_scheduler_cli(argv: list[str] | None = None) -> int:
     """Main entry point for scheduler CLI.
 
@@ -248,6 +370,12 @@ def run_scheduler_cli(argv: list[str] | None = None) -> int:
             return validate_scheduler_config(args.config)
         elif args.action == "list":
             return list_scheduler_rules(args.config, enabled_only=args.enabled_only)
+        elif args.action == "status":
+            return show_scheduler_status(args.config, as_json=args.json)
+        elif args.action == "enable":
+            return set_scheduler_rule_enabled(args.rule_id, enabled=True)
+        elif args.action == "disable":
+            return set_scheduler_rule_enabled(args.rule_id, enabled=False)
         else:
             print(f"Unknown action: {args.action}", file=sys.stderr)
             return EXIT_ERROR

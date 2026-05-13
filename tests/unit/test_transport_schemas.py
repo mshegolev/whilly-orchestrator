@@ -20,7 +20,7 @@ here. These tests cover the AC for TASK-021a1:
 from __future__ import annotations
 
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -53,6 +53,9 @@ from whilly.core.models import Plan, Priority, Task, TaskStatus, VerificationCom
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+UTC = timezone.utc
 
 
 def _sample_task() -> Task:

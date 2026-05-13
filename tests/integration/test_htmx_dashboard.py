@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 import asyncpg
 import pytest
@@ -43,6 +43,8 @@ from whilly.operator_views import (
     operator_wui_artifacts,
     operator_wui_route_prefixes,
 )
+
+UTC = timezone.utc
 
 pytestmark = DOCKER_REQUIRED
 

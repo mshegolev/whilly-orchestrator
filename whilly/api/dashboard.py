@@ -22,7 +22,7 @@ import json
 import logging
 from collections import deque
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
@@ -42,6 +42,8 @@ from whilly.operator_views import (
     operator_table_columns,
     operator_wui_route_prefixes,
 )
+
+UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 

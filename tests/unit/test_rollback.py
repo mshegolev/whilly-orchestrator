@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +20,9 @@ from whilly.rollback.service import (
     list_rollback_points,
     restore_to_ref,
 )
+
+
+UTC = timezone.utc
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:

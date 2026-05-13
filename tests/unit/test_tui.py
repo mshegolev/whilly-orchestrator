@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -34,6 +34,9 @@ from whilly.operator_views import (
     operator_surface_hotkeys,
     operator_wui_artifacts,
 )
+
+
+UTC = timezone.utc
 
 
 def _render_to_text(renderable: Any) -> str:
