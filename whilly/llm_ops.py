@@ -16,12 +16,14 @@ import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.core.models import Plan, Task, WorkerId
+
+UTC = timezone.utc
 
 log = logging.getLogger(__name__)
 

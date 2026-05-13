@@ -102,7 +102,13 @@ import logging
 from collections.abc import Mapping
 from decimal import Decimal
 from types import TracebackType
-from typing import Any, Final, Self, TypeVar
+import sys
+from typing import Any, Final, TypeVar
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 import httpx
 from pydantic import BaseModel, ValidationError

@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypeVar
 
@@ -51,6 +51,8 @@ from whilly.core import (
 # The migration round-trip test boots a Postgres container via testcontainers,
 # which needs a working Docker daemon. Skip cleanly on machines where Docker
 # is not available rather than failing the whole integration suite.
+
+UTC = timezone.utc
 
 try:
     from testcontainers.postgres import PostgresContainer  # type: ignore[import-untyped]

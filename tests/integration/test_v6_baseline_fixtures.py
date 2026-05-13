@@ -45,7 +45,7 @@ import socket
 import subprocess
 import time
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +76,8 @@ from whilly.adapters.transport.server import (
     create_app,
 )
 from whilly.api.sse import EventNotifyBroker
+
+UTC = timezone.utc
 
 pytestmark = DOCKER_REQUIRED
 

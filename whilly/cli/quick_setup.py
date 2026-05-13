@@ -9,8 +9,10 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
+
+UTC = timezone.utc
 
 try:
     from whilly import __version__

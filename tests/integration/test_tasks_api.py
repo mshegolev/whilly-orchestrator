@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import asyncpg
 import pytest
@@ -34,6 +34,8 @@ from httpx import ASGITransport, AsyncClient
 
 from tests.conftest import DOCKER_REQUIRED
 from whilly.adapters.transport.server import REGISTER_PATH, create_app
+
+UTC = timezone.utc
 
 pytestmark = DOCKER_REQUIRED
 
