@@ -299,6 +299,36 @@ def build_admin_parser() -> argparse.ArgumentParser:
         help="Emit a single-line JSON object on stdout instead of key: value lines.",
     )
 
+    # ── database ──────────────────────────────────────────────────
+    database = sub.add_parser(
+        "database",
+        help="Database management commands (reset with password).",
+        description="Operator-facing database administration.",
+    )
+    database_sub = database.add_subparsers(dest="action", metavar="<action>")
+    database_sub.required = True
+
+    db_reset = database_sub.add_parser(
+        "reset",
+        help="Clear all data (tasks, workers, events, plans) — requires password.",
+        description=(
+            "DESTRUCTIVE: Clear all tasks, workers, events, plans, and bootstrap tokens. "
+            "Resets sequences. Requires --password for safety."
+        ),
+    )
+    db_reset.add_argument(
+        "--password",
+        dest="password",
+        required=False,
+        help="Admin password to confirm reset (prevents accidental data loss).",
+    )
+    db_reset.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit a single-line JSON object on stdout instead of key: value lines.",
+    )
+
     return parser
 
 
@@ -406,6 +436,9 @@ def run_admin_command(argv: Sequence[str]) -> int:
     elif args.namespace == "worker":
         if args.action == "revoke":
             return _run_worker_revoke(args)
+    elif args.namespace == "database":
+        if args.action == "reset":
+            return _run_database_reset(args)
 
     parser.error(f"unknown admin command: {args.namespace} {args.action}")
     return EXIT_OPERATION_ERROR  # unreachable — ``parser.error`` raises SystemExit(2).
@@ -640,6 +673,63 @@ def _run_worker_revoke(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _run_database_reset(args: argparse.Namespace) -> int:
+    """Reset the database — clear all tasks, workers, events, plans (requires password)."""
+    import getpass
+
+    # Admin password for safety
+    ADMIN_PASSWORD = "whilly-reset-admin"
+
+    # Get password from argument or prompt
+    password = args.password
+    if password is None:
+        password = getpass.getpass("⚠️  DESTRUCTIVE OPERATION: Enter admin password to reset database: ")
+
+    if password != ADMIN_PASSWORD:
+        print(
+            "whilly admin database reset: incorrect password.",
+            file=sys.stderr,
+        )
+        return EXIT_OPERATION_ERROR
+
+    # Confirm operation
+    if args.password is None:  # Only confirm if interactive
+        confirm = input("⚠️  This will DELETE ALL tasks, workers, events, and plans. Type 'yes' to confirm: ")
+        if confirm.strip().lower() != "yes":
+            print("whilly admin database reset: cancelled.", file=sys.stderr)
+            return EXIT_OPERATION_ERROR
+
+    dsn = _resolve_dsn()
+    if dsn is None:
+        print(_missing_dsn_diagnostic(), file=sys.stderr)
+        return EXIT_ENVIRONMENT_ERROR
+
+    try:
+        asyncio.run(_async_database_reset(dsn))
+    except Exception as exc:
+        print(f"whilly admin database reset: {_format_db_error(exc)}", file=sys.stderr)
+        return EXIT_OPERATION_ERROR
+
+    if args.json_output:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "reset": True,
+                    "message": "Database cleared: events, plans, tasks, workers, bootstrap_tokens",
+                }
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
+    else:
+        _emit_kv(
+            sys.stdout,
+            reset="true",
+            message="Database cleared: events, plans, tasks, workers, bootstrap_tokens",
+        )
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------------------
 # Async helpers (one short-lived pool per command)
 # ---------------------------------------------------------------------------
@@ -712,6 +802,34 @@ async def _async_revoke_worker(dsn: str, worker_id: str) -> tuple[bool, int]:
     try:
         repo = TaskRepository(pool)
         return await repo.revoke_worker_bearer(worker_id)
+    finally:
+        await close_pool(pool)
+
+
+async def _async_database_reset(dsn: str) -> None:
+    """Clear all data from the database (events, plans, tasks, workers, bootstrap_tokens)."""
+    pool = await create_pool(dsn)
+    try:
+        # Use raw connection to execute SQL truncate commands
+        async with pool.acquire() as conn:
+            await conn.execute("TRUNCATE events CASCADE;")
+            await conn.execute("TRUNCATE plans CASCADE;")
+            await conn.execute("TRUNCATE workers CASCADE;")
+            await conn.execute("TRUNCATE tasks CASCADE;")
+            await conn.execute("TRUNCATE bootstrap_tokens CASCADE;")
+            # Reset sequences (ignore if they don't exist)
+            try:
+                await conn.execute("ALTER SEQUENCE workers_id_seq RESTART WITH 1;")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER SEQUENCE bootstrap_tokens_id_seq RESTART WITH 1;")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER SEQUENCE events_id_seq RESTART WITH 1;")
+            except Exception:
+                pass
     finally:
         await close_pool(pool)
 
