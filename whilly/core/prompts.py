@@ -170,7 +170,12 @@ PR_REVIEW_COMMENT_SCOPE = "pr_review_comment"
 PR_DIFF_SCOPE = "pr_diff"
 
 
-def build_task_prompt(task: Task, plan: Plan) -> str:
+def build_task_prompt(
+    task: Task,
+    plan: Plan,
+    *,
+    mcp_profile: Mapping[str, Any] | None = None,
+) -> str:
     """Construct the agent prompt for ``task`` within ``plan``.
 
     The returned string:
@@ -182,6 +187,15 @@ def build_task_prompt(task: Task, plan: Plan) -> str:
     * Surfaces ``priority``, ``dependencies``, and ``prd_requirement`` for
       context — these are part of the domain model and cheap to inline.
     * Demands ``<promise>COMPLETE</promise>`` on success (PRD FR-1.6).
+    * Optionally appends an ``## Available Tools`` section when an MCP profile
+      is provided (Phase 5 TASK-SCH-042).
+
+    Args:
+        task: The task being executed
+        plan: The plan containing the task
+        mcp_profile: Optional MCP profile dict with keys ``name``, ``description``,
+            ``tools`` (list of tool names). When non-empty, its tools are listed
+            under an ``## Available Tools`` heading.
 
     No I/O, no time-dependent values; deterministic for deterministic inputs
     and prompt-guard environment. ``mypy --strict`` clean per PRD NFR-4.
@@ -230,7 +244,43 @@ def build_task_prompt(task: Task, plan: Plan) -> str:
     lines.append(f"- На финише, ТОЛЬКО при полном успехе, выведи `{PROMISE_MARKER}`.")
     lines.append("- Если не можешь завершить — опиши проблему и НЕ выводи promise-маркер.")
 
+    if mcp_profile:
+        tool_lines = _format_mcp_tools(mcp_profile)
+        if tool_lines:
+            lines.append("")
+            lines.append("## Available Tools")
+            profile_name = str(mcp_profile.get("name", "") or "")
+            profile_desc = str(mcp_profile.get("description", "") or "")
+            if profile_name:
+                header = f"Profile: **{profile_name}**"
+                if profile_desc:
+                    header += f" — {profile_desc}"
+                lines.append(header)
+            lines.extend(tool_lines)
+
     return "\n".join(lines)
+
+
+def _format_mcp_tools(profile: Mapping[str, Any]) -> list[str]:
+    """Render MCP profile tools as a bullet list. Empty list if no tools."""
+    raw_tools = profile.get("tools") or []
+    if not isinstance(raw_tools, (list, tuple)):
+        return []
+    lines: list[str] = []
+    for tool in raw_tools:
+        if isinstance(tool, Mapping):
+            name = str(tool.get("name", "") or "")
+            description = str(tool.get("description", "") or "")
+            if not name:
+                continue
+            if description:
+                lines.append(f"- **{name}** — {description}")
+            else:
+                lines.append(f"- **{name}**")
+        elif isinstance(tool, str):
+            if tool:
+                lines.append(f"- **{tool}**")
+    return lines
 
 
 def build_pr_fix_prompt(

@@ -145,3 +145,96 @@ class TestMCPProfileRegistry:
         registry2.load_from_json(path)
         assert registry2.get_profile("qa") is not None
         assert registry2.get_profile("qa").tools == ["allure", "jira"]
+
+
+class TestPromptInjection:
+    """Phase 5 TASK-SCH-042: build_task_prompt accepts mcp_profile."""
+
+    def _make_plan_and_task(self):
+        from whilly.core.models import Plan, Priority, Task, TaskStatus
+
+        task = Task(
+            id="t-mcp-1",
+            status=TaskStatus.PENDING,
+            description="Test task",
+            priority=Priority.MEDIUM,
+            acceptance_criteria=(),
+            test_steps=(),
+        )
+        plan = Plan(id="plan-mcp", name="MCP test plan")
+        return plan, task
+
+    def test_no_mcp_profile_omits_section(self) -> None:
+        from whilly.core.prompts import build_task_prompt
+
+        plan, task = self._make_plan_and_task()
+        prompt = build_task_prompt(task, plan)
+        assert "## Available Tools" not in prompt
+
+    def test_empty_mcp_profile_omits_section(self) -> None:
+        from whilly.core.prompts import build_task_prompt
+
+        plan, task = self._make_plan_and_task()
+        prompt = build_task_prompt(task, plan, mcp_profile={"name": "empty", "tools": []})
+        assert "## Available Tools" not in prompt
+
+    def test_mcp_profile_with_string_tools(self) -> None:
+        from whilly.core.prompts import build_task_prompt
+
+        plan, task = self._make_plan_and_task()
+        profile = {"name": "qa-tools", "description": "QA tooling", "tools": ["allure", "jira-read"]}
+        prompt = build_task_prompt(task, plan, mcp_profile=profile)
+
+        assert "## Available Tools" in prompt
+        assert "Profile: **qa-tools**" in prompt
+        assert "QA tooling" in prompt
+        assert "**allure**" in prompt
+        assert "**jira-read**" in prompt
+
+    def test_mcp_profile_with_dict_tools(self) -> None:
+        from whilly.core.prompts import build_task_prompt
+
+        plan, task = self._make_plan_and_task()
+        profile = {
+            "name": "dev",
+            "tools": [
+                {"name": "git", "description": "Version control"},
+                {"name": "docker", "description": "Container runtime"},
+            ],
+        }
+        prompt = build_task_prompt(task, plan, mcp_profile=profile)
+
+        assert "## Available Tools" in prompt
+        assert "**git** — Version control" in prompt
+        assert "**docker** — Container runtime" in prompt
+
+    def test_mcp_profile_section_after_rules(self) -> None:
+        from whilly.core.prompts import build_task_prompt
+
+        plan, task = self._make_plan_and_task()
+        profile = {"name": "tools", "tools": ["t1"]}
+        prompt = build_task_prompt(task, plan, mcp_profile=profile)
+
+        rules_idx = prompt.index("## Правила")
+        tools_idx = prompt.index("## Available Tools")
+        assert rules_idx < tools_idx, "Available Tools section should come after rules"
+
+    def test_mcp_profile_filters_empty_tool_names(self) -> None:
+        from whilly.core.prompts import build_task_prompt
+
+        plan, task = self._make_plan_and_task()
+        profile = {
+            "name": "mixed",
+            "tools": [
+                {"name": "real-tool", "description": "Works"},
+                {"name": "", "description": "no name"},
+                "",
+            ],
+        }
+        prompt = build_task_prompt(task, plan, mcp_profile=profile)
+        assert "**real-tool**" in prompt
+        # Empty-name entries must be skipped — count tool bullets in Available Tools section
+        tools_section = prompt.split("## Available Tools", 1)[1]
+        bullet_lines = [line for line in tools_section.split("\n") if line.startswith("- **")]
+        assert len(bullet_lines) == 1
+        assert "real-tool" in bullet_lines[0]
