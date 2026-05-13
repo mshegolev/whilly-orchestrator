@@ -295,6 +295,7 @@ def build_jira_parser() -> argparse.ArgumentParser:
     )
     p_tui.add_argument(
         "--action",
+        dest="tui_action",
         choices=["prd", "plan", "run", "interactive", "save"],
         default=None,
         help="Non-interactive action (skips menu); useful for scripting.",
@@ -315,6 +316,16 @@ def build_jira_parser() -> argparse.ArgumentParser:
         type=int,
         default=15,
         help="Per Jira HTTP request timeout in seconds (default: 15).",
+    )
+    p_tui.add_argument(
+        "--interactive-config",
+        action="store_true",
+        help="Prompt for missing Jira settings before fetching the issue.",
+    )
+    p_tui.add_argument(
+        "--no-interactive-config",
+        action="store_true",
+        help="Never prompt for missing Jira settings; print setup instructions instead.",
     )
     return parser
 
@@ -380,7 +391,7 @@ def run_jira_command(
         from whilly.cli.jira_tui import run_jira_tui_command
 
         return run_jira_tui_command(
-            list(argv),
+            args,
             fetcher=fetcher or fetch_single_jira_issue,
             plan_runner=plan_runner or _run_plan_command,
             config_loader=config_loader,
