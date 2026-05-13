@@ -641,6 +641,40 @@ class HeartbeatResponse(_FrozenModel):
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# Task Creation (WUI)
+# ---------------------------------------------------------------------------
+
+
+class TaskCreateRequest(_FrozenModel):
+    """``POST /api/v1/tasks`` request body for WUI task creation.
+
+    Minimal form-friendly schema for creating a task through the dashboard.
+    All fields except ``id`` are optional (with sensible defaults).
+    """
+
+    id: NonEmptyShortStr = Field(
+        ...,
+        description="Unique task ID within the plan",
+        min_length=1,
+        max_length=128,
+    )
+    description: Annotated[str, Field(max_length=MAX_DESCRIPTION_LEN)] = ""
+    priority: Priority = Priority.MEDIUM
+    # Comma-separated or semicolon-separated task IDs for dependencies
+    dependencies: list[NonEmptyShortStr] = Field(default_factory=list)
+    key_files: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    test_steps: list[str] = Field(default_factory=list)
+    repo_target_id: str = ""
+
+
+class TaskCreateResponse(_FrozenModel):
+    """``POST /api/v1/tasks`` response body."""
+
+    task: TaskPayload
+
 class ErrorResponse(_FrozenModel):
     """Shared error envelope for any non-2xx response (PRD FR-1.2).
 

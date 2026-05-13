@@ -627,6 +627,60 @@
 
     <section id="surface-plans_tasks" class="operator-surface surface-panel" data-surface="plans_tasks" hidden>
       <header><h2>Plans/Tasks</h2></header>
+      
+      <!-- Task Creation Form -->
+      <details style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--line-strong); background: var(--surface-strong); cursor: pointer;">
+        <summary style="font-weight: bold; color: var(--text);">+ Create Task</summary>
+        <form id="create-task-form" 
+              style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center; padding: 12px; margin-top: 8px;"
+              hx-post="/api/v1/tasks"
+              hx-trigger="submit"
+              hx-swap="none">
+          
+          <label for="task-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Task ID *</label>
+          <input id="task-id" 
+                 type="text" 
+                 name="id" 
+                 required 
+                 pattern="[a-zA-Z0-9\-_]+"
+                 placeholder="e.g., fix-db-constraint"
+                 style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+          
+          <label for="task-priority" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Priority</label>
+          <select id="task-priority" 
+                  name="priority"
+                  style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+            <option value="low">Low</option>
+            <option value="medium" selected>Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+          
+          <label for="task-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Description</label>
+          <textarea id="task-description" 
+                    name="description" 
+                    maxlength="2048"
+                    rows="3"
+                    placeholder="What needs to be done?"
+                    style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+          
+          <label for="task-dependencies" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Dependencies</label>
+          <input id="task-dependencies" 
+                 type="text" 
+                 name="dependencies" 
+                 placeholder="Comma-separated task IDs (optional)"
+                 style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+          
+          <div style="grid-column: 1 / -1;">
+            <button type="submit" 
+                    style="padding: 6px 12px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
+              Create Task
+            </button>
+            <span id="create-task-status" style="margin-left: 12px; color: var(--muted);"></span>
+          </div>
+        </form>
+      </details>
+      
       <div class="table-wrapper">
         {% include "_tasks_table.html" %}
       </div>
@@ -1081,6 +1135,74 @@
           setSurface(surfaceOrder[Number(event.key) - 1]);
         }
       });
+      // Task creation form handler
+      const createTaskForm = document.getElementById("create-task-form");
+      if (createTaskForm) {
+        // Convert form data to JSON with proper array handling
+        createTaskForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const formData = new FormData(createTaskForm);
+          const payload = Object.fromEntries(formData);
+          
+          // Parse dependencies as array
+          if (payload.dependencies && typeof payload.dependencies === "string") {
+            payload.dependencies = payload.dependencies
+              .split(/[,;]/)
+              .map((s) => s.trim())
+              .filter((s) => s);
+          } else {
+            payload.dependencies = [];
+          }
+          
+          // Get plan_id from URL or use default
+          const urlParams = new URLSearchParams(window.location.search);
+          const planId = urlParams.get("plan_id") || "default";
+          
+          // Submit via fetch + HTMX
+          fetch(`/api/v1/tasks?plan_id=${encodeURIComponent(planId)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          })
+            .then((response) => {
+              const statusEl = createTaskForm.querySelector("#create-task-status");
+              if (response.ok) {
+                createTaskForm.reset();
+                if (statusEl) {
+                  statusEl.textContent = "Task created!";
+                  statusEl.style.color = "var(--ok)";
+                }
+                setTimeout(() => {
+                  if (statusEl) statusEl.textContent = "";
+                  // Trigger tasks table refresh via HTMX if available
+                  if (window.htmx) {
+                    const tasksTable = document.querySelector("#tasks");
+                    if (tasksTable) window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" });
+                  }
+                }, 1500);
+              } else {
+                response.text().then((text) => {
+                  if (statusEl) {
+                    try {
+                      const err = JSON.parse(text);
+                      statusEl.textContent = err.detail || "Task creation failed";
+                    } catch {
+                      statusEl.textContent = "Task creation failed";
+                    }
+                    statusEl.style.color = "var(--danger)";
+                  }
+                });
+              }
+            })
+            .catch((error) => {
+              const statusEl = createTaskForm.querySelector("#create-task-status");
+              if (statusEl) {
+                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.style.color = "var(--danger)";
+              }
+            });
+        });
+      }
       restoreDashboardState();
     })();
   </script>
