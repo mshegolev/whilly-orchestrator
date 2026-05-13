@@ -17,13 +17,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TypeAlias
 
-type TaskId = str
-type PlanId = str
-type WorkerId = str
-type WorkIntentId = str
-type RepoTargetId = str
+TaskId: TypeAlias = str
+PlanId: TypeAlias = str
+WorkerId: TypeAlias = str
+WorkIntentId: TypeAlias = str
+RepoTargetId: TypeAlias = str
 
 
 class TaskStatus(str, Enum):
