@@ -454,6 +454,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.project_config import run_project_config_command
 
         return run_project_config_command(rest)
+    if cmd == "project-map":
+        from whilly.cli.project_map import run_project_map_command
+
+        return run_project_map_command(rest)
     if cmd == "github-projects":
         from whilly.cli.github_projects import run_github_projects_command
 
