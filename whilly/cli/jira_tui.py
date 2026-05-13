@@ -168,7 +168,7 @@ def _dispatch_tui_action(
 
 
 def run_jira_tui_command(
-    argv: Sequence[str],
+    args: argparse.Namespace,
     *,
     fetcher: Fetcher | None = None,
     plan_runner: Runner | None = None,
@@ -181,17 +181,9 @@ def run_jira_tui_command(
 ) -> int:
     """Main entry point for `whilly jira tui` command.
 
+    Receives already-parsed argparse.Namespace from run_jira_command.
     Returns process exit code.
     """
-    # Parse arguments
-    parser = argparse.ArgumentParser(prog="whilly jira tui", description="Interactive TUI intake for a Jira issue.")
-    parser.add_argument("jira_ref", help="Jira key or browse URL")
-    parser.add_argument("--action", choices=["prd", "plan", "run", "interactive", "save"], default=None)
-    parser.add_argument("--plan-id", dest="plan_id", default=None)
-    parser.add_argument("--out", default=None)
-    parser.add_argument("--timeout", type=int, default=15)
-
-    args = parser.parse_args(list(argv)[1:])  # Skip 'tui' subcommand
 
     # Normalize config defaults
     environ = environ or os.environ
@@ -219,11 +211,13 @@ def run_jira_tui_command(
     # Validate Jira configuration
     rc = _ensure_jira_config(
         args,
-        config_loader=config_loader,
         config_reader=config_reader,
+        env=environ,
         prompt=prompt,
         secret_prompt=secret_prompt,
-        environ=environ,
+        browser_opener=lambda url: False,  # No browser opening in TUI
+        stdin_isatty=stdin_isatty,
+        command_label="whilly jira tui",
     )
     if rc != 0:
         return rc
@@ -243,8 +237,8 @@ def run_jira_tui_command(
     _render_intake_screen(console, key, plan_path, work_meta)
 
     # Determine choice: explicit flag, interactive keypress, or save in non-TTY
-    if args.action:
-        choice = args.action
+    if args.tui_action:
+        choice = args.tui_action
     elif stdin_isatty():
         choice = _read_single_key()
     else:

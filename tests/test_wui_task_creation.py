@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
 from whilly.adapters.db.repository import TaskRepository
 from whilly.adapters.transport.schemas import TaskCreateRequest
-from whilly.core.models import Plan, Priority, Task, TaskStatus
+from whilly.core.models import Priority, Task, TaskStatus
 
 
 class TestTaskRepositoryInsertTask:

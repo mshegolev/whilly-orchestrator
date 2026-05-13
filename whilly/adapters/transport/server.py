@@ -2351,9 +2351,7 @@ def create_app(
             task_payload = TaskPayload.from_task(inserted)
 
             cors_origin = (
-                request.headers.get("origin")
-                or os.environ.get("WHILLY_DASHBOARD_ORIGIN")
-                or DASHBOARD_DEFAULT_ORIGIN
+                request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
             )
             headers = {
                 "Cache-Control": "no-store",

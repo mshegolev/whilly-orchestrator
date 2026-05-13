@@ -641,7 +641,6 @@ class HeartbeatResponse(_FrozenModel):
 # ---------------------------------------------------------------------------
 
 
-
 # ---------------------------------------------------------------------------
 # Task Creation (WUI)
 # ---------------------------------------------------------------------------
@@ -674,6 +673,7 @@ class TaskCreateResponse(_FrozenModel):
     """``POST /api/v1/tasks`` response body."""
 
     task: TaskPayload
+
 
 class ErrorResponse(_FrozenModel):
     """Shared error envelope for any non-2xx response (PRD FR-1.2).
