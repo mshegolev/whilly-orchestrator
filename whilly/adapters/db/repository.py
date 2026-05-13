@@ -2062,6 +2062,109 @@ class TaskRepository:
             for row in rows
         )
 
+    async def insert_task(
+        self,
+        task: Task,
+        plan_id: PlanId,
+    ) -> Task:
+        """Insert a new task into an existing plan.
+
+        Validates that the plan exists and that dependencies, if any, belong to the
+        same plan. Returns the inserted :class:`Task` with version = 0.
+
+        Args
+        ----
+        task:
+            The :class:`Task` to insert. ``id`` must be unique within ``plan_id``.
+            ``status`` should be ``PENDING`` (recommended) but any valid status is
+            accepted. ``version`` is always reset to 0 on insert.
+        plan_id:
+            The parent plan. Must exist in the plans table. A non-existent
+            ``plan_id`` raises a ForeignKeyError or similar constraint violation.
+
+        Returns
+        -------
+        Task
+            The freshly inserted task with ``version = 0``.
+
+        Raises
+        ------
+        asyncpg.UniqueViolationError
+            If ``task.id`` already exists in ``plan_id``.
+        asyncpg.ForeignKeyViolationError
+            If ``plan_id`` doesn't exist, or if a dependency references a task
+            outside ``plan_id`` (if such a check is enforced at the schema level).
+        ValueError
+            If ``task.status`` or ``task.priority`` are invalid enums.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                # Validate plan exists
+                plan_row = await conn.fetchrow("SELECT id FROM plans WHERE id = $1", plan_id)
+                if plan_row is None:
+                    raise ValueError(f"Plan {plan_id!r} does not exist")
+
+                # Validate dependencies (if any) exist in same plan
+                if task.dependencies:
+                    dep_count = await conn.fetchval(
+                        """
+                        SELECT COUNT(*)
+                        FROM tasks
+                        WHERE plan_id = $1 AND id = ANY($2::text[])
+                        """,
+                        plan_id,
+                        list(task.dependencies),
+                    )
+                    if dep_count != len(task.dependencies):
+                        missing = set(task.dependencies) - {
+                            row["id"]
+                            for row in await conn.fetch(
+                                "SELECT id FROM tasks WHERE plan_id = $1 AND id = ANY($2::text[])",
+                                plan_id,
+                                list(task.dependencies),
+                            )
+                        }
+                        raise ValueError(f"Dependencies not found in plan: {missing}")
+
+                # Insert the task
+                await conn.execute(
+                    _INSERT_REPAIR_TASK_SQL,
+                    task.id,
+                    plan_id,
+                    task.status.value,
+                    json.dumps(list(task.dependencies)),
+                    json.dumps(list(task.key_files)),
+                    task.priority.value,
+                    task.description,
+                    json.dumps(list(task.acceptance_criteria)),
+                    json.dumps(list(task.test_steps)),
+                    task.prd_requirement,
+                    0,  # version always starts at 0
+                )
+
+                # Set repo_target_id if provided
+                if task.repo_target_id:
+                    await conn.execute(
+                        _UPSERT_REPAIR_TASK_REPO_TARGET_SQL,
+                        task.id,
+                        task.repo_target_id,
+                    )
+
+                # Fetch and return the inserted task
+                row = await conn.fetchrow(_SELECT_TASK_WITH_REPO_TARGET_SQL, task.id)
+                if row is None:  # pragma: no cover
+                    raise RuntimeError(f"insert_task: inserted task vanished: {task.id!r}")
+                inserted = _row_to_task(row)
+
+        # Emit audit event
+        self._emit_jsonl(
+            "TASK_CREATED",
+            task_id=task.id,
+            plan_id=plan_id,
+            payload={"description": task.description, "priority": task.priority.value},
+        )
+        return inserted
+
     async def insert_repair_task(self, orig_task: Task, repair_task: Task, event: PipelineTaskEvent) -> Task:
         """Insert a deterministic repair task and its requested event atomically."""
 

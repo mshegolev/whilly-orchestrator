@@ -258,6 +258,7 @@ from whilly.adapters.transport.schemas import (
     RepairTaskResponse,
     ReleaseRequest,
     ReleaseResponse,
+    TaskCreateRequest,
     TaskEventItem,
     TaskEventRequest,
     TaskEventResponse,
@@ -2297,6 +2298,98 @@ def create_app(
             "Vary": "Origin",
         }
         return JSONResponse(payload, headers=headers)
+
+    @app.post(
+        "/api/v1/tasks",
+        tags=["tasks"],
+        summary="Create a new task in a plan",
+        response_model=TaskPayload | None,
+    )
+    async def create_task_endpoint(
+        request: Request,
+        plan_id: str = Query(..., min_length=1, max_length=256),
+    ) -> JSONResponse:
+        """Create a single task in an existing plan.
+
+        Requires worker bearer auth. Validates:
+        - plan_id exists
+        - task.id is unique within plan
+        - dependencies (if any) exist in plan
+
+        Returns the newly created TaskPayload with status PENDING, version 0.
+        """
+        # Parse request body manually to handle JSON
+        try:
+            raw_body = await request.json()
+            create_req = TaskCreateRequest(**raw_body)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status_module.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid request body: {str(exc)}",
+            ) from None
+
+        await _authenticate_tasks_read_request(request)
+
+        try:
+            # Create task object
+            task = Task(
+                id=create_req.id,
+                status=TaskStatus.PENDING,
+                description=create_req.description,
+                priority=create_req.priority,
+                dependencies=tuple(create_req.dependencies),
+                key_files=tuple(create_req.key_files),
+                acceptance_criteria=tuple(create_req.acceptance_criteria),
+                test_steps=tuple(create_req.test_steps),
+                repo_target_id=create_req.repo_target_id,
+            )
+
+            # Insert into database
+            inserted = await repo.insert_task(task, plan_id=plan_id)
+
+            # Convert to wire format
+            task_payload = TaskPayload.from_task(inserted)
+
+            cors_origin = (
+                request.headers.get("origin")
+                or os.environ.get("WHILLY_DASHBOARD_ORIGIN")
+                or DASHBOARD_DEFAULT_ORIGIN
+            )
+            headers = {
+                "Cache-Control": "no-store",
+                "Access-Control-Allow-Origin": cors_origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Vary": "Origin",
+            }
+            return JSONResponse(
+                task_payload.model_dump(mode="json"),
+                status_code=status_module.HTTP_201_CREATED,
+                headers=headers,
+            )
+
+        except ValueError as exc:
+            # Plan not found or dependency missing
+            detail = str(exc)
+            if "does not exist" in detail:
+                status_code = status_module.HTTP_404_NOT_FOUND
+            elif "not found" in detail:
+                status_code = status_module.HTTP_400_BAD_REQUEST
+            else:
+                status_code = status_module.HTTP_400_BAD_REQUEST
+            raise HTTPException(status_code=status_code, detail=detail) from None
+        except Exception as exc:
+            # Unique violation or other DB error
+            error_msg = str(exc)
+            if "unique" in error_msg.lower() or "already exists" in error_msg.lower():
+                raise HTTPException(
+                    status_code=status_module.HTTP_409_CONFLICT,
+                    detail=f"Task '{create_req.id}' already exists in plan",
+                ) from None
+            logger.exception("create_task_endpoint error")
+            raise HTTPException(
+                status_code=status_module.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create task",
+            ) from None
 
     @app.get(
         "/llm-ops",

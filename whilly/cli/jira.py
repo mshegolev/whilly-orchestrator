@@ -387,7 +387,6 @@ def run_jira_command(
             config_reader=config_reader,
             prompt=prompt,
             secret_prompt=secret_prompt,
-            browser_opener=browser_opener,
             environ=environ,
             stdin_isatty=stdin_isatty,
         )
