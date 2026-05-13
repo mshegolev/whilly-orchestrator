@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timezone, timedelta
 
 from whilly.operator_views import (
     ComplianceSummary,
@@ -17,6 +17,9 @@ from whilly.operator_views import (
     operator_table_columns,
     operator_table_labels,
 )
+
+
+UTC = timezone.utc
 
 
 def test_operator_surface_items_pin_shared_order_and_labels() -> None:

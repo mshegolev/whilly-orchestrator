@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from whilly.rollback.git_ops import GitClient, RollbackError
 from whilly.rollback.models import PreflightReport, ProtectionSignal, RestoreResult, RollbackPoint, WorktreeState
+
+UTC = timezone.utc
 
 ROLLBACK_TAG_PREFIX = "whilly/rollback/"
 PROTECTED_OPERATIONS = {"push", "merge", "restore"}
