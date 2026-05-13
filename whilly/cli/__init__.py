@@ -496,6 +496,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.scheduler import run_scheduler_cli
 
         return run_scheduler_cli(rest)
+    if cmd == "skill":
+        from whilly.cli.skill import run_skill_cli
+
+        return run_skill_cli(rest)
     if cmd == "worker":
         # Sub-dispatch ``whilly worker register ...`` and
         # ``whilly worker connect ...`` to their handlers before falling
