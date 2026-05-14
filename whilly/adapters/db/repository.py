@@ -3972,6 +3972,67 @@ class TaskRepository:
             )
         return reset_count
 
+    async def list_plans(
+        self,
+        *,
+        include_archived: bool,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return plans for the WUI list view (PRD-wui-multi-plan §6.2).
+
+        ``include_archived`` is an *explicit* parameter — defaults are
+        intentionally avoided so the call site at the router layer
+        cannot accidentally leak archived plans into the default view.
+        The flag flows from ``GET /api/v1/plans?include_archived=...``
+        straight to the SQL ``WHERE`` clause; there is no Python-side
+        filter.
+
+        Each returned dict carries the same fields the router emits on
+        the wire (``id``, ``name``, ``prd_file``, ``budget_usd``,
+        ``archived_at``, ``last_event_at`` and ``task_counts``). The
+        router does the JSON serialisation; this method only converts
+        from :class:`asyncpg.Record` to a plain ``dict`` so the
+        repository surface stays free of FastAPI-shaped types.
+
+        Sort: ``last_event_at DESC NULLS LAST, id ASC``. ``last_event_at``
+        is computed on-read via ``MAX(events.emitted_at)`` per PRD §6.3
+        — the column on ``plans`` is reserved but not populated in v2.
+
+        Pagination is handled at the router layer (Block 4 ships
+        the cursor codec); this method exposes only the page size so
+        repository-level callers (CLI, tests) can still bound their
+        result set.
+        """
+        from whilly.api.plans_api import _SELECT_PLANS_SQL  # local import to avoid cycle
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                _SELECT_PLANS_SQL,
+                bool(include_archived),
+                None,
+                "",
+                int(limit),
+            )
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "prd_file": row["prd_file"],
+                "budget_usd": row["budget_usd"],
+                "archived_at": row["archived_at"],
+                "last_event_at": row["last_event_at"],
+                "task_counts": {
+                    "pending": int(row["pending_count"]),
+                    "claimed": int(row["claimed_count"]),
+                    "in_progress": int(row["in_progress_count"]),
+                    "done": int(row["done_count"]),
+                    "failed": int(row["failed_count"]),
+                    "skipped": int(row["skipped_count"]),
+                },
+            }
+            for row in rows
+        ]
+
     async def _raise_version_conflict(
         self,
         conn: asyncpg.Connection,

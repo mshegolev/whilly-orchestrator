@@ -1256,6 +1256,7 @@ def create_app(
     from whilly.api.auth_routes import build_auth_router
     from whilly.api.csrf import WhillySessionCSRFMiddleware
     from whilly.api.dashboard import FileLogStore
+    from whilly.api.plans_api import build_plans_router
     from whilly.api.static_mount import mount_static_assets
 
     mount_static_assets(app)
@@ -1273,6 +1274,14 @@ def create_app(
     app.add_middleware(WhillySessionCSRFMiddleware)
     app.include_router(
         build_auth_router(pool=pool, secret=dashboard_token_secret),
+    )
+    # PRD-wui-multi-plan v2 Block 4 (Epic B1+B2+B7 — GET list side only).
+    # Bound to the same pool + HMAC secret as the auth router so a
+    # single key governs the entire session-only CRUD surface
+    # (Architect F2). Block 7 will mount the CRUD writes on a
+    # sibling router built by the same module.
+    app.include_router(
+        build_plans_router(pool=pool, secret=dashboard_token_secret),
     )
 
     async def _probe_pool() -> tuple[bool, str | None]:
