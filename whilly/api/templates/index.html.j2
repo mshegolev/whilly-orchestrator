@@ -463,6 +463,7 @@
     <header class="wui-plans__head">
       <h2>Plans</h2>
       <div class="wui-plans__controls">
+        <button type="button" id="new-plan-btn" class="wui-plans__new-btn">+ New Plan</button>
         <input type="search" id="plans-filter" placeholder="Filter by name or plan_id..." aria-label="Filter plans">
         <label><input type="checkbox" id="show-archived"> Show archived</label>
         <span id="archived-count" class="wui-plans__archived-count" aria-live="polite"></span>
@@ -483,15 +484,68 @@
           <th data-sort-key="budget_usd">Budget</th>
           <th data-sort-key="workers">Workers</th>
           <th data-sort-key="last_event_at">Last active</th>
+          <th scope="col" aria-label="Actions"></th>
         </tr>
       </thead>
       <tbody id="plans-table-body">
-        <tr class="wui-plans__empty"><td colspan="9">Loading plans...</td></tr>
+        <tr class="wui-plans__empty"><td colspan="10">Loading plans...</td></tr>
       </tbody>
     </table>
     <p id="plans-empty-state" class="wui-plans__empty-state" hidden>
-      No plans yet. <a href="/plans/new">Create your first plan</a>.
+      No plans yet. <button type="button" id="new-plan-empty-btn">Create your first plan</button>.
     </p>
+
+    <!-- PRD-wui-multi-plan v2 Epic B3 — New Plan modal -->
+    <dialog id="new-plan-modal" aria-modal="true" aria-labelledby="new-plan-title">
+      <form id="new-plan-form" method="dialog">
+        <h3 id="new-plan-title">Create new plan</h3>
+        <div class="wui-form-row">
+          <label for="plan_id">Plan ID <span class="wui-required">*</span></label>
+          <input type="text" id="plan_id" name="plan_id" required
+                 maxlength="256" pattern="^[a-z0-9][a-z0-9\-_]{0,254}$"
+                 aria-describedby="plan_id-help plan_id-error"
+                 autocomplete="off">
+          <small id="plan_id-help">lowercase letters, digits, dash, underscore</small>
+          <small id="plan_id-error" class="wui-error" role="alert" hidden></small>
+        </div>
+        <div class="wui-form-row">
+          <label for="new-plan-name">Name <span class="wui-required">*</span></label>
+          <input type="text" id="new-plan-name" name="name" required maxlength="1024">
+        </div>
+        <div class="wui-form-row">
+          <label for="new-plan-budget">Budget USD (optional)</label>
+          <input type="number" id="new-plan-budget" name="budget_usd" step="0.01" min="0">
+        </div>
+        <small id="new-plan-error" class="wui-error" role="alert" hidden></small>
+        <div class="wui-form-actions">
+          <button type="button" id="new-plan-cancel">Cancel</button>
+          <button type="submit" id="new-plan-submit">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Inline rename / budget modal (reused for both PATCH-name and PATCH-budget paths) -->
+    <dialog id="edit-plan-modal" aria-modal="true" aria-labelledby="edit-plan-title">
+      <form id="edit-plan-form" method="dialog">
+        <h3 id="edit-plan-title">Edit plan</h3>
+        <input type="hidden" id="edit-plan-id">
+        <input type="hidden" id="edit-plan-etag">
+        <input type="hidden" id="edit-plan-mode">
+        <div class="wui-form-row" id="edit-plan-name-row">
+          <label for="edit-plan-name">Name</label>
+          <input type="text" id="edit-plan-name" maxlength="1024">
+        </div>
+        <div class="wui-form-row" id="edit-plan-budget-row">
+          <label for="edit-plan-budget">Budget USD</label>
+          <input type="number" id="edit-plan-budget" step="0.01" min="0">
+        </div>
+        <small id="edit-plan-error" class="wui-error" role="alert" hidden></small>
+        <div class="wui-form-actions">
+          <button type="button" id="edit-plan-cancel">Cancel</button>
+          <button type="submit" id="edit-plan-submit">Save</button>
+        </div>
+      </form>
+    </dialog>
     <script>
       (function () {
         var state = { plans: [], sortKey: "last_event_at", sortDir: "desc" };
@@ -554,6 +608,7 @@
             var budget = (p.budget_usd == null || p.budget_usd === "") ? "—" : p.budget_usd;
             var tr = document.createElement("tr");
             tr.setAttribute("data-plan-id", p.id || "");
+            if (p.archived_at != null) { tr.setAttribute("data-archived", "true"); }
             tr.tabIndex = 0;
             tr.appendChild(makeCell(p.name || ""));
             tr.appendChild(makeCodeCell(p.id || ""));
@@ -564,15 +619,205 @@
             tr.appendChild(makeCell(budget));
             tr.appendChild(makeCell("—"));
             tr.appendChild(makeCell(last));
-            tr.addEventListener("click", function () {
+
+            // Actions cell: overflow menu via <details> (lightweight,
+            // no extra JS for show/hide). Stops bubble so the row's
+            // click-to-navigate handler doesn't fire when the operator
+            // is actually targeting the menu.
+            var actionsTd = document.createElement("td");
+            actionsTd.className = "wui-plans__actions";
+            var det = document.createElement("details");
+            det.className = "wui-plans__menu";
+            var sum = document.createElement("summary");
+            sum.textContent = "⋯";  // horizontal ellipsis ⋯
+            sum.setAttribute("aria-label", "Plan actions");
+            det.appendChild(sum);
+            var menu = document.createElement("div");
+            menu.className = "wui-plans__menu-body";
+            var btnRename = document.createElement("button");
+            btnRename.type = "button";
+            btnRename.textContent = "Rename";
+            btnRename.addEventListener("click", function (ev) { ev.stopPropagation(); det.open = false; openEditModal(p, "name"); });
+            var btnBudget = document.createElement("button");
+            btnBudget.type = "button";
+            btnBudget.textContent = "Edit budget";
+            btnBudget.addEventListener("click", function (ev) { ev.stopPropagation(); det.open = false; openEditModal(p, "budget"); });
+            var btnArchive = document.createElement("button");
+            btnArchive.type = "button";
+            var isArchived = p.archived_at != null;
+            btnArchive.textContent = isArchived ? "Restore" : "Archive";
+            btnArchive.addEventListener("click", function (ev) {
+              ev.stopPropagation();
+              det.open = false;
+              patchPlanArchive(p.id, !isArchived);
+            });
+            menu.appendChild(btnRename);
+            menu.appendChild(btnBudget);
+            menu.appendChild(btnArchive);
+            det.appendChild(menu);
+            // Prevent row-click navigation when interacting with the menu.
+            det.addEventListener("click", function (ev) { ev.stopPropagation(); });
+            actionsTd.appendChild(det);
+            tr.appendChild(actionsTd);
+
+            tr.addEventListener("click", function (ev) {
+              // Ignore clicks that originated inside the actions menu.
+              if (ev.target && (ev.target.closest && ev.target.closest(".wui-plans__menu"))) return;
               window.location.href = "/plans/" + encodeURIComponent(p.id || "");
             });
             tr.addEventListener("keydown", function (ev) {
-              if (ev.key === "Enter") {
+              if (ev.key === "Enter" && !(ev.target.closest && ev.target.closest(".wui-plans__menu"))) {
                 window.location.href = "/plans/" + encodeURIComponent(p.id || "");
               }
             });
             tbody.appendChild(tr);
+          });
+        }
+
+        // ── New Plan modal ──────────────────────────────────────────
+        function openNewPlanModal() {
+          var dlg = document.getElementById("new-plan-modal");
+          var planIdInput = document.getElementById("plan_id");
+          var nameInput = document.getElementById("new-plan-name");
+          var budgetInput = document.getElementById("new-plan-budget");
+          planIdInput.value = "";
+          nameInput.value = "";
+          budgetInput.value = "";
+          document.getElementById("plan_id-error").hidden = true;
+          document.getElementById("new-plan-error").hidden = true;
+          if (typeof dlg.showModal === "function") { dlg.showModal(); } else { dlg.setAttribute("open", ""); }
+          setTimeout(function () { planIdInput.focus(); }, 0);
+        }
+        function closeNewPlanModal() {
+          var dlg = document.getElementById("new-plan-modal");
+          if (typeof dlg.close === "function") { dlg.close(); } else { dlg.removeAttribute("open"); }
+          document.getElementById("new-plan-btn").focus();
+        }
+
+        // ── Edit (rename / budget) modal ────────────────────────────
+        function openEditModal(plan, mode) {
+          var dlg = document.getElementById("edit-plan-modal");
+          document.getElementById("edit-plan-id").value = plan.id || "";
+          document.getElementById("edit-plan-mode").value = mode;
+          document.getElementById("edit-plan-name").value = plan.name || "";
+          document.getElementById("edit-plan-budget").value = plan.budget_usd == null ? "" : plan.budget_usd;
+          document.getElementById("edit-plan-name-row").hidden = (mode !== "name");
+          document.getElementById("edit-plan-budget-row").hidden = (mode !== "budget");
+          document.getElementById("edit-plan-error").hidden = true;
+          // Fetch fresh ETag for optimistic-concurrency PATCH.
+          fetch("/api/v1/plans/" + encodeURIComponent(plan.id || ""), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+          }).then(function (r) {
+            document.getElementById("edit-plan-etag").value = r.headers.get("ETag") || "";
+            if (typeof dlg.showModal === "function") { dlg.showModal(); } else { dlg.setAttribute("open", ""); }
+            setTimeout(function () {
+              var target = (mode === "name") ? document.getElementById("edit-plan-name") : document.getElementById("edit-plan-budget");
+              target.focus();
+            }, 0);
+          });
+        }
+        function closeEditModal() {
+          var dlg = document.getElementById("edit-plan-modal");
+          if (typeof dlg.close === "function") { dlg.close(); } else { dlg.removeAttribute("open"); }
+        }
+
+        function submitNewPlan(ev) {
+          ev.preventDefault();
+          var planIdInput = document.getElementById("plan_id");
+          var nameInput = document.getElementById("new-plan-name");
+          var budgetInput = document.getElementById("new-plan-budget");
+          var pidErr = document.getElementById("plan_id-error");
+          var generalErr = document.getElementById("new-plan-error");
+          pidErr.hidden = true; generalErr.hidden = true;
+          var body = { plan_id: planIdInput.value, name: nameInput.value };
+          if (budgetInput.value !== "") {
+            body.budget_usd = parseFloat(budgetInput.value);
+          }
+          fetch("/api/v1/plans", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Accept": "application/json", "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }).then(function (r) {
+            if (r.status === 201) {
+              closeNewPlanModal();
+              fetchPlans();
+              return;
+            }
+            return r.json().then(function (data) {
+              if (r.status === 409 && data.error === "plan_exists") {
+                pidErr.textContent = "this plan_id already exists";
+                pidErr.hidden = false;
+                planIdInput.focus();
+                return;
+              }
+              generalErr.textContent = (data && data.detail) ? String(data.detail) : ("Error " + r.status);
+              generalErr.hidden = false;
+            });
+          }).catch(function (e) {
+            generalErr.textContent = "Network error: " + e;
+            generalErr.hidden = false;
+          });
+        }
+
+        function submitEditPlan(ev) {
+          ev.preventDefault();
+          var planId = document.getElementById("edit-plan-id").value;
+          var etag = document.getElementById("edit-plan-etag").value;
+          var mode = document.getElementById("edit-plan-mode").value;
+          var generalErr = document.getElementById("edit-plan-error");
+          generalErr.hidden = true;
+          var body = {};
+          if (mode === "name") {
+            body.name = document.getElementById("edit-plan-name").value;
+          } else if (mode === "budget") {
+            var bv = document.getElementById("edit-plan-budget").value;
+            body.budget_usd = (bv === "") ? null : parseFloat(bv);
+          }
+          fetch("/api/v1/plans/" + encodeURIComponent(planId), {
+            method: "PATCH",
+            credentials: "same-origin",
+            headers: { "Accept": "application/json", "Content-Type": "application/json", "If-Match": etag },
+            body: JSON.stringify(body),
+          }).then(function (r) {
+            if (r.ok) {
+              closeEditModal();
+              fetchPlans();
+              return;
+            }
+            return r.json().then(function (data) {
+              generalErr.textContent = (data && data.detail) ? String(data.detail) : ("Error " + r.status);
+              generalErr.hidden = false;
+            });
+          }).catch(function (e) {
+            generalErr.textContent = "Network error: " + e;
+            generalErr.hidden = false;
+          });
+        }
+
+        function patchPlanArchive(planId, archive) {
+          // Fetch fresh ETag, then PATCH.
+          fetch("/api/v1/plans/" + encodeURIComponent(planId), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+          }).then(function (r) {
+            var etag = r.headers.get("ETag") || "";
+            return fetch("/api/v1/plans/" + encodeURIComponent(planId), {
+              method: "PATCH",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "Content-Type": "application/json", "If-Match": etag },
+              body: JSON.stringify({ archived: !!archive }),
+            });
+          }).then(function (r) {
+            if (!r.ok) {
+              return r.json().then(function (data) {
+                alert((data && data.detail) ? data.detail : ("Error " + r.status));
+              });
+            }
+            fetchPlans();
+          }).catch(function (e) {
+            alert("Network error: " + e);
           });
         }
 
@@ -624,6 +869,23 @@
           });
           document.getElementById("plans-filter").addEventListener("input", render);
           document.getElementById("show-archived").addEventListener("change", fetchPlans);
+          // New-plan modal wiring (PRD Epic B3 + D5 modal pattern).
+          document.getElementById("new-plan-btn").addEventListener("click", openNewPlanModal);
+          var emptyBtn = document.getElementById("new-plan-empty-btn");
+          if (emptyBtn) { emptyBtn.addEventListener("click", openNewPlanModal); }
+          document.getElementById("new-plan-cancel").addEventListener("click", closeNewPlanModal);
+          document.getElementById("new-plan-form").addEventListener("submit", submitNewPlan);
+          document.getElementById("new-plan-modal").addEventListener("cancel", function () {
+            // <dialog> emits 'cancel' on Escape; route through closeNewPlanModal
+            // so focus management runs uniformly.
+            setTimeout(closeNewPlanModal, 0);
+          });
+          // Edit modal wiring.
+          document.getElementById("edit-plan-cancel").addEventListener("click", closeEditModal);
+          document.getElementById("edit-plan-form").addEventListener("submit", submitEditPlan);
+          document.getElementById("edit-plan-modal").addEventListener("cancel", function () {
+            setTimeout(closeEditModal, 0);
+          });
           fetchPlans();
         });
       })();

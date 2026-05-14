@@ -286,6 +286,48 @@ def _coerce_cost_usd(value: Any) -> Decimal:
 logger = logging.getLogger(__name__)
 
 
+class _Unset:
+    """Sentinel type used by :meth:`TaskRepository.patch_plan` to distinguish
+    "field not present in PATCH body" from "field present and set to NULL".
+
+    A naked default of ``None`` cannot disambiguate the two cases —
+    PRD-wui-multi-plan v2 PATCH body lets ``budget_usd: null`` clear
+    the cap, which is different from omitting the key entirely. We
+    expose the class (rather than instances) so ``isinstance(value,
+    _Unset)`` is the clean type-narrowing test.
+    """
+
+
+_UNSET: _Unset = _Unset()
+
+
+def _row_to_plan_payload_dict(row: asyncpg.Record) -> dict[str, Any]:
+    """Convert one ``plans`` row into the PlanPayload-shaped dict.
+
+    Mirrors the shape :meth:`TaskRepository.list_plans` returns — single
+    source of truth so the GET-list / GET-one / POST / PATCH paths all
+    emit the same JSON wire format (Architect F2 — narrow projection).
+    Raw ``datetime`` / ``Decimal`` types are preserved; ISO-8601
+    serialisation happens at the router layer.
+    """
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "prd_file": row["prd_file"],
+        "budget_usd": row["budget_usd"],
+        "archived_at": row["archived_at"],
+        "last_event_at": row["last_event_at"],
+        "task_counts": {
+            "pending": int(row["pending_count"]),
+            "claimed": int(row["claimed_count"]),
+            "in_progress": int(row["in_progress_count"]),
+            "done": int(row["done_count"]),
+            "failed": int(row["failed_count"]),
+            "skipped": int(row["skipped_count"]),
+        },
+    }
+
+
 # Priority → integer rank for SQL ORDER BY. Lower = higher priority. The
 # CHECK constraint on tasks.priority guarantees one of these four values
 # in production data; the trailing ``ELSE`` is defence-in-depth so a row
@@ -3971,6 +4013,144 @@ class TaskRepository:
                 payload=entry["payload"],
             )
         return reset_count
+
+    async def create_plan(
+        self,
+        *,
+        plan_id: str,
+        name: str,
+        prd_file: str | None,
+        budget_usd: Decimal | None,
+    ) -> dict[str, Any]:
+        """Insert a brand-new plan and return its PlanPayload-shaped dict.
+
+        PRD-wui-multi-plan v2 Epic B3. ``plan_id`` validation (length +
+        regex) is the route layer's responsibility — this method assumes
+        the caller has already vetted the slug. On unique-violation the
+        underlying :class:`asyncpg.UniqueViolationError` propagates so
+        the router can map it to 409. ``archived_at`` is left NULL and
+        ``last_event_at`` is computed via the same correlated subquery
+        the list endpoint uses (it will be ``None`` until the first
+        event is emitted against this plan_id).
+        """
+        from whilly.api.plans_api import _SELECT_ONE_PLAN_SQL  # local import to avoid cycle
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "INSERT INTO plans (id, name, prd_file, budget_usd) VALUES ($1, $2, $3, $4)",
+                    plan_id,
+                    name,
+                    prd_file,
+                    budget_usd,
+                )
+                # Reuse the same SQL the list endpoint runs so the shape
+                # is identical (single source of truth for projection).
+                # We pin the cursor cols to NULL/"" so the WHERE clause
+                # admits any plan, and ``include_archived = TRUE`` so a
+                # caller racing against an archive sweep still sees the
+                # row they just created.
+                row = await conn.fetchrow(
+                    _SELECT_ONE_PLAN_SQL,
+                    plan_id,
+                    True,  # include_archived — caller just created it
+                )
+        if row is None:
+            # Should never happen — the INSERT just succeeded in the
+            # same transaction. Guard so a future refactor cannot
+            # silently regress to a partial-state response.
+            raise RuntimeError(f"plan {plan_id!r} not visible after INSERT")
+        return _row_to_plan_payload_dict(row)
+
+    async def patch_plan(
+        self,
+        plan_id: str,
+        *,
+        name: str | _Unset = _UNSET,
+        budget_usd: Decimal | None | _Unset = _UNSET,
+        archived: bool | None | _Unset = _UNSET,
+    ) -> dict[str, Any] | None:
+        """Apply a partial update to a plan and return the fresh PlanPayload.
+
+        PRD-wui-multi-plan v2 Epic B4 / B5. Only present fields update;
+        ``_UNSET`` sentinels distinguish "field not in PATCH body" from
+        "field present and set to None". ``archived=True`` sets
+        ``archived_at = NOW()``; ``archived=False`` restores by NULLing
+        the column (this is the path that replaces v1's ``/restore``
+        endpoint, per PRD change-log line 17).
+
+        Returns ``None`` when ``plan_id`` does not exist so the route
+        layer can map it to 404 cleanly.
+        """
+        from whilly.api.plans_api import _SELECT_ONE_PLAN_SQL  # local import to avoid cycle
+
+        set_clauses: list[str] = []
+        params: list[Any] = []
+        if not isinstance(name, _Unset):
+            params.append(name)
+            set_clauses.append(f"name = ${len(params)}")
+        if not isinstance(budget_usd, _Unset):
+            params.append(budget_usd)
+            set_clauses.append(f"budget_usd = ${len(params)}")
+        if not isinstance(archived, _Unset):
+            if archived is True:
+                set_clauses.append("archived_at = NOW()")
+            elif archived is False:
+                set_clauses.append("archived_at = NULL")
+            # archived=None is a no-op (treated like "field not set"); the
+            # route layer is expected to filter None out before calling.
+        # Always bump last_event_at on any PATCH so the activity sort in
+        # the list endpoint reflects the operator-side change. Cheap and
+        # makes the UI feedback obvious.
+        set_clauses.append("last_event_at = NOW()")
+
+        if not set_clauses:
+            # Defensive: caller passed nothing. Fall back to a pure read
+            # so the API surface is idempotent ("PATCH with empty body"
+            # → returns current state).
+            return await self.get_plan(plan_id, include_archived=True)
+
+        params.append(plan_id)
+        sql = f"UPDATE plans SET {', '.join(set_clauses)} WHERE id = ${len(params)} RETURNING id"
+
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                updated = await conn.fetchrow(sql, *params)
+                if updated is None:
+                    return None
+                row = await conn.fetchrow(
+                    _SELECT_ONE_PLAN_SQL,
+                    plan_id,
+                    True,
+                )
+        if row is None:
+            return None
+        return _row_to_plan_payload_dict(row)
+
+    async def get_plan(
+        self,
+        plan_id: str,
+        *,
+        include_archived: bool,
+    ) -> dict[str, Any] | None:
+        """Return the PlanPayload-shaped dict for a single plan, or None if missing.
+
+        Same projection as :meth:`list_plans`. When ``include_archived``
+        is ``False`` and the plan has ``archived_at IS NOT NULL`` this
+        method returns ``None`` (so the route can 404 cleanly without
+        leaking soft-deleted state into the default surface).
+        """
+        from whilly.api.plans_api import _SELECT_ONE_PLAN_SQL  # local import to avoid cycle
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                _SELECT_ONE_PLAN_SQL,
+                plan_id,
+                bool(include_archived),
+            )
+        if row is None:
+            return None
+        return _row_to_plan_payload_dict(row)
 
     async def list_plans(
         self,

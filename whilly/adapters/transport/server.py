@@ -2183,8 +2183,20 @@ def create_app(
             minimal.
         """
         async with pool.acquire() as conn:
+            # PRD-wui-multi-plan v2 Block 7: extend the projection with
+            # budget_usd / archived_at / last_event_at so we can emit an
+            # ETag header that round-trips through PATCH /api/v1/plans/
+            # {plan_id}'s ``If-Match`` precondition. The forge-shaped
+            # JSON body is unchanged (back-compat with VAL-FORGE-012
+            # consumers); the new ETag is purely additive in headers.
             row = await conn.fetchrow(
-                "SELECT id, name, github_issue_ref, prd_file, verification_commands FROM plans WHERE id = $1",
+                """
+                SELECT
+                    p.id, p.name, p.github_issue_ref, p.prd_file, p.verification_commands,
+                    p.budget_usd, p.archived_at,
+                    (SELECT MAX(e.created_at) FROM events e WHERE e.plan_id = p.id) AS last_event_at
+                FROM plans p WHERE p.id = $1
+                """,
                 plan_id,
             )
             origin_row = await conn.fetchrow(
@@ -2237,6 +2249,14 @@ def create_app(
                 "prd_file": origin_row["prd_file"],
                 "decomposition_mode": origin_row["decomposition_mode"],
             }
+        # PRD-wui-multi-plan v2 §6.5: ETag round-trips through PATCH's
+        # If-Match. The tuple matches the plans_api ETag formula
+        # (id, name, budget_usd, archived_at, last_event_at) so a GET
+        # via the forge route and a GET via the session-only router
+        # (when we add one) produce the same tag for the same row.
+        from whilly.api.plans_api import _compute_plan_etag
+
+        etag = _compute_plan_etag(row)
         return JSONResponse(
             {
                 "id": row["id"],
@@ -2246,7 +2266,8 @@ def create_app(
                 "verification_commands": _decode_json_array(row["verification_commands"]),
                 "origin": origin,
                 "repo_targets": [dict(repo_target) for repo_target in repo_target_rows],
-            }
+            },
+            headers={"ETag": etag, "Cache-Control": "no-store"},
         )
 
     @app.get(
@@ -2387,6 +2408,24 @@ def create_app(
         await _authenticate_tasks_read_request(request)
 
         try:
+            # PRD-wui-multi-plan v2 Epic B6: archived plans cannot accept
+            # new tasks. Check explicitly before INSERT so the operator
+            # sees a 410 Gone with an actionable message rather than
+            # silently watching the worker pool idle on a frozen plan.
+            async with pool.acquire() as conn:
+                archived_row = await conn.fetchrow(
+                    "SELECT archived_at FROM plans WHERE id = $1",
+                    plan_id,
+                )
+            if archived_row is not None and archived_row["archived_at"] is not None:
+                return JSONResponse(
+                    {
+                        "error": "plan_archived",
+                        "detail": "cannot create tasks on archived plan",
+                    },
+                    status_code=status_module.HTTP_410_GONE,
+                )
+
             # Create task object
             task = Task(
                 id=create_req.id,
