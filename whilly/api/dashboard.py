@@ -272,6 +272,8 @@ async def render_dashboard(
     fragment: str | None = None,
     events_token: str | None = None,
     task_id: str | None = None,
+    auth_email: str | None = None,
+    plan_id_for_share_link: str | None = None,
 ) -> HTMLResponse:
     """Render the dashboard (full page or one of its two partials).
 
@@ -279,6 +281,13 @@ async def render_dashboard(
     error banner replaces the live tables); never raises 500. The
     fragment partials surface the same banner when DB is down so the
     polling fallback shows the issue without flashing the page empty.
+
+    ``auth_email`` and ``plan_id_for_share_link`` are PRD-wui-multi-plan
+    v2 Block 5 (Epic D2) plumbing. When ``auth_email`` is truthy the
+    template renders the header nav + plans-table block. When
+    ``plan_id_for_share_link`` is truthy and ``auth_email`` is falsy the
+    template surfaces the "shared plan" banner offering a sign-in
+    affordance — see ``index.html.j2``.
     """
     fragment_name = _normalise_fragment(fragment)
     templates = get_templates()
@@ -320,6 +329,8 @@ async def render_dashboard(
         "events_token": events_token,
         "format_iso": _format_iso,
         "format_human": _format_human,
+        "auth_email": auth_email,
+        "plan_id_for_share_link": plan_id_for_share_link,
     }
 
     if fragment_name == "logs":

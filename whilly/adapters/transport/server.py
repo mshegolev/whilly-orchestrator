@@ -165,7 +165,7 @@ from typing import Any, Final
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi import status as status_module
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.core.models import Task, TaskStatus
@@ -191,6 +191,9 @@ from whilly.api.sse import (
     _ListenerState,
     event_notify_listener_loop,
 )
+from whilly.api import auth_tokens as wui_auth_tokens
+from whilly.api import sessions as wui_sessions
+from whilly.api.auth_routes import DEFAULT_SESSION_COOKIE_NAME
 from whilly.api.dashboard import render_dashboard as render_dashboard_view
 from whilly.api.dashboard_token import (
     DEFAULT_DASHBOARD_SCOPES,
@@ -1028,6 +1031,35 @@ def create_app(
             legacy_worker_token=legacy_worker_token,
             legacy_bootstrap_token=legacy_bootstrap_token,
         )
+
+    async def _resolve_session_from_cookie(request: Request) -> tuple[str | None, str | None]:
+        """Best-effort session resolution for the ``/`` dispatcher (PRD D2).
+
+        Returns ``(email, session_id)`` when the ``whilly_session`` cookie
+        is present, signature-valid, unexpired, and refers to a non-revoked
+        ``sessions`` row. Any failure — missing cookie, signature mismatch,
+        expiry, revoked row — collapses to ``(None, None)`` silently. The
+        dispatcher must never 401 on an absent/invalid cookie because the
+        share-link path is fully anonymous.
+        """
+        cookie_value = request.cookies.get(DEFAULT_SESSION_COOKIE_NAME)
+        if not cookie_value:
+            return None, None
+        try:
+            claims = wui_auth_tokens.verify_session_cookie_value(cookie_value, dashboard_token_secret)
+        except wui_auth_tokens.AuthTokenError:
+            return None, None
+        sid = claims.get("sid")
+        if not isinstance(sid, str) or not sid:
+            return None, None
+        try:
+            session = await wui_sessions.verify_session(pool, session_id=sid)
+        except Exception as exc:  # noqa: BLE001 - dispatcher must never 500 on a stale cookie.
+            logger.warning("dispatcher: session lookup failed: %s", exc)
+            return None, None
+        if session is None:
+            return None, None
+        return session.email, session.session_id
 
     # Event flusher (TASK-106). Construction is cheap and non-async — it
     # just allocates an :class:`asyncio.Queue` and stashes config. The
@@ -2529,19 +2561,57 @@ def create_app(
         fragment: str | None = None,
         task_id: str | None = None,
     ) -> Response:
+        # PRD-wui-multi-plan v2 Epic D2 dispatcher.
+        #
+        # Branching matrix:
+        #   - Fragment requests (?fragment=tasks|workers|logs) skip the
+        #     dispatcher entirely — they render the partial as today so
+        #     HTMX polling fallback keeps working regardless of session
+        #     state.
+        #   - Anonymous + no ?token= + no ?plan_id= → 302 to /login.
+        #   - Anonymous + ?token= and/or ?plan_id= → existing share-link
+        #     path. The legacy bearer/JWT auth on the partial endpoints
+        #     still guards data; here we just render the page shell and
+        #     pass ``plan_id_for_share_link`` so the template can surface
+        #     the "shared plan" sign-in banner (D2 last bullet).
+        #   - Authenticated session → render with ``auth_email`` so the
+        #     template hydrates the plans-table and header nav.
+        fragment_param = (fragment or "").strip().lower() or None
+        if fragment_param is None:
+            auth_email, _session_id = await _resolve_session_from_cookie(request)
+            query_token = (request.query_params.get("token") or "").strip()
+            query_plan_id = (request.query_params.get("plan_id") or "").strip()
+            if auth_email is None and not query_token and not query_plan_id:
+                # PRD D2 first bullet — anonymous landing → /login funnel.
+                return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+        else:
+            auth_email = None
+            query_plan_id = ""
+
         events_token = None
-        if fragment is None:
+        if fragment_param is None:
             events_token = mint_dashboard_token(
                 dashboard_token_secret,
                 ttl_seconds=dashboard_token_ttl,
                 scope=DEFAULT_DASHBOARD_SCOPES,
             )
+        # plan_id_for_share_link is only set in anonymous share-link mode
+        # (no session cookie + plan_id query param present). When the user
+        # is authenticated we deliberately drop it: the future
+        # ``/plans/<id>`` URL will surface header nav (D3) instead of the
+        # share-link banner.
+        plan_id_for_share_link: str | None = None
+        if fragment_param is None and auth_email is None and query_plan_id:
+            plan_id_for_share_link = query_plan_id
+
         return await render_dashboard_view(
             request=request,
             pool=pool,
             fragment=fragment,
             events_token=events_token,
             task_id=task_id,
+            auth_email=auth_email,
+            plan_id_for_share_link=plan_id_for_share_link,
         )
 
     @app.get(

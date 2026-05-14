@@ -444,6 +444,11 @@
   </style>
 </head>
 <body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
+  {% if not auth_email and plan_id_for_share_link %}
+  <div class="share-link-banner" role="status">
+    You're viewing a shared plan. <a href="/login?next=/?plan_id={{ plan_id_for_share_link | urlencode }}">Sign in to manage all plans</a>
+  </div>
+  {% endif %}
   {% if auth_email %}
   <header class="wui-nav" role="banner" aria-label="WUI session">
     <span class="wui-nav__identity">Signed in as <strong>{{ auth_email }}</strong></span>
