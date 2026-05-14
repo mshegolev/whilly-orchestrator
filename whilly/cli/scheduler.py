@@ -70,7 +70,9 @@ def build_scheduler_parser() -> argparse.ArgumentParser:
     )
     p_list.add_argument(
         "config",
-        help="Path to scheduler configuration file.",
+        nargs="?",
+        default="-",
+        help="Path to scheduler config file. Use '-' or omit to read from whilly.toml [[scheduler]].",
     )
     p_list.add_argument(
         "--enabled-only",
@@ -212,7 +214,9 @@ def list_scheduler_rules(config_path: str, enabled_only: bool = True) -> int:
     """List scheduler rules from configuration.
 
     Args:
-        config_path: Path to configuration file
+        config_path: Path to configuration file. Pass ``"-"`` (or empty string)
+            to read rules from the layered ``whilly.toml`` ``[[scheduler]]`` section
+            instead of a standalone config file.
         enabled_only: Only show enabled rules
 
     Returns:
@@ -220,7 +224,21 @@ def list_scheduler_rules(config_path: str, enabled_only: bool = True) -> int:
     """
 
     try:
-        rules = load_scheduler_config(config_path)
+        if config_path in ("", "-"):
+            from whilly.config import load_layered
+            from whilly.config_sections import load_scheduler_rules as _load_from_toml
+
+            load_layered()
+            rules = _load_from_toml()
+            if not rules:
+                print(
+                    "whilly scheduler list: no [[scheduler]] rules found in whilly.toml. "
+                    "Add at least one [[scheduler]] section or pass a path to a JSON/TOML config.",
+                    file=sys.stderr,
+                )
+                return EXIT_ERROR
+        else:
+            rules = load_scheduler_config(config_path)
 
         if enabled_only:
             rules = [r for r in rules if r.enabled]
