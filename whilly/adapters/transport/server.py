@@ -2659,6 +2659,170 @@ def create_app(
             headers=headers,
         )
 
+    @app.post(
+        "/api/v1/jira/import",
+        # WUI Jira intake: full flow that mirrors `whilly jira tui`. Lets the
+        # operator paste a Jira key into the dashboard form, then route the
+        # task either straight to autonomous execution or through a wizard
+        # that captures clarifications before workers pick it up.
+        tags=["jira"],
+        summary="Fetch a Jira issue and import it as a plan with tasks",
+    )
+    async def jira_import_endpoint(request: Request) -> JSONResponse:
+        """Import a Jira issue into Whilly via the dashboard.
+
+        Body: {"jira_ref": "EORD-9843" | "https://.../browse/EORD-9843",
+               "plan_id": "<optional override>",
+               "mode": "autonomous" | "wizard"  (default "autonomous"),
+               "wizard": { "description": "...", "acceptance_criteria": [...],
+                           "key_files": [...] }  (optional, used when mode=wizard)}
+
+        Returns: {"plan_id": "...", "task_id": "...", "mode": "..."}
+        """
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status_module.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid JSON body: {exc}",
+            ) from None
+
+        await _authenticate_tasks_read_request(request)
+
+        jira_ref = str(body.get("jira_ref", "") or "").strip()
+        if not jira_ref:
+            raise HTTPException(
+                status_code=status_module.HTTP_400_BAD_REQUEST,
+                detail="jira_ref is required (Jira key like EORD-9843 or browse URL)",
+            )
+
+        mode = str(body.get("mode", "autonomous") or "autonomous").strip().lower()
+        if mode not in ("autonomous", "wizard"):
+            raise HTTPException(
+                status_code=status_module.HTTP_400_BAD_REQUEST,
+                detail="mode must be 'autonomous' or 'wizard'",
+            )
+
+        plan_id_override = str(body.get("plan_id", "") or "").strip()
+        wizard_data = body.get("wizard") or {}
+        if not isinstance(wizard_data, dict):
+            wizard_data = {}
+
+        # Lazy imports so the fastapi module doesn't hard-depend on the Jira
+        # source layer at module load time (mirrors the CLI pattern).
+        from pathlib import Path as _Path
+
+        from whilly.adapters.filesystem.plan_io import parse_plan_dict
+        from whilly.cli.jira import (
+            _clear_repo_target,
+            _write_jira_work_metadata,
+            _write_plan_id,
+        )
+        from whilly.cli.plan import _insert_plan_and_tasks
+        from whilly.sources.jira import fetch_single_jira_issue, parse_jira_key
+
+        try:
+            key = parse_jira_key(jira_ref)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status_module.HTTP_400_BAD_REQUEST,
+                detail=f"invalid Jira reference: {exc}",
+            ) from None
+
+        plan_id = plan_id_override or f"jira-{key.lower()}"
+        out_dir = _Path("out")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"jira-{key.lower()}.json"
+
+        # ── 1. Fetch issue and assemble the plan JSON on disk ──
+        try:
+            plan_path, _stats = fetch_single_jira_issue(key, out_path=out_path, timeout=15)
+            _write_plan_id(plan_path, plan_id)
+            _clear_repo_target(plan_path)
+            work_meta = _write_jira_work_metadata(plan_path, key=key, repo_path=None)
+        except Exception as exc:
+            logger.exception("jira_import_endpoint: fetch failed")
+            raise HTTPException(
+                status_code=status_module.HTTP_502_BAD_GATEWAY,
+                detail=f"Jira fetch failed: {exc}",
+            ) from None
+
+        # ── 2. Apply wizard overrides if provided ──
+        if mode == "wizard":
+            plan_dict = json.loads(plan_path.read_text(encoding="utf-8"))
+            tasks = plan_dict.get("tasks") or []
+            if tasks:
+                first = tasks[0]
+                if wizard_data.get("description"):
+                    first["description"] = str(wizard_data["description"])
+                if wizard_data.get("acceptance_criteria"):
+                    criteria = wizard_data["acceptance_criteria"]
+                    if isinstance(criteria, list):
+                        first["acceptance_criteria"] = [str(c) for c in criteria if str(c).strip()]
+                if wizard_data.get("key_files"):
+                    key_files = wizard_data["key_files"]
+                    if isinstance(key_files, list):
+                        first["key_files"] = [str(p) for p in key_files if str(p).strip()]
+                if wizard_data.get("test_steps"):
+                    steps = wizard_data["test_steps"]
+                    if isinstance(steps, list):
+                        first["test_steps"] = [str(s) for s in steps if str(s).strip()]
+            plan_path.write_text(json.dumps(plan_dict, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        # ── 3. Parse + insert into DB ──
+        try:
+            plan_dict = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan, tasks_iter = parse_plan_dict(plan_dict)
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await _insert_plan_and_tasks(conn, plan, tasks_iter)
+        except Exception as exc:
+            logger.exception("jira_import_endpoint: DB insert failed")
+            # Common case: plan already exists from a previous import.
+            error_msg = str(exc)
+            if (
+                "unique" in error_msg.lower()
+                or "already exists" in error_msg.lower()
+                or "duplicate" in error_msg.lower()
+            ):
+                raise HTTPException(
+                    status_code=status_module.HTTP_409_CONFLICT,
+                    detail=f"plan '{plan_id}' already imported. Pass a different plan_id to re-import.",
+                ) from None
+            raise HTTPException(
+                status_code=status_module.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to import plan: {exc}",
+            ) from None
+
+        first_task_id = ""
+        plan_tasks = plan_dict.get("tasks") or []
+        if plan_tasks:
+            first_task_id = str(plan_tasks[0].get("id", ""))
+
+        cors_origin = (
+            request.headers.get("origin") or os.environ.get("WHILLY_DASHBOARD_ORIGIN") or DASHBOARD_DEFAULT_ORIGIN
+        )
+        headers = {
+            "Cache-Control": "no-store",
+            "Access-Control-Allow-Origin": cors_origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+        return JSONResponse(
+            {
+                "plan_id": plan_id,
+                "task_id": first_task_id,
+                "mode": mode,
+                "jira_key": key,
+                "kind": work_meta.get("kind", "unknown"),
+                "confidence": work_meta.get("confidence", "unknown"),
+                "task_count": len(plan_tasks),
+                "plan_path": str(plan_path),
+            },
+            status_code=status_module.HTTP_201_CREATED,
+            headers=headers,
+        )
+
     return app
 
 

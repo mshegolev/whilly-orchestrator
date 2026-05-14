@@ -627,7 +627,72 @@
 
     <section id="surface-plans_tasks" class="operator-surface surface-panel" data-surface="plans_tasks" hidden>
       <header><h2>Plans/Tasks</h2></header>
-      
+
+      <!-- Jira Import Form (Phase 1 WUI) -->
+      <details open style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--accent); background: var(--surface-strong); cursor: pointer;">
+        <summary style="font-weight: bold; color: var(--accent);">📥 Import from Jira</summary>
+        <div style="padding: 12px; margin-top: 8px;">
+          <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center;">
+            <label for="jira-ref" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Jira key / URL *</label>
+            <input id="jira-ref" type="text" placeholder="EORD-9843 or https://jira.../browse/EORD-9843"
+                   style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+
+            <label for="jira-plan-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Plan ID override</label>
+            <input id="jira-plan-id" type="text" placeholder="default: jira-&lt;key-lowercase&gt;"
+                   style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+          </div>
+
+          <div style="margin-top: 12px;">
+            <button id="jira-import-autonomous" type="button"
+                    style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold; margin-right: 8px;">
+              🤖 Import &amp; Autonomous
+            </button>
+            <button id="jira-import-wizard" type="button"
+                    style="padding: 8px 16px; background: var(--surface); color: var(--accent); border: 1px solid var(--accent); border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
+              🧙 Import &amp; Wizard
+            </button>
+            <span id="jira-import-status" style="margin-left: 12px; color: var(--muted);"></span>
+          </div>
+
+          <!-- Wizard panel (hidden until 'Import & Wizard' is clicked + Jira fetched) -->
+          <div id="jira-wizard-panel" hidden
+               style="margin-top: 16px; padding: 12px; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 4px;">
+            <h3 style="margin-top: 0; color: var(--accent);">🧙 Wizard — refine before agent picks up</h3>
+            <p style="color: var(--muted); font-size: 0.85rem; margin: 4px 0 12px;">
+              Imported task: <strong id="wizard-task-summary"></strong>
+            </p>
+            <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: start;">
+              <label for="wizard-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Описание / Goal</label>
+              <textarea id="wizard-description" rows="4" placeholder="Override what the agent should do (markdown ok)"
+                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+
+              <label for="wizard-criteria" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Acceptance criteria</label>
+              <textarea id="wizard-criteria" rows="3" placeholder="One per line"
+                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+
+              <label for="wizard-key-files" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Key files</label>
+              <textarea id="wizard-key-files" rows="2" placeholder="One path per line"
+                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+
+              <label for="wizard-test-steps" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Test steps</label>
+              <textarea id="wizard-test-steps" rows="2" placeholder="One step per line"
+                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+            </div>
+            <div style="margin-top: 12px;">
+              <button id="wizard-submit" type="button"
+                      style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
+                ✓ Send to agent (autonomous)
+              </button>
+              <button id="wizard-cancel" type="button"
+                      style="padding: 8px 16px; background: var(--surface); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 2px; cursor: pointer; font: inherit; margin-left: 8px;">
+                Cancel
+              </button>
+              <span id="wizard-status" style="margin-left: 12px; color: var(--muted);"></span>
+            </div>
+          </div>
+        </div>
+      </details>
+
       <!-- Task Creation Form -->
       <details style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--line-strong); background: var(--surface-strong); cursor: pointer;">
         <summary style="font-weight: bold; color: var(--text);">+ Create Task</summary>
@@ -1157,11 +1222,18 @@
           // Get plan_id from URL or use default
           const urlParams = new URLSearchParams(window.location.search);
           const planId = urlParams.get("plan_id") || "default";
-          
-          // Submit via fetch + HTMX
+          const token = urlParams.get("token") || "";
+
+          // Submit via fetch — include bearer token from ?token= URL param so the
+          // POST passes _authenticate_tasks_read_request (worker bearer OR JWT
+          // dashboard token both accepted by the server).
+          const headers = { "Content-Type": "application/json" };
+          if (token) {
+            headers["Authorization"] = "Bearer " + token;
+          }
           fetch(`/api/v1/tasks?plan_id=${encodeURIComponent(planId)}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: headers,
             body: JSON.stringify(payload),
           })
             .then((response) => {
@@ -1203,6 +1275,162 @@
             });
         });
       }
+
+      // ── Jira Import handlers (Phase 1 WUI) ──
+      const jiraRefInput = document.getElementById("jira-ref");
+      const jiraPlanIdInput = document.getElementById("jira-plan-id");
+      const jiraImportStatus = document.getElementById("jira-import-status");
+      const jiraAutonomousBtn = document.getElementById("jira-import-autonomous");
+      const jiraWizardBtn = document.getElementById("jira-import-wizard");
+      const jiraWizardPanel = document.getElementById("jira-wizard-panel");
+      const wizardTaskSummary = document.getElementById("wizard-task-summary");
+      const wizardDescription = document.getElementById("wizard-description");
+      const wizardCriteria = document.getElementById("wizard-criteria");
+      const wizardKeyFiles = document.getElementById("wizard-key-files");
+      const wizardTestSteps = document.getElementById("wizard-test-steps");
+      const wizardSubmit = document.getElementById("wizard-submit");
+      const wizardCancel = document.getElementById("wizard-cancel");
+      const wizardStatus = document.getElementById("wizard-status");
+
+      // Pending Jira ref so the wizard knows what to re-import on Send.
+      let pendingWizardImport = null;
+
+      function getJiraImportHeaders() {
+        const params = new URLSearchParams(window.location.search);
+        const token = params.get("token") || "";
+        const headers = { "Content-Type": "application/json" };
+        if (token) headers["Authorization"] = "Bearer " + token;
+        return headers;
+      }
+
+      function splitLines(text) {
+        if (!text) return [];
+        return text
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter((s) => s);
+      }
+
+      function refreshTasksAndPlans() {
+        if (window.htmx) {
+          const tasksTable = document.querySelector("#tasks");
+          if (tasksTable) {
+            window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" });
+          }
+        }
+      }
+
+      function jiraImport(mode, wizardPayload) {
+        if (!jiraRefInput) return;
+        const jiraRef = (jiraRefInput.value || "").trim();
+        if (!jiraRef) {
+          if (jiraImportStatus) {
+            jiraImportStatus.textContent = "Введи Jira key или URL";
+            jiraImportStatus.style.color = "var(--danger)";
+          }
+          return;
+        }
+        const planIdOverride = (jiraPlanIdInput.value || "").trim();
+        const body = {
+          jira_ref: jiraRef,
+          mode: mode,
+        };
+        if (planIdOverride) body.plan_id = planIdOverride;
+        if (wizardPayload) body.wizard = wizardPayload;
+
+        if (jiraImportStatus) {
+          jiraImportStatus.textContent = mode === "autonomous" ? "Импортирую…" : "Фетчу Jira…";
+          jiraImportStatus.style.color = "var(--muted)";
+        }
+
+        fetch("/api/v1/jira/import", {
+          method: "POST",
+          headers: getJiraImportHeaders(),
+          body: JSON.stringify(body),
+        })
+          .then((response) => response.text().then((text) => ({ ok: response.ok, status: response.status, text })))
+          .then(({ ok, status, text }) => {
+            let data = null;
+            try { data = JSON.parse(text); } catch (e) {}
+            if (!ok) {
+              const detail = (data && data.detail) || text || `HTTP ${status}`;
+              if (jiraImportStatus) {
+                jiraImportStatus.textContent = `Ошибка: ${detail.slice(0, 200)}`;
+                jiraImportStatus.style.color = "var(--danger)";
+              }
+              return;
+            }
+            if (jiraImportStatus) {
+              jiraImportStatus.textContent =
+                `✓ ${data.jira_key} → plan ${data.plan_id} (${data.task_count} task, kind=${data.kind})`;
+              jiraImportStatus.style.color = "var(--ok)";
+            }
+            refreshTasksAndPlans();
+            return data;
+          })
+          .catch((err) => {
+            if (jiraImportStatus) {
+              jiraImportStatus.textContent = `Network error: ${err.message}`;
+              jiraImportStatus.style.color = "var(--danger)";
+            }
+          });
+      }
+
+      function showWizardAfterFetch() {
+        if (!jiraRefInput) return;
+        const jiraRef = (jiraRefInput.value || "").trim();
+        if (!jiraRef) {
+          if (jiraImportStatus) {
+            jiraImportStatus.textContent = "Введи Jira key или URL";
+            jiraImportStatus.style.color = "var(--danger)";
+          }
+          return;
+        }
+        // Just show the wizard form. The import only happens on Send.
+        pendingWizardImport = jiraRef;
+        if (wizardTaskSummary) wizardTaskSummary.textContent = jiraRef;
+        if (jiraWizardPanel) jiraWizardPanel.hidden = false;
+        if (jiraImportStatus) {
+          jiraImportStatus.textContent = "Заполни форму ниже и нажми Send to agent.";
+          jiraImportStatus.style.color = "var(--muted)";
+        }
+      }
+
+      if (jiraAutonomousBtn) {
+        jiraAutonomousBtn.addEventListener("click", () => jiraImport("autonomous", null));
+      }
+      if (jiraWizardBtn) {
+        jiraWizardBtn.addEventListener("click", () => showWizardAfterFetch());
+      }
+      if (wizardCancel) {
+        wizardCancel.addEventListener("click", () => {
+          if (jiraWizardPanel) jiraWizardPanel.hidden = true;
+          pendingWizardImport = null;
+        });
+      }
+      if (wizardSubmit) {
+        wizardSubmit.addEventListener("click", () => {
+          if (!pendingWizardImport) return;
+          const wizardPayload = {
+            description: (wizardDescription.value || "").trim(),
+            acceptance_criteria: splitLines(wizardCriteria.value),
+            key_files: splitLines(wizardKeyFiles.value),
+            test_steps: splitLines(wizardTestSteps.value),
+          };
+          if (wizardStatus) {
+            wizardStatus.textContent = "Отправляю…";
+            wizardStatus.style.color = "var(--muted)";
+          }
+          jiraImport("wizard", wizardPayload);
+          if (wizardStatus) {
+            setTimeout(() => {
+              wizardStatus.textContent = "Готово — see status above";
+              wizardStatus.style.color = "var(--ok)";
+            }, 800);
+          }
+        });
+      }
+
       restoreDashboardState();
     })();
   </script>
