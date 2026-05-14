@@ -177,7 +177,9 @@ def verify_session_cookie_value(
     responsible for confirming the ``sessions`` row exists with matching
     ``email`` and ``revoked_at IS NULL``.
     """
-    return _verify_envelope(cookie_value, secret, expected_typ=SESSION_TOKEN_TYPE, now=now, leeway_seconds=leeway_seconds)
+    return _verify_envelope(
+        cookie_value, secret, expected_typ=SESSION_TOKEN_TYPE, now=now, leeway_seconds=leeway_seconds
+    )
 
 
 def generate_session_id() -> str:
