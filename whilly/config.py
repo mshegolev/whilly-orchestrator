@@ -217,7 +217,25 @@ class WhillyConfig:
 # Public-ish map of extra non-dataclass namespaces we read from TOML. Values are
 # returned by :func:`load_layered` via ``get_toml_section`` so downstream modules
 # (gh_utils, secrets consumers) can reach them without parsing TOML themselves.
-_EXTRA_TOML_NAMESPACES = ("github", "jira", "project_board")
+#
+# Jira Scheduler integration (PRD-jira-scheduler-integration §6.4) adds four
+# new sections: `confluence` (Phase 4), `project_map` (Phase 2), `mcp_profile`
+# (Phase 5), and `scheduler` (Phase 3, array-of-tables). All four are
+# preserved in their original shape so downstream loaders can pick what they
+# need (e.g. project_map keeps its `{QA: {...}, EORD: {...}}` sub-table
+# structure, mcp_profile preserves `{qa-tools: {servers: [...]}}`).
+_EXTRA_TOML_NAMESPACES = (
+    "github",
+    "jira",
+    "project_board",
+    "confluence",
+    "project_map",
+    "mcp_profile",
+)
+
+# Sections that are arrays-of-tables in TOML (`[[scheduler]]`), not nested dicts.
+# Parsed by tomllib as `list[dict]`, kept separate so callers know to expect a list.
+_EXTRA_TOML_LIST_NAMESPACES = ("scheduler",)
 
 
 def user_config_path() -> Path:
@@ -298,6 +316,7 @@ def _extract_toml_sections(toml_data: dict[str, Any], names: Iterable[str]) -> d
 # Module-level cache for non-dataclass TOML sections. Populated by
 # :func:`load_layered` and consumed via :func:`get_toml_section`.
 _toml_sections_cache: dict[str, dict[str, Any]] = {name: {} for name in _EXTRA_TOML_NAMESPACES}
+_toml_list_sections_cache: dict[str, list[dict[str, Any]]] = {name: [] for name in _EXTRA_TOML_LIST_NAMESPACES}
 
 
 def get_toml_section(name: str) -> dict[str, Any]:
@@ -307,6 +326,16 @@ def get_toml_section(name: str) -> dict[str, Any]:
     when the section is absent from both user and repo TOML files.
     """
     return dict(_toml_sections_cache.get(name, {}))
+
+
+def get_toml_list_section(name: str) -> list[dict[str, Any]]:
+    """Return a list-typed TOML section (e.g. ``[[scheduler]]``).
+
+    Returns a list of dict copies. Empty list when the section is absent.
+    Used for TOML array-of-tables: scheduler rules, future webhook hooks, etc.
+    """
+    items = _toml_list_sections_cache.get(name, [])
+    return [dict(item) for item in items]
 
 
 def load_layered(cwd: Path | str | None = None) -> WhillyConfig:
@@ -345,6 +374,17 @@ def load_layered(cwd: Path | str | None = None) -> WhillyConfig:
     _toml_sections_cache.clear()
     _toml_sections_cache.update(merged_sections)
 
+    # List-typed sections (TOML array-of-tables). Repo wins entirely if it sets
+    # the section — we don't merge by index (rules are positional, not named).
+    merged_lists: dict[str, list[dict[str, Any]]] = {name: [] for name in _EXTRA_TOML_LIST_NAMESPACES}
+    for source in (user_toml, repo_toml):
+        for name in _EXTRA_TOML_LIST_NAMESPACES:
+            value = source.get(name)
+            if isinstance(value, list):
+                merged_lists[name] = [item for item in value if isinstance(item, dict)]
+    _toml_list_sections_cache.clear()
+    _toml_list_sections_cache.update(merged_lists)
+
     # .env feeds os.environ (no overwrite of real env vars). Warn if present so
     # users are nudged toward `whilly --config migrate`.
     dotenv_path = base_dir / ".env"
@@ -367,6 +407,7 @@ __all__ = [
     "migrate_env_to_toml",
     "user_config_path",
     "get_toml_section",
+    "get_toml_list_section",
 ]
 
 
