@@ -354,6 +354,14 @@ class OperatorTaskRow:
     acceptance_criteria: tuple[str, ...] = ()
     test_steps: tuple[str, ...] = ()
     human_review: HumanReviewState = field(default_factory=HumanReviewState)
+    # PRD-wui-multi-plan v2 Epic C: the task-edit modal needs the
+    # optimistic-locking ``version`` and the editable fields rendered
+    # alongside the row so a single HTMX fragment refresh keeps the
+    # modal-open ETag synced with the displayed values.
+    version: int = 0
+    description: str = ""
+    key_files: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -421,7 +429,9 @@ WORKERS_LIMIT: Final[int] = 200
 EVENTS_LIMIT: Final[int] = 200
 
 _TASKS_SQL: Final[str] = """
-SELECT id, plan_id, status, priority, claimed_by, claimed_at, updated_at, acceptance_criteria, test_steps
+SELECT id, plan_id, status, priority, claimed_by, claimed_at, updated_at,
+       acceptance_criteria, test_steps, version, description, key_files,
+       dependencies
 FROM tasks
 WHERE ($1::text IS NULL OR plan_id = $1)
 ORDER BY
@@ -569,6 +579,7 @@ def _control_state(row: Mapping[str, Any] | None) -> OperatorControlState:
 
 
 def _task_row(row: Mapping[str, Any]) -> OperatorTaskRow:
+    version_raw = row.get("version") if "version" in row else 0
     return OperatorTaskRow(
         task_id=str(row["id"]),
         plan_id=str(row["plan_id"]),
@@ -579,6 +590,10 @@ def _task_row(row: Mapping[str, Any]) -> OperatorTaskRow:
         updated_at=row["updated_at"],
         acceptance_criteria=_string_tuple(row.get("acceptance_criteria")),
         test_steps=_string_tuple(row.get("test_steps")),
+        version=int(version_raw) if version_raw is not None else 0,
+        description=str(row.get("description") or ""),
+        key_files=_string_tuple(row.get("key_files")),
+        dependencies=_string_tuple(row.get("dependencies")),
     )
 
 
