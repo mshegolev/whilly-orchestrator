@@ -2704,6 +2704,7 @@ def create_app(
             )
 
         plan_id_override = str(body.get("plan_id", "") or "").strip()
+        force = bool(body.get("force", False))
         wizard_data = body.get("wizard") or {}
         if not isinstance(wizard_data, dict):
             wizard_data = {}
@@ -2733,6 +2734,15 @@ def create_app(
         out_dir = _Path("out")
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"jira-{key.lower()}.json"
+
+        # Always start from a clean file — `fetch_single_jira_issue` appends
+        # to an existing JSON instead of overwriting (see whilly/sources/jira.py),
+        # which makes repeat imports of the same key accumulate duplicate task
+        # entries and trigger PlanParseError("duplicate task id …") downstream.
+        try:
+            out_path.unlink()
+        except FileNotFoundError:
+            pass
 
         # ── 1. Fetch issue and assemble the plan JSON on disk ──
         try:
@@ -2775,6 +2785,16 @@ def create_app(
             plan, tasks_iter = parse_plan_dict(plan_dict)
             async with pool.acquire() as conn:
                 async with conn.transaction():
+                    if force:
+                        # Drop existing plan+tasks+events so the re-import succeeds.
+                        # FK ON DELETE CASCADE handles tasks/events; we use explicit
+                        # deletes anyway so the operator sees what was wiped in logs.
+                        await conn.execute(
+                            "DELETE FROM events WHERE plan_id = $1 OR task_id IN (SELECT id FROM tasks WHERE plan_id = $1)",
+                            plan.id,
+                        )
+                        await conn.execute("DELETE FROM tasks WHERE plan_id = $1", plan.id)
+                        await conn.execute("DELETE FROM plans WHERE id = $1", plan.id)
                     await _insert_plan_and_tasks(conn, plan, tasks_iter)
         except Exception as exc:
             logger.exception("jira_import_endpoint: DB insert failed")
@@ -2787,7 +2807,7 @@ def create_app(
             ):
                 raise HTTPException(
                     status_code=status_module.HTTP_409_CONFLICT,
-                    detail=f"plan '{plan_id}' already imported. Pass a different plan_id to re-import.",
+                    detail=f"plan '{plan_id}' already imported. Tick 'Force re-import' to overwrite or pass a different plan_id.",
                 ) from None
             raise HTTPException(
                 status_code=status_module.HTTP_500_INTERNAL_SERVER_ERROR,

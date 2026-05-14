@@ -642,6 +642,13 @@
                    style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
           </div>
 
+          <div style="margin-top: 8px;">
+            <label for="jira-force" style="font-weight: normal; color: var(--muted); font-size: 0.85rem; cursor: pointer;">
+              <input id="jira-force" type="checkbox" style="vertical-align: middle; margin-right: 4px;">
+              Force re-import (overwrite existing plan + tasks)
+            </label>
+          </div>
+
           <div style="margin-top: 12px;">
             <button id="jira-import-autonomous" type="button"
                     style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold; margin-right: 8px;">
@@ -1331,11 +1338,13 @@
           return;
         }
         const planIdOverride = (jiraPlanIdInput.value || "").trim();
+        const forceCheckbox = document.getElementById("jira-force");
         const body = {
           jira_ref: jiraRef,
           mode: mode,
         };
         if (planIdOverride) body.plan_id = planIdOverride;
+        if (forceCheckbox && forceCheckbox.checked) body.force = true;
         if (wizardPayload) body.wizard = wizardPayload;
 
         if (jiraImportStatus) {
