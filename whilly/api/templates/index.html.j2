@@ -1204,6 +1204,310 @@
       <div class="table-wrapper">
         {% include "_tasks_table.html" %}
       </div>
+
+      <!-- PRD-wui-multi-plan v2 Epic C — Edit Task modal -->
+      <dialog id="edit-task-modal" aria-modal="true" aria-labelledby="edit-task-title">
+        <form id="edit-task-form" method="dialog">
+          <h3 id="edit-task-title">Edit task</h3>
+          <input type="hidden" id="edit-task-id">
+          <input type="hidden" id="edit-task-plan-id">
+          <input type="hidden" id="edit-task-version">
+          <input type="hidden" id="edit-task-claimed-by">
+          <div class="wui-form-row">
+            <label for="edit-task-description">Description</label>
+            <textarea id="edit-task-description" rows="3" maxlength="8192"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-priority">Priority</label>
+            <select id="edit-task-priority">
+              <option value="critical">critical</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-key-files">Key files <small>(one path per line)</small></label>
+            <textarea id="edit-task-key-files" rows="3"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-acceptance">Acceptance criteria <small>(one per line)</small></label>
+            <textarea id="edit-task-acceptance" rows="3"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-test-steps">Test steps <small>(one per line)</small></label>
+            <textarea id="edit-task-test-steps" rows="3"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-dependencies">Dependencies <small>(comma-separated task IDs)</small></label>
+            <input type="text" id="edit-task-dependencies" autocomplete="off">
+          </div>
+          <div id="edit-task-banner" class="wui-banner" role="alert" hidden></div>
+          <div id="edit-task-force-release-confirm" class="wui-banner wui-banner--danger" role="alert" hidden>
+            <p><strong>This will interrupt the running worker.</strong>
+               The task will return to PENDING and may produce a duplicate result.</p>
+            <div class="wui-form-actions">
+              <button type="button" id="edit-task-force-release-cancel">Cancel</button>
+              <button type="button" id="edit-task-force-release-confirm-btn"
+                      class="wui-btn--danger">Confirm release</button>
+            </div>
+          </div>
+          <small id="edit-task-error" class="wui-error" role="alert" hidden></small>
+          <div class="wui-form-actions">
+            <button type="button" id="edit-task-cancel">Cancel</button>
+            <button type="submit" id="edit-task-submit">Save</button>
+          </div>
+        </form>
+      </dialog>
+      <script>
+        (function () {
+          // PRD-wui-multi-plan v2 Block 8 (Epic C) — Edit/Delete task wiring.
+          // Operates on the existing #tasks table rendered by
+          // _tasks_table.html. Bound at document level via delegation so
+          // HTMX refresh (every 5s + SSE) does not strip our handlers
+          // along with the swapped rows.
+          var lastFocusedTrigger = null;
+
+          function readListAttr(row, name) {
+            try { return JSON.parse(row.getAttribute(name) || "[]"); }
+            catch (e) { return []; }
+          }
+          function joinLines(arr) { return (arr || []).join("\n"); }
+          function splitLines(text) {
+            return (text || "").split(/\r?\n/).map(function (s) { return s.trim(); })
+              .filter(function (s) { return s.length > 0; });
+          }
+          function splitCommas(text) {
+            return (text || "").split(/[,;]/).map(function (s) { return s.trim(); })
+              .filter(function (s) { return s.length > 0; });
+          }
+
+          function openEditTaskModal(row, trigger) {
+            lastFocusedTrigger = trigger || null;
+            var dlg = document.getElementById("edit-task-modal");
+            document.getElementById("edit-task-id").value = row.getAttribute("data-task-id") || "";
+            document.getElementById("edit-task-plan-id").value = row.getAttribute("data-plan-id") || "";
+            document.getElementById("edit-task-version").value = row.getAttribute("data-version") || "0";
+            document.getElementById("edit-task-claimed-by").value = row.getAttribute("data-claimed-by") || "";
+            document.getElementById("edit-task-description").value = row.getAttribute("data-description") || "";
+            document.getElementById("edit-task-priority").value = row.getAttribute("data-priority") || "medium";
+            document.getElementById("edit-task-key-files").value = joinLines(readListAttr(row, "data-key-files"));
+            document.getElementById("edit-task-acceptance").value = joinLines(readListAttr(row, "data-acceptance-criteria"));
+            document.getElementById("edit-task-test-steps").value = joinLines(readListAttr(row, "data-test-steps"));
+            document.getElementById("edit-task-dependencies").value = (readListAttr(row, "data-dependencies") || []).join(", ");
+            document.getElementById("edit-task-banner").hidden = true;
+            document.getElementById("edit-task-force-release-confirm").hidden = true;
+            document.getElementById("edit-task-error").hidden = true;
+            if (typeof dlg.showModal === "function") { dlg.showModal(); }
+            else { dlg.setAttribute("open", ""); }
+            setTimeout(function () { document.getElementById("edit-task-description").focus(); }, 0);
+          }
+          function closeEditTaskModal() {
+            var dlg = document.getElementById("edit-task-modal");
+            if (typeof dlg.close === "function") { dlg.close(); } else { dlg.removeAttribute("open"); }
+            if (lastFocusedTrigger && typeof lastFocusedTrigger.focus === "function") {
+              try { lastFocusedTrigger.focus(); } catch (e) { /* row gone after HTMX swap */ }
+            }
+          }
+
+          function showBanner(html, opts) {
+            var banner = document.getElementById("edit-task-banner");
+            banner.innerHTML = html;
+            banner.hidden = false;
+            if (opts && opts.danger) { banner.classList.add("wui-banner--danger"); }
+            else { banner.classList.remove("wui-banner--danger"); }
+          }
+
+          function submitEditTask(ev) {
+            ev.preventDefault();
+            var taskId = document.getElementById("edit-task-id").value;
+            var planId = document.getElementById("edit-task-plan-id").value;
+            var version = document.getElementById("edit-task-version").value;
+            var body = {
+              description: document.getElementById("edit-task-description").value,
+              priority: document.getElementById("edit-task-priority").value,
+              key_files: splitLines(document.getElementById("edit-task-key-files").value),
+              acceptance_criteria: splitLines(document.getElementById("edit-task-acceptance").value),
+              test_steps: splitLines(document.getElementById("edit-task-test-steps").value),
+              dependencies: splitCommas(document.getElementById("edit-task-dependencies").value),
+            };
+            var ifMatch = 'W/"v' + parseInt(version || "0", 10) + '"';
+            fetch("/api/v1/tasks/" + encodeURIComponent(taskId) + "?plan_id=" + encodeURIComponent(planId), {
+              method: "PATCH",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "Content-Type": "application/json", "If-Match": ifMatch },
+              body: JSON.stringify(body),
+            }).then(function (r) {
+              if (r.ok) {
+                closeEditTaskModal();
+                if (window.htmx) { window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" }); }
+                return;
+              }
+              return r.json().then(function (data) {
+                if (r.status === 412) {
+                  showBanner(
+                    "This task changed since you opened the modal. "
+                    + '<button type="button" id="edit-task-reload-btn">Reload current values</button> '
+                    + '<button type="button" id="edit-task-cancel-412">Cancel</button>'
+                  );
+                  document.getElementById("edit-task-reload-btn").addEventListener("click", function () {
+                    if (window.htmx) {
+                      window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" })
+                        .then(function () {
+                          var fresh = document.querySelector('#tasks tr[data-task-id="' + CSS.escape(taskId) + '"]');
+                          if (fresh) { openEditTaskModal(fresh, lastFocusedTrigger); }
+                          else { closeEditTaskModal(); }
+                        });
+                    }
+                  });
+                  document.getElementById("edit-task-cancel-412").addEventListener("click", closeEditTaskModal);
+                  return;
+                }
+                if (r.status === 409 && data && data.error === "task_claimed") {
+                  var workerHtml = data.worker_id ? ("worker <code>" + data.worker_id + "</code>") : "a worker";
+                  showBanner(
+                    "Task is in " + workerHtml + ". "
+                    + '<button type="button" id="edit-task-show-force-release">Force release</button> '
+                    + '<button type="button" id="edit-task-cancel-409">Cancel</button>',
+                    { danger: true }
+                  );
+                  document.getElementById("edit-task-show-force-release").addEventListener("click", function () {
+                    document.getElementById("edit-task-force-release-confirm").hidden = false;
+                  });
+                  document.getElementById("edit-task-cancel-409").addEventListener("click", closeEditTaskModal);
+                  return;
+                }
+                var err = document.getElementById("edit-task-error");
+                err.textContent = (data && data.detail) ? String(data.detail) : ("Error " + r.status);
+                err.hidden = false;
+              });
+            }).catch(function (e) {
+              var err = document.getElementById("edit-task-error");
+              err.textContent = "Network error: " + e;
+              err.hidden = false;
+            });
+          }
+
+          function forceReleaseConfirmed() {
+            // PRD C5: two-step Force release inside the modal.
+            var taskId = document.getElementById("edit-task-id").value;
+            var workerId = document.getElementById("edit-task-claimed-by").value;
+            // Build a minimal ReleaseRequest; the existing worker endpoint
+            // requires worker_id + version + reason. We don't carry the
+            // task's CLAIMED version in the DOM, so we re-fetch.
+            fetch("/api/v1/tasks?plan_id=" + encodeURIComponent(document.getElementById("edit-task-plan-id").value), {
+              credentials: "same-origin",
+              headers: { "Accept": "application/json" }
+            }).then(function (r) { return r.ok ? r.json() : { tasks: [] }; })
+              .then(function (data) {
+                var match = (data.tasks || []).filter(function (t) { return t.id === taskId; })[0];
+                if (!match) { throw new Error("task not found after refetch"); }
+                return fetch("/tasks/" + encodeURIComponent(taskId) + "/release", {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json", "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    worker_id: workerId,
+                    version: match.version,
+                    reason: "operator force-release via WUI"
+                  })
+                });
+              }).then(function (r) {
+                if (!r.ok) {
+                  return r.json().then(function (data) {
+                    var err = document.getElementById("edit-task-error");
+                    err.textContent = (data && data.detail) ? String(data.detail) : ("Release error " + r.status);
+                    err.hidden = false;
+                  });
+                }
+                document.getElementById("edit-task-force-release-confirm").hidden = true;
+                document.getElementById("edit-task-banner").hidden = true;
+                if (window.htmx) { window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" }); }
+                closeEditTaskModal();
+              }).catch(function (e) {
+                var err = document.getElementById("edit-task-error");
+                err.textContent = "Network error: " + e;
+                err.hidden = false;
+              });
+          }
+
+          function deleteTaskWithConfirm(row, btn) {
+            // PRD C3: two-step inline confirm. Reuses the row cell so the
+            // operator's attention does not jump out of the table.
+            var cell = btn.parentNode;
+            var original = cell.innerHTML;
+            var taskId = row.getAttribute("data-task-id");
+            cell.innerHTML = '<span class="wui-inline-confirm">Delete <code>' + taskId
+              + '</code>? <button type="button" class="task-delete-confirm wui-btn--danger">Confirm</button> '
+              + '<button type="button" class="task-delete-cancel">Cancel</button></span>';
+            cell.querySelector(".task-delete-cancel").addEventListener("click", function () {
+              cell.innerHTML = original;
+              // Re-bind the now-recreated edit/delete buttons.
+              wireRowButtons(row);
+            });
+            cell.querySelector(".task-delete-confirm").addEventListener("click", function () {
+              var planId = row.getAttribute("data-plan-id");
+              var version = row.getAttribute("data-version") || "0";
+              var ifMatch = 'W/"v' + parseInt(version, 10) + '"';
+              fetch("/api/v1/tasks/" + encodeURIComponent(taskId) + "?plan_id=" + encodeURIComponent(planId), {
+                method: "DELETE",
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "If-Match": ifMatch }
+              }).then(function (r) {
+                if (r.status === 204) {
+                  if (window.htmx) { window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" }); }
+                  return;
+                }
+                return r.json().then(function (data) {
+                  alert((data && data.detail) ? data.detail : ("Error " + r.status));
+                  cell.innerHTML = original;
+                  wireRowButtons(row);
+                });
+              }).catch(function (e) {
+                alert("Network error: " + e);
+                cell.innerHTML = original;
+                wireRowButtons(row);
+              });
+            });
+          }
+
+          function wireRowButtons(row) {
+            // Idempotent — safe to call after each HTMX swap.
+            var editBtn = row.querySelector(".task-edit-btn");
+            var delBtn = row.querySelector(".task-delete-btn");
+            if (editBtn && !editBtn.dataset.bound) {
+              editBtn.dataset.bound = "1";
+              editBtn.addEventListener("click", function () { openEditTaskModal(row, editBtn); });
+            }
+            if (delBtn && !delBtn.dataset.bound) {
+              delBtn.dataset.bound = "1";
+              delBtn.addEventListener("click", function () { deleteTaskWithConfirm(row, delBtn); });
+            }
+          }
+
+          function wireAllRows() {
+            var rows = document.querySelectorAll('#tasks tr[data-task-id]');
+            Array.prototype.forEach.call(rows, wireRowButtons);
+          }
+
+          document.addEventListener("DOMContentLoaded", function () {
+            wireAllRows();
+            document.getElementById("edit-task-cancel").addEventListener("click", closeEditTaskModal);
+            document.getElementById("edit-task-form").addEventListener("submit", submitEditTask);
+            document.getElementById("edit-task-modal").addEventListener("cancel", function () {
+              setTimeout(closeEditTaskModal, 0);
+            });
+            document.getElementById("edit-task-force-release-cancel").addEventListener("click", function () {
+              document.getElementById("edit-task-force-release-confirm").hidden = true;
+            });
+            document.getElementById("edit-task-force-release-confirm-btn").addEventListener("click", forceReleaseConfirmed);
+          });
+          // HTMX swap re-renders the table — re-bind buttons each time.
+          document.body.addEventListener("htmx:afterSwap", function (ev) {
+            if (ev && ev.target && ev.target.id === "tasks") { wireAllRows(); }
+          });
+        })();
+      </script>
     </section>
 
     <section id="surface-workers" class="operator-surface surface-panel" data-surface="workers" hidden>

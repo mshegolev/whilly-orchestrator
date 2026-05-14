@@ -4,7 +4,13 @@
    2. Status / priority / review spans get class="s s-XXX" (design system convention)
       while KEEPING the original status-XXX class for backward compatibility
    3. <td>s use data-l="..." (design system uses CSS attr() for mobile labels);
-      keep data-mobile-label for any existing JS that reads it #}
+      keep data-mobile-label for any existing JS that reads it
+   PRD-wui-multi-plan v2 Block 8 (Epic C):
+   - extra "Actions" column with Edit / Delete buttons
+   - data-* attributes carrying ``version`` + editable fields so the
+     modal can pre-fill without an extra round-trip
+   - Edit button visible only when status ∈ {PENDING,DONE,FAILED,SKIPPED}.
+#}
 {% set task_columns = table_columns.tasks %}
 <table id="tasks"
        class="tbl"
@@ -17,6 +23,7 @@
       {% for column in task_columns %}
         <th scope="col">{{ column.label_for("wui") }}</th>
       {% endfor %}
+      <th scope="col">Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -29,7 +36,19 @@
         {% set _l4 = task_columns[4].label_for("wui") %}
         {% set _l5 = task_columns[5].label_for("wui") %}
         {% set _l6 = task_columns[6].label_for("wui") %}
+        {% set _editable = t.status in ("PENDING", "DONE", "FAILED", "SKIPPED") %}
         <tr id="task-{{ t.task_id }}"
+            data-task-id="{{ t.task_id }}"
+            data-plan-id="{{ t.plan_id }}"
+            data-status="{{ t.status }}"
+            data-version="{{ t.version | default(0) }}"
+            data-claimed-by="{{ t.claimed_by or '' }}"
+            data-description="{{ (t.description or '') | e }}"
+            data-priority="{{ t.priority }}"
+            data-key-files='{{ (t.key_files | default([]) | list) | tojson }}'
+            data-acceptance-criteria='{{ (t.acceptance_criteria | default([]) | list) | tojson }}'
+            data-test-steps='{{ (t.test_steps | default([]) | list) | tojson }}'
+            data-dependencies='{{ (t.dependencies | default([]) | list) | tojson }}'
             data-filter-text="{{ t.task_id }} {{ t.plan_id }} {{ t.status }} {{ t.priority }} {{ t.claimed_by or '' }} {{ t.human_review.stage_id }} {{ t.human_review.decision or '' }} {{ t.human_review.reason }}">
           <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}"><code>{{ t.task_id }}</code></td>
           <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ t.plan_id }}</td>
@@ -52,11 +71,26 @@
           <td data-l="{{ _l6 }}" data-mobile-label="{{ _l6 }}">
             <time datetime="{{ format_iso(t.updated_at) }}">{{ format_human(t.updated_at) }}</time>
           </td>
+          <td data-l="Actions" data-mobile-label="Actions" class="tasks-actions">
+            {% if _editable %}
+              <button type="button"
+                      class="task-edit-btn"
+                      data-task-id="{{ t.task_id }}"
+                      aria-label="Edit task {{ t.task_id }}">Edit</button>
+              <button type="button"
+                      class="task-delete-btn"
+                      data-task-id="{{ t.task_id }}"
+                      aria-label="Delete task {{ t.task_id }}"
+                      title="Delete">✕</button>
+            {% else %}
+              <span style="opacity:.5">—</span>
+            {% endif %}
+          </td>
         </tr>
       {% endfor %}
     {% else %}
       <tr id="tasks-empty">
-        <td colspan="{{ task_columns|length }}"><em class="empty-state" style="color:var(--muted)">No tasks in queue.</em></td>
+        <td colspan="{{ task_columns|length + 1 }}"><em class="empty-state" style="color:var(--muted)">No tasks in queue.</em></td>
       </tr>
     {% endif %}
   </tbody>

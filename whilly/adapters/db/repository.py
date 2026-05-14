@@ -328,6 +328,30 @@ def _row_to_plan_payload_dict(row: asyncpg.Record) -> dict[str, Any]:
     }
 
 
+def _task_row_to_payload_dict(row: asyncpg.Record) -> dict[str, Any]:
+    """Convert a ``tasks``-table row into a JSON-friendly TaskPayload dict.
+
+    Shape mirrors the wire format the WUI tasks endpoints emit (Epic C):
+    JSONB columns are decoded to native Python lists, ``claimed_at`` is
+    left as a ``datetime`` for the route to ISO-8601-serialise.
+    """
+    claimed_at = row["claimed_at"]
+    return {
+        "id": row["id"],
+        "plan_id": row["plan_id"],
+        "status": str(row["status"]),
+        "priority": str(row["priority"]),
+        "claimed_by": row["claimed_by"],
+        "claimed_at": claimed_at.isoformat() if claimed_at is not None else None,
+        "version": int(row["version"]),
+        "key_files": list(_decode_jsonb(row["key_files"]) or []),
+        "description": row["description"] or "",
+        "dependencies": list(_decode_jsonb(row["dependencies"]) or []),
+        "acceptance_criteria": list(_decode_jsonb(row["acceptance_criteria"]) or []),
+        "test_steps": list(_decode_jsonb(row["test_steps"]) or []),
+    }
+
+
 # Priority → integer rank for SQL ORDER BY. Lower = higher priority. The
 # CHECK constraint on tasks.priority guarantees one of these four values
 # in production data; the trailing ``ELSE`` is defence-in-depth so a row
@@ -4212,6 +4236,243 @@ class TaskRepository:
             }
             for row in rows
         ]
+
+    async def patch_task(
+        self,
+        task_id: TaskId,
+        plan_id: PlanId,
+        *,
+        fields_to_patch: dict[str, Any],
+        expected_version: int,
+    ) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+        """Apply a partial update to a task with optimistic concurrency.
+
+        PRD-wui-multi-plan v2 Epic C2. Returns a ``(status, payload, diff)``
+        tuple where ``status`` is one of:
+
+        * ``"updated"`` — row patched; ``payload`` is the new TaskPayload
+          dict (with bumped version), ``diff`` is the JSON diff for the
+          ``task.edited`` audit event.
+        * ``"version_conflict"`` — current ``version`` differs from
+          ``expected_version``; ``payload`` is the current TaskPayload
+          dict so the route can return its ETag, ``diff`` is None.
+        * ``"claimed"`` — ``claimed_by IS NOT NULL``; ``payload`` carries
+          ``{"worker_id": ..., "version": ...}`` so the route can build
+          the 409 error envelope (Epic C5).
+        * ``"in_progress"`` — ``status = IN_PROGRESS`` (transient between
+          CLAIMED → DONE). Same shape as ``claimed``.
+        * ``"not_found"`` — no row matches ``(task_id, plan_id)``.
+        * ``"plan_archived"`` — plan exists with ``archived_at IS NOT NULL``.
+
+        ``fields_to_patch`` accepts only the editable subset
+        (``description``, ``priority``, ``key_files``,
+        ``acceptance_criteria``, ``test_steps``, ``dependencies``); every
+        present key is written, omitted keys are left untouched.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                plan_row = await conn.fetchrow(
+                    "SELECT archived_at FROM plans WHERE id = $1",
+                    plan_id,
+                )
+                if plan_row is None:
+                    return ("not_found", None, None)
+                if plan_row["archived_at"] is not None:
+                    return ("plan_archived", None, None)
+
+                current = await conn.fetchrow(
+                    """
+                    SELECT id, plan_id, status, priority, claimed_by, claimed_at,
+                           version, key_files, description, dependencies,
+                           acceptance_criteria, test_steps
+                    FROM tasks
+                    WHERE id = $1 AND plan_id = $2
+                    """,
+                    task_id,
+                    plan_id,
+                )
+                if current is None:
+                    return ("not_found", None, None)
+
+                current_payload = _task_row_to_payload_dict(current)
+
+                # Claim / status gating. 409 (claimed) takes precedence over
+                # 412 (stale ETag) so the operator sees the actionable
+                # message — release the worker first.
+                if current["claimed_by"] is not None:
+                    return ("claimed", current_payload, None)
+                if str(current["status"]) == "IN_PROGRESS":
+                    return ("in_progress", current_payload, None)
+
+                if int(current["version"]) != int(expected_version):
+                    return ("version_conflict", current_payload, None)
+
+                # Build SET clause from present fields. Only the editable
+                # subset is permitted; unknown keys are ignored (the route
+                # layer already validates the shape via TaskCreateRequest).
+                set_clauses: list[str] = []
+                params: list[Any] = []
+                diff: dict[str, Any] = {}
+
+                if "description" in fields_to_patch:
+                    new_val = fields_to_patch["description"]
+                    if (current["description"] or "") != (new_val or ""):
+                        params.append(new_val)
+                        set_clauses.append(f"description = ${len(params)}")
+                        diff["description"] = {
+                            "from": current["description"] or "",
+                            "to": new_val or "",
+                        }
+                if "priority" in fields_to_patch:
+                    new_val = fields_to_patch["priority"]
+                    if str(current["priority"]) != str(new_val):
+                        params.append(new_val)
+                        set_clauses.append(f"priority = ${len(params)}")
+                        diff["priority"] = {
+                            "from": str(current["priority"]),
+                            "to": str(new_val),
+                        }
+                for jsonb_field in ("key_files", "acceptance_criteria", "test_steps", "dependencies"):
+                    if jsonb_field in fields_to_patch:
+                        new_list = list(fields_to_patch[jsonb_field] or [])
+                        old_list = list(_decode_jsonb(current[jsonb_field]) or [])
+                        if old_list != new_list:
+                            params.append(json.dumps(new_list))
+                            set_clauses.append(f"{jsonb_field} = ${len(params)}::jsonb")
+                            diff[jsonb_field] = {"from": old_list, "to": new_list}
+
+                if not set_clauses:
+                    # Idempotent PATCH — nothing actually changed. Return
+                    # the current payload so the route still emits a
+                    # 200 + ETag and avoids spamming task.edited events.
+                    return ("updated", current_payload, {})
+
+                # Always bump version + updated_at on a real change so the
+                # next operator round-trip carries a fresh ETag.
+                set_clauses.append("version = version + 1")
+                set_clauses.append("updated_at = NOW()")
+
+                params.append(task_id)
+                params.append(plan_id)
+                params.append(expected_version)
+                sql = (
+                    f"UPDATE tasks SET {', '.join(set_clauses)} "
+                    f"WHERE id = ${len(params) - 2} AND plan_id = ${len(params) - 1} "
+                    f"AND version = ${len(params)} "
+                    f"RETURNING id, plan_id, status, priority, claimed_by, claimed_at, "
+                    f"version, key_files, description, dependencies, "
+                    f"acceptance_criteria, test_steps"
+                )
+                updated = await conn.fetchrow(sql, *params)
+                if updated is None:
+                    # A racing writer slipped a version bump between our
+                    # SELECT and UPDATE. Re-read to surface the latest
+                    # state on the conflict payload.
+                    latest = await conn.fetchrow(
+                        """
+                        SELECT id, plan_id, status, priority, claimed_by, claimed_at,
+                               version, key_files, description, dependencies,
+                               acceptance_criteria, test_steps
+                        FROM tasks
+                        WHERE id = $1 AND plan_id = $2
+                        """,
+                        task_id,
+                        plan_id,
+                    )
+                    if latest is None:
+                        return ("not_found", None, None)
+                    return ("version_conflict", _task_row_to_payload_dict(latest), None)
+
+                new_payload = _task_row_to_payload_dict(updated)
+                return ("updated", new_payload, diff)
+
+    async def delete_task(
+        self,
+        task_id: TaskId,
+        plan_id: PlanId,
+        *,
+        expected_version: int,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Hard-delete a task with optimistic concurrency.
+
+        PRD-wui-multi-plan v2 Epic C3 + change-log: tasks use hard delete
+        plus an audit event (no ARCHIVED status). Returns
+        ``(status, payload)`` where ``status`` is one of:
+
+        * ``"deleted"`` — row removed; ``payload`` is the pre-deletion
+          TaskPayload dict (so the route can write the full row JSON to
+          the ``task.deleted`` event).
+        * ``"version_conflict"`` — current ``version`` differs from
+          ``expected_version``; ``payload`` is the current TaskPayload.
+        * ``"claimed"`` / ``"in_progress"`` — worker still owns the row;
+          payload carries the current TaskPayload so the route can build
+          the 409 envelope.
+        * ``"not_found"`` / ``"plan_archived"`` — same semantics as
+          :meth:`patch_task`.
+        """
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                plan_row = await conn.fetchrow(
+                    "SELECT archived_at FROM plans WHERE id = $1",
+                    plan_id,
+                )
+                if plan_row is None:
+                    return ("not_found", None)
+                if plan_row["archived_at"] is not None:
+                    return ("plan_archived", None)
+
+                current = await conn.fetchrow(
+                    """
+                    SELECT id, plan_id, status, priority, claimed_by, claimed_at,
+                           version, key_files, description, dependencies,
+                           acceptance_criteria, test_steps
+                    FROM tasks
+                    WHERE id = $1 AND plan_id = $2
+                    """,
+                    task_id,
+                    plan_id,
+                )
+                if current is None:
+                    return ("not_found", None)
+
+                current_payload = _task_row_to_payload_dict(current)
+
+                if current["claimed_by"] is not None:
+                    return ("claimed", current_payload)
+                if str(current["status"]) == "IN_PROGRESS":
+                    return ("in_progress", current_payload)
+
+                if int(current["version"]) != int(expected_version):
+                    return ("version_conflict", current_payload)
+
+                deleted = await conn.execute(
+                    """
+                    DELETE FROM tasks
+                    WHERE id = $1 AND plan_id = $2 AND version = $3
+                    """,
+                    task_id,
+                    plan_id,
+                    expected_version,
+                )
+                # asyncpg returns "DELETE <rowcount>" — 0 means a racing
+                # writer beat us; treat as version_conflict and re-read.
+                if not deleted.endswith(" 1"):
+                    latest = await conn.fetchrow(
+                        """
+                        SELECT id, plan_id, status, priority, claimed_by, claimed_at,
+                               version, key_files, description, dependencies,
+                               acceptance_criteria, test_steps
+                        FROM tasks
+                        WHERE id = $1 AND plan_id = $2
+                        """,
+                        task_id,
+                        plan_id,
+                    )
+                    if latest is None:
+                        return ("not_found", None)
+                    return ("version_conflict", _task_row_to_payload_dict(latest))
+
+                return ("deleted", current_payload)
 
     async def _raise_version_conflict(
         self,
