@@ -1253,12 +1253,27 @@ def create_app(
         # /docs (Swagger UI) and /openapi.json on FastAPI defaults —
         # operators expect them there, no reason to relocate.
     )
+    from whilly.api.auth_routes import build_auth_router
+    from whilly.api.csrf import WhillySessionCSRFMiddleware
     from whilly.api.dashboard import FileLogStore
     from whilly.api.static_mount import mount_static_assets
 
     mount_static_assets(app)
     app.state.log_store = FileLogStore(Path("whilly_logs"))
     instrument_app(app)
+
+    # PRD-wui-multi-plan v2 Epic A + §6.1: install the CSRF gate BEFORE the
+    # auth router and any subsequent CRUD routers. The middleware is a
+    # no-op for requests that do not carry the session cookie, so worker
+    # bearer / dashboard JWT traffic is unaffected. ``cookie_name`` and
+    # ``cookie_secure`` flow through env (WHILLY_SESSION_COOKIE_SECURE,
+    # WHILLY_CSRF_ORIGIN_ALLOWLIST) per §6.4. The router itself is wired
+    # to the same pool + ``dashboard_token_secret`` so a single HMAC key
+    # governs the whole auth surface (Architect F2).
+    app.add_middleware(WhillySessionCSRFMiddleware)
+    app.include_router(
+        build_auth_router(pool=pool, secret=dashboard_token_secret),
+    )
 
     async def _probe_pool() -> tuple[bool, str | None]:
         try:
