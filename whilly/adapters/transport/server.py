@@ -1290,6 +1290,7 @@ def create_app(
     from whilly.api.dashboard import FileLogStore
     from whilly.api.plans_api import build_plans_router
     from whilly.api.static_mount import mount_static_assets
+    from whilly.api.tasks_api_crud import build_tasks_crud_router
 
     mount_static_assets(app)
     app.state.log_store = FileLogStore(Path("whilly_logs"))
@@ -1314,6 +1315,13 @@ def create_app(
     # sibling router built by the same module.
     app.include_router(
         build_plans_router(pool=pool, secret=dashboard_token_secret),
+    )
+    # PRD-wui-multi-plan v2 Block 8 (Epic C — task edit + hard delete).
+    # PATCH/DELETE on /api/v1/tasks/{task_id} with If-Match: W/"v<version>"
+    # concurrency. Same pool + HMAC secret as the rest of the
+    # session-only CRUD surface so a single key governs the whole UI.
+    app.include_router(
+        build_tasks_crud_router(pool=pool, secret=dashboard_token_secret),
     )
 
     async def _probe_pool() -> tuple[bool, str | None]:
@@ -2327,7 +2335,11 @@ def create_app(
         # read-only dashboard token so HTMX fragments do not need worker
         # credentials in the browser.
         tags=["tasks"],
-        summary="List tasks for a plan with pagination + status filter",
+        summary=(
+            "List tasks for a plan with pagination + status filter. "
+            "Each row carries a ``version`` int; PATCH/DELETE require "
+            '``If-Match: W/"v<version>"`` (PRD-wui-multi-plan v2 Epic C).'
+        ),
     )
     async def list_tasks_endpoint(
         request: Request,
