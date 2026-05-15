@@ -220,6 +220,13 @@ def signed_in_page(page, live_server: str):
     in through the canonical ``/login`` username+password form so every UI
     test exercises the production auth path (not the magic-link fallback at
     ``/login/magic``).
+
+    After landing on ``/`` we wait until the plans-section JS init has run.
+    The "+ New Plan" button is rendered server-side, but its click handler
+    is attached inside a ``DOMContentLoaded`` listener that also runs
+    ``fetchPlans()``. Tests that click the button BEFORE this listener fires
+    silently no-op. We wait for either an empty-state CTA or a plan-row to
+    confirm the JS is wired up.
     """
     page.goto(f"{live_server}/login")
     page.get_by_label("username").fill("admin")
@@ -227,6 +234,11 @@ def signed_in_page(page, live_server: str):
     page.get_by_role("button", name="[ sign in ]").click()
     # Successful auth = 303 to /, page header shows "Signed in as ...".
     page.get_by_text("Signed in as").wait_for()
+    # Ensure the plans-section JS handlers are attached before any test
+    # tries to click "+ New Plan" / open overflow menus. Empty-state CTA is
+    # part of fetchPlans() output — once it's visible, DOMContentLoaded has
+    # already fired and addEventListener calls have completed.
+    page.locator("[data-testid='plans-table-empty-state'], [data-testid='plan-row']").first.wait_for(state="visible")
     return page
 
 
