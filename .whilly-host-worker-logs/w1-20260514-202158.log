@@ -1,1 +1,0 @@
-whilly-worker: --plan is required (or set WHILLY_PLAN_ID). This is the plan id imported via `whilly plan import`.
