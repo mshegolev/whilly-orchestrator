@@ -281,6 +281,7 @@ async def render_dashboard(
     task_id: str | None = None,
     auth_email: str | None = None,
     plan_id_for_share_link: str | None = None,
+    plan_id_override: str | None = None,
 ) -> HTMLResponse:
     """Render the dashboard (full page or one of its two partials).
 
@@ -301,8 +302,17 @@ async def render_dashboard(
     error: str | None = None
     rendered_at = datetime.now(tz=UTC)
     snapshot = _empty_snapshot(rendered_at)
+    # When invoked via /plans/<id>, plan_id_override filters the operator
+    # snapshot so the rendered tasks/events tables only show rows for that
+    # plan. The legacy /?plan_id=X query path falls through to the query
+    # parameter read by fetch_operator_snapshot's own resolver.
+    effective_plan_id = (plan_id_override or (request.query_params.get("plan_id") or "").strip()) or None
     try:
-        snapshot = await fetch_operator_snapshot(_SnapshotPool(pool), rendered_at=rendered_at)
+        snapshot = await fetch_operator_snapshot(
+            _SnapshotPool(pool),
+            rendered_at=rendered_at,
+            plan_id=effective_plan_id,
+        )
     except Exception as exc:
         logger.warning("dashboard fetch failed: %s", exc)
         error = f"{type(exc).__name__}: {exc}"
@@ -338,6 +348,7 @@ async def render_dashboard(
         "format_human": _format_human,
         "auth_email": auth_email,
         "plan_id_for_share_link": plan_id_for_share_link,
+        "current_plan_id": effective_plan_id,
     }
 
     if fragment_name == "logs":
