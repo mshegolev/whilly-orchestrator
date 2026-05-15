@@ -232,7 +232,12 @@ def open_mr_for_task(
         )
 
     # ── 1) git push ────────────────────────────────────────────────────────────
-    push_cmd = [git_bin, "push", "origin", f"HEAD:{branch}", "--force-with-lease"]
+    # Use ``--force`` for whilly's feature branches: the branch namespace is
+    # owned by this worker (``whilly/<task-id>``) so non-fast-forward pushes
+    # from re-runs of the same task must overwrite the previous attempt.
+    # ``--force-with-lease`` requires a remote tracking ref which is absent
+    # on a fresh worktree, so plain ``--force`` is the right primitive here.
+    push_cmd = [git_bin, "push", "--force", "origin", f"HEAD:{branch}"]
     try:
         push_proc = _run(push_cmd, cwd=worktree_path, timeout=timeout_seconds, env=env)
     except subprocess.TimeoutExpired:
@@ -253,11 +258,14 @@ def open_mr_for_task(
                 reason="git push: nothing to push (no diff)",
                 failure_mode="no_diff",
             )
-        first_line = combined.splitlines()[:1] or ["unknown"]
+        # Preserve enough stderr context for triage — a single first_line
+        # from git push tends to be "To <url>" or "remote:" preamble, while
+        # the actual ``fatal: ...`` / ``error: ...`` lines come later.
+        diagnostic_tail = combined[-600:] if len(combined) > 600 else combined
         return PRResult(
             ok=False,
             branch=branch,
-            reason=f"git push failed: {first_line[0]}",
+            reason=f"git push failed: {diagnostic_tail}",
             failure_mode="git_push_failed",
             push_exit_code=int(push_proc.returncode),
         )
@@ -274,6 +282,11 @@ def open_mr_for_task(
         body_file = tmp.name
 
     try:
+        # glab uses --description / -d (inline string), not --description-file
+        # like `gh pr create`. We keep the temp file write above so the body
+        # is fully captured for debugging, then read it back for the flag.
+        with open(body_file, encoding="utf-8") as fh:
+            description_inline = fh.read()
         mr_cmd = [
             glab_bin,
             "mr",
@@ -284,8 +297,8 @@ def open_mr_for_task(
             branch,
             "--title",
             effective_title,
-            "--description-file",
-            body_file,
+            "--description",
+            description_inline,
             "--yes",  # non-interactive
         ]
         try:
