@@ -135,16 +135,43 @@ async def create_magic_link(
                 return _row_to_magic_link(existing_row, raw_token=None)
 
             raw_token, token_hash = mint_magic_link_token(secret, email=normalised_email, ttl_seconds=ttl_seconds)
-            new_row = await conn.fetchrow(
-                """
-                INSERT INTO magic_links (token_hash, email, expires_at)
-                VALUES ($1, $2, NOW() + ($3::int || ' seconds')::interval)
-                RETURNING token_hash, email, issued_at, expires_at, consumed_at
-                """,
-                token_hash,
-                normalised_email,
-                int(ttl_seconds),
-            )
+            try:
+                new_row = await conn.fetchrow(
+                    """
+                    INSERT INTO magic_links (token_hash, email, expires_at)
+                    VALUES ($1, $2, NOW() + ($3::int || ' seconds')::interval)
+                    RETURNING token_hash, email, issued_at, expires_at, consumed_at
+                    """,
+                    token_hash,
+                    normalised_email,
+                    int(ttl_seconds),
+                )
+            except asyncpg.exceptions.UniqueViolationError:
+                # Race window: a concurrent caller for the same email passed
+                # the SELECT just after ours but inserted before us. The
+                # partial unique index ``uq_magic_links_active_email`` blocks
+                # the second insert; treat it as a "reuse" — fetch the row
+                # the other caller minted and return it with raw_token=None
+                # (we can't reconstruct it from the hash). The route layer
+                # already knows raw_token=None means "no fresh event to log".
+                # See Architect F4 follow-up; this closes the 500-on-second-
+                # login-from-same-email path observed in live ops.
+                existing_after_race = await conn.fetchrow(
+                    """
+                    SELECT token_hash, email, issued_at, expires_at, consumed_at
+                    FROM magic_links
+                    WHERE email = $1 AND consumed_at IS NULL AND expires_at > NOW()
+                    ORDER BY issued_at DESC
+                    LIMIT 1
+                    """,
+                    normalised_email,
+                )
+                if existing_after_race is None:
+                    # Defensive: if the conflicting row was consumed/expired
+                    # between violation and re-SELECT, surface the original
+                    # exception by re-raising rather than silently swallow.
+                    raise
+                return _row_to_magic_link(existing_after_race, raw_token=None)
             assert new_row is not None  # INSERT ... RETURNING guarantees a row
             return _row_to_magic_link(new_row, raw_token=raw_token)
 

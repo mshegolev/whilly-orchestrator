@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR: Final[Path] = Path(__file__).resolve().parent / "templates"
 LOGIN_TEMPLATE: Final[str] = "login.html.j2"
+LOGIN_MAGIC_TEMPLATE: Final[str] = "login_magic.html.j2"
 LOGIN_CHECK_INBOX_TEMPLATE: Final[str] = "login_check_inbox.html.j2"
 LOGIN_CONSUMED_TEMPLATE: Final[str] = "login_consumed.html.j2"
 
@@ -85,18 +86,92 @@ def build_auth_router(
     router = APIRouter(tags=["auth"])
 
     @router.get("/login", response_class=HTMLResponse, include_in_schema=False)
-    async def login_form(request: Request, email: str | None = Query(default=None, max_length=320)) -> Response:
-        """Email entry form. Pre-fills email from ?email= so 'Send again' works."""
+    async def login_form(
+        request: Request,
+        username: str | None = Query(default=None, max_length=64),
+    ) -> Response:
+        """Username + password sign-in form. Pre-fills ``username`` from query."""
         return templates.TemplateResponse(
             request,
             LOGIN_TEMPLATE,
+            {"username_prefill": (username or "").strip(), "login_error": None},
+        )
+
+    @router.get("/login/magic", response_class=HTMLResponse, include_in_schema=False)
+    async def login_magic_form(
+        request: Request,
+        email: str | None = Query(default=None, max_length=320),
+    ) -> Response:
+        """Alternative passwordless magic-link form. Reachable from /login footer."""
+        return templates.TemplateResponse(
+            request,
+            LOGIN_MAGIC_TEMPLATE,
             {"email_prefill": (email or "").strip()},
         )
 
     @router.post(
-        "/auth/login", response_class=HTMLResponse, include_in_schema=True, summary="Submit email, mint magic link"
+        "/auth/login",
+        response_class=HTMLResponse,
+        include_in_schema=True,
+        summary="Submit username+password, mint a session cookie on success",
     )
     async def submit_login(
+        request: Request,
+        username: str = Form(..., min_length=1, max_length=64),
+        password: str = Form(..., min_length=1, max_length=512),
+    ) -> Response:
+        from whilly.api import users_repo
+
+        user = await users_repo.verify_credentials(pool, username=username, password=password)
+        if user is None:
+            logger.info("auth.login: credential rejection for username=%r", username[:64])
+            return templates.TemplateResponse(
+                request,
+                LOGIN_TEMPLATE,
+                {
+                    "username_prefill": username.strip()[:64],
+                    "login_error": "Invalid username or password.",
+                },
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Establish session + cookie. Email defaults to ``<username>@local``
+        # so the existing sessions table (keyed on email) keeps its shape.
+        principal_email = user.email or f"{user.username}@local"
+        session = await sessions.create_session(pool, email=principal_email)
+        cookie_value = auth_tokens.mint_session_cookie_value(
+            secret,
+            session_id=session.session_id,
+            email=session.email,
+            ttl_seconds=int((session.expires_at.timestamp() - time.time())),
+        )
+        await users_repo.update_last_login(pool, username=user.username)
+        _append_event(
+            {
+                "event_type": "auth.session.created",
+                "username": user.username,
+                "email": session.email,
+                "session_id": session.session_id,
+                "method": "password",
+            },
+        )
+        redirect = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+        _set_session_cookie(
+            redirect,
+            cookie_name=cookie_name,
+            cookie_value=cookie_value,
+            secure=cookie_secure,
+            max_age_seconds=int((session.expires_at.timestamp() - time.time())),
+        )
+        return redirect
+
+    @router.post(
+        "/auth/magic-login",
+        response_class=HTMLResponse,
+        include_in_schema=True,
+        summary="Submit email, mint magic link (passwordless fallback)",
+    )
+    async def submit_magic_login(
         request: Request,
         email: str = Form(..., min_length=3, max_length=320),
     ) -> Response:
@@ -106,7 +181,7 @@ def build_auth_router(
             # leaking validation hints to enumeration attackers. Operators
             # see the typo themselves when no link arrives; the [Send again]
             # affordance handles the loop.
-            logger.warning("auth.login: rejected non-email input shape (length=%d)", len(normalised))
+            logger.warning("auth.magic-login: rejected non-email input shape (length=%d)", len(normalised))
             return templates.TemplateResponse(
                 request,
                 LOGIN_CHECK_INBOX_TEMPLATE,
@@ -128,7 +203,7 @@ def build_auth_router(
                 },
             )
         else:
-            logger.info("auth.login: reused existing unconsumed magic link for %s", normalised)
+            logger.info("auth.magic-login: reused existing unconsumed magic link for %s", normalised)
 
         return templates.TemplateResponse(
             request,
