@@ -135,6 +135,7 @@ markers = [
     "compose: docker-compose-driven integration test (heavy; gate with `pytest -m compose` and a built `WHILLY_IMAGE`)",
     "acceptance: full-flow acceptance demo programmatic smoke (PRD-wui-multi-plan v2 Appendix B; Block 9)",
     "wui_e2e: end-to-end WUI workflow tests (plan -> Jira -> worker -> human-review -> PR)",
+    "ui: browser-driven UI tests via pytest-playwright (real Chromium, live uvicorn)",
 ]
 
 [tool.mypy]
