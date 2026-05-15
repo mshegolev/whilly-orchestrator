@@ -541,8 +541,13 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
             "WHILLY_WORKER_ID": worker_id,
             "WHILLY_AUTO_OPEN_PR": "1",
             "WHILLY_PR_PROVIDER": "gitlab",
+            # whilly>=4.7.0 is deny-by-default: claude CLI receives
+            # --disallowedTools Write,Edit,MultiEdit,NotebookEdit,Bash unless
+            # WHILLY_AGENT_ALLOW_SHELL=1. For the live E2E we *must* enable
+            # shell — Claude needs git + filesystem to fulfil the task.
+            "WHILLY_AGENT_ALLOW_SHELL": "1",
             "CLAUDE_BIN": str(CLAUDE_BIN_PATH),
-            "WHILLY_MODEL": "claude-sonnet-4-6",
+            "WHILLY_MODEL": "claude-haiku-4-5-20251001",
             "HTTP_PROXY": f"http://{CLAUDEPROXY_HOST}:{CLAUDEPROXY_PORT}",
             "HTTPS_PROXY": f"http://{CLAUDEPROXY_HOST}:{CLAUDEPROXY_PORT}",
             "NO_PROXY": ",".join(["127.0.0.1", "localhost", "::1", ".example.com", GITLAB_HOST, "jira.example.com"]),
@@ -595,7 +600,10 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
         if gate == "failed":
             events = _events_for_task(postgres_dsn, task_id)
             event_summary = "\n".join(
-                f"  {e['created_at']}  {e.get('event_type')}  {str(e.get('detail') or '')[:80]}" for e in events
+                f"  {e['created_at']}  {e.get('event_type')}\n"
+                f"    detail: {str(e.get('detail') or '')[:400]}\n"
+                f"    payload: {str(e.get('payload') or '')[:800]}"
+                for e in events
             )
             pytest.fail(f"worker marked task FAILED before producing COMPLETE / pr.opened.\nevents:\n{event_summary}")
 
