@@ -445,12 +445,12 @@
 </head>
 <body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
   {% if not auth_email and plan_id_for_share_link %}
-  <div class="share-link-banner" role="status">
+  <div class="share-link-banner" role="status" data-testid="share-link-banner">
     You're viewing a shared plan. <a href="/login?next=/?plan_id={{ plan_id_for_share_link | urlencode }}">Sign in to manage all plans</a>
   </div>
   {% endif %}
   {% if auth_email %}
-  <header class="wui-nav" role="banner" aria-label="WUI session">
+  <header class="wui-nav" role="banner" aria-label="WUI session" data-testid="auth-nav">
     <span class="wui-nav__identity">Signed in as <strong>{{ auth_email }}</strong></span>
     <form method="post" action="/auth/logout" class="wui-nav__logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token | default('') }}">
@@ -491,12 +491,12 @@
         <tr class="wui-plans__empty"><td colspan="10">Loading plans...</td></tr>
       </tbody>
     </table>
-    <p id="plans-empty-state" class="wui-plans__empty-state" hidden>
+    <p id="plans-empty-state" class="wui-plans__empty-state" data-testid="plans-table-empty-state" hidden>
       No plans yet. <button type="button" id="new-plan-empty-btn">Create your first plan</button>.
     </p>
 
     <!-- PRD-wui-multi-plan v2 Epic B3 — New Plan modal -->
-    <dialog id="new-plan-modal" aria-modal="true" aria-labelledby="new-plan-title">
+    <dialog id="new-plan-modal" role="dialog" aria-modal="true" aria-labelledby="new-plan-title" data-testid="new-plan-modal">
       <form id="new-plan-form" method="dialog">
         <h3 id="new-plan-title">Create new plan</h3>
         <div class="wui-form-row">
@@ -525,7 +525,7 @@
     </dialog>
 
     <!-- Inline rename / budget modal (reused for both PATCH-name and PATCH-budget paths) -->
-    <dialog id="edit-plan-modal" aria-modal="true" aria-labelledby="edit-plan-title">
+    <dialog id="edit-plan-modal" role="dialog" aria-modal="true" aria-labelledby="edit-plan-title" data-testid="edit-plan-modal">
       <form id="edit-plan-form" method="dialog">
         <h3 id="edit-plan-title">Edit plan</h3>
         <input type="hidden" id="edit-plan-id">
@@ -607,15 +607,20 @@
             var last = p.last_event_at ? new Date(p.last_event_at).toISOString() : "—";
             var budget = (p.budget_usd == null || p.budget_usd === "") ? "—" : p.budget_usd;
             var tr = document.createElement("tr");
+            tr.setAttribute("data-testid", "plan-row");
             tr.setAttribute("data-plan-id", p.id || "");
             if (p.archived_at != null) { tr.setAttribute("data-archived", "true"); }
             tr.tabIndex = 0;
-            tr.appendChild(makeCell(p.name || ""));
+            var tdName = makeCell(p.name || "");
+            tr.appendChild(tdName);
             tr.appendChild(makeCodeCell(p.id || ""));
-            tr.appendChild(makeCell(counts.pending || 0));
+            var tdPending = makeCell(counts.pending || 0);
+            tr.appendChild(tdPending);
             tr.appendChild(makeCell(inFlight));
-            tr.appendChild(makeCell(counts.done || 0));
-            tr.appendChild(makeCell(counts.failed || 0));
+            var tdDone = makeCell(counts.done || 0);
+            tr.appendChild(tdDone);
+            var tdFailed = makeCell(counts.failed || 0);
+            tr.appendChild(tdFailed);
             tr.appendChild(makeCell(budget));
             tr.appendChild(makeCell("—"));
             tr.appendChild(makeCell(last));
@@ -956,9 +961,11 @@
       </article>
     {% endif %}
 
-    <nav class="surface-tabs" aria-label="Operator views">
+    <nav class="surface-tabs" role="tablist" aria-label="Operator surfaces">
       {% for surface, label in surfaces %}
         <button type="button"
+                id="surface-tab-{{ surface }}"
+                role="tab"
                 data-surface-tab="{{ surface }}"
                 aria-controls="surface-{{ surface }}"
                 aria-selected="{{ 'true' if loop.first else 'false' }}">
@@ -986,7 +993,7 @@
       </section>
     </section>
 
-    <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview">
+    <section id="surface-overview" class="operator-surface surface-panel" role="tabpanel" aria-labelledby="surface-tab-overview" data-surface="overview">
       <header><h2>Overview</h2></header>
       <div class="table-wrapper">
         <table id="overview-status" role="grid">
@@ -1009,7 +1016,7 @@
       </div>
     </section>
 
-    <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" hidden>
+    <section id="surface-compliance" class="operator-surface surface-panel" role="tabpanel" aria-labelledby="surface-tab-compliance" data-surface="compliance" hidden>
       <header><h2>Compliance - Human review / verification gaps</h2></header>
       <div class="table-wrapper">
         {% set review_columns = table_columns.review_gaps %}
@@ -1073,11 +1080,11 @@
       </div>
     </section>
 
-    <section id="surface-plans_tasks" class="operator-surface surface-panel" data-surface="plans_tasks" hidden>
+    <section id="surface-plans_tasks" class="operator-surface surface-panel" role="tabpanel" aria-labelledby="surface-tab-plans_tasks" data-surface="plans_tasks" hidden>
       <header><h2>Plans/Tasks</h2></header>
 
       <!-- Jira Import Form (Phase 1 WUI) -->
-      <details open style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--accent); background: var(--surface-strong); cursor: pointer;">
+      <details open style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--accent); background: var(--surface-strong); cursor: pointer;" data-testid="jira-import-panel">
         <summary style="font-weight: bold; color: var(--accent);">📥 Import from Jira</summary>
         <div style="padding: 12px; margin-top: 8px;">
           <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center;">
@@ -1106,11 +1113,12 @@
                     style="padding: 8px 16px; background: var(--surface); color: var(--accent); border: 1px solid var(--accent); border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
               🧙 Import &amp; Wizard
             </button>
-            <span id="jira-import-status" style="margin-left: 12px; color: var(--muted);"></span>
+            <span id="jira-import-status" role="status" aria-live="polite" style="margin-left: 12px; color: var(--muted);"></span>
           </div>
 
           <!-- Wizard panel (hidden until 'Import & Wizard' is clicked + Jira fetched) -->
           <div id="jira-wizard-panel" hidden
+               data-testid="jira-wizard-panel"
                style="margin-top: 16px; padding: 12px; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 4px;">
             <h3 style="margin-top: 0; color: var(--accent);">🧙 Wizard — refine before agent picks up</h3>
             <p style="color: var(--muted); font-size: 0.85rem; margin: 4px 0 12px;">
@@ -1142,7 +1150,7 @@
                       style="padding: 8px 16px; background: var(--surface); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 2px; cursor: pointer; font: inherit; margin-left: 8px;">
                 Cancel
               </button>
-              <span id="wizard-status" style="margin-left: 12px; color: var(--muted);"></span>
+              <span id="wizard-status" role="status" aria-live="polite" style="margin-left: 12px; color: var(--muted);"></span>
             </div>
           </div>
         </div>
@@ -1151,23 +1159,23 @@
       <!-- Task Creation Form -->
       <details style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--line-strong); background: var(--surface-strong); cursor: pointer;">
         <summary style="font-weight: bold; color: var(--text);">+ Create Task</summary>
-        <form id="create-task-form" 
+        <form id="create-task-form"
               style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center; padding: 12px; margin-top: 8px;"
               hx-post="/api/v1/tasks"
               hx-trigger="submit"
               hx-swap="none">
-          
+
           <label for="task-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Task ID *</label>
-          <input id="task-id" 
-                 type="text" 
-                 name="id" 
-                 required 
+          <input id="task-id"
+                 type="text"
+                 name="id"
+                 required
                  pattern="[a-zA-Z0-9\-_]+"
                  placeholder="e.g., fix-db-constraint"
                  style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
-          
+
           <label for="task-priority" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Priority</label>
-          <select id="task-priority" 
+          <select id="task-priority"
                   name="priority"
                   style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
             <option value="low">Low</option>
@@ -1175,28 +1183,28 @@
             <option value="high">High</option>
             <option value="critical">Critical</option>
           </select>
-          
+
           <label for="task-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Description</label>
-          <textarea id="task-description" 
-                    name="description" 
+          <textarea id="task-description"
+                    name="description"
                     maxlength="2048"
                     rows="3"
                     placeholder="What needs to be done?"
                     style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
-          
+
           <label for="task-dependencies" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Dependencies</label>
-          <input id="task-dependencies" 
-                 type="text" 
-                 name="dependencies" 
+          <input id="task-dependencies"
+                 type="text"
+                 name="dependencies"
                  placeholder="Comma-separated task IDs (optional)"
                  style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
-          
+
           <div style="grid-column: 1 / -1;">
-            <button type="submit" 
+            <button type="submit"
                     style="padding: 6px 12px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
               Create Task
             </button>
-            <span id="create-task-status" style="margin-left: 12px; color: var(--muted);"></span>
+            <span id="create-task-status" role="status" aria-live="polite" style="margin-left: 12px; color: var(--muted);"></span>
           </div>
         </form>
       </details>
@@ -1206,7 +1214,7 @@
       </div>
 
       <!-- PRD-wui-multi-plan v2 Epic C — Edit Task modal -->
-      <dialog id="edit-task-modal" aria-modal="true" aria-labelledby="edit-task-title">
+      <dialog id="edit-task-modal" role="dialog" aria-modal="true" aria-labelledby="edit-task-title" data-testid="edit-task-modal">
         <form id="edit-task-form" method="dialog">
           <h3 id="edit-task-title">Edit task</h3>
           <input type="hidden" id="edit-task-id">
@@ -1249,7 +1257,7 @@
             <div class="wui-form-actions">
               <button type="button" id="edit-task-force-release-cancel">Cancel</button>
               <button type="button" id="edit-task-force-release-confirm-btn"
-                      class="wui-btn--danger">Confirm release</button>
+                      class="wui-btn--danger" data-testid="force-release-confirm-btn">Confirm release</button>
             </div>
           </div>
           <small id="edit-task-error" class="wui-error" role="alert" hidden></small>
@@ -1510,14 +1518,14 @@
       </script>
     </section>
 
-    <section id="surface-workers" class="operator-surface surface-panel" data-surface="workers" hidden>
+    <section id="surface-workers" class="operator-surface surface-panel" role="tabpanel" aria-labelledby="surface-tab-workers" data-surface="workers" hidden>
       <header><h2>Workers</h2></header>
       <div class="table-wrapper">
         {% include "_workers_table.html" %}
       </div>
     </section>
 
-    <section id="surface-events" class="operator-surface surface-panel" data-surface="events" hidden>
+    <section id="surface-events" class="operator-surface surface-panel" role="tabpanel" aria-labelledby="surface-tab-events" data-surface="events" hidden>
       <header><h2>Events</h2></header>
       <div class="table-wrapper">
         {% set event_columns = table_columns.events %}
@@ -1978,20 +1986,25 @@
             payload.dependencies = [];
           }
           
-          // Get plan_id from URL or use default
+          // Resolve plan_id from either /plans/<id> path or ?plan_id= query.
+          // Path takes precedence so the form on /plans/foo POSTs to plan
+          // "foo" without depending on a query parameter being present.
           const urlParams = new URLSearchParams(window.location.search);
-          const planId = urlParams.get("plan_id") || "default";
+          const pathMatch = window.location.pathname.match(/^\/plans\/([^/?#]+)/);
+          const planId = (pathMatch && decodeURIComponent(pathMatch[1])) || urlParams.get("plan_id") || "default";
           const token = urlParams.get("token") || "";
 
-          // Submit via fetch — include bearer token from ?token= URL param so the
-          // POST passes _authenticate_tasks_read_request (worker bearer OR JWT
-          // dashboard token both accepted by the server).
+          // Auth: session cookie via credentials: 'same-origin' (the canonical
+          // path under PRD-wui-multi-plan v2). The legacy ?token= bearer is
+          // still forwarded when present so share-link operators (no cookie)
+          // can still create tasks — the server accepts either credential.
           const headers = { "Content-Type": "application/json" };
           if (token) {
             headers["Authorization"] = "Bearer " + token;
           }
           fetch(`/api/v1/tasks?plan_id=${encodeURIComponent(planId)}`, {
             method: "POST",
+            credentials: "same-origin",
             headers: headers,
             body: JSON.stringify(payload),
           })
@@ -2106,6 +2119,7 @@
 
         fetch("/api/v1/jira/import", {
           method: "POST",
+          credentials: "same-origin",
           headers: getJiraImportHeaders(),
           body: JSON.stringify(body),
         })
