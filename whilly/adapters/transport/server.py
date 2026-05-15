@@ -168,6 +168,7 @@ from fastapi import status as status_module
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
+from whilly.adapters.db.repository import PR_OPENED_EVENT_TYPE
 from whilly.core.models import Task, TaskStatus
 from whilly.core.agent_runner import SHELL_COMMAND_BLOCKED_EVENT_TYPE
 from whilly.core.prompts import PROMPT_INJECTION_BLOCKED_EVENT_TYPE
@@ -255,6 +256,8 @@ from whilly.adapters.transport.schemas import (
     HeartbeatResponse,
     HumanReviewDecisionRequest,
     ListTaskEventsResponse,
+    PullRequestRecordRequest,
+    PullRequestRecordResponse,
     RegisterRequest,
     RegisterResponse,
     RepairTaskRequest,
@@ -2182,6 +2185,232 @@ def create_app(
             payload.reason,
         )
         return ReleaseResponse(task=TaskPayload.from_task(updated))
+
+    @app.post(
+        "/api/v1/plans/{plan_id}/pull_requests",
+        response_model=PullRequestRecordResponse,
+        status_code=status.HTTP_201_CREATED,
+        responses={
+            status.HTTP_200_OK: {
+                "model": PullRequestRecordResponse,
+                "description": (
+                    "Idempotent re-POST: a ``pull_requests`` row already "
+                    "exists for ``(plan_id, task_id)`` and the existing "
+                    "row's data is returned. No second ``pr.opened`` "
+                    "event is emitted."
+                ),
+            },
+            status.HTTP_201_CREATED: {
+                "model": PullRequestRecordResponse,
+                "description": ("New ``pull_requests`` row inserted and one ``pr.opened`` audit event emitted."),
+            },
+            status.HTTP_404_NOT_FOUND: {
+                "model": ErrorResponse,
+                "description": "Plan or task does not exist, or the task does not belong to the plan.",
+            },
+            status.HTTP_409_CONFLICT: {
+                "model": ErrorResponse,
+                "description": "Task exists but is not in DONE state — PR cannot yet be recorded.",
+            },
+        },
+        dependencies=[Depends(bearer_dep)],
+    )
+    async def record_pull_request(
+        request: Request,
+        plan_id: str,
+        payload: PullRequestRecordRequest,
+    ) -> PullRequestRecordResponse | JSONResponse:
+        """Record a PR/MR the *remote* worker opened locally (parity with the local hook).
+
+        Closes the symmetry gap between
+        :func:`whilly.worker.local.run_local_worker` (which fires
+        :func:`whilly.sinks.post_complete_pr_hook.run_post_complete_pr_hook`
+        in-process after each ``DONE``) and
+        :func:`whilly.worker.remote.run_remote_worker` (an HTTP client
+        with no direct DB access). The remote worker, after running
+        ``git push`` + ``glab mr create`` / ``gh pr create`` locally,
+        POSTs the resulting PR/MR triple here so the control plane
+        performs the same ``pull_requests`` INSERT + ``pr.opened`` event
+        emission. Dashboards that watch ``events.pr.opened`` therefore
+        behave identically regardless of which worker flavour the task
+        ran on.
+
+        Auth: worker bearer only — *no* cookie path. PR recording is a
+        worker-contract RPC; we deliberately do not accept the dashboard
+        session cookie even though it authenticates other ``/api/v1/*``
+        routes, because operators should not be able to forge PR records
+        from a browser fetch.
+
+        Idempotency: keyed on ``(plan_id, task_id)``. A re-POST returns
+        200 (not 201) with the existing row's data and emits no second
+        event. Migration 012's UNIQUE index is on ``(plan_id, pr_number)``
+        — *not* ``(plan_id, task_id)`` — so the application-layer check
+        below is load-bearing: it is what prevents the same task from
+        accumulating two PR rows after a worker retry.
+
+        Returns
+        -------
+        ``201`` with :class:`PullRequestRecordResponse` on first record.
+        ``200`` with the same shape on idempotent re-POST.
+        ``404`` if ``plan_id`` does not exist or ``task_id`` does not
+        belong to it.
+        ``409`` if the task exists but is not yet in ``DONE``.
+        """
+        async with pool.acquire() as conn:
+            plan_row = await conn.fetchrow("SELECT id FROM plans WHERE id = $1", plan_id)
+            if plan_row is None:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=ErrorResponse(
+                        error="plan_not_found",
+                        detail=f"plan {plan_id!r} not found",
+                    ).model_dump(exclude_none=True),
+                )
+            task_row = await conn.fetchrow(
+                "SELECT plan_id, status FROM tasks WHERE id = $1",
+                payload.task_id,
+            )
+            if task_row is None or task_row["plan_id"] != plan_id:
+                return JSONResponse(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    content=ErrorResponse(
+                        error="task_not_found",
+                        detail=(f"task {payload.task_id!r} not found in plan {plan_id!r}"),
+                    ).model_dump(exclude_none=True),
+                )
+            if task_row["status"] != TaskStatus.DONE.value:
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content=ErrorResponse(
+                        error="task_not_complete",
+                        detail="PR can only be recorded for DONE tasks",
+                        task_id=payload.task_id,
+                    ).model_dump(exclude_none=True),
+                )
+
+            # Application-layer idempotency on (plan_id, task_id). The
+            # schema-level UNIQUE index keys ``(plan_id, pr_number)``
+            # only — see migration 012's docstring — so a worker that
+            # retried after a transient transport error would happily
+            # insert a second row with a *different* ``pr_number`` if
+            # we did not gate the insert here. Two PRs for one DONE
+            # task is the contract we want to forbid.
+            existing = await conn.fetchrow(
+                """
+                SELECT pr_url, pr_number, branch, created_at
+                FROM pull_requests
+                WHERE plan_id = $1 AND task_id = $2
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                plan_id,
+                payload.task_id,
+            )
+
+        if existing is not None:
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content=PullRequestRecordResponse(
+                    plan_id=plan_id,
+                    task_id=payload.task_id,
+                    pr_url=str(existing["pr_url"]),
+                    pr_number=int(existing["pr_number"]),
+                    branch=str(existing["branch"]),
+                    provider=payload.provider,
+                    recorded_at=existing["created_at"],
+                ).model_dump(mode="json"),
+            )
+
+        # Fresh insert + audit event. Both calls mirror the local-path
+        # ``post_complete_pr_hook._record_success`` shape byte-for-byte
+        # so observability dashboards that key off ``events.pr.opened``
+        # do not need to learn about the remote flavour.
+        try:
+            await repo.insert_pull_request(
+                plan_id=plan_id,
+                task_id=payload.task_id,
+                repo_target_id=payload.repo_target_id,
+                pr_number=payload.pr_number,
+                pr_url=payload.pr_url,
+                branch=payload.branch,
+                head_sha=payload.head_sha,
+                state="open",
+            )
+        except Exception as exc:  # noqa: BLE001 — surface to operator without crashing the loop.
+            logger.exception(
+                "record_pull_request: insert failed plan=%s task=%s: %s",
+                plan_id,
+                payload.task_id,
+                exc,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content=ErrorResponse(
+                    error="pull_request_insert_failed",
+                    detail=str(exc),
+                ).model_dump(exclude_none=True),
+            )
+
+        event_payload: dict[str, Any] = {
+            "pr_url": payload.pr_url,
+            "pr_number": payload.pr_number,
+            "branch": payload.branch,
+            "head_sha": payload.head_sha,
+            "task_id": payload.task_id,
+            "provider": payload.provider,
+            "worker_id": payload.worker_id,
+        }
+        if payload.repo_target_id is not None:
+            event_payload["repo_target_id"] = payload.repo_target_id
+        try:
+            await repo.emit_pr_event(
+                PR_OPENED_EVENT_TYPE,
+                plan_id=plan_id,
+                task_id=payload.task_id,
+                payload=event_payload,
+            )
+        except Exception as exc:  # noqa: BLE001 — event emission must not unwind the insert.
+            logger.warning(
+                "record_pull_request: emit_pr_event failed plan=%s task=%s: %s",
+                plan_id,
+                payload.task_id,
+                exc,
+            )
+
+        # Re-read ``created_at`` so the response carries the canonical
+        # server-side timestamp rather than re-deriving it on the client.
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT created_at
+                FROM pull_requests
+                WHERE plan_id = $1 AND task_id = $2
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                plan_id,
+                payload.task_id,
+            )
+        recorded_at = row["created_at"] if row is not None else None
+        logger.info(
+            "record_pull_request: plan=%s task=%s pr_number=%s provider=%s → recorded",
+            plan_id,
+            payload.task_id,
+            payload.pr_number,
+            payload.provider,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=PullRequestRecordResponse(
+                plan_id=plan_id,
+                task_id=payload.task_id,
+                pr_url=payload.pr_url,
+                pr_number=payload.pr_number,
+                branch=payload.branch,
+                provider=payload.provider,
+                recorded_at=recorded_at,
+            ).model_dump(mode="json"),
+        )
 
     @app.get(
         "/api/v1/plans/{plan_id}",
