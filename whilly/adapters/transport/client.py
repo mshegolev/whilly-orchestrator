@@ -1370,3 +1370,78 @@ class RemoteWorkerClient:
             json=request.model_dump(),
         )
         return await self._parse_response(response, ReleaseResponse)
+
+    async def record_pull_request(
+        self,
+        *,
+        plan_id: str,
+        task_id: str,
+        pr_url: str,
+        branch: str,
+        pr_number: int,
+        head_sha: str | None = None,
+        repo_target_id: str | None = None,
+        provider: str = "github",
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        """POST /api/v1/plans/{plan_id}/pull_requests with worker bearer auth.
+
+        Records a successfully opened PR/MR on the control plane so dashboards
+        see a ``pr.opened`` event and the ``pull_requests`` table is populated
+        consistently with the local-worker path.
+
+        Parameters
+        ----------
+        plan_id:
+            The plan the completed task belongs to.
+        task_id:
+            The task whose PR/MR was just opened.
+        pr_url:
+            Full URL of the opened PR/MR (e.g. ``https://github.com/…/pull/1``).
+        branch:
+            The feature branch that was pushed and opened into a PR/MR.
+        pr_number:
+            Integer PR/MR number from the forge. Pass ``0`` if unknown.
+        head_sha:
+            Commit SHA at the head of the branch, if available.
+        repo_target_id:
+            Provider-specific repository id (e.g. GitLab project id), if available.
+        provider:
+            ``"github"`` or ``"gitlab"``. Defaults to ``"github"``.
+        worker_id:
+            The registerd worker identity (audit correlation). ``None`` omits the
+            field from the payload — the server treats it as optional.
+
+        Returns
+        -------
+        dict[str, Any]
+            Raw JSON response body from the server (typically the created
+            ``pull_requests`` row serialised as a dict).
+
+        Raises
+        ------
+        AuthError
+            Per-worker bearer rejected.
+        HTTPClientError
+            Other 4xx (e.g. 422 from a missing required field).
+        ServerError
+            5xx after retries or a transport-level failure on the final attempt.
+        RuntimeError
+            If called outside the ``async with`` block.
+        """
+        payload: dict[str, Any] = {
+            "task_id": task_id,
+            "pr_url": pr_url,
+            "branch": branch,
+            "pr_number": pr_number,
+            "provider": provider,
+        }
+        if head_sha is not None:
+            payload["head_sha"] = head_sha
+        if repo_target_id is not None:
+            payload["repo_target_id"] = repo_target_id
+        if worker_id is not None:
+            payload["worker_id"] = worker_id
+        response = await self._request("POST", f"{PLAN_PATH_PREFIX}/{plan_id}/pull_requests", json=payload)
+        response.raise_for_status()
+        return response.json()
