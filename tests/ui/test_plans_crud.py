@@ -240,17 +240,6 @@ def test_plans_filter_input_narrows_visible_rows(signed_in_page, insert_plan) ->
 # ── B6: archived plan rejects new task with 410 surface ────────────────────
 
 
-@pytest.mark.skip(
-    reason=(
-        "Pre-existing gap: the legacy Create Task form JS in index.html.j2 reads "
-        "the bearer from `?token=` in the URL and does not fall through to the "
-        "session cookie. So under cookie-only auth the form 401s with 'missing "
-        "bearer token' before the 410 plan_archived path is exercised. Tracked "
-        "as a follow-up: migrate the Create Task form's fetch to credentials: "
-        "'same-origin' so the cookie carries auth like the new plans/tasks CRUD "
-        "endpoints. Until then this surface is not testable via session-only UI."
-    )
-)
 def test_archived_plan_rejects_new_task_with_410(signed_in_page, insert_plan, postgres_dsn, live_server) -> None:
     """B6 — POST /api/v1/tasks on an archived plan surfaces 410 in the form status."""
     # Seed an already-archived plan directly so we don't burn a click on

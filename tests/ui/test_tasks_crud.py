@@ -28,18 +28,6 @@ def _switch_to_plans_tasks_tab(page) -> None:
     page.get_by_role("tab").filter(has_text="Plans/Tasks").click()
 
 
-@pytest.mark.skip(
-    reason=(
-        "Pre-existing gap: the legacy task-row Edit/Delete JS in "
-        "index.html.j2 reads the bearer from ``?token=`` in the URL and "
-        "does not fall through to the session cookie. So under cookie-only "
-        "UI auth the modal opens but Save/Delete 401 before the 412/409/200 "
-        "behaviour is exercised. Same follow-up as the Create Task form: "
-        "migrate fetch() calls in index.html.j2 to ``credentials: 'same-"
-        "origin'`` so the cookie carries auth. Once that ships, remove "
-        "this skip and re-enable C1-C5."
-    )
-)
 def test_edit_task_modal_opens_with_prefilled_fields(signed_in_page, insert_plan, insert_task) -> None:
     """C1 — clicking Edit on a PENDING task row opens modal with current values."""
     insert_plan(plan_id="ui-tasks", name="UI Tasks")
@@ -66,14 +54,15 @@ def test_edit_task_modal_opens_with_prefilled_fields(signed_in_page, insert_plan
     assert dialog.get_by_label("Priority").input_value() == "high"
 
 
-@pytest.mark.skip(reason="Same bearer-in-URL gap as above — re-enable when fetch uses cookie.")
-def test_edit_task_save_with_valid_if_match_updates_row(signed_in_page, insert_plan, insert_task) -> None:
+def test_edit_task_save_with_valid_if_match_updates_row(signed_in_page, insert_plan, insert_task, live_server) -> None:
     """C2 — Save with the row's current If-Match version succeeds (200)."""
     insert_plan(plan_id="ui-tasks", name="UI Tasks")
     insert_task(plan_id="ui-tasks", task_id="UI-T-2", description="Before", version=0)
 
     page = signed_in_page
-    page.reload()
+    # Navigate to the plan-scoped URL so the operator snapshot is filtered
+    # to this plan_id; signed_in_page lands on / which shows ALL tasks.
+    page.goto(f"{live_server}/plans/ui-tasks")
     _switch_to_plans_tasks_tab(page)
 
     row = page.get_by_test_id("task-row").filter(has=page.get_by_text("UI-T-2"))
@@ -86,24 +75,57 @@ def test_edit_task_save_with_valid_if_match_updates_row(signed_in_page, insert_p
     dialog.get_by_role("button", name="Save").click()
 
     dialog.wait_for(state="hidden")
-    page.get_by_test_id("task-row").filter(has=page.get_by_text("After")).wait_for(state="visible")
+    # PATCH succeeded (modal hidden = 200). Verify by re-opening the modal
+    # for the same task ID — its description input must show "After". The
+    # tasks-table cell doesn't render the description text, so we cannot
+    # assert on the table; the modal re-fetch is the operator-visible
+    # confirmation that the new value persisted.
+    page.goto(f"{live_server}/plans/ui-tasks")
+    _switch_to_plans_tasks_tab(page)
+    row = page.get_by_test_id("task-row").filter(has=page.get_by_text("UI-T-2"))
+    row.wait_for(state="visible")
+    row.get_by_role("button", name="Edit").click()
+    dialog2 = page.get_by_test_id("edit-task-modal")
+    dialog2.wait_for(state="visible")
+    assert dialog2.get_by_label("Description").input_value() == "After"
 
 
-@pytest.mark.skip(reason="Same bearer-in-URL gap; once cookie-auth wired, re-enable.")
-def test_edit_claimed_task_surfaces_409_force_release_banner(signed_in_page, insert_plan, insert_task) -> None:
+@pytest.mark.skip(
+    reason=(
+        "C5 race scenario — Edit button is hidden for CLAIMED tasks by "
+        "design (_tasks_table.html line 39: _editable iff status in "
+        "{PENDING,DONE,FAILED,SKIPPED}). The 409 force-release path only "
+        "fires when a PENDING task is claimed mid-edit; reproducing that "
+        "requires (1) seed PENDING, (2) open Edit modal, (3) in-flight "
+        "UPDATE tasks SET claimed_by via psql, (4) click Save. Doable but "
+        "needs a more elaborate fixture than the simple seed-then-click "
+        "pattern used elsewhere. Tracked as follow-up."
+    )
+)
+def test_edit_claimed_task_surfaces_409_force_release_banner(
+    signed_in_page, insert_plan, insert_task, postgres_dsn, live_server
+) -> None:
     """C5 — editing a claimed task triggers 409 with a two-step Force-release confirm."""
     insert_plan(plan_id="ui-tasks", name="UI Tasks")
+    # tasks.claimed_by → workers(worker_id) FK; seed a worker row first.
+    from tests.ui.conftest import _psql_run  # type: ignore[attr-defined]
+
+    _psql_run(
+        postgres_dsn,
+        "INSERT INTO workers (worker_id, hostname, status) "
+        "VALUES ('w-ui-fake', 'ui-fake-host', 'online') ON CONFLICT DO NOTHING",
+    )
     insert_task(
         plan_id="ui-tasks",
         task_id="UI-T-3",
         description="Claimed by worker",
         version=1,
         status="CLAIMED",
-        claimed_by="fake-worker-id",
+        claimed_by="w-ui-fake",
     )
 
     page = signed_in_page
-    page.reload()
+    page.goto(f"{live_server}/plans/ui-tasks")
     _switch_to_plans_tasks_tab(page)
 
     row = page.get_by_test_id("task-row").filter(has=page.get_by_text("UI-T-3"))
@@ -122,10 +144,9 @@ def test_edit_claimed_task_surfaces_409_force_release_banner(signed_in_page, ins
     force_btn.wait_for(state="visible")
     # The banner mentions the worker id so the operator sees who is in the
     # way before they interrupt.
-    assert dialog.get_by_text("fake-worker-id").is_visible()
+    assert dialog.get_by_text("w-ui-fake").is_visible()
 
 
-@pytest.mark.skip(reason="Same bearer-in-URL gap; once cookie-auth wired, re-enable.")
 def test_delete_task_with_inline_confirm_removes_row(signed_in_page, insert_plan, insert_task) -> None:
     """C3 — Delete shows two-step inline confirm; Confirm hard-deletes the row."""
     insert_plan(plan_id="ui-tasks", name="UI Tasks")
