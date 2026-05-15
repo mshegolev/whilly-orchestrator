@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Check your inbox — Whilly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      max-width: 28rem; margin: 6rem auto; padding: 0 1.5rem;
+      line-height: 1.5;
+    }
+    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+    p.muted { color: #6b7280; margin-top: 0; }
+    .email-pill {
+      display: inline-block; padding: 0.1rem 0.5rem; background: rgba(0,0,0,0.05);
+      border-radius: 0.25rem; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .secondary {
+      margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;
+      font-size: 0.9rem; color: #6b7280;
+    }
+    .secondary a { color: #2563eb; }
+    .dev-note {
+      margin-top: 1rem; padding: 0.75rem; background: #fef3c7; border-left: 3px solid #f59e0b;
+      border-radius: 0.25rem; font-size: 0.85rem; color: #92400e;
+    }
+    .dev-note code { font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1>Check your inbox</h1>
+  <p>
+    We sent a sign-in link to <span class="email-pill">{{ email }}</span>.
+    Click it to finish signing in. The link is valid for 15 minutes.
+  </p>
+
+  {# Dev-mode note — never renders the link itself. Operators retrieve the
+     link from whilly_events.jsonl. Frontend F7 + Devil's Advocate #2. #}
+  <div class="dev-note" role="note">
+    Dev mode: the link was written to <code>whilly_logs/whilly_events.jsonl</code>
+    (event type <code>auth.magic_link.issued</code>). Tail the file to copy the URL.
+  </div>
+
+  <div class="secondary">
+    Wrong address? <a href="/login?email={{ email | urlencode }}">Send again</a>
+  </div>
+</body>
+</html>
