@@ -38,6 +38,7 @@
         {% set _l6 = task_columns[6].label_for("wui") %}
         {% set _editable = t.status in ("PENDING", "DONE", "FAILED", "SKIPPED") %}
         <tr id="task-{{ t.task_id }}"
+            data-testid="task-row"
             data-task-id="{{ t.task_id }}"
             data-plan-id="{{ t.plan_id }}"
             data-status="{{ t.status }}"
@@ -89,7 +90,7 @@
         </tr>
       {% endfor %}
     {% else %}
-      <tr id="tasks-empty">
+      <tr id="tasks-empty" data-testid="tasks-table-empty-state">
         <td colspan="{{ task_columns|length + 1 }}"><em class="empty-state" style="color:var(--muted)">No tasks in queue.</em></td>
       </tr>
     {% endif %}

@@ -1003,9 +1003,29 @@ def create_app(
                 auth_exc = exc
         if await _authenticate_dashboard_token(request, expected_scope=TASKS_READ_SCOPE):
             return
+        # PRD-wui-multi-plan v2 §A6: session cookie is the third accepted
+        # credential type. Tried after bearer + dashboard JWT so worker
+        # traffic carrying a stale cookie still authenticates as the worker
+        # principal first. The legacy /api/v1/tasks endpoints (GET list,
+        # POST create) participate in this chain so the WUI's Create Task
+        # form can use cookie-auth like the newer plans/tasks CRUD.
+        from whilly.api.csrf import COOKIE_NAME
+
+        if request.cookies.get(COOKIE_NAME):
+            try:
+                await _authenticate_session_request_inline(request)
+                return
+            except HTTPException as exc:
+                auth_exc = auth_exc or exc
         if auth_exc is not None:
             raise auth_exc
         await bearer_dep(request, None)
+
+    async def _authenticate_session_request_inline(request: Request) -> None:
+        """Cookie-auth helper shared with legacy tasks endpoints."""
+        from whilly.api.auth_routes import authenticate_session_request
+
+        await authenticate_session_request(request, pool=pool, secret=dashboard_token_secret)
 
     async def _authenticate_events_stream_request(request: Request) -> None:
         authorization = request.headers.get("authorization")

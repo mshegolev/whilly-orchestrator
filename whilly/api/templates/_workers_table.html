@@ -23,6 +23,8 @@
         {% set _l3 = worker_columns[3].label_for("wui") %}
         {% set _l4 = worker_columns[4].label_for("wui") %}
         <tr id="worker-{{ w.worker_id }}"
+            data-testid="worker-row"
+            data-worker-id="{{ w.worker_id }}"
             data-filter-text="{{ w.worker_id }} {{ w.hostname }} {{ w.owner_email or '' }} {{ w.status }}">
           <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}"><code>{{ w.worker_id }}</code></td>
           <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ w.hostname }}</td>
@@ -36,7 +38,7 @@
         </tr>
       {% endfor %}
     {% else %}
-      <tr id="workers-empty">
+      <tr id="workers-empty" data-testid="workers-table-empty-state">
         <td colspan="{{ worker_columns|length }}"><em class="empty-state" style="color:var(--muted)">No workers connected yet.</em></td>
       </tr>
     {% endif %}
