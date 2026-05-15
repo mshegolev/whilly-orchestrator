@@ -45,3 +45,17 @@ __all__ = [
     "parse_output",
     "run_task",
 ]
+
+# Initialize anonymizer proxy if environment variable is set
+_enable_anonymizer = __import__("os").environ.get("WHILLY_ENABLE_ANONYMIZER", "").lower()
+if _enable_anonymizer in ("1", "true", "yes"):
+    try:
+        from whilly.adapters.runner.claude_anonymizer_proxy import (
+            create_and_patch_proxy,
+        )
+
+        create_and_patch_proxy()
+    except Exception as e:
+        import logging
+
+        logging.getLogger("whilly.adapters.runner").error("failed to enable anonymizer proxy: %s", e)
