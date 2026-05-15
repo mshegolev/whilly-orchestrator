@@ -30,21 +30,21 @@
   </style>
 </head>
 <body>
-  <h1 data-testid="login-check-inbox-banner">Check your inbox</h1>
+  <h1>Check your inbox</h1>
   <p>
-    We sent a sign-in link to <span class="email-pill" data-testid="login-check-inbox-email">{{ email }}</span>.
+    We sent a sign-in link to <span class="email-pill">{{ email }}</span>.
     Click it to finish signing in. The link is valid for 15 minutes.
   </p>
 
   {# Dev-mode note — never renders the link itself. Operators retrieve the
      link from whilly_events.jsonl. Frontend F7 + Devil's Advocate #2. #}
-  <div class="dev-note" role="note" data-testid="login-dev-mode-note">
+  <div class="dev-note" role="note">
     Dev mode: the link was written to <code>whilly_logs/whilly_events.jsonl</code>
     (event type <code>auth.magic_link.issued</code>). Tail the file to copy the URL.
   </div>
 
   <div class="secondary">
-    Wrong address? <a href="/login?email={{ email | urlencode }}" data-testid="login-send-again-link">Send again</a>
+    Wrong address? <a href="/login?email={{ email | urlencode }}">Send again</a>
   </div>
 </body>
 </html>
