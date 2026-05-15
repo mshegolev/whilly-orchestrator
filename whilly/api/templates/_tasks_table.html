@@ -78,6 +78,13 @@
                       class="task-edit-btn"
                       data-task-id="{{ t.task_id }}"
                       aria-label="Edit task {{ t.task_id }}">Edit</button>
+              {% if t.status in ("FAILED", "SKIPPED", "DONE") %}
+                <button type="button"
+                        class="task-reset-btn"
+                        data-task-id="{{ t.task_id }}"
+                        aria-label="Reset task {{ t.task_id }} to PENDING"
+                        title="Reset to PENDING (re-enqueue for workers)">Reset</button>
+              {% endif %}
               <button type="button"
                       class="task-delete-btn"
                       data-task-id="{{ t.task_id }}"

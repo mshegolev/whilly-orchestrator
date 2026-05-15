@@ -365,6 +365,132 @@ def build_tasks_crud_router(pool: asyncpg.Pool, secret: bytes) -> APIRouter:
 
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @router.get("/api/v1/tasks/{task_id}/reset-preview")
+    async def reset_preview_endpoint(
+        request: Request,
+        task_id: str,
+        plan_id: str = Query(..., min_length=1, max_length=256),
+    ) -> JSONResponse:
+        """Preview a reset (hotfix): returns the target task + downstream
+        candidates (tasks that depend on this one and are NOT PENDING).
+
+        The UI uses this to populate a cascade-checkbox list. Read-only —
+        no state change.
+        """
+        await authenticate_session_request(request, pool=pool, secret=secret)
+        async with pool.acquire() as conn:
+            target = await conn.fetchrow(
+                "SELECT id, status, version, claimed_by FROM tasks WHERE id=$1 AND plan_id=$2",
+                task_id,
+                plan_id,
+            )
+            if target is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"task {task_id!r} not found in plan {plan_id!r}",
+                )
+            if target["claimed_by"]:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"task is currently in worker {target['claimed_by']}; release it first",
+                )
+            if target["status"] not in ("FAILED", "SKIPPED", "DONE"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"task status is {target['status']}; only FAILED/SKIPPED/DONE can be reset",
+                )
+            downstream = await conn.fetch(
+                """
+                SELECT id, status, version
+                FROM tasks
+                WHERE plan_id = $1
+                  AND $2 = ANY(dependencies)
+                  AND status <> 'PENDING'
+                  AND claimed_by IS NULL
+                ORDER BY id
+                """,
+                plan_id,
+                task_id,
+            )
+        return JSONResponse(
+            {
+                "task_id": target["id"],
+                "status": target["status"],
+                "version": target["version"],
+                "downstream_blocked": [
+                    {"id": r["id"], "status": r["status"], "version": r["version"]} for r in downstream
+                ],
+            }
+        )
+
+    @router.post("/api/v1/tasks/{task_id}/reset")
+    async def reset_task_endpoint(
+        request: Request,
+        task_id: str,
+        plan_id: str = Query(..., min_length=1, max_length=256),
+    ) -> JSONResponse:
+        """Reset a non-running task back to ``PENDING`` (hotfix).
+
+        Body: ``{"cascade_ids": ["DOWNSTREAM-1", ...]}`` — optional list of
+        downstream task IDs to also reset in the same transaction. Each
+        ID must belong to the same plan, be in {FAILED, SKIPPED, DONE},
+        and have ``claimed_by IS NULL``; rows failing any of those are
+        silently skipped so we never wedge a row a worker is holding.
+
+        Returns ``{"reset_ids": [...]}`` with the IDs actually updated.
+        The target task itself MUST land in that list — 409 if a worker
+        claimed it between the preview and the confirm.
+        """
+        principal = await authenticate_session_request(request, pool=pool, secret=secret)
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        cascade_ids = body.get("cascade_ids") or []
+        if not isinstance(cascade_ids, list) or not all(isinstance(x, str) for x in cascade_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cascade_ids must be a list of strings",
+            )
+        all_ids = [task_id, *cascade_ids]
+        async with pool.acquire() as conn, conn.transaction():
+            rows = await conn.fetch(
+                """
+                UPDATE tasks
+                SET status='PENDING',
+                    claimed_by=NULL,
+                    claimed_at=NULL,
+                    version=version+1,
+                    updated_at=NOW()
+                WHERE plan_id=$1
+                  AND id = ANY($2::text[])
+                  AND status IN ('FAILED','SKIPPED','DONE')
+                  AND claimed_by IS NULL
+                RETURNING id, status, version
+                """,
+                plan_id,
+                all_ids,
+            )
+        reset_ids = [r["id"] for r in rows]
+        if task_id not in reset_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(f"task {task_id!r} was not reset — it may be claimed by a worker, missing, or already PENDING"),
+            )
+        for tid in reset_ids:
+            _append_task_event(
+                {
+                    "event_type": "task.reset",
+                    "plan_id": plan_id,
+                    "task_id": tid,
+                    "actor": principal.get("email"),
+                    "cascade_from": task_id if tid != task_id else None,
+                }
+            )
+        return JSONResponse({"reset_ids": reset_ids})
+
     return router
 
 
