@@ -516,6 +516,18 @@ def main(argv: list[str] | None = None) -> int:
             from whilly.cli.worker import run_connect_command
 
             return run_connect_command(rest[1:])
+        if rest and rest[0] == "launch":
+            from whilly.cli.worker_launch import run_launch_command
+
+            return run_launch_command(rest[1:])
+        if rest and rest[0] == "list":
+            from whilly.cli.worker_launch import run_list_command
+
+            return run_list_command(rest[1:])
+        if rest and rest[0] == "remove":
+            from whilly.cli.worker_launch import run_remove_command
+
+            return run_remove_command(rest[1:])
         from whilly.cli.worker import run_worker_command
 
         return run_worker_command(rest)
