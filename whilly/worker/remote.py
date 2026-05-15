@@ -108,10 +108,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final
+from pathlib import Path
+from typing import Any, Final
 
 from whilly.adapters.runner.result_parser import AgentResult
 from whilly.adapters.transport.client import HTTPClientError, RemoteWorkerClient, VersionConflictError
@@ -316,6 +318,76 @@ async def _record_llm_event(
             session.task_id,
             event_type,
             exc_info=True,
+        )
+
+
+async def _maybe_open_pr_after_complete(
+    client: RemoteWorkerClient,
+    *,
+    task: Task,
+    plan_id: str,
+    worker_id: str,
+    worktree_path: Path,
+) -> None:
+    """Open a PR/MR after a successful COMPLETE and record it on the server.
+
+    Gated on two env vars:
+    * ``WHILLY_AUTO_OPEN_PR=1`` — feature flag (off by default).
+    * ``WHILLY_PR_PROVIDER`` — ``"gitlab"`` or ``"github"`` (default ``"github"``).
+
+    Errors in the opener and in the server-record step are swallowed: this
+    hook must **never** raise into the worker loop. The task is already DONE
+    on the server before this function is called.
+    """
+    if (os.environ.get("WHILLY_AUTO_OPEN_PR") or "").strip() != "1":
+        return
+    provider = (os.environ.get("WHILLY_PR_PROVIDER") or "github").strip().lower()
+    if provider not in ("github", "gitlab"):
+        log.warning("worker pr-hook: unknown provider %r, skipping", provider)
+        return
+    try:
+        if provider == "gitlab":
+            from whilly.sinks.gitlab_mr import open_mr_for_task
+
+            result: Any = open_mr_for_task(task=task, worktree_path=worktree_path)
+        else:
+            from whilly.sinks.github_pr import open_pr_for_task
+
+            result = open_pr_for_task(task=task, worktree_path=worktree_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("worker pr-hook: opener crashed for task=%s: %s", task.id, exc)
+        return
+    if not result.ok:
+        log.warning(
+            "worker pr-hook: open failed for task=%s provider=%s mode=%s reason=%s",
+            task.id,
+            provider,
+            result.failure_mode,
+            result.reason,
+        )
+        return
+    # Record on the server so dashboards see pr.opened consistently.
+    try:
+        recorder = getattr(client, "record_pull_request", None)
+        if recorder is not None:
+            await recorder(
+                plan_id=plan_id,
+                task_id=task.id,
+                pr_url=result.pr_url,
+                branch=result.branch,
+                pr_number=result.pr_number or 0,
+                head_sha=result.head_sha,
+                repo_target_id=getattr(task, "repo_target_id", None) or None,
+                provider=provider,
+                worker_id=worker_id,
+            )
+        log.info("worker pr-hook: recorded pr.opened task=%s url=%s", task.id, result.pr_url)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "worker pr-hook: server record failed task=%s url=%s: %s",
+            task.id,
+            result.pr_url,
+            exc,
         )
 
 
@@ -1263,6 +1335,13 @@ async def run_remote_worker(
                     exc.actual_status.value if exc.actual_status else None,
                 )
                 continue
+            await _maybe_open_pr_after_complete(
+                client,
+                task=claimed,
+                plan_id=plan.id,
+                worker_id=worker_id,
+                worktree_path=Path.cwd(),
+            )
             await _record_pipeline_event(client, worker_id, make_stage_succeeded_event(stage_context))
             if llm_session is not None:
                 notify_slack_task_terminal(llm_session, "DONE", result)
