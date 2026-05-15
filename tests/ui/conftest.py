@@ -187,7 +187,7 @@ def _truncate_auth_state(postgres_dsn: str) -> Iterator[None]:
     """Empty WUI auth state before every UI test (sync — Playwright owns the loop)."""
     _psql_run(
         postgres_dsn,
-        "TRUNCATE TABLE magic_links, sessions, events, tasks, pull_requests, plans RESTART IDENTITY CASCADE",
+        "TRUNCATE TABLE magic_links, sessions, events, tasks, pull_requests, plans, workers RESTART IDENTITY CASCADE",
     )
     yield
 
@@ -247,12 +247,17 @@ def insert_task(postgres_dsn: str):
         version: int = 0,
         claimed_by: str | None = None,
     ) -> None:
+        # ck_tasks_claim_pair_consistent requires claimed_by + claimed_at
+        # to be both set or both NULL. When the caller seeds a claimed
+        # task we generate claimed_at = NOW() to satisfy the check.
+        claimed_at_sql = "NOW()" if claimed_by else "NULL"
         sql = (
             "INSERT INTO tasks (id, plan_id, status, priority, description, version, "
-            "key_files, dependencies, acceptance_criteria, test_steps, claimed_by) VALUES ("
+            "key_files, dependencies, acceptance_criteria, test_steps, claimed_by, "
+            "claimed_at) VALUES ("
             f"{_sql_str(task_id)}, {_sql_str(plan_id)}, {_sql_str(status)}, "
             f"{_sql_str(priority)}, {_sql_str(description)}, {int(version)}, "
-            f"'{{}}', '{{}}', '{{}}', '{{}}', {_sql_str(claimed_by)})"
+            f"'{{}}', '{{}}', '{{}}', '{{}}', {_sql_str(claimed_by)}, {claimed_at_sql})"
         )
         _psql_run(postgres_dsn, sql)
 
