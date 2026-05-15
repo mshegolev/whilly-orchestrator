@@ -212,16 +212,20 @@ def magic_link_reader(event_log_path: Path):
 
 
 @pytest.fixture
-def signed_in_page(page, live_server: str, magic_link_reader):
-    """Browser page already logged in as ``operator@example.com``."""
-    email = "operator@example.com"
+def signed_in_page(page, live_server: str):
+    """Browser page already logged in as the bootstrap ``admin/admin``.
+
+    Migration 020 seeds the admin user; the autouse truncate fixture does NOT
+    include the ``users`` table, so this row survives between tests. We log
+    in through the canonical ``/login`` username+password form so every UI
+    test exercises the production auth path (not the magic-link fallback at
+    ``/login/magic``).
+    """
     page.goto(f"{live_server}/login")
-    page.get_by_label("Email").fill(email)
-    page.get_by_role("button", name="Send sign-in link").click()
-    page.get_by_role("heading", name="Check your inbox").wait_for()
-    link = magic_link_reader(email)
-    page.goto(link)
-    # The /auth/magic 303 lands on / — wait until we see the signed-in nav.
+    page.get_by_label("username").fill("admin")
+    page.get_by_label("password").fill("admin")
+    page.get_by_role("button", name="[ sign in ]").click()
+    # Successful auth = 303 to /, page header shows "Signed in as ...".
     page.get_by_text("Signed in as").wait_for()
     return page
 
