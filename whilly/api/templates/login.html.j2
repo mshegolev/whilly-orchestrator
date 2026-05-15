@@ -31,7 +31,7 @@
   <h1>Sign in to Whilly</h1>
   <p class="muted">Enter your email — we'll send a one-time link. No password required.</p>
 
-  <form method="post" action="/auth/login" novalidate data-testid="login-form">
+  <form method="post" action="/auth/login" novalidate>
     <label for="email">Email</label>
     <input
       id="email"
@@ -42,9 +42,8 @@
       autofocus
       value="{{ email_prefill | default('') }}"
       placeholder="you@example.com"
-      data-testid="login-email-input"
     />
-    <button type="submit" data-testid="login-submit-btn">Send sign-in link</button>
+    <button type="submit">Send sign-in link</button>
   </form>
 </body>
 </html>
