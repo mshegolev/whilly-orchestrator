@@ -1,50 +1,84 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <title>Check your inbox — Whilly</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
   <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      max-width: 28rem; margin: 6rem auto; padding: 0 1.5rem;
-      line-height: 1.5;
+    body { min-height: 100vh; display: grid; place-items: center; }
+    .login-wrap { width: min(500px, calc(100vw - 32px)); }
+    .login-frame {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 0;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-    p.muted { color: #6b7280; margin-top: 0; }
-    .email-pill {
-      display: inline-block; padding: 0.1rem 0.5rem; background: rgba(0,0,0,0.05);
-      border-radius: 0.25rem; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    .login-titlebar {
+      display: flex; align-items: center; gap: 0;
+      border-bottom: 1px solid var(--line-strong);
+      padding: 6px 10px;
+      background: var(--surface-strong);
+      font: 700 var(--t-body)/var(--lh-tight) var(--font-mono);
+      color: var(--text);
     }
-    .secondary {
-      margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;
-      font-size: 0.9rem; color: #6b7280;
+    .login-titlebar .corner { color: var(--muted); }
+    .login-titlebar .title { flex: 1; color: var(--ok); margin: 0; font: inherit; }
+    .login-body { padding: 20px; font: var(--t-body)/var(--lh-body) var(--font-mono); }
+    .login-body p { margin: 0 0 12px; color: var(--text); }
+    .email-tag {
+      display: inline;
+      padding: 1px 6px;
+      background: var(--surface-strong);
+      border: 1px solid var(--line-strong);
+      color: var(--accent);
+      font: var(--t-body)/var(--lh-body) var(--font-mono);
     }
-    .secondary a { color: #2563eb; }
     .dev-note {
-      margin-top: 1rem; padding: 0.75rem; background: #fef3c7; border-left: 3px solid #f59e0b;
-      border-radius: 0.25rem; font-size: 0.85rem; color: #92400e;
+      margin-top: 16px;
+      padding: 8px 10px;
+      border: 1px solid var(--warn);
+      color: var(--warn);
+      font: var(--t-sm)/var(--lh-body) var(--font-mono);
     }
-    .dev-note code { font-family: ui-monospace, monospace; }
+    .dev-note strong { font-weight: 700; }
+    .login-alt {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      font: var(--t-sm)/var(--lh-body) var(--font-mono);
+      color: var(--muted);
+    }
+    .login-alt a { color: var(--accent); text-decoration: none; }
+    .login-alt a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <h1>Check your inbox</h1>
-  <p>
-    We sent a sign-in link to <span class="email-pill">{{ email }}</span>.
-    Click it to finish signing in. The link is valid for 15 minutes.
-  </p>
+  <div class="login-wrap">
+    <div class="login-frame">
+      <div class="login-titlebar">
+        <span class="corner">&#9581;&#9472; </span>
+        <h1 class="title">Check your inbox</h1>
+        <span class="corner"> &#9472;&#9585;</span>
+      </div>
+      <div class="login-body">
+        <p>
+          sign-in link sent to <span class="email-tag">{{ email }}</span>.
+          click it to finish signing in. valid for 15 minutes.
+        </p>
 
-  {# Dev-mode note — never renders the link itself. Operators retrieve the
-     link from whilly_events.jsonl. Frontend F7 + Devil's Advocate #2. #}
-  <div class="dev-note" role="note">
-    Dev mode: the link was written to <code>whilly_logs/whilly_events.jsonl</code>
-    (event type <code>auth.magic_link.issued</code>). Tail the file to copy the URL.
-  </div>
+        {# Dev-mode note — never renders the link itself. Operators retrieve the
+           link from whilly_events.jsonl. Frontend F7 + Devil's Advocate #2. #}
+        <div class="dev-note" role="note">
+          <strong>[dev]</strong> link written to <code>whilly_logs/whilly_events.jsonl</code>
+          (event type <code>auth.magic_link.issued</code>). tail the file to copy the URL.
+        </div>
 
-  <div class="secondary">
-    Wrong address? <a href="/login?email={{ email | urlencode }}">Send again</a>
+        <div class="login-alt">
+          wrong address? <a href="/login?email={{ email | urlencode }}">Send again</a>
+        </div>
+      </div>
+    </div>
   </div>
 </body>
 </html>

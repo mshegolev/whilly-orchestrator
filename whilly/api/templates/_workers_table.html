@@ -30,7 +30,13 @@
           <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ w.hostname }}</td>
           <td data-l="{{ _l2 }}" data-mobile-label="{{ _l2 }}">{{ w.owner_email if w.owner_email else "—" }}</td>
           <td data-l="{{ _l3 }}" data-mobile-label="{{ _l3 }}">
-            <strong class="s s-{{ w.status }} status status-{{ w.status }}">{{ w.status }}</strong>
+            {% if w.status == "online" %}
+              <strong class="s s-online status status-online">&#9679; online</strong>
+            {% elif w.status == "offline" %}
+              <strong class="s s-offline status status-offline">&#9675; offline</strong>
+            {% else %}
+              <strong class="s s-{{ w.status }} status status-{{ w.status }}">{{ w.status }}</strong>
+            {% endif %}
           </td>
           <td data-l="{{ _l4 }}" data-mobile-label="{{ _l4 }}">
             <time datetime="{{ format_iso(w.last_heartbeat) }}">{{ format_human(w.last_heartbeat) }}</time>
