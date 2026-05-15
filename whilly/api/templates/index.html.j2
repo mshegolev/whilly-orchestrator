@@ -100,6 +100,69 @@
       gap: 8px;
       flex: 1;
     }
+    .wui-plans__page-size-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+    }
+    .wui-plans__page-size-text { color: var(--muted); }
+    .wui-plans__page-size-label select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      padding: 2px 6px;
+      font: 12px/1.4 var(--whilly-mono);
+    }
+    .wui-plans__page-size-label select:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+    .wui-plans__pagination {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 4px;
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+    }
+    .wui-plans__pagination-info { color: var(--muted); }
+    .wui-plans__pagination-btn {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0;
+      padding: 2px 10px;
+      font: 700 12px/1.4 var(--whilly-mono);
+      cursor: pointer;
+    }
+    .wui-plans__pagination-btn:hover:not(:disabled),
+    .wui-plans__pagination-btn:focus-visible {
+      background: var(--accent);
+      color: var(--bg);
+      outline: none;
+    }
+    .wui-plans__pagination-btn:disabled {
+      color: var(--muted);
+      border-color: var(--line);
+      cursor: not-allowed;
+    }
+    /* Generic pagination controls for tasks/workers tables — uses the
+       same TUI style as wui-plans__pagination but sits above the table. */
+    .wui-pagination-controls {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 0;
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+    }
+    .wui-pagination-controls[hidden] { display: none; }
     .wui-plans__new-btn {
       padding: 3px 10px;
       background: transparent;
@@ -848,6 +911,14 @@
         <input type="search" id="plans-filter" placeholder="Filter by name or plan_id..." aria-label="Filter plans">
         <label><input type="checkbox" id="show-archived"> Show archived</label>
         <span id="archived-count" class="wui-plans__archived-count" aria-live="polite"></span>
+        <label class="wui-plans__page-size-label">
+          <span class="wui-plans__page-size-text">rows:</span>
+          <select id="plans-page-size" aria-label="Rows per page">
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="100">100</option>
+          </select>
+        </label>
       </div>
     </header>
     <table id="plans-table"
@@ -875,6 +946,11 @@
     <p id="plans-empty-state" class="wui-plans__empty-state" data-testid="plans-table-empty-state" hidden>
       No plans yet. <button type="button" id="new-plan-empty-btn">Create your first plan</button>.
     </p>
+    <nav class="wui-plans__pagination" id="plans-pagination" aria-label="Plans table pagination" hidden>
+      <span id="plans-pagination-info" class="wui-plans__pagination-info" aria-live="polite"></span>
+      <button type="button" id="plans-prev-page" class="wui-plans__pagination-btn" aria-label="Previous page">← prev</button>
+      <button type="button" id="plans-next-page" class="wui-plans__pagination-btn" aria-label="Next page">next →</button>
+    </nav>
 
     <!-- PRD-wui-multi-plan v2 Epic B3 — New Plan modal -->
     <dialog id="new-plan-modal" role="dialog" aria-modal="true" aria-labelledby="new-plan-title" data-testid="new-plan-modal">
@@ -929,7 +1005,13 @@
     </dialog>
     <script>
       (function () {
-        var state = { plans: [], sortKey: "last_event_at", sortDir: "desc" };
+        var state = {
+          plans: [],
+          sortKey: "last_event_at",
+          sortDir: "desc",
+          pageSize: 25,
+          currentPage: 1,
+        };
 
         function fetchPlans() {
           var showArchived = document.getElementById("show-archived").checked;
@@ -965,6 +1047,10 @@
           var tbody = document.getElementById("plans-table-body");
           var empty = document.getElementById("plans-empty-state");
           var archivedCount = document.getElementById("archived-count");
+          var pagination = document.getElementById("plans-pagination");
+          var paginationInfo = document.getElementById("plans-pagination-info");
+          var prevBtn = document.getElementById("plans-prev-page");
+          var nextBtn = document.getElementById("plans-next-page");
           var filterRaw = (document.getElementById("plans-filter").value || "").toLowerCase();
           var rows = state.plans.slice();
           if (filterRaw) {
@@ -976,13 +1062,35 @@
           var archived = rows.filter(function (p) { return p.archived_at != null; }).length;
           archivedCount.textContent = archived > 0 ? "(" + archived + " archived shown)" : "";
           rows.sort(compareRows);
+          // ── Pagination: client-side slice. After filter + sort, slice by
+          // pageSize and currentPage. Clamp currentPage so a filter change
+          // that shrinks the result-set doesn't leave us on an empty page.
+          var totalRows = rows.length;
+          var pageSize = state.pageSize > 0 ? state.pageSize : totalRows || 1;
+          var totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+          if (state.currentPage > totalPages) { state.currentPage = totalPages; }
+          if (state.currentPage < 1) { state.currentPage = 1; }
+          var startIndex = (state.currentPage - 1) * pageSize;
+          var endIndex = Math.min(startIndex + pageSize, totalRows);
+          var visibleRows = rows.slice(startIndex, endIndex);
           clearChildren(tbody);
-          if (rows.length === 0) {
+          if (totalRows === 0) {
             empty.hidden = false;
+            pagination.hidden = true;
             return;
           }
           empty.hidden = true;
-          rows.forEach(function (p) {
+          // Show pagination only when we have more than one page worth.
+          if (totalRows > pageSize) {
+            pagination.hidden = false;
+            paginationInfo.textContent =
+              (startIndex + 1) + "–" + endIndex + " of " + totalRows;
+            prevBtn.disabled = state.currentPage <= 1;
+            nextBtn.disabled = state.currentPage >= totalPages;
+          } else {
+            pagination.hidden = true;
+          }
+          visibleRows.forEach(function (p) {
             var counts = p.task_counts || {};
             var inFlight = (counts.in_progress || 0) + (counts.claimed || 0);
             var last = p.last_event_at ? new Date(p.last_event_at).toISOString() : "—";
@@ -1253,8 +1361,26 @@
               render();
             });
           });
-          document.getElementById("plans-filter").addEventListener("input", render);
+          document.getElementById("plans-filter").addEventListener("input", function () {
+            // Any new filter resets to the first page so the operator never
+            // lands on an empty page after narrowing the result-set.
+            state.currentPage = 1;
+            render();
+          });
           document.getElementById("show-archived").addEventListener("change", fetchPlans);
+          document.getElementById("plans-page-size").addEventListener("change", function (e) {
+            var n = parseInt(e.target.value, 10);
+            state.pageSize = (n === 10 || n === 25 || n === 100) ? n : 25;
+            state.currentPage = 1;
+            render();
+          });
+          document.getElementById("plans-prev-page").addEventListener("click", function () {
+            if (state.currentPage > 1) { state.currentPage -= 1; render(); }
+          });
+          document.getElementById("plans-next-page").addEventListener("click", function () {
+            state.currentPage += 1;
+            render();
+          });
           // New-plan modal wiring (PRD Epic B3 + D5 modal pattern).
           document.getElementById("new-plan-btn").addEventListener("click", openNewPlanModal);
           var emptyBtn = document.getElementById("new-plan-empty-btn");
@@ -1575,6 +1701,19 @@
         </form>
       </details>
       
+      <div class="wui-pagination-controls" id="tasks-pagination-controls" data-pager-key="tasks" data-pager-target="tasks">
+        <label class="wui-plans__page-size-label">
+          <span class="wui-plans__page-size-text">rows:</span>
+          <select class="wui-pager-size" aria-label="Tasks rows per page">
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <span class="wui-pager-info wui-plans__pagination-info" aria-live="polite"></span>
+        <button type="button" class="wui-pager-prev wui-plans__pagination-btn" aria-label="Previous page of tasks">← prev</button>
+        <button type="button" class="wui-pager-next wui-plans__pagination-btn" aria-label="Next page of tasks">next →</button>
+      </div>
       <div class="table-wrapper">
         {% include "_tasks_table.html" %}
       </div>
@@ -1880,12 +2019,105 @@
           document.body.addEventListener("htmx:afterSwap", function (ev) {
             if (ev && ev.target && ev.target.id === "tasks") { wireAllRows(); }
           });
+
+          // ── Generic table pagination (tasks + workers) ────────────────
+          // Tables come from server-side fragments (limit=200), HTMX swaps
+          // them every 5 s. JS slice via display:none keeps the operator's
+          // page-size + current-page across swaps. Page state persists in
+          // localStorage so a refresh / re-login lands on the same page.
+          function wuiPager(controlsId) {
+            var controls = document.getElementById(controlsId);
+            if (!controls) return;
+            var pagerKey = controls.dataset.pagerKey;
+            var targetId = controls.dataset.pagerTarget;
+            var sizeSelect = controls.querySelector(".wui-pager-size");
+            var info = controls.querySelector(".wui-pager-info");
+            var prevBtn = controls.querySelector(".wui-pager-prev");
+            var nextBtn = controls.querySelector(".wui-pager-next");
+            var storageKey = "wui-pager:" + pagerKey;
+            var saved = {};
+            try { saved = JSON.parse(localStorage.getItem(storageKey) || "{}"); } catch (e) {}
+            var pageSize = (saved.pageSize === 10 || saved.pageSize === 25 || saved.pageSize === 100)
+              ? saved.pageSize : 25;
+            var currentPage = saved.currentPage > 0 ? saved.currentPage : 1;
+            sizeSelect.value = String(pageSize);
+
+            function persist() {
+              try {
+                localStorage.setItem(storageKey, JSON.stringify({
+                  pageSize: pageSize, currentPage: currentPage,
+                }));
+              } catch (e) {}
+            }
+            function getDataRows() {
+              var table = document.getElementById(targetId);
+              if (!table) return [];
+              // Skip the empty-state row (only one td with colspan).
+              return Array.prototype.filter.call(
+                table.tBodies[0] ? table.tBodies[0].rows : [],
+                function (tr) { return tr.cells.length > 1; }
+              );
+            }
+            function apply() {
+              var rows = getDataRows();
+              var total = rows.length;
+              if (total === 0) {
+                controls.hidden = true;
+                return;
+              }
+              var totalPages = Math.max(1, Math.ceil(total / pageSize));
+              if (currentPage > totalPages) currentPage = totalPages;
+              if (currentPage < 1) currentPage = 1;
+              var start = (currentPage - 1) * pageSize;
+              var end = Math.min(start + pageSize, total);
+              rows.forEach(function (tr, i) {
+                tr.style.display = (i >= start && i < end) ? "" : "none";
+              });
+              controls.hidden = total <= pageSize ? false : false;  // always shown when there are rows
+              info.textContent = (start + 1) + "–" + end + " of " + total;
+              prevBtn.disabled = currentPage <= 1;
+              nextBtn.disabled = currentPage >= totalPages;
+              persist();
+            }
+            sizeSelect.addEventListener("change", function (e) {
+              var n = parseInt(e.target.value, 10);
+              pageSize = (n === 10 || n === 25 || n === 100) ? n : 25;
+              currentPage = 1;
+              apply();
+            });
+            prevBtn.addEventListener("click", function () {
+              if (currentPage > 1) { currentPage -= 1; apply(); }
+            });
+            nextBtn.addEventListener("click", function () {
+              currentPage += 1; apply();
+            });
+            // Re-apply on every HTMX swap that replaces our target.
+            document.body.addEventListener("htmx:afterSwap", function (ev) {
+              if (ev && ev.target && ev.target.id === targetId) { apply(); }
+            });
+            apply();
+          }
+          wuiPager("tasks-pagination-controls");
+          wuiPager("workers-pagination-controls");
         })();
       </script>
     </section>
 
     <section id="surface-workers" class="operator-surface surface-panel" role="tabpanel" aria-labelledby="surface-tab-workers" data-surface="workers" hidden>
       <header><h2>Workers</h2></header>
+      <div class="wui-pagination-controls" id="workers-pagination-controls" data-pager-key="workers" data-pager-target="workers">
+        <label class="wui-plans__page-size-label">
+          <span class="wui-plans__page-size-text">rows:</span>
+          <select class="wui-pager-size" aria-label="Workers rows per page">
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <span class="wui-pager-info wui-plans__pagination-info" aria-live="polite"></span>
+        <button type="button" class="wui-pager-prev wui-plans__pagination-btn" aria-label="Previous page of workers">← prev</button>
+        <button type="button" class="wui-pager-next wui-plans__pagination-btn" aria-label="Next page of workers">next →</button>
+      </div>
       <div class="table-wrapper">
         {% include "_workers_table.html" %}
       </div>
