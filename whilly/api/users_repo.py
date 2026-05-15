@@ -1,10 +1,12 @@
-"""Async DB repository for the ``users`` table (migration 020).
+"""Async DB repository for the ``users`` table (migrations 020–021).
 
 The login route layer (:mod:`whilly.api.auth_routes`) calls
 :func:`verify_credentials` on every ``POST /auth/login`` and
-:func:`update_last_login` after a successful match. No FastAPI / Jinja
-imports here — keeps the contract identical to :mod:`whilly.api.sessions`
-so tests can target this module directly via testcontainers Postgres.
+:func:`update_last_login` after a successful match. :func:`set_password`
+is called by the change-password route to update the hash and clear the
+``must_change_password`` flag atomically. No FastAPI / Jinja imports here —
+keeps the contract identical to :mod:`whilly.api.sessions` so tests can
+target this module directly via testcontainers Postgres.
 
 Username normalisation: all lookups lower-case the input. The DB CHECK
 constraint enforces ``^[a-z0-9][a-z0-9_-]{0,63}$`` so the route layer
@@ -20,7 +22,7 @@ import datetime
 
 import asyncpg
 
-from whilly.api.passwords import verify_password
+from whilly.api.passwords import hash_password, verify_password
 
 
 @dataclasses.dataclass(frozen=True)
@@ -32,6 +34,7 @@ class User:
     role: str
     created_at: datetime.datetime
     last_login_at: datetime.datetime | None
+    must_change_password: bool = False
 
 
 async def get_user_by_username(pool: asyncpg.Pool, *, username: str) -> User | None:
@@ -45,7 +48,7 @@ async def get_user_by_username(pool: asyncpg.Pool, *, username: str) -> User | N
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT username, email, role, created_at, last_login_at
+            SELECT username, email, role, created_at, last_login_at, must_change_password
             FROM users WHERE username = $1
             """,
             normalised,
@@ -58,6 +61,7 @@ async def get_user_by_username(pool: asyncpg.Pool, *, username: str) -> User | N
             role=row["role"],
             created_at=row["created_at"],
             last_login_at=row["last_login_at"],
+            must_change_password=bool(row["must_change_password"]),
         )
 
 
@@ -78,7 +82,7 @@ async def verify_credentials(pool: asyncpg.Pool, *, username: str, password: str
         row = await conn.fetchrow(
             """
             SELECT username, email, role, created_at, last_login_at,
-                   password_hash, password_salt
+                   password_hash, password_salt, must_change_password
             FROM users WHERE username = $1
             """,
             normalised,
@@ -99,6 +103,7 @@ async def verify_credentials(pool: asyncpg.Pool, *, username: str, password: str
             role=row["role"],
             created_at=row["created_at"],
             last_login_at=row["last_login_at"],
+            must_change_password=bool(row["must_change_password"]),
         )
 
 
@@ -117,9 +122,46 @@ async def update_last_login(pool: asyncpg.Pool, *, username: str) -> None:
         return
 
 
+async def set_password(pool: asyncpg.Pool, *, username: str, new_password: str) -> None:
+    """Hash ``new_password`` and atomically update the users row.
+
+    Clears ``must_change_password`` and bumps ``updated_at`` in the same
+    single-round-trip UPDATE so there is no window where the password is
+    changed but the flag is still set.  Raises ``ValueError`` on bad
+    inputs (empty username / password).  Raises ``LookupError`` when the
+    username does not exist (callers must verify the session before calling
+    this).
+    """
+    if not isinstance(username, str) or not username.strip():
+        raise ValueError("set_password: username must be a non-empty string")
+    if not isinstance(new_password, str) or not new_password:
+        raise ValueError("set_password: new_password must be a non-empty string")
+    normalised = username.strip().lower()
+    salt_hex, hash_hex = hash_password(new_password)
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE users
+               SET password_hash        = $1,
+                   password_salt        = $2,
+                   must_change_password = FALSE,
+                   updated_at           = NOW()
+             WHERE username = $3
+            """,
+            hash_hex,
+            salt_hex,
+            normalised,
+        )
+    # asyncpg returns "UPDATE <count>" as a string status.
+    updated_count = int((result or "UPDATE 0").split()[-1])
+    if updated_count == 0:
+        raise LookupError(f"set_password: no user found with username={normalised!r}")
+
+
 __all__ = [
     "User",
     "get_user_by_username",
+    "set_password",
     "update_last_login",
     "verify_credentials",
 ]
