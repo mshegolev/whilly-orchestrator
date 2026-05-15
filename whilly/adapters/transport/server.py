@@ -1047,6 +1047,20 @@ def create_app(
         await authenticate_session_request(request, pool=pool, secret=dashboard_token_secret)
 
     async def _authenticate_events_stream_request(request: Request) -> None:
+        # P1.5: Cookie-based auth path — preferred over URL token.
+        # Try the session cookie first so browser EventSource connections
+        # with withCredentials:true do not need a ?token= in the URL.
+        from whilly.api.auth_routes import _HOST_PREFIX_COOKIE_NAME as _HOST_COOKIE_P15  # noqa: PLC0415
+
+        _session_cookie = request.cookies.get(DEFAULT_SESSION_COOKIE_NAME) or request.cookies.get(_HOST_COOKIE_P15)
+        if _session_cookie:
+            try:
+                await _authenticate_session_request_inline(request)
+                return
+            except HTTPException:
+                # Cookie present but invalid/expired — fall through to bearer/token paths.
+                pass
+
         authorization = request.headers.get("authorization")
         auth_exc: HTTPException | None = None
         if authorization is not None:
@@ -1060,7 +1074,16 @@ def create_app(
                 return
             except HTTPException as exc:
                 auth_exc = exc
-        if await _authenticate_dashboard_token(request, expected_scope=EVENTS_STREAM_SCOPE):
+
+        # P1.5: Dashboard/URL token path — kept for backward compat during
+        # the deprecation period.  WHILLY_SSE_ACCEPT_URL_TOKEN=false disables it.
+        _sse_url_token_env = (os.environ.get("WHILLY_SSE_ACCEPT_URL_TOKEN") or "true").strip().lower()
+        _sse_url_token_enabled = _sse_url_token_env not in {"0", "false", "no", "off"}
+        if _sse_url_token_enabled and await _authenticate_dashboard_token(request, expected_scope=EVENTS_STREAM_SCOPE):
+            logger.info(
+                "sse: authenticated via URL/header dashboard token; "
+                "migrate to cookie-based auth (withCredentials:true) before WHILLY_SSE_ACCEPT_URL_TOKEN is retired"
+            )
             return
         if auth_exc is not None:
             raise auth_exc

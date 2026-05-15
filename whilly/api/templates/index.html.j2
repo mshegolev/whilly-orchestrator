@@ -6,6 +6,7 @@
   <link rel="stylesheet" href="/static/whilly-app.css">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   {% if events_token %}<meta name="whilly-events-token" content="{{ events_token }}">{% endif %}
+  {# P1.5: kept for one-release backward compat; new auth path uses session cookie (withCredentials). #}
   <title>Whilly Control Plane</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"
           crossorigin="anonymous"
@@ -887,7 +888,10 @@
     }
   </style>
 </head>
-<body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
+<body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream">
+  {# P1.5: session cookie is the primary auth path for SSE now (sent automatically
+     for same-origin requests). The ?token= fallback still works server-side during
+     the deprecation period (WHILLY_SSE_ACCEPT_URL_TOKEN, default true). #}
   {% if not auth_email and plan_id_for_share_link %}
   <div class="share-link-banner" role="status" data-testid="share-link-banner">
     You're viewing a shared plan. <a href="/login?next=/?plan_id={{ plan_id_for_share_link | urlencode }}">Sign in to manage all plans</a>
