@@ -73,3 +73,7 @@ htmlcov/
 .env-v4
 .venv-v4/
 .env-backups/
+
+# runtime worker outputs
+out/
+.whilly-host-worker-logs/
