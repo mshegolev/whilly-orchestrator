@@ -43,8 +43,9 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Res
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from whilly.api import auth_tokens, sessions
+from whilly.api import auth_tokens, rate_limit, sessions
 from whilly.api.csrf import COOKIE_NAME
+from whilly.api.prod_mode import cookie_secure_default, is_prod_mode
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,40 @@ LOGIN_CONSUMED_TEMPLATE: Final[str] = "login_consumed.html.j2"
 
 DEFAULT_SESSION_COOKIE_NAME: Final[str] = COOKIE_NAME
 """Single canonical cookie name; the CSRF middleware reads the same constant."""
+
+_HOST_PREFIX_COOKIE_NAME: Final[str] = "__Host-whilly_session"
+
+CHANGE_PASSWORD_TEMPLATE: Final[str] = "password_change.html.j2"
+_MIN_PASSWORD_LENGTH: Final[int] = 12
+"""__Host- prefixed name used in prod+secure mode for strongest browser binding."""
+
+
+def session_cookie_name(*, secure: bool | None = None) -> str:
+    """Return the canonical session cookie name for the current environment.
+
+    When prod mode is active AND the Secure flag is on, the ``__Host-``
+    prefix is used so browsers enforce ``Secure; Path=/; no Domain``.
+    In all other cases the plain ``whilly_session`` name is returned for
+    backward compatibility with dev setups and proxied deployments that
+    strip TLS before the app.
+
+    The ``secure`` parameter lets the caller pass the already-resolved
+    value (so we don't re-read the env twice); when omitted, it is derived
+    from :func:`~whilly.api.prod_mode.cookie_secure_default` and the
+    ``WHILLY_SESSION_COOKIE_SECURE`` override.
+    """
+    if secure is None:
+        raw = (os.environ.get("WHILLY_SESSION_COOKIE_SECURE") or "").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            secure = True
+        elif raw in {"0", "false", "no", "off"}:
+            secure = False
+        else:
+            secure = cookie_secure_default()
+    if is_prod_mode() and secure:
+        return _HOST_PREFIX_COOKIE_NAME
+    return DEFAULT_SESSION_COOKIE_NAME
+
 
 EVENT_LOG_PATH_ENV: Final[str] = "WHILLY_EVENT_LOG_PATH"
 DEFAULT_EVENT_LOG_PATH: Final[str] = "whilly_logs/whilly_events.jsonl"
@@ -80,7 +115,23 @@ def build_auth_router(
     tests can inject testcontainer pools and per-test secrets.
     """
     if cookie_secure is None:
-        cookie_secure = _parse_bool_env("WHILLY_SESSION_COOKIE_SECURE", default=False)
+        cookie_secure = _parse_bool_env("WHILLY_SESSION_COOKIE_SECURE", default=cookie_secure_default())
+
+    # Resolve the canonical cookie name once at router-build time so all
+    # handlers in this closure use the same value without re-reading env.
+    resolved_cookie_name = session_cookie_name(secure=cookie_secure)
+    if resolved_cookie_name != cookie_name:
+        # The caller passed an explicit cookie_name that differs from what
+        # the prod-mode logic would select.  Honour the caller (the caller
+        # is usually a test fixture) but log a debug note.
+        logger.debug(
+            "build_auth_router: caller provided cookie_name=%r; prod-mode resolved name=%r. "
+            "Using caller-provided value.",
+            cookie_name,
+            resolved_cookie_name,
+        )
+    else:
+        cookie_name = resolved_cookie_name
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     router = APIRouter(tags=["auth"])
@@ -122,6 +173,12 @@ def build_auth_router(
     ) -> Response:
         from whilly.api import users_repo
 
+        # P1.2: IP rate limit — checked before touching the DB so a flood of
+        # requests is stopped at the edge without creating DB load.
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            raise HTTPException(status_code=429, detail="too many requests")
+
         user = await users_repo.verify_credentials(pool, username=username, password=password)
         if user is None:
             logger.info("auth.login: credential rejection for username=%r", username[:64])
@@ -155,7 +212,12 @@ def build_auth_router(
                 "method": "password",
             },
         )
-        redirect = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+        # P1.1: when must_change_password is set, redirect to the change-password
+        # form immediately after session creation.  The session is valid; access to
+        # other pages is gated by the per-request DB check in
+        # :func:`_check_must_change_password`.
+        redirect_url = "/auth/change-password" if user.must_change_password else "/"
+        redirect = RedirectResponse(url=redirect_url, status_code=status.HTTP_303_SEE_OTHER)
         _set_session_cookie(
             redirect,
             cookie_name=cookie_name,
@@ -175,6 +237,11 @@ def build_auth_router(
         request: Request,
         email: str = Form(..., min_length=3, max_length=320),
     ) -> Response:
+        # P1.2: IP rate limit on magic-login the same as on password login.
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            raise HTTPException(status_code=429, detail="too many requests")
+
         normalised = email.strip().lower()
         if not _looks_like_email(normalised):
             # Render the same "check inbox" page on bad email to avoid
@@ -295,6 +362,90 @@ def build_auth_router(
         # the browser may be carrying a stale cookie tied to a deleted row.
         response.delete_cookie(cookie_name, path="/")
         return response
+
+    # P1.1 — change-password routes ───────────────────────────────────────────
+
+    @router.get(
+        "/auth/change-password",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def change_password_form(request: Request) -> Response:
+        """Render the change-password form.
+
+        Does not require an authenticated session — the browser reaches this
+        page immediately after login when ``must_change_password`` is True.
+        """
+        return templates.TemplateResponse(
+            request,
+            CHANGE_PASSWORD_TEMPLATE,
+            {"form_error": None},
+        )
+
+    @router.post(
+        "/auth/change-password",
+        response_class=HTMLResponse,
+        include_in_schema=True,
+        summary="Set a new password; clears must_change_password flag",
+    )
+    async def submit_change_password(
+        request: Request,
+        new_password: str = Form(..., min_length=1, max_length=512),
+        confirm_new_password: str = Form(..., min_length=1, max_length=512),
+    ) -> Response:
+        """Validate + store new password, then redirect to dashboard.
+
+        CSRF-protected by the existing :class:`~whilly.api.csrf.WhillySessionCSRFMiddleware`
+        (POST with a session cookie present — not on the exempt list).
+        Requires an authenticated session so a stale cookie cannot be used
+        to reset someone else's password.
+        """
+        from whilly.api import users_repo
+
+        # Require an authenticated session to reach this endpoint.
+        try:
+            principal = await _authenticate_session(request, pool=pool, secret=secret, cookie_name=cookie_name)
+        except HTTPException:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+        def _render_error(msg: str) -> Response:
+            return templates.TemplateResponse(
+                request,
+                CHANGE_PASSWORD_TEMPLATE,
+                {"form_error": msg},
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        if new_password != confirm_new_password:
+            return _render_error("Passwords do not match.")
+        if len(new_password) < _MIN_PASSWORD_LENGTH:
+            return _render_error(f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.")
+
+        # Extract username from the session email.  The email stored in the
+        # sessions table is either the real email or the ``<username>@local``
+        # synthetic address produced by submit_login.
+        session_email: str = str(principal.get("email", ""))
+        username = session_email.removesuffix("@local") if session_email.endswith("@local") else session_email
+        if not username:
+            logger.warning("auth.change-password: could not resolve username from session email %r", session_email)
+            return _render_error("Session error — please log out and log in again.")
+
+        try:
+            await users_repo.set_password(pool, username=username, new_password=new_password)
+        except (ValueError, LookupError) as exc:
+            logger.warning("auth.change-password: set_password failed for %r: %s", username, exc)
+            return _render_error("Could not update password. Please try again.")
+
+        _append_event(
+            {
+                "event_type": "auth.password.changed",
+                "username": username,
+                "email": session_email,
+                "session_id": principal.get("session_id"),
+            }
+        )
+        logger.info("auth.change-password: password changed for username=%r", username)
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
     return router
 
@@ -442,11 +593,14 @@ def _parse_bool_env(name: str, *, default: bool) -> bool:
 
 
 __all__ = [
+    "CHANGE_PASSWORD_TEMPLATE",
     "DEFAULT_EVENT_LOG_PATH",
     "DEFAULT_SESSION_COOKIE_NAME",
     "EVENT_LOG_PATH_ENV",
+    "_HOST_PREFIX_COOKIE_NAME",
     "authenticate_session_request",
     "build_auth_router",
+    "session_cookie_name",
 ]
 
 
