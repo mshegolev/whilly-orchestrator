@@ -43,7 +43,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Res
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from whilly.api import auth_tokens, sessions
+from whilly.api import auth_tokens, rate_limit, sessions
 from whilly.api.csrf import COOKIE_NAME
 from whilly.api.prod_mode import cookie_secure_default, is_prod_mode
 
@@ -173,6 +173,12 @@ def build_auth_router(
     ) -> Response:
         from whilly.api import users_repo
 
+        # P1.2: IP rate limit — checked before touching the DB so a flood of
+        # requests is stopped at the edge without creating DB load.
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            raise HTTPException(status_code=429, detail="too many requests")
+
         user = await users_repo.verify_credentials(pool, username=username, password=password)
         if user is None:
             logger.info("auth.login: credential rejection for username=%r", username[:64])
@@ -231,6 +237,11 @@ def build_auth_router(
         request: Request,
         email: str = Form(..., min_length=3, max_length=320),
     ) -> Response:
+        # P1.2: IP rate limit on magic-login the same as on password login.
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            raise HTTPException(status_code=429, detail="too many requests")
+
         normalised = email.strip().lower()
         if not _looks_like_email(normalised):
             # Render the same "check inbox" page on bad email to avoid
