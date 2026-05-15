@@ -45,6 +45,7 @@ from fastapi.templating import Jinja2Templates
 
 from whilly.api import auth_tokens, sessions
 from whilly.api.csrf import COOKIE_NAME
+from whilly.api.prod_mode import cookie_secure_default, is_prod_mode
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,37 @@ LOGIN_CONSUMED_TEMPLATE: Final[str] = "login_consumed.html.j2"
 
 DEFAULT_SESSION_COOKIE_NAME: Final[str] = COOKIE_NAME
 """Single canonical cookie name; the CSRF middleware reads the same constant."""
+
+_HOST_PREFIX_COOKIE_NAME: Final[str] = "__Host-whilly_session"
+"""__Host- prefixed name used in prod+secure mode for strongest browser binding."""
+
+
+def session_cookie_name(*, secure: bool | None = None) -> str:
+    """Return the canonical session cookie name for the current environment.
+
+    When prod mode is active AND the Secure flag is on, the ``__Host-``
+    prefix is used so browsers enforce ``Secure; Path=/; no Domain``.
+    In all other cases the plain ``whilly_session`` name is returned for
+    backward compatibility with dev setups and proxied deployments that
+    strip TLS before the app.
+
+    The ``secure`` parameter lets the caller pass the already-resolved
+    value (so we don't re-read the env twice); when omitted, it is derived
+    from :func:`~whilly.api.prod_mode.cookie_secure_default` and the
+    ``WHILLY_SESSION_COOKIE_SECURE`` override.
+    """
+    if secure is None:
+        raw = (os.environ.get("WHILLY_SESSION_COOKIE_SECURE") or "").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            secure = True
+        elif raw in {"0", "false", "no", "off"}:
+            secure = False
+        else:
+            secure = cookie_secure_default()
+    if is_prod_mode() and secure:
+        return _HOST_PREFIX_COOKIE_NAME
+    return DEFAULT_SESSION_COOKIE_NAME
+
 
 EVENT_LOG_PATH_ENV: Final[str] = "WHILLY_EVENT_LOG_PATH"
 DEFAULT_EVENT_LOG_PATH: Final[str] = "whilly_logs/whilly_events.jsonl"
@@ -80,7 +112,23 @@ def build_auth_router(
     tests can inject testcontainer pools and per-test secrets.
     """
     if cookie_secure is None:
-        cookie_secure = _parse_bool_env("WHILLY_SESSION_COOKIE_SECURE", default=False)
+        cookie_secure = _parse_bool_env("WHILLY_SESSION_COOKIE_SECURE", default=cookie_secure_default())
+
+    # Resolve the canonical cookie name once at router-build time so all
+    # handlers in this closure use the same value without re-reading env.
+    resolved_cookie_name = session_cookie_name(secure=cookie_secure)
+    if resolved_cookie_name != cookie_name:
+        # The caller passed an explicit cookie_name that differs from what
+        # the prod-mode logic would select.  Honour the caller (the caller
+        # is usually a test fixture) but log a debug note.
+        logger.debug(
+            "build_auth_router: caller provided cookie_name=%r; prod-mode resolved name=%r. "
+            "Using caller-provided value.",
+            cookie_name,
+            resolved_cookie_name,
+        )
+    else:
+        cookie_name = resolved_cookie_name
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     router = APIRouter(tags=["auth"])
