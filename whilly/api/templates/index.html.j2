@@ -1986,20 +1986,25 @@
             payload.dependencies = [];
           }
           
-          // Get plan_id from URL or use default
+          // Resolve plan_id from either /plans/<id> path or ?plan_id= query.
+          // Path takes precedence so the form on /plans/foo POSTs to plan
+          // "foo" without depending on a query parameter being present.
           const urlParams = new URLSearchParams(window.location.search);
-          const planId = urlParams.get("plan_id") || "default";
+          const pathMatch = window.location.pathname.match(/^\/plans\/([^/?#]+)/);
+          const planId = (pathMatch && decodeURIComponent(pathMatch[1])) || urlParams.get("plan_id") || "default";
           const token = urlParams.get("token") || "";
 
-          // Submit via fetch — include bearer token from ?token= URL param so the
-          // POST passes _authenticate_tasks_read_request (worker bearer OR JWT
-          // dashboard token both accepted by the server).
+          // Auth: session cookie via credentials: 'same-origin' (the canonical
+          // path under PRD-wui-multi-plan v2). The legacy ?token= bearer is
+          // still forwarded when present so share-link operators (no cookie)
+          // can still create tasks — the server accepts either credential.
           const headers = { "Content-Type": "application/json" };
           if (token) {
             headers["Authorization"] = "Bearer " + token;
           }
           fetch(`/api/v1/tasks?plan_id=${encodeURIComponent(planId)}`, {
             method: "POST",
+            credentials: "same-origin",
             headers: headers,
             body: JSON.stringify(payload),
           })
@@ -2114,6 +2119,7 @@
 
         fetch("/api/v1/jira/import", {
           method: "POST",
+          credentials: "same-origin",
           headers: getJiraImportHeaders(),
           body: JSON.stringify(body),
         })
