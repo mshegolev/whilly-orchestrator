@@ -134,6 +134,7 @@ markers = [
     "live_llm: live-LLM smoke test gated by WHILLY_RUN_LIVE_LLM=1 (TASK-104b)",
     "compose: docker-compose-driven integration test (heavy; gate with `pytest -m compose` and a built `WHILLY_IMAGE`)",
     "acceptance: full-flow acceptance demo programmatic smoke (PRD-wui-multi-plan v2 Appendix B; Block 9)",
+    "wui_e2e: end-to-end WUI workflow tests (plan -> Jira -> worker -> human-review -> PR)",
 ]
 
 [tool.mypy]
