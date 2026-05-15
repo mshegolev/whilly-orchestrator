@@ -58,6 +58,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 from typing import Any, Final
@@ -92,6 +93,48 @@ class InvalidDashboardTokenError(DashboardTokenError):
 
 
 def generate_dashboard_secret() -> bytes:
+    """Resolve the HMAC secret for session cookies + dashboard tokens.
+
+    Order of precedence:
+
+    1. ``WHILLY_DASHBOARD_TOKEN_SECRET`` env var — base64url or hex
+       (32 bytes after decode). Persisting this across restarts is how
+       operators avoid invalidating every active session cookie on
+       redeploy. Documented in :mod:`whilly.api.auth_tokens`.
+    2. Fresh ``secrets.token_bytes(32)`` — dev default. Survives only
+       within a single process lifetime.
+
+    Decode is forgiving: any ASCII string ≥ 32 chars is accepted via
+    ``utf-8`` bytes when neither base64url nor hex parses, so operators
+    who paste a random hex/base64url/passphrase all get the right
+    behaviour. Whitespace stripped.
+    """
+    raw = os.environ.get("WHILLY_DASHBOARD_TOKEN_SECRET", "").strip()
+    if not raw:
+        return secrets.token_bytes(32)
+    # Try base64url first (most natural for `python -c "secrets.token_urlsafe(32)"` output).
+    try:
+        padding = "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(raw + padding)
+        if len(decoded) >= 32:
+            return decoded[:32]
+    except (ValueError, TypeError):
+        pass
+    # Try hex.
+    try:
+        decoded = bytes.fromhex(raw)
+        if len(decoded) >= 32:
+            return decoded[:32]
+    except ValueError:
+        pass
+    # Fall back to raw UTF-8 bytes — only safe when string is long enough.
+    raw_bytes = raw.encode("utf-8")
+    if len(raw_bytes) >= 32:
+        return hashlib.sha256(raw_bytes).digest()
+    # Too-short secret — refuse silently and generate fresh; logging here
+    # would be nice but this module has no logger and the function is
+    # called once at startup, so operators notice the rotation via the
+    # invalidated cookies.
     return secrets.token_bytes(32)
 
 

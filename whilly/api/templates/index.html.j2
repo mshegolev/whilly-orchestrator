@@ -1772,6 +1772,18 @@
           </div>
         </form>
       </dialog>
+      <dialog id="reset-task-modal" role="dialog" aria-modal="true" aria-labelledby="reset-task-title" data-testid="reset-task-modal">
+        <form method="dialog">
+          <h3 id="reset-task-title">Reset task to PENDING</h3>
+          <p class="reset-task-msg" style="white-space:pre-line"></p>
+          <div class="reset-task-cascade-list" style="margin:.6em 0"></div>
+          <small class="reset-task-error wui-error" role="alert" hidden></small>
+          <div class="wui-form-actions">
+            <button type="button" class="reset-task-cancel-btn">Cancel</button>
+            <button type="button" class="reset-task-confirm-btn">Reset</button>
+          </div>
+        </form>
+      </dialog>
       <script>
         (function () {
           // PRD-wui-multi-plan v2 Block 8 (Epic C) — Edit/Delete task wiring.
@@ -1984,10 +1996,108 @@
             });
           }
 
+          function openResetTaskModal(row) {
+            // Hotfix: reset FAILED/SKIPPED/DONE → PENDING so a worker re-picks
+            // the task. Fetches the preview so the operator can also cascade-
+            // reset downstream tasks that are blocked behind this one.
+            // DOM-built (no innerHTML) — task IDs come from server-trusted
+            // storage, but downstream values are still user content from the
+            // plan import, so we treat them as untrusted.
+            var taskId = row.getAttribute("data-task-id");
+            var planId = row.getAttribute("data-plan-id");
+            var dlg = document.getElementById("reset-task-modal");
+            var msgEl = dlg.querySelector(".reset-task-msg");
+            var listEl = dlg.querySelector(".reset-task-cascade-list");
+            var errEl = dlg.querySelector(".reset-task-error");
+            errEl.hidden = true;
+            errEl.textContent = "";
+            msgEl.textContent = "Loading preview for " + taskId + "…";
+            while (listEl.firstChild) { listEl.removeChild(listEl.firstChild); }
+            dlg.showModal();
+            fetch("/api/v1/tasks/" + encodeURIComponent(taskId) + "/reset-preview?plan_id=" + encodeURIComponent(planId), {
+              credentials: "same-origin",
+              headers: { "Accept": "application/json" }
+            }).then(function (r) {
+              return r.json().then(function (data) { return { ok: r.ok, status: r.status, data: data }; });
+            }).then(function (resp) {
+              if (!resp.ok) {
+                errEl.textContent = (resp.data && resp.data.detail) ? resp.data.detail : ("Error " + resp.status);
+                errEl.hidden = false;
+                msgEl.textContent = "";
+                return;
+              }
+              var preview = resp.data;
+              var dl = preview.downstream_blocked || [];
+              var msg = "Reset task " + taskId + " (currently " + preview.status + ") back to PENDING?";
+              if (dl.length > 0) {
+                msg += "\n" + dl.length + " downstream task(s) are also not PENDING — uncheck any you want to skip:";
+                dl.forEach(function (d) {
+                  var label = document.createElement("label");
+                  label.style.display = "block";
+                  label.style.margin = ".3em 0";
+                  var cb = document.createElement("input");
+                  cb.type = "checkbox";
+                  cb.checked = true;
+                  cb.value = d.id;
+                  var code = document.createElement("code");
+                  code.textContent = d.id;
+                  var statusLower = String(d.status || "").toLowerCase();
+                  var statusSpan = document.createElement("span");
+                  statusSpan.className = "s s-" + d.status + " status status-" + statusLower;
+                  statusSpan.textContent = "[" + d.status + "]";
+                  label.appendChild(cb);
+                  label.appendChild(document.createTextNode(" "));
+                  label.appendChild(code);
+                  label.appendChild(document.createTextNode(" "));
+                  label.appendChild(statusSpan);
+                  listEl.appendChild(label);
+                });
+              }
+              msgEl.textContent = msg;
+            }).catch(function (e) {
+              errEl.textContent = "Network error: " + e;
+              errEl.hidden = false;
+              msgEl.textContent = "";
+            });
+            dlg.querySelector(".reset-task-confirm-btn").onclick = function () {
+              var cascadeIds = Array.prototype.map.call(
+                dlg.querySelectorAll(".reset-task-cascade-list input[type=checkbox]:checked"),
+                function (c) { return c.value; }
+              );
+              confirmResetTask(taskId, planId, cascadeIds, dlg, errEl);
+            };
+          }
+
+          function confirmResetTask(taskId, planId, cascadeIds, dlg, errEl) {
+            errEl.hidden = true;
+            fetch("/api/v1/tasks/" + encodeURIComponent(taskId) + "/reset?plan_id=" + encodeURIComponent(planId), {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "Content-Type": "application/json" },
+              body: JSON.stringify({ cascade_ids: cascadeIds })
+            }).then(function (r) {
+              return r.json().then(function (data) { return { ok: r.ok, status: r.status, data: data }; });
+            }).then(function (resp) {
+              if (resp.ok) {
+                dlg.close();
+                if (window.htmx) {
+                  window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" });
+                }
+                return;
+              }
+              errEl.textContent = (resp.data && resp.data.detail) ? resp.data.detail : ("Error " + resp.status);
+              errEl.hidden = false;
+            }).catch(function (e) {
+              errEl.textContent = "Network error: " + e;
+              errEl.hidden = false;
+            });
+          }
+
           function wireRowButtons(row) {
             // Idempotent — safe to call after each HTMX swap.
             var editBtn = row.querySelector(".task-edit-btn");
             var delBtn = row.querySelector(".task-delete-btn");
+            var resetBtn = row.querySelector(".task-reset-btn");
             if (editBtn && !editBtn.dataset.bound) {
               editBtn.dataset.bound = "1";
               editBtn.addEventListener("click", function () { openEditTaskModal(row, editBtn); });
@@ -1995,6 +2105,10 @@
             if (delBtn && !delBtn.dataset.bound) {
               delBtn.dataset.bound = "1";
               delBtn.addEventListener("click", function () { deleteTaskWithConfirm(row, delBtn); });
+            }
+            if (resetBtn && !resetBtn.dataset.bound) {
+              resetBtn.dataset.bound = "1";
+              resetBtn.addEventListener("click", function () { openResetTaskModal(row); });
             }
           }
 
@@ -2014,6 +2128,12 @@
               document.getElementById("edit-task-force-release-confirm").hidden = true;
             });
             document.getElementById("edit-task-force-release-confirm-btn").addEventListener("click", forceReleaseConfirmed);
+            var resetModal = document.getElementById("reset-task-modal");
+            if (resetModal) {
+              resetModal.querySelector(".reset-task-cancel-btn").addEventListener("click", function () {
+                resetModal.close();
+              });
+            }
           });
           // HTMX swap re-renders the table — re-bind buttons each time.
           document.body.addEventListener("htmx:afterSwap", function (ev) {
