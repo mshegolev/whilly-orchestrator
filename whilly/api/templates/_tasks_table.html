@@ -14,7 +14,6 @@
 {% set task_columns = table_columns.tasks %}
 <table id="tasks"
        class="tbl"
-       data-testid="tasks-table"
        hx-get="/?fragment=tasks"
        hx-trigger="every 5s, whilly:reviewDecision from:body, sse:task.created, sse:CLAIM, sse:START, sse:COMPLETE, sse:FAIL, sse:RELEASE, sse:SKIP, sse:task.skipped, sse:human_review.required, sse:human_review.approved, sse:human_review.rejected, sse:human_review.changes_requested"
        hx-swap="outerHTML"
@@ -54,10 +53,10 @@
             data-filter-text="{{ t.task_id }} {{ t.plan_id }} {{ t.status }} {{ t.priority }} {{ t.claimed_by or '' }} {{ t.human_review.stage_id }} {{ t.human_review.decision or '' }} {{ t.human_review.reason }}">
           <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}"><code>{{ t.task_id }}</code></td>
           <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ t.plan_id }}</td>
-          <td data-l="{{ _l2 }}" data-mobile-label="{{ _l2 }}" data-testid="task-row-status">
+          <td data-l="{{ _l2 }}" data-mobile-label="{{ _l2 }}">
             <strong class="s s-{{ t.status }} status status-{{ t.status|lower }}">{{ t.status }}</strong>
           </td>
-          <td data-l="{{ _l3 }}" data-mobile-label="{{ _l3 }}" data-testid="task-row-priority">
+          <td data-l="{{ _l3 }}" data-mobile-label="{{ _l3 }}">
             <strong class="s p-{{ t.priority }} priority priority-{{ t.priority }}">{{ t.priority }}</strong>
           </td>
           <td data-l="{{ _l4 }}" data-mobile-label="{{ _l4 }}">{{ t.claimed_by if t.claimed_by else "—" }}</td>
@@ -77,12 +76,10 @@
             {% if _editable %}
               <button type="button"
                       class="task-edit-btn"
-                      data-testid="task-row-edit-btn"
                       data-task-id="{{ t.task_id }}"
                       aria-label="Edit task {{ t.task_id }}">Edit</button>
               <button type="button"
                       class="task-delete-btn"
-                      data-testid="task-row-delete-btn"
                       data-task-id="{{ t.task_id }}"
                       aria-label="Delete task {{ t.task_id }}"
                       title="Delete">✕</button>
