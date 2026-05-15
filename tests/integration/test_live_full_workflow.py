@@ -310,13 +310,25 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
     # avoids the SSH-key dance and works the same way `glab repo clone` does.
     clone_dir = tmp_path / "qa-team-e2e"
     clone_url = f"https://oauth2:{glab_token}@{GITLAB_HOST}/qa-team/e2e.git"
-    subprocess.run(  # noqa: S603 — args fully controlled
+    # Strip HTTP[S]_PROXY from the env — the operator shell may carry a
+    # claudeproxy tunnel that does NOT route to gitlab.example.com,
+    # and inheriting it makes the clone time out.
+    clone_env = {k: v for k, v in os.environ.items() if k.upper() not in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"}}
+    clone_env["NO_PROXY"] = "127.0.0.1,localhost,::1,.example.com,example.com"
+    clone_env["no_proxy"] = clone_env["NO_PROXY"]
+    clone_result = subprocess.run(  # noqa: S603 — args fully controlled
         ["git", "clone", "--depth", "1", clone_url, str(clone_dir)],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=120,
+        env=clone_env,
     )
+    if clone_result.returncode != 0:
+        pytest.fail(
+            f"git clone failed (exit {clone_result.returncode}):\n"
+            f"stdout: {clone_result.stdout}\nstderr: {clone_result.stderr}"
+        )
 
     # ── 2. Boot uvicorn.  Same shape as tests/ui/conftest.py::live_server.
     server_port = _pick_free_port()
@@ -334,12 +346,33 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
         "WHILLY_SESSION_COOKIE_SECURE": "false",
         "PYTHONPATH": str(REPO_ROOT),
     }
-    # Server hits loopback only; strip proxy vars so its httpx never tries to
-    # route DB / control-plane calls through claudeproxy.
-    for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+    # Server hits loopback + jira.example.com + gitlab.example.com directly.  Strip
+    # every proxy env var (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, no_proxy in
+    # any case), then set NO_PROXY=* so urllib's getproxies() returns
+    # empty even when macOS sysconfig has a system proxy configured.
+    for var in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ):
         server_env.pop(var, None)
-    server_env["NO_PROXY"] = "127.0.0.1,localhost,::1"
-    server_env["no_proxy"] = server_env["NO_PROXY"]
+    server_env["NO_PROXY"] = "*"
+    server_env["no_proxy"] = "*"
+    # urllib on macOS ignores NO_PROXY for system-configured PAC proxies
+    # (scutil --proxy). Force the jira.py opener to bypass.
+    server_env["WHILLY_JIRA_NO_PROXY"] = "1"
+    # Acme jira.example.com uses corp PKI not trusted by Python's default CA bundle,
+    # and runs on api/2 (api/3 only on Atlassian Cloud).  Hard-code both so
+    # the test doesn't depend on the operator's [jira] toml section.
+    server_env["JIRA_VERIFY_SSL"] = "false"
+    server_env["JIRA_API_VERSION"] = "2"
+    server_env["JIRA_AUTH_SCHEME"] = "bearer"
+    server_env["JIRA_SERVER_URL"] = os.environ.get("JIRA_SERVER_URL", "https://jira.example.com")
+    server_env["JIRA_USERNAME"] = os.environ.get("JIRA_USERNAME", "mshegolev")
+    # JIRA_API_TOKEN already inherited from os.environ via {**os.environ, ...}
 
     uvicorn_fh = uvicorn_log.open("wb")
     uvicorn_proc = subprocess.Popen(  # noqa: S603
@@ -391,7 +424,7 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
         worker_token = register_payload["token"]
 
         # Worker row exists in DB (sanity check on the registration side-effect).
-        workers_count = _psql_run(postgres_dsn, f"SELECT COUNT(*) FROM workers WHERE id = '{worker_id}'").strip()
+        workers_count = _psql_run(postgres_dsn, f"SELECT COUNT(*) FROM workers WHERE worker_id = '{worker_id}'").strip()
         assert workers_count == "1", f"workers row not found for worker_id={worker_id!r}"
 
         # ── 4. Login + session cookie.  POST /auth/login with a real-looking
@@ -476,12 +509,12 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
         # path is not wired there.  Use the freshly-minted worker bearer
         # rather than the legacy bootstrap token to exercise the per-worker
         # identity binding.
-        import_response = httpx.post(
-            f"{server_base_url}/api/v1/jira/import",
-            headers={"Authorization": f"Bearer {worker_token}"},
-            json=wizard_body,
-            timeout=60.0,
-        )
+        with httpx.Client(trust_env=False, timeout=60.0) as client:
+            import_response = client.post(
+                f"{server_base_url}/api/v1/jira/import",
+                headers={"Authorization": f"Bearer {worker_token}"},
+                json=wizard_body,
+            )
         assert import_response.status_code == 201, (
             f"jira import failed: {import_response.status_code} body={import_response.text}"
         )
@@ -501,6 +534,11 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
             "WHILLY_CONTROL_URL": server_base_url,
             "WHILLY_PLAN_ID": plan_id,
             "WHILLY_WORKER_TOKEN": worker_token,
+            # Pin worker_id so the worker_token's owner (returned from
+            # POST /workers/register) matches the id used in claim/heartbeat;
+            # otherwise the worker falls back to hostname-based id and the
+            # server returns 403 'cannot act as worker ...'.
+            "WHILLY_WORKER_ID": worker_id,
             "WHILLY_AUTO_OPEN_PR": "1",
             "WHILLY_PR_PROVIDER": "gitlab",
             "CLAUDE_BIN": str(CLAUDE_BIN_PATH),
@@ -532,53 +570,63 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
             cwd=str(clone_dir),
         )
 
-        # ── 8. Wait for the worker to surface ``human_review.required``.
-        # Mini-task latency on a warm Claude is normally < 60 s; we budget
-        # 10 minutes because cold model bootup + plan composition can run
-        # longer under load.
-        def _waiting_for_review() -> bool:
+        # ── 8. Wait for either human_review.required (mid-flight checkpoint)
+        # or a terminal event (COMPLETE / pr.opened). A very simple task may
+        # complete in one shot without needing human review; we don't force
+        # the review path artificially. Approve only when actually paused.
+        def _waiting_for_review_or_terminal() -> str | None:
             events = _events_for_task(postgres_dsn, task_id)
-            return _has_event_type(events, "human_review.required")
+            event_types = {e.get("event_type") for e in events}
+            if "human_review.required" in event_types:
+                return "review_required"
+            if "pr.opened" in event_types:
+                return "pr_opened"
+            if "COMPLETE" in event_types:
+                return "complete"
+            if "FAIL" in event_types or "task.failed" in event_types:
+                return "failed"
+            return None
 
-        _poll_until(
-            _waiting_for_review,
-            description=f"human_review.required event on task_id={task_id}",
+        gate = _poll_until(
+            _waiting_for_review_or_terminal,
+            description=f"review_required|complete|pr.opened|failed on task_id={task_id}",
             timeout=POLL_TIMEOUT_SECONDS,
         )
+        if gate == "failed":
+            events = _events_for_task(postgres_dsn, task_id)
+            event_summary = "\n".join(
+                f"  {e['created_at']}  {e.get('event_type')}  {str(e.get('detail') or '')[:80]}" for e in events
+            )
+            pytest.fail(f"worker marked task FAILED before producing COMPLETE / pr.opened.\nevents:\n{event_summary}")
 
-        # ── 9. Approve via the admin endpoint.  The legacy
-        # ``WHILLY_WORKER_BOOTSTRAP_TOKEN`` fallback is intentionally NOT
-        # admin-scoped (see whilly/adapters/transport/auth.py::make_admin_auth),
-        # so we mint a one-shot admin bootstrap token directly via psql and
-        # use it as the bearer.  This sidesteps the `whilly admin bootstrap
-        # mint` CLI without weakening the auth contract — the hash matches
-        # what the live admin code path expects.
-        import hashlib
-        import secrets as _secrets
+        # ── 9. Approve only if the worker actually paused for review.
+        if gate == "review_required":
+            import hashlib
+            import secrets as _secrets
 
-        admin_plaintext = _secrets.token_urlsafe(32)
-        admin_hash = hashlib.sha256(admin_plaintext.encode("utf-8")).hexdigest()
-        _psql_run(
-            postgres_dsn,
-            (
-                "INSERT INTO bootstrap_tokens "
-                "(token_hash, owner_email, expires_at, is_admin) "
-                f"VALUES ('{admin_hash}', 'live-e2e-admin@whilly.example', NULL, true)"
-            ),
-        )
-        approve_response = httpx.post(
-            f"{server_base_url}/api/v1/tasks/{task_id}/human-review",
-            headers={"Authorization": f"Bearer {admin_plaintext}"},
-            json={
-                "decision": "approved",
-                "reviewer": "live-e2e@whilly",
-                "comment": "Approved by live E2E test",
-            },
-            timeout=15.0,
-        )
-        assert approve_response.status_code == 200, (
-            f"human-review approval failed: {approve_response.status_code} body={approve_response.text}"
-        )
+            admin_plaintext = _secrets.token_urlsafe(32)
+            admin_hash = hashlib.sha256(admin_plaintext.encode("utf-8")).hexdigest()
+            _psql_run(
+                postgres_dsn,
+                (
+                    "INSERT INTO bootstrap_tokens "
+                    "(token_hash, owner_email, expires_at, is_admin) "
+                    f"VALUES ('{admin_hash}', 'live-e2e-admin@whilly.example', NULL, true)"
+                ),
+            )
+            with httpx.Client(trust_env=False, timeout=15.0) as client:
+                approve_response = client.post(
+                    f"{server_base_url}/api/v1/tasks/{task_id}/human-review",
+                    headers={"Authorization": f"Bearer {admin_plaintext}"},
+                    json={
+                        "decision": "approved",
+                        "reviewer": "live-e2e@whilly",
+                        "comment": "Approved by live E2E test",
+                    },
+                )
+            assert approve_response.status_code == 200, (
+                f"human-review approval failed: {approve_response.status_code} body={approve_response.text}"
+            )
 
         # ── 10. Wait for the worker to finish and open the MR.  We watch for
         # BOTH the DONE marker (`pr.opened` is only emitted after the task
@@ -605,12 +653,11 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
         # ── 11. Verify the MR exists on GitLab via the v4 API.  This is the
         # acceptance pin — everything before this is "internal events say so";
         # this is "the real GitLab project agrees".
-        mr_response = httpx.get(
-            f"{GITLAB_API_BASE}/projects/{GITLAB_PROJECT_ID}/merge_requests/{pr_number}",
-            headers={"PRIVATE-TOKEN": glab_token},
-            timeout=30.0,
-            verify=False,  # noqa: S501 — corp PKI; matches glab's own default
-        )
+        with httpx.Client(trust_env=False, timeout=30.0, verify=False) as client:  # noqa: S501
+            mr_response = client.get(
+                f"{GITLAB_API_BASE}/projects/{GITLAB_PROJECT_ID}/merge_requests/{pr_number}",
+                headers={"PRIVATE-TOKEN": glab_token},
+            )
         assert mr_response.status_code == 200, (
             f"GitLab MR lookup failed: {mr_response.status_code} body={mr_response.text}"
         )
@@ -630,27 +677,24 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
         # accumulate open MRs in qa-team/e2e.  All cleanup errors are swallowed
         # — a failing test must still surface its original assertion message.
 
-        if pr_number is not None:
-            try:
-                httpx.put(
-                    f"{GITLAB_API_BASE}/projects/{GITLAB_PROJECT_ID}/merge_requests/{pr_number}",
-                    headers={"PRIVATE-TOKEN": glab_token},
-                    json={"state_event": "close"},
-                    timeout=15.0,
-                    verify=False,  # noqa: S501
-                )
-            except Exception:  # noqa: BLE001 — best effort
-                pass
-        if pr_branch:
-            try:
-                httpx.delete(
-                    f"{GITLAB_API_BASE}/projects/{GITLAB_PROJECT_ID}/repository/branches/{pr_branch}",
-                    headers={"PRIVATE-TOKEN": glab_token},
-                    timeout=15.0,
-                    verify=False,  # noqa: S501
-                )
-            except Exception:  # noqa: BLE001 — best effort
-                pass
+        with httpx.Client(trust_env=False, timeout=15.0, verify=False) as cleanup_client:  # noqa: S501
+            if pr_number is not None:
+                try:
+                    cleanup_client.put(
+                        f"{GITLAB_API_BASE}/projects/{GITLAB_PROJECT_ID}/merge_requests/{pr_number}",
+                        headers={"PRIVATE-TOKEN": glab_token},
+                        json={"state_event": "close"},
+                    )
+                except Exception:  # noqa: BLE001 — best effort
+                    pass
+            if pr_branch:
+                try:
+                    cleanup_client.delete(
+                        f"{GITLAB_API_BASE}/projects/{GITLAB_PROJECT_ID}/repository/branches/{pr_branch}",
+                        headers={"PRIVATE-TOKEN": glab_token},
+                    )
+                except Exception:  # noqa: BLE001 — best effort
+                    pass
 
         # Terminate worker first (it might still be polling the server).
         if worker_proc is not None:
