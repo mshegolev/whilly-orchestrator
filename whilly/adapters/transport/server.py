@@ -952,7 +952,23 @@ def create_app(
     # on missing/invalid bearer, 403 on known non-admin operator.
     admin_dep: IdentityBindingAuthDependency = make_admin_auth(repo, legacy_token=legacy_bootstrap_token)
 
+    # P1.3: validate production config loudly before any routing is wired.
+    # In dev mode this is a no-op (is_prod_mode() returns False).
+    from whilly.api.prod_mode import is_prod_mode as _is_prod_mode
+    from whilly.api.prod_mode import validate_prod_config as _validate_prod_config
+
+    if _is_prod_mode():
+        _validate_prod_config()
+
     dashboard_token_secret: bytes = generate_dashboard_secret()
+    # P1.3: warn when a random fallback secret is in use (regardless of prod mode).
+    # Operators need to see this in logs so they know the secret resets on restart.
+    if not os.environ.get("WHILLY_DASHBOARD_TOKEN_SECRET", "").strip():
+        logger.warning(
+            "create_app: WHILLY_DASHBOARD_TOKEN_SECRET is not set — "
+            "using a per-process random secret. Dashboard tokens will be "
+            "invalidated on every restart. Set the env var for stable sessions."
+        )
     dashboard_token_ttl_raw = (os.environ.get("WHILLY_DASHBOARD_TOKEN_TTL_SECONDS") or "").strip()
     if dashboard_token_ttl_raw:
         try:
@@ -1012,9 +1028,9 @@ def create_app(
         # principal first. The legacy /api/v1/tasks endpoints (GET list,
         # POST create) participate in this chain so the WUI's Create Task
         # form can use cookie-auth like the newer plans/tasks CRUD.
-        from whilly.api.csrf import COOKIE_NAME
+        from whilly.api.csrf import COOKIE_NAME, _HOST_PREFIX_COOKIE_NAME as _HOST_PFX_COOKIE  # noqa: PLC0415
 
-        if request.cookies.get(COOKIE_NAME):
+        if request.cookies.get(COOKIE_NAME) or request.cookies.get(_HOST_PFX_COOKIE):
             try:
                 await _authenticate_session_request_inline(request)
                 return
@@ -1031,6 +1047,20 @@ def create_app(
         await authenticate_session_request(request, pool=pool, secret=dashboard_token_secret)
 
     async def _authenticate_events_stream_request(request: Request) -> None:
+        # P1.5: Cookie-based auth path — preferred over URL token.
+        # Try the session cookie first so browser EventSource connections
+        # with withCredentials:true do not need a ?token= in the URL.
+        from whilly.api.auth_routes import _HOST_PREFIX_COOKIE_NAME as _HOST_COOKIE_P15  # noqa: PLC0415
+
+        _session_cookie = request.cookies.get(DEFAULT_SESSION_COOKIE_NAME) or request.cookies.get(_HOST_COOKIE_P15)
+        if _session_cookie:
+            try:
+                await _authenticate_session_request_inline(request)
+                return
+            except HTTPException:
+                # Cookie present but invalid/expired — fall through to bearer/token paths.
+                pass
+
         authorization = request.headers.get("authorization")
         auth_exc: HTTPException | None = None
         if authorization is not None:
@@ -1044,7 +1074,16 @@ def create_app(
                 return
             except HTTPException as exc:
                 auth_exc = exc
-        if await _authenticate_dashboard_token(request, expected_scope=EVENTS_STREAM_SCOPE):
+
+        # P1.5: Dashboard/URL token path — kept for backward compat during
+        # the deprecation period.  WHILLY_SSE_ACCEPT_URL_TOKEN=false disables it.
+        _sse_url_token_env = (os.environ.get("WHILLY_SSE_ACCEPT_URL_TOKEN") or "true").strip().lower()
+        _sse_url_token_enabled = _sse_url_token_env not in {"0", "false", "no", "off"}
+        if _sse_url_token_enabled and await _authenticate_dashboard_token(request, expected_scope=EVENTS_STREAM_SCOPE):
+            logger.info(
+                "sse: authenticated via URL/header dashboard token; "
+                "migrate to cookie-based auth (withCredentials:true) before WHILLY_SSE_ACCEPT_URL_TOKEN is retired"
+            )
             return
         if auth_exc is not None:
             raise auth_exc
@@ -1065,7 +1104,10 @@ def create_app(
         dispatcher must never 401 on an absent/invalid cookie because the
         share-link path is fully anonymous.
         """
-        cookie_value = request.cookies.get(DEFAULT_SESSION_COOKIE_NAME)
+        # Check both plain and __Host- prefixed names; whichever is set wins.
+        from whilly.api.auth_routes import _HOST_PREFIX_COOKIE_NAME as _HOST_COOKIE  # noqa: PLC0415
+
+        cookie_value = request.cookies.get(DEFAULT_SESSION_COOKIE_NAME) or request.cookies.get(_HOST_COOKIE)
         if not cookie_value:
             return None, None
         try:

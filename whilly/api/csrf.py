@@ -62,6 +62,11 @@ CSRF_EXEMPT_PATHS: Final[frozenset[str]] = frozenset({"/auth/login", "/auth/magi
 #: cookie-authenticated and therefore needs CSRF gating".
 COOKIE_NAME: Final[str] = "whilly_session"
 
+#: __Host- prefixed variant used in prod+secure mode.  The CSRF gate must
+#: recognise both names because the same middleware instance may serve a
+#: mix of old and new cookies during a rolling deploy.
+_HOST_PREFIX_COOKIE_NAME: Final[str] = "__Host-whilly_session"
+
 
 class WhillySessionCSRFMiddleware(BaseHTTPMiddleware):
     """Block cookie-authenticated state-mutating requests with a missing/bad Origin.
@@ -122,8 +127,11 @@ def _needs_csrf_check(request: Request) -> bool:
     if path in CSRF_EXEMPT_PATHS:
         return False
     # No session cookie → request relies on bearer/JWT, which is not
-    # auto-attached by the browser. Skip CSRF gate.
-    if COOKIE_NAME not in request.cookies:
+    # auto-attached by the browser. Skip CSRF gate.  Check both the plain
+    # and __Host- prefixed names so the gate works across a rolling deploy
+    # where some clients carry the old cookie name and new clients carry
+    # the hardened one.
+    if COOKIE_NAME not in request.cookies and _HOST_PREFIX_COOKIE_NAME not in request.cookies:
         return False
     return True
 
@@ -135,6 +143,7 @@ __all__ = [
     "DEFAULT_CSRF_ALLOWLIST",
     "STATE_MUTATING_METHODS",
     "WhillySessionCSRFMiddleware",
+    "_HOST_PREFIX_COOKIE_NAME",
 ]
 
 
