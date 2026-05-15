@@ -444,6 +444,454 @@
   </style>
 </head>
 <body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
+  {% if not auth_email and plan_id_for_share_link %}
+  <div class="share-link-banner" role="status">
+    You're viewing a shared plan. <a href="/login?next=/?plan_id={{ plan_id_for_share_link | urlencode }}">Sign in to manage all plans</a>
+  </div>
+  {% endif %}
+  {% if auth_email %}
+  <header class="wui-nav" role="banner" aria-label="WUI session">
+    <span class="wui-nav__identity">Signed in as <strong>{{ auth_email }}</strong></span>
+    <form method="post" action="/auth/logout" class="wui-nav__logout">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token | default('') }}">
+      <button type="submit">Log out</button>
+    </form>
+  </header>
+  {% endif %}
+  {% if auth_email %}
+  <section id="wui-plans" aria-label="Plans" class="wui-plans">
+    <header class="wui-plans__head">
+      <h2>Plans</h2>
+      <div class="wui-plans__controls">
+        <button type="button" id="new-plan-btn" class="wui-plans__new-btn">+ New Plan</button>
+        <input type="search" id="plans-filter" placeholder="Filter by name or plan_id..." aria-label="Filter plans">
+        <label><input type="checkbox" id="show-archived"> Show archived</label>
+        <span id="archived-count" class="wui-plans__archived-count" aria-live="polite"></span>
+      </div>
+    </header>
+    <table id="plans-table"
+           hx-get="/api/v1/plans"
+           hx-trigger="load, refreshPlans from:body"
+           hx-swap="none">
+      <thead>
+        <tr>
+          <th data-sort-key="name">Name</th>
+          <th data-sort-key="id">ID</th>
+          <th data-sort-key="pending">Pending</th>
+          <th data-sort-key="in_progress">In progress</th>
+          <th data-sort-key="done">Done</th>
+          <th data-sort-key="failed">Failed</th>
+          <th data-sort-key="budget_usd">Budget</th>
+          <th data-sort-key="workers">Workers</th>
+          <th data-sort-key="last_event_at">Last active</th>
+          <th scope="col" aria-label="Actions"></th>
+        </tr>
+      </thead>
+      <tbody id="plans-table-body">
+        <tr class="wui-plans__empty"><td colspan="10">Loading plans...</td></tr>
+      </tbody>
+    </table>
+    <p id="plans-empty-state" class="wui-plans__empty-state" hidden>
+      No plans yet. <button type="button" id="new-plan-empty-btn">Create your first plan</button>.
+    </p>
+
+    <!-- PRD-wui-multi-plan v2 Epic B3 — New Plan modal -->
+    <dialog id="new-plan-modal" aria-modal="true" aria-labelledby="new-plan-title">
+      <form id="new-plan-form" method="dialog">
+        <h3 id="new-plan-title">Create new plan</h3>
+        <div class="wui-form-row">
+          <label for="plan_id">Plan ID <span class="wui-required">*</span></label>
+          <input type="text" id="plan_id" name="plan_id" required
+                 maxlength="256" pattern="^[a-z0-9][a-z0-9\-_]{0,254}$"
+                 aria-describedby="plan_id-help plan_id-error"
+                 autocomplete="off">
+          <small id="plan_id-help">lowercase letters, digits, dash, underscore</small>
+          <small id="plan_id-error" class="wui-error" role="alert" hidden></small>
+        </div>
+        <div class="wui-form-row">
+          <label for="new-plan-name">Name <span class="wui-required">*</span></label>
+          <input type="text" id="new-plan-name" name="name" required maxlength="1024">
+        </div>
+        <div class="wui-form-row">
+          <label for="new-plan-budget">Budget USD (optional)</label>
+          <input type="number" id="new-plan-budget" name="budget_usd" step="0.01" min="0">
+        </div>
+        <small id="new-plan-error" class="wui-error" role="alert" hidden></small>
+        <div class="wui-form-actions">
+          <button type="button" id="new-plan-cancel">Cancel</button>
+          <button type="submit" id="new-plan-submit">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Inline rename / budget modal (reused for both PATCH-name and PATCH-budget paths) -->
+    <dialog id="edit-plan-modal" aria-modal="true" aria-labelledby="edit-plan-title">
+      <form id="edit-plan-form" method="dialog">
+        <h3 id="edit-plan-title">Edit plan</h3>
+        <input type="hidden" id="edit-plan-id">
+        <input type="hidden" id="edit-plan-etag">
+        <input type="hidden" id="edit-plan-mode">
+        <div class="wui-form-row" id="edit-plan-name-row">
+          <label for="edit-plan-name">Name</label>
+          <input type="text" id="edit-plan-name" maxlength="1024">
+        </div>
+        <div class="wui-form-row" id="edit-plan-budget-row">
+          <label for="edit-plan-budget">Budget USD</label>
+          <input type="number" id="edit-plan-budget" step="0.01" min="0">
+        </div>
+        <small id="edit-plan-error" class="wui-error" role="alert" hidden></small>
+        <div class="wui-form-actions">
+          <button type="button" id="edit-plan-cancel">Cancel</button>
+          <button type="submit" id="edit-plan-submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+    <script>
+      (function () {
+        var state = { plans: [], sortKey: "last_event_at", sortDir: "desc" };
+
+        function fetchPlans() {
+          var showArchived = document.getElementById("show-archived").checked;
+          var url = "/api/v1/plans?include_archived=" + (showArchived ? "true" : "false");
+          fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json" } })
+            .then(function (r) { return r.ok ? r.json() : { plans: [] }; })
+            .then(function (data) {
+              state.plans = data.plans || [];
+              render();
+            })
+            .catch(function () { state.plans = []; render(); });
+        }
+
+        function clearChildren(node) {
+          while (node.firstChild) { node.removeChild(node.firstChild); }
+        }
+
+        function makeCell(text) {
+          var td = document.createElement("td");
+          td.textContent = text == null ? "" : String(text);
+          return td;
+        }
+
+        function makeCodeCell(text) {
+          var td = document.createElement("td");
+          var code = document.createElement("code");
+          code.textContent = text == null ? "" : String(text);
+          td.appendChild(code);
+          return td;
+        }
+
+        function render() {
+          var tbody = document.getElementById("plans-table-body");
+          var empty = document.getElementById("plans-empty-state");
+          var archivedCount = document.getElementById("archived-count");
+          var filterRaw = (document.getElementById("plans-filter").value || "").toLowerCase();
+          var rows = state.plans.slice();
+          if (filterRaw) {
+            rows = rows.filter(function (p) {
+              return (p.name || "").toLowerCase().indexOf(filterRaw) !== -1
+                  || (p.id || "").toLowerCase().indexOf(filterRaw) !== -1;
+            });
+          }
+          var archived = rows.filter(function (p) { return p.archived_at != null; }).length;
+          archivedCount.textContent = archived > 0 ? "(" + archived + " archived shown)" : "";
+          rows.sort(compareRows);
+          clearChildren(tbody);
+          if (rows.length === 0) {
+            empty.hidden = false;
+            return;
+          }
+          empty.hidden = true;
+          rows.forEach(function (p) {
+            var counts = p.task_counts || {};
+            var inFlight = (counts.in_progress || 0) + (counts.claimed || 0);
+            var last = p.last_event_at ? new Date(p.last_event_at).toISOString() : "—";
+            var budget = (p.budget_usd == null || p.budget_usd === "") ? "—" : p.budget_usd;
+            var tr = document.createElement("tr");
+            tr.setAttribute("data-plan-id", p.id || "");
+            if (p.archived_at != null) { tr.setAttribute("data-archived", "true"); }
+            tr.tabIndex = 0;
+            tr.appendChild(makeCell(p.name || ""));
+            tr.appendChild(makeCodeCell(p.id || ""));
+            tr.appendChild(makeCell(counts.pending || 0));
+            tr.appendChild(makeCell(inFlight));
+            tr.appendChild(makeCell(counts.done || 0));
+            tr.appendChild(makeCell(counts.failed || 0));
+            tr.appendChild(makeCell(budget));
+            tr.appendChild(makeCell("—"));
+            tr.appendChild(makeCell(last));
+
+            // Actions cell: overflow menu via <details> (lightweight,
+            // no extra JS for show/hide). Stops bubble so the row's
+            // click-to-navigate handler doesn't fire when the operator
+            // is actually targeting the menu.
+            var actionsTd = document.createElement("td");
+            actionsTd.className = "wui-plans__actions";
+            var det = document.createElement("details");
+            det.className = "wui-plans__menu";
+            var sum = document.createElement("summary");
+            sum.textContent = "⋯";  // horizontal ellipsis ⋯
+            sum.setAttribute("aria-label", "Plan actions");
+            det.appendChild(sum);
+            var menu = document.createElement("div");
+            menu.className = "wui-plans__menu-body";
+            var btnRename = document.createElement("button");
+            btnRename.type = "button";
+            btnRename.textContent = "Rename";
+            btnRename.addEventListener("click", function (ev) { ev.stopPropagation(); det.open = false; openEditModal(p, "name"); });
+            var btnBudget = document.createElement("button");
+            btnBudget.type = "button";
+            btnBudget.textContent = "Edit budget";
+            btnBudget.addEventListener("click", function (ev) { ev.stopPropagation(); det.open = false; openEditModal(p, "budget"); });
+            var btnArchive = document.createElement("button");
+            btnArchive.type = "button";
+            var isArchived = p.archived_at != null;
+            btnArchive.textContent = isArchived ? "Restore" : "Archive";
+            btnArchive.addEventListener("click", function (ev) {
+              ev.stopPropagation();
+              det.open = false;
+              patchPlanArchive(p.id, !isArchived);
+            });
+            menu.appendChild(btnRename);
+            menu.appendChild(btnBudget);
+            menu.appendChild(btnArchive);
+            det.appendChild(menu);
+            // Prevent row-click navigation when interacting with the menu.
+            det.addEventListener("click", function (ev) { ev.stopPropagation(); });
+            actionsTd.appendChild(det);
+            tr.appendChild(actionsTd);
+
+            tr.addEventListener("click", function (ev) {
+              // Ignore clicks that originated inside the actions menu.
+              if (ev.target && (ev.target.closest && ev.target.closest(".wui-plans__menu"))) return;
+              window.location.href = "/plans/" + encodeURIComponent(p.id || "");
+            });
+            tr.addEventListener("keydown", function (ev) {
+              if (ev.key === "Enter" && !(ev.target.closest && ev.target.closest(".wui-plans__menu"))) {
+                window.location.href = "/plans/" + encodeURIComponent(p.id || "");
+              }
+            });
+            tbody.appendChild(tr);
+          });
+        }
+
+        // ── New Plan modal ──────────────────────────────────────────
+        function openNewPlanModal() {
+          var dlg = document.getElementById("new-plan-modal");
+          var planIdInput = document.getElementById("plan_id");
+          var nameInput = document.getElementById("new-plan-name");
+          var budgetInput = document.getElementById("new-plan-budget");
+          planIdInput.value = "";
+          nameInput.value = "";
+          budgetInput.value = "";
+          document.getElementById("plan_id-error").hidden = true;
+          document.getElementById("new-plan-error").hidden = true;
+          if (typeof dlg.showModal === "function") { dlg.showModal(); } else { dlg.setAttribute("open", ""); }
+          setTimeout(function () { planIdInput.focus(); }, 0);
+        }
+        function closeNewPlanModal() {
+          var dlg = document.getElementById("new-plan-modal");
+          if (typeof dlg.close === "function") { dlg.close(); } else { dlg.removeAttribute("open"); }
+          document.getElementById("new-plan-btn").focus();
+        }
+
+        // ── Edit (rename / budget) modal ────────────────────────────
+        function openEditModal(plan, mode) {
+          var dlg = document.getElementById("edit-plan-modal");
+          document.getElementById("edit-plan-id").value = plan.id || "";
+          document.getElementById("edit-plan-mode").value = mode;
+          document.getElementById("edit-plan-name").value = plan.name || "";
+          document.getElementById("edit-plan-budget").value = plan.budget_usd == null ? "" : plan.budget_usd;
+          document.getElementById("edit-plan-name-row").hidden = (mode !== "name");
+          document.getElementById("edit-plan-budget-row").hidden = (mode !== "budget");
+          document.getElementById("edit-plan-error").hidden = true;
+          // Fetch fresh ETag for optimistic-concurrency PATCH.
+          fetch("/api/v1/plans/" + encodeURIComponent(plan.id || ""), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+          }).then(function (r) {
+            document.getElementById("edit-plan-etag").value = r.headers.get("ETag") || "";
+            if (typeof dlg.showModal === "function") { dlg.showModal(); } else { dlg.setAttribute("open", ""); }
+            setTimeout(function () {
+              var target = (mode === "name") ? document.getElementById("edit-plan-name") : document.getElementById("edit-plan-budget");
+              target.focus();
+            }, 0);
+          });
+        }
+        function closeEditModal() {
+          var dlg = document.getElementById("edit-plan-modal");
+          if (typeof dlg.close === "function") { dlg.close(); } else { dlg.removeAttribute("open"); }
+        }
+
+        function submitNewPlan(ev) {
+          ev.preventDefault();
+          var planIdInput = document.getElementById("plan_id");
+          var nameInput = document.getElementById("new-plan-name");
+          var budgetInput = document.getElementById("new-plan-budget");
+          var pidErr = document.getElementById("plan_id-error");
+          var generalErr = document.getElementById("new-plan-error");
+          pidErr.hidden = true; generalErr.hidden = true;
+          var body = { plan_id: planIdInput.value, name: nameInput.value };
+          if (budgetInput.value !== "") {
+            body.budget_usd = parseFloat(budgetInput.value);
+          }
+          fetch("/api/v1/plans", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Accept": "application/json", "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }).then(function (r) {
+            if (r.status === 201) {
+              closeNewPlanModal();
+              fetchPlans();
+              return;
+            }
+            return r.json().then(function (data) {
+              if (r.status === 409 && data.error === "plan_exists") {
+                pidErr.textContent = "this plan_id already exists";
+                pidErr.hidden = false;
+                planIdInput.focus();
+                return;
+              }
+              generalErr.textContent = (data && data.detail) ? String(data.detail) : ("Error " + r.status);
+              generalErr.hidden = false;
+            });
+          }).catch(function (e) {
+            generalErr.textContent = "Network error: " + e;
+            generalErr.hidden = false;
+          });
+        }
+
+        function submitEditPlan(ev) {
+          ev.preventDefault();
+          var planId = document.getElementById("edit-plan-id").value;
+          var etag = document.getElementById("edit-plan-etag").value;
+          var mode = document.getElementById("edit-plan-mode").value;
+          var generalErr = document.getElementById("edit-plan-error");
+          generalErr.hidden = true;
+          var body = {};
+          if (mode === "name") {
+            body.name = document.getElementById("edit-plan-name").value;
+          } else if (mode === "budget") {
+            var bv = document.getElementById("edit-plan-budget").value;
+            body.budget_usd = (bv === "") ? null : parseFloat(bv);
+          }
+          fetch("/api/v1/plans/" + encodeURIComponent(planId), {
+            method: "PATCH",
+            credentials: "same-origin",
+            headers: { "Accept": "application/json", "Content-Type": "application/json", "If-Match": etag },
+            body: JSON.stringify(body),
+          }).then(function (r) {
+            if (r.ok) {
+              closeEditModal();
+              fetchPlans();
+              return;
+            }
+            return r.json().then(function (data) {
+              generalErr.textContent = (data && data.detail) ? String(data.detail) : ("Error " + r.status);
+              generalErr.hidden = false;
+            });
+          }).catch(function (e) {
+            generalErr.textContent = "Network error: " + e;
+            generalErr.hidden = false;
+          });
+        }
+
+        function patchPlanArchive(planId, archive) {
+          // Fetch fresh ETag, then PATCH.
+          fetch("/api/v1/plans/" + encodeURIComponent(planId), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+          }).then(function (r) {
+            var etag = r.headers.get("ETag") || "";
+            return fetch("/api/v1/plans/" + encodeURIComponent(planId), {
+              method: "PATCH",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "Content-Type": "application/json", "If-Match": etag },
+              body: JSON.stringify({ archived: !!archive }),
+            });
+          }).then(function (r) {
+            if (!r.ok) {
+              return r.json().then(function (data) {
+                alert((data && data.detail) ? data.detail : ("Error " + r.status));
+              });
+            }
+            fetchPlans();
+          }).catch(function (e) {
+            alert("Network error: " + e);
+          });
+        }
+
+        function compareRows(a, b) {
+          var key = state.sortKey;
+          var dir = state.sortDir === "asc" ? 1 : -1;
+          var av = extract(a, key);
+          var bv = extract(b, key);
+          if (av == null && bv == null) return 0;
+          if (av == null) return 1;
+          if (bv == null) return -1;
+          if (av < bv) return -1 * dir;
+          if (av > bv) return 1 * dir;
+          return (a.id || "").localeCompare(b.id || "");
+        }
+
+        function extract(plan, key) {
+          var counts = plan.task_counts || {};
+          switch (key) {
+            case "name": return (plan.name || "").toLowerCase();
+            case "id": return (plan.id || "").toLowerCase();
+            case "pending": return counts.pending || 0;
+            case "in_progress": return (counts.in_progress || 0) + (counts.claimed || 0);
+            case "done": return counts.done || 0;
+            case "failed": return counts.failed || 0;
+            case "budget_usd":
+              return plan.budget_usd == null ? null : parseFloat(plan.budget_usd);
+            case "workers": return 0;
+            case "last_event_at":
+              return plan.last_event_at ? Date.parse(plan.last_event_at) : null;
+            default: return null;
+          }
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+          var headers = document.querySelectorAll("#plans-table thead th[data-sort-key]");
+          Array.prototype.forEach.call(headers, function (th) {
+            th.style.cursor = "pointer";
+            th.addEventListener("click", function () {
+              var key = th.getAttribute("data-sort-key");
+              if (state.sortKey === key) {
+                state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+              } else {
+                state.sortKey = key;
+                state.sortDir = (key === "name" || key === "id") ? "asc" : "desc";
+              }
+              render();
+            });
+          });
+          document.getElementById("plans-filter").addEventListener("input", render);
+          document.getElementById("show-archived").addEventListener("change", fetchPlans);
+          // New-plan modal wiring (PRD Epic B3 + D5 modal pattern).
+          document.getElementById("new-plan-btn").addEventListener("click", openNewPlanModal);
+          var emptyBtn = document.getElementById("new-plan-empty-btn");
+          if (emptyBtn) { emptyBtn.addEventListener("click", openNewPlanModal); }
+          document.getElementById("new-plan-cancel").addEventListener("click", closeNewPlanModal);
+          document.getElementById("new-plan-form").addEventListener("submit", submitNewPlan);
+          document.getElementById("new-plan-modal").addEventListener("cancel", function () {
+            // <dialog> emits 'cancel' on Escape; route through closeNewPlanModal
+            // so focus management runs uniformly.
+            setTimeout(closeNewPlanModal, 0);
+          });
+          // Edit modal wiring.
+          document.getElementById("edit-plan-cancel").addEventListener("click", closeEditModal);
+          document.getElementById("edit-plan-form").addEventListener("submit", submitEditPlan);
+          document.getElementById("edit-plan-modal").addEventListener("cancel", function () {
+            setTimeout(closeEditModal, 0);
+          });
+          fetchPlans();
+        });
+      })();
+    </script>
+  </section>
+  {% endif %}
   <main class="operator-shell">
     <header class="topbar">
       <hgroup>
@@ -756,6 +1204,310 @@
       <div class="table-wrapper">
         {% include "_tasks_table.html" %}
       </div>
+
+      <!-- PRD-wui-multi-plan v2 Epic C — Edit Task modal -->
+      <dialog id="edit-task-modal" aria-modal="true" aria-labelledby="edit-task-title">
+        <form id="edit-task-form" method="dialog">
+          <h3 id="edit-task-title">Edit task</h3>
+          <input type="hidden" id="edit-task-id">
+          <input type="hidden" id="edit-task-plan-id">
+          <input type="hidden" id="edit-task-version">
+          <input type="hidden" id="edit-task-claimed-by">
+          <div class="wui-form-row">
+            <label for="edit-task-description">Description</label>
+            <textarea id="edit-task-description" rows="3" maxlength="8192"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-priority">Priority</label>
+            <select id="edit-task-priority">
+              <option value="critical">critical</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-key-files">Key files <small>(one path per line)</small></label>
+            <textarea id="edit-task-key-files" rows="3"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-acceptance">Acceptance criteria <small>(one per line)</small></label>
+            <textarea id="edit-task-acceptance" rows="3"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-test-steps">Test steps <small>(one per line)</small></label>
+            <textarea id="edit-task-test-steps" rows="3"></textarea>
+          </div>
+          <div class="wui-form-row">
+            <label for="edit-task-dependencies">Dependencies <small>(comma-separated task IDs)</small></label>
+            <input type="text" id="edit-task-dependencies" autocomplete="off">
+          </div>
+          <div id="edit-task-banner" class="wui-banner" role="alert" hidden></div>
+          <div id="edit-task-force-release-confirm" class="wui-banner wui-banner--danger" role="alert" hidden>
+            <p><strong>This will interrupt the running worker.</strong>
+               The task will return to PENDING and may produce a duplicate result.</p>
+            <div class="wui-form-actions">
+              <button type="button" id="edit-task-force-release-cancel">Cancel</button>
+              <button type="button" id="edit-task-force-release-confirm-btn"
+                      class="wui-btn--danger">Confirm release</button>
+            </div>
+          </div>
+          <small id="edit-task-error" class="wui-error" role="alert" hidden></small>
+          <div class="wui-form-actions">
+            <button type="button" id="edit-task-cancel">Cancel</button>
+            <button type="submit" id="edit-task-submit">Save</button>
+          </div>
+        </form>
+      </dialog>
+      <script>
+        (function () {
+          // PRD-wui-multi-plan v2 Block 8 (Epic C) — Edit/Delete task wiring.
+          // Operates on the existing #tasks table rendered by
+          // _tasks_table.html. Bound at document level via delegation so
+          // HTMX refresh (every 5s + SSE) does not strip our handlers
+          // along with the swapped rows.
+          var lastFocusedTrigger = null;
+
+          function readListAttr(row, name) {
+            try { return JSON.parse(row.getAttribute(name) || "[]"); }
+            catch (e) { return []; }
+          }
+          function joinLines(arr) { return (arr || []).join("\n"); }
+          function splitLines(text) {
+            return (text || "").split(/\r?\n/).map(function (s) { return s.trim(); })
+              .filter(function (s) { return s.length > 0; });
+          }
+          function splitCommas(text) {
+            return (text || "").split(/[,;]/).map(function (s) { return s.trim(); })
+              .filter(function (s) { return s.length > 0; });
+          }
+
+          function openEditTaskModal(row, trigger) {
+            lastFocusedTrigger = trigger || null;
+            var dlg = document.getElementById("edit-task-modal");
+            document.getElementById("edit-task-id").value = row.getAttribute("data-task-id") || "";
+            document.getElementById("edit-task-plan-id").value = row.getAttribute("data-plan-id") || "";
+            document.getElementById("edit-task-version").value = row.getAttribute("data-version") || "0";
+            document.getElementById("edit-task-claimed-by").value = row.getAttribute("data-claimed-by") || "";
+            document.getElementById("edit-task-description").value = row.getAttribute("data-description") || "";
+            document.getElementById("edit-task-priority").value = row.getAttribute("data-priority") || "medium";
+            document.getElementById("edit-task-key-files").value = joinLines(readListAttr(row, "data-key-files"));
+            document.getElementById("edit-task-acceptance").value = joinLines(readListAttr(row, "data-acceptance-criteria"));
+            document.getElementById("edit-task-test-steps").value = joinLines(readListAttr(row, "data-test-steps"));
+            document.getElementById("edit-task-dependencies").value = (readListAttr(row, "data-dependencies") || []).join(", ");
+            document.getElementById("edit-task-banner").hidden = true;
+            document.getElementById("edit-task-force-release-confirm").hidden = true;
+            document.getElementById("edit-task-error").hidden = true;
+            if (typeof dlg.showModal === "function") { dlg.showModal(); }
+            else { dlg.setAttribute("open", ""); }
+            setTimeout(function () { document.getElementById("edit-task-description").focus(); }, 0);
+          }
+          function closeEditTaskModal() {
+            var dlg = document.getElementById("edit-task-modal");
+            if (typeof dlg.close === "function") { dlg.close(); } else { dlg.removeAttribute("open"); }
+            if (lastFocusedTrigger && typeof lastFocusedTrigger.focus === "function") {
+              try { lastFocusedTrigger.focus(); } catch (e) { /* row gone after HTMX swap */ }
+            }
+          }
+
+          function showBanner(html, opts) {
+            var banner = document.getElementById("edit-task-banner");
+            banner.innerHTML = html;
+            banner.hidden = false;
+            if (opts && opts.danger) { banner.classList.add("wui-banner--danger"); }
+            else { banner.classList.remove("wui-banner--danger"); }
+          }
+
+          function submitEditTask(ev) {
+            ev.preventDefault();
+            var taskId = document.getElementById("edit-task-id").value;
+            var planId = document.getElementById("edit-task-plan-id").value;
+            var version = document.getElementById("edit-task-version").value;
+            var body = {
+              description: document.getElementById("edit-task-description").value,
+              priority: document.getElementById("edit-task-priority").value,
+              key_files: splitLines(document.getElementById("edit-task-key-files").value),
+              acceptance_criteria: splitLines(document.getElementById("edit-task-acceptance").value),
+              test_steps: splitLines(document.getElementById("edit-task-test-steps").value),
+              dependencies: splitCommas(document.getElementById("edit-task-dependencies").value),
+            };
+            var ifMatch = 'W/"v' + parseInt(version || "0", 10) + '"';
+            fetch("/api/v1/tasks/" + encodeURIComponent(taskId) + "?plan_id=" + encodeURIComponent(planId), {
+              method: "PATCH",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "Content-Type": "application/json", "If-Match": ifMatch },
+              body: JSON.stringify(body),
+            }).then(function (r) {
+              if (r.ok) {
+                closeEditTaskModal();
+                if (window.htmx) { window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" }); }
+                return;
+              }
+              return r.json().then(function (data) {
+                if (r.status === 412) {
+                  showBanner(
+                    "This task changed since you opened the modal. "
+                    + '<button type="button" id="edit-task-reload-btn">Reload current values</button> '
+                    + '<button type="button" id="edit-task-cancel-412">Cancel</button>'
+                  );
+                  document.getElementById("edit-task-reload-btn").addEventListener("click", function () {
+                    if (window.htmx) {
+                      window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" })
+                        .then(function () {
+                          var fresh = document.querySelector('#tasks tr[data-task-id="' + CSS.escape(taskId) + '"]');
+                          if (fresh) { openEditTaskModal(fresh, lastFocusedTrigger); }
+                          else { closeEditTaskModal(); }
+                        });
+                    }
+                  });
+                  document.getElementById("edit-task-cancel-412").addEventListener("click", closeEditTaskModal);
+                  return;
+                }
+                if (r.status === 409 && data && data.error === "task_claimed") {
+                  var workerHtml = data.worker_id ? ("worker <code>" + data.worker_id + "</code>") : "a worker";
+                  showBanner(
+                    "Task is in " + workerHtml + ". "
+                    + '<button type="button" id="edit-task-show-force-release">Force release</button> '
+                    + '<button type="button" id="edit-task-cancel-409">Cancel</button>',
+                    { danger: true }
+                  );
+                  document.getElementById("edit-task-show-force-release").addEventListener("click", function () {
+                    document.getElementById("edit-task-force-release-confirm").hidden = false;
+                  });
+                  document.getElementById("edit-task-cancel-409").addEventListener("click", closeEditTaskModal);
+                  return;
+                }
+                var err = document.getElementById("edit-task-error");
+                err.textContent = (data && data.detail) ? String(data.detail) : ("Error " + r.status);
+                err.hidden = false;
+              });
+            }).catch(function (e) {
+              var err = document.getElementById("edit-task-error");
+              err.textContent = "Network error: " + e;
+              err.hidden = false;
+            });
+          }
+
+          function forceReleaseConfirmed() {
+            // PRD C5: two-step Force release inside the modal.
+            var taskId = document.getElementById("edit-task-id").value;
+            var workerId = document.getElementById("edit-task-claimed-by").value;
+            // Build a minimal ReleaseRequest; the existing worker endpoint
+            // requires worker_id + version + reason. We don't carry the
+            // task's CLAIMED version in the DOM, so we re-fetch.
+            fetch("/api/v1/tasks?plan_id=" + encodeURIComponent(document.getElementById("edit-task-plan-id").value), {
+              credentials: "same-origin",
+              headers: { "Accept": "application/json" }
+            }).then(function (r) { return r.ok ? r.json() : { tasks: [] }; })
+              .then(function (data) {
+                var match = (data.tasks || []).filter(function (t) { return t.id === taskId; })[0];
+                if (!match) { throw new Error("task not found after refetch"); }
+                return fetch("/tasks/" + encodeURIComponent(taskId) + "/release", {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json", "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    worker_id: workerId,
+                    version: match.version,
+                    reason: "operator force-release via WUI"
+                  })
+                });
+              }).then(function (r) {
+                if (!r.ok) {
+                  return r.json().then(function (data) {
+                    var err = document.getElementById("edit-task-error");
+                    err.textContent = (data && data.detail) ? String(data.detail) : ("Release error " + r.status);
+                    err.hidden = false;
+                  });
+                }
+                document.getElementById("edit-task-force-release-confirm").hidden = true;
+                document.getElementById("edit-task-banner").hidden = true;
+                if (window.htmx) { window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" }); }
+                closeEditTaskModal();
+              }).catch(function (e) {
+                var err = document.getElementById("edit-task-error");
+                err.textContent = "Network error: " + e;
+                err.hidden = false;
+              });
+          }
+
+          function deleteTaskWithConfirm(row, btn) {
+            // PRD C3: two-step inline confirm. Reuses the row cell so the
+            // operator's attention does not jump out of the table.
+            var cell = btn.parentNode;
+            var original = cell.innerHTML;
+            var taskId = row.getAttribute("data-task-id");
+            cell.innerHTML = '<span class="wui-inline-confirm">Delete <code>' + taskId
+              + '</code>? <button type="button" class="task-delete-confirm wui-btn--danger">Confirm</button> '
+              + '<button type="button" class="task-delete-cancel">Cancel</button></span>';
+            cell.querySelector(".task-delete-cancel").addEventListener("click", function () {
+              cell.innerHTML = original;
+              // Re-bind the now-recreated edit/delete buttons.
+              wireRowButtons(row);
+            });
+            cell.querySelector(".task-delete-confirm").addEventListener("click", function () {
+              var planId = row.getAttribute("data-plan-id");
+              var version = row.getAttribute("data-version") || "0";
+              var ifMatch = 'W/"v' + parseInt(version, 10) + '"';
+              fetch("/api/v1/tasks/" + encodeURIComponent(taskId) + "?plan_id=" + encodeURIComponent(planId), {
+                method: "DELETE",
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "If-Match": ifMatch }
+              }).then(function (r) {
+                if (r.status === 204) {
+                  if (window.htmx) { window.htmx.ajax("GET", "/?fragment=tasks", { target: "#tasks", swap: "outerHTML" }); }
+                  return;
+                }
+                return r.json().then(function (data) {
+                  alert((data && data.detail) ? data.detail : ("Error " + r.status));
+                  cell.innerHTML = original;
+                  wireRowButtons(row);
+                });
+              }).catch(function (e) {
+                alert("Network error: " + e);
+                cell.innerHTML = original;
+                wireRowButtons(row);
+              });
+            });
+          }
+
+          function wireRowButtons(row) {
+            // Idempotent — safe to call after each HTMX swap.
+            var editBtn = row.querySelector(".task-edit-btn");
+            var delBtn = row.querySelector(".task-delete-btn");
+            if (editBtn && !editBtn.dataset.bound) {
+              editBtn.dataset.bound = "1";
+              editBtn.addEventListener("click", function () { openEditTaskModal(row, editBtn); });
+            }
+            if (delBtn && !delBtn.dataset.bound) {
+              delBtn.dataset.bound = "1";
+              delBtn.addEventListener("click", function () { deleteTaskWithConfirm(row, delBtn); });
+            }
+          }
+
+          function wireAllRows() {
+            var rows = document.querySelectorAll('#tasks tr[data-task-id]');
+            Array.prototype.forEach.call(rows, wireRowButtons);
+          }
+
+          document.addEventListener("DOMContentLoaded", function () {
+            wireAllRows();
+            document.getElementById("edit-task-cancel").addEventListener("click", closeEditTaskModal);
+            document.getElementById("edit-task-form").addEventListener("submit", submitEditTask);
+            document.getElementById("edit-task-modal").addEventListener("cancel", function () {
+              setTimeout(closeEditTaskModal, 0);
+            });
+            document.getElementById("edit-task-force-release-cancel").addEventListener("click", function () {
+              document.getElementById("edit-task-force-release-confirm").hidden = true;
+            });
+            document.getElementById("edit-task-force-release-confirm-btn").addEventListener("click", forceReleaseConfirmed);
+          });
+          // HTMX swap re-renders the table — re-bind buttons each time.
+          document.body.addEventListener("htmx:afterSwap", function (ev) {
+            if (ev && ev.target && ev.target.id === "tasks") { wireAllRows(); }
+          });
+        })();
+      </script>
     </section>
 
     <section id="surface-workers" class="operator-surface surface-panel" data-surface="workers" hidden>

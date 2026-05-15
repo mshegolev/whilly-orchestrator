@@ -165,7 +165,7 @@ from typing import Any, Final
 import asyncpg
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi import status as status_module
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from whilly.adapters.db import TaskRepository, VersionConflictError
 from whilly.core.models import Task, TaskStatus
@@ -191,6 +191,9 @@ from whilly.api.sse import (
     _ListenerState,
     event_notify_listener_loop,
 )
+from whilly.api import auth_tokens as wui_auth_tokens
+from whilly.api import sessions as wui_sessions
+from whilly.api.auth_routes import DEFAULT_SESSION_COOKIE_NAME
 from whilly.api.dashboard import render_dashboard as render_dashboard_view
 from whilly.api.dashboard_token import (
     DEFAULT_DASHBOARD_SCOPES,
@@ -1029,6 +1032,35 @@ def create_app(
             legacy_bootstrap_token=legacy_bootstrap_token,
         )
 
+    async def _resolve_session_from_cookie(request: Request) -> tuple[str | None, str | None]:
+        """Best-effort session resolution for the ``/`` dispatcher (PRD D2).
+
+        Returns ``(email, session_id)`` when the ``whilly_session`` cookie
+        is present, signature-valid, unexpired, and refers to a non-revoked
+        ``sessions`` row. Any failure — missing cookie, signature mismatch,
+        expiry, revoked row — collapses to ``(None, None)`` silently. The
+        dispatcher must never 401 on an absent/invalid cookie because the
+        share-link path is fully anonymous.
+        """
+        cookie_value = request.cookies.get(DEFAULT_SESSION_COOKIE_NAME)
+        if not cookie_value:
+            return None, None
+        try:
+            claims = wui_auth_tokens.verify_session_cookie_value(cookie_value, dashboard_token_secret)
+        except wui_auth_tokens.AuthTokenError:
+            return None, None
+        sid = claims.get("sid")
+        if not isinstance(sid, str) or not sid:
+            return None, None
+        try:
+            session = await wui_sessions.verify_session(pool, session_id=sid)
+        except Exception as exc:  # noqa: BLE001 - dispatcher must never 500 on a stale cookie.
+            logger.warning("dispatcher: session lookup failed: %s", exc)
+            return None, None
+        if session is None:
+            return None, None
+        return session.email, session.session_id
+
     # Event flusher (TASK-106). Construction is cheap and non-async — it
     # just allocates an :class:`asyncio.Queue` and stashes config. The
     # actual coroutine is spawned inside the lifespan TaskGroup below.
@@ -1253,12 +1285,44 @@ def create_app(
         # /docs (Swagger UI) and /openapi.json on FastAPI defaults —
         # operators expect them there, no reason to relocate.
     )
+    from whilly.api.auth_routes import build_auth_router
+    from whilly.api.csrf import WhillySessionCSRFMiddleware
     from whilly.api.dashboard import FileLogStore
+    from whilly.api.plans_api import build_plans_router
     from whilly.api.static_mount import mount_static_assets
+    from whilly.api.tasks_api_crud import build_tasks_crud_router
 
     mount_static_assets(app)
     app.state.log_store = FileLogStore(Path("whilly_logs"))
     instrument_app(app)
+
+    # PRD-wui-multi-plan v2 Epic A + §6.1: install the CSRF gate BEFORE the
+    # auth router and any subsequent CRUD routers. The middleware is a
+    # no-op for requests that do not carry the session cookie, so worker
+    # bearer / dashboard JWT traffic is unaffected. ``cookie_name`` and
+    # ``cookie_secure`` flow through env (WHILLY_SESSION_COOKIE_SECURE,
+    # WHILLY_CSRF_ORIGIN_ALLOWLIST) per §6.4. The router itself is wired
+    # to the same pool + ``dashboard_token_secret`` so a single HMAC key
+    # governs the whole auth surface (Architect F2).
+    app.add_middleware(WhillySessionCSRFMiddleware)
+    app.include_router(
+        build_auth_router(pool=pool, secret=dashboard_token_secret),
+    )
+    # PRD-wui-multi-plan v2 Block 4 (Epic B1+B2+B7 — GET list side only).
+    # Bound to the same pool + HMAC secret as the auth router so a
+    # single key governs the entire session-only CRUD surface
+    # (Architect F2). Block 7 will mount the CRUD writes on a
+    # sibling router built by the same module.
+    app.include_router(
+        build_plans_router(pool=pool, secret=dashboard_token_secret),
+    )
+    # PRD-wui-multi-plan v2 Block 8 (Epic C — task edit + hard delete).
+    # PATCH/DELETE on /api/v1/tasks/{task_id} with If-Match: W/"v<version>"
+    # concurrency. Same pool + HMAC secret as the rest of the
+    # session-only CRUD surface so a single key governs the whole UI.
+    app.include_router(
+        build_tasks_crud_router(pool=pool, secret=dashboard_token_secret),
+    )
 
     async def _probe_pool() -> tuple[bool, str | None]:
         try:
@@ -2127,8 +2191,20 @@ def create_app(
             minimal.
         """
         async with pool.acquire() as conn:
+            # PRD-wui-multi-plan v2 Block 7: extend the projection with
+            # budget_usd / archived_at / last_event_at so we can emit an
+            # ETag header that round-trips through PATCH /api/v1/plans/
+            # {plan_id}'s ``If-Match`` precondition. The forge-shaped
+            # JSON body is unchanged (back-compat with VAL-FORGE-012
+            # consumers); the new ETag is purely additive in headers.
             row = await conn.fetchrow(
-                "SELECT id, name, github_issue_ref, prd_file, verification_commands FROM plans WHERE id = $1",
+                """
+                SELECT
+                    p.id, p.name, p.github_issue_ref, p.prd_file, p.verification_commands,
+                    p.budget_usd, p.archived_at,
+                    (SELECT MAX(e.created_at) FROM events e WHERE e.plan_id = p.id) AS last_event_at
+                FROM plans p WHERE p.id = $1
+                """,
                 plan_id,
             )
             origin_row = await conn.fetchrow(
@@ -2181,6 +2257,14 @@ def create_app(
                 "prd_file": origin_row["prd_file"],
                 "decomposition_mode": origin_row["decomposition_mode"],
             }
+        # PRD-wui-multi-plan v2 §6.5: ETag round-trips through PATCH's
+        # If-Match. The tuple matches the plans_api ETag formula
+        # (id, name, budget_usd, archived_at, last_event_at) so a GET
+        # via the forge route and a GET via the session-only router
+        # (when we add one) produce the same tag for the same row.
+        from whilly.api.plans_api import _compute_plan_etag
+
+        etag = _compute_plan_etag(row)
         return JSONResponse(
             {
                 "id": row["id"],
@@ -2190,7 +2274,8 @@ def create_app(
                 "verification_commands": _decode_json_array(row["verification_commands"]),
                 "origin": origin,
                 "repo_targets": [dict(repo_target) for repo_target in repo_target_rows],
-            }
+            },
+            headers={"ETag": etag, "Cache-Control": "no-store"},
         )
 
     @app.get(
@@ -2250,7 +2335,11 @@ def create_app(
         # read-only dashboard token so HTMX fragments do not need worker
         # credentials in the browser.
         tags=["tasks"],
-        summary="List tasks for a plan with pagination + status filter",
+        summary=(
+            "List tasks for a plan with pagination + status filter. "
+            "Each row carries a ``version`` int; PATCH/DELETE require "
+            '``If-Match: W/"v<version>"`` (PRD-wui-multi-plan v2 Epic C).'
+        ),
     )
     async def list_tasks_endpoint(
         request: Request,
@@ -2331,6 +2420,24 @@ def create_app(
         await _authenticate_tasks_read_request(request)
 
         try:
+            # PRD-wui-multi-plan v2 Epic B6: archived plans cannot accept
+            # new tasks. Check explicitly before INSERT so the operator
+            # sees a 410 Gone with an actionable message rather than
+            # silently watching the worker pool idle on a frozen plan.
+            async with pool.acquire() as conn:
+                archived_row = await conn.fetchrow(
+                    "SELECT archived_at FROM plans WHERE id = $1",
+                    plan_id,
+                )
+            if archived_row is not None and archived_row["archived_at"] is not None:
+                return JSONResponse(
+                    {
+                        "error": "plan_archived",
+                        "detail": "cannot create tasks on archived plan",
+                    },
+                    status_code=status_module.HTTP_410_GONE,
+                )
+
             # Create task object
             task = Task(
                 id=create_req.id,
@@ -2505,19 +2612,57 @@ def create_app(
         fragment: str | None = None,
         task_id: str | None = None,
     ) -> Response:
+        # PRD-wui-multi-plan v2 Epic D2 dispatcher.
+        #
+        # Branching matrix:
+        #   - Fragment requests (?fragment=tasks|workers|logs) skip the
+        #     dispatcher entirely — they render the partial as today so
+        #     HTMX polling fallback keeps working regardless of session
+        #     state.
+        #   - Anonymous + no ?token= + no ?plan_id= → 302 to /login.
+        #   - Anonymous + ?token= and/or ?plan_id= → existing share-link
+        #     path. The legacy bearer/JWT auth on the partial endpoints
+        #     still guards data; here we just render the page shell and
+        #     pass ``plan_id_for_share_link`` so the template can surface
+        #     the "shared plan" sign-in banner (D2 last bullet).
+        #   - Authenticated session → render with ``auth_email`` so the
+        #     template hydrates the plans-table and header nav.
+        fragment_param = (fragment or "").strip().lower() or None
+        if fragment_param is None:
+            auth_email, _session_id = await _resolve_session_from_cookie(request)
+            query_token = (request.query_params.get("token") or "").strip()
+            query_plan_id = (request.query_params.get("plan_id") or "").strip()
+            if auth_email is None and not query_token and not query_plan_id:
+                # PRD D2 first bullet — anonymous landing → /login funnel.
+                return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+        else:
+            auth_email = None
+            query_plan_id = ""
+
         events_token = None
-        if fragment is None:
+        if fragment_param is None:
             events_token = mint_dashboard_token(
                 dashboard_token_secret,
                 ttl_seconds=dashboard_token_ttl,
                 scope=DEFAULT_DASHBOARD_SCOPES,
             )
+        # plan_id_for_share_link is only set in anonymous share-link mode
+        # (no session cookie + plan_id query param present). When the user
+        # is authenticated we deliberately drop it: the future
+        # ``/plans/<id>`` URL will surface header nav (D3) instead of the
+        # share-link banner.
+        plan_id_for_share_link: str | None = None
+        if fragment_param is None and auth_email is None and query_plan_id:
+            plan_id_for_share_link = query_plan_id
+
         return await render_dashboard_view(
             request=request,
             pool=pool,
             fragment=fragment,
             events_token=events_token,
             task_id=task_id,
+            auth_email=auth_email,
+            plan_id_for_share_link=plan_id_for_share_link,
         )
 
     @app.get(
