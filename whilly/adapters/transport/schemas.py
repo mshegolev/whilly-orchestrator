@@ -675,6 +675,48 @@ class TaskCreateResponse(_FrozenModel):
     task: TaskPayload
 
 
+class PullRequestRecordRequest(_FrozenModel):
+    """``POST /api/v1/plans/{plan_id}/pull_requests`` request body.
+
+    Worker-callable RPC the *remote* worker uses to record a PR/MR it
+    just opened via ``git push`` + ``glab mr create`` / ``gh pr create``.
+    Brings the remote worker to parity with the local worker, which
+    performs the same DB insert + ``pr.opened`` event emission inline
+    via :func:`whilly.sinks.post_complete_pr_hook.run_post_complete_pr_hook`.
+
+    ``provider`` is a closed-set ``Literal["gitlab", "github"]`` rather
+    than a free-form string because the worker can only have called one
+    of two known commands (``glab mr create`` / ``gh pr create``); the
+    value is stored in the audit-event payload so observability
+    dashboards can route by provider without sniffing the URL.
+
+    ``head_sha`` / ``repo_target_id`` / ``worker_id`` are optional —
+    the local-path payload omits them in the same conditions and the
+    pull_requests table allows NULL on ``head_sha`` / ``repo_target_id``.
+    """
+
+    task_id: NonEmptyShortStr
+    pr_url: NonEmptyToken
+    branch: NonEmptyShortStr
+    pr_number: NonNegativeVersion
+    head_sha: Annotated[str, Field(max_length=64)] | None = None
+    repo_target_id: NonEmptyShortStr | None = None
+    provider: Literal["gitlab", "github"] = "github"
+    worker_id: Annotated[str, Field(max_length=128)] | None = None
+
+
+class PullRequestRecordResponse(_FrozenModel):
+    """``POST /api/v1/plans/{plan_id}/pull_requests`` response body."""
+
+    plan_id: NonEmptyShortStr
+    task_id: NonEmptyShortStr
+    pr_url: NonEmptyToken
+    pr_number: NonNegativeVersion
+    branch: NonEmptyShortStr
+    provider: Literal["gitlab", "github"]
+    recorded_at: datetime
+
+
 class ErrorResponse(_FrozenModel):
     """Shared error envelope for any non-2xx response (PRD FR-1.2).
 
@@ -724,6 +766,8 @@ __all__ = [
     "HumanReviewDecisionRequest",
     "ListTaskEventsResponse",
     "PlanPayload",
+    "PullRequestRecordRequest",
+    "PullRequestRecordResponse",
     "RegisterRequest",
     "RegisterResponse",
     "ReleaseRequest",
