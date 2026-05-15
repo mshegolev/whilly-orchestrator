@@ -2666,6 +2666,76 @@ def create_app(
         )
 
     @app.get(
+        "/plans/{plan_id}",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def plan_detail(
+        request: Request,
+        plan_id: str,
+        fragment: str | None = None,
+        task_id: str | None = None,
+    ) -> Response:
+        """PRD-wui-multi-plan v2 Epic D2 / D3 — per-plan dashboard URL.
+
+        Path-param alternative to ``/?plan_id=X``. Plans-table rows in the
+        homepage link here (template index.html.j2:666). Reuses the same
+        ``dashboard_index`` dispatcher branching by re-injecting ``plan_id``
+        into the request scope so downstream handlers that read
+        ``request.query_params.get("plan_id")`` (operator views, share-link
+        banner check) keep working with zero changes.
+
+        Auth model mirrors ``GET /``: anonymous + no session cookie + no
+        ``?token=`` → redirect to ``/login?next=/plans/<id>`` so the
+        operator lands back on the same plan after sign-in. Anonymous +
+        ``?token=`` → share-link mode (banner rendered, no header nav).
+        Authenticated → full single-plan dashboard with header nav.
+        """
+        fragment_param = (fragment or "").strip().lower() or None
+        if fragment_param is None:
+            auth_email, _session_id = await _resolve_session_from_cookie(request)
+            query_token = (request.query_params.get("token") or "").strip()
+            if auth_email is None and not query_token:
+                # Redirect to login with ?next= so the user lands back here.
+                next_path = f"/plans/{plan_id}"
+                return RedirectResponse(
+                    url=f"/login?next={next_path}",
+                    status_code=status.HTTP_303_SEE_OTHER,
+                )
+        else:
+            auth_email = None
+
+        events_token = None
+        if fragment_param is None:
+            events_token = mint_dashboard_token(
+                dashboard_token_secret,
+                ttl_seconds=dashboard_token_ttl,
+                scope=DEFAULT_DASHBOARD_SCOPES,
+            )
+
+        # Share-link banner shows only when anonymous; authenticated users
+        # see the full nav header.
+        plan_id_for_share_link: str | None = None
+        if fragment_param is None and auth_email is None:
+            plan_id_for_share_link = plan_id
+
+        # Inject plan_id into the request's query_params view so the
+        # operator-views code path (which reads it from query) gets the
+        # right value. We can't mutate request.query_params directly, so
+        # pass it explicitly to render_dashboard_view; the renderer maps
+        # it onto the existing `?plan_id=` contract.
+        return await render_dashboard_view(
+            request=request,
+            pool=pool,
+            fragment=fragment,
+            events_token=events_token,
+            task_id=task_id,
+            auth_email=auth_email,
+            plan_id_for_share_link=plan_id_for_share_link,
+            plan_id_override=plan_id,
+        )
+
+    @app.get(
         "/events/stream",
         include_in_schema=True,
     )
