@@ -31,12 +31,28 @@ from pathlib import Path
 from typing import Any
 from json import JSONDecodeError
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener, urlopen
 
 from whilly.security.prompt_sanitizer import sanitize_external_text
 from whilly.sources.github_issues import FetchStats, GitHubIssuesSource, merge_into_plan
 
 log = logging.getLogger("whilly")
+
+
+def _bypass_system_proxy() -> bool:
+    """Return True if the operator opted into urllib bypass via env."""
+    return (os.environ.get("WHILLY_JIRA_NO_PROXY") or "").strip() == "1"
+
+
+def _jira_opener_no_proxy(context=None):
+    """Build a urllib opener with empty ProxyHandler — ignores env + macOS sysconfig.
+
+    The optional SSL ``context`` argument flows through to ``HTTPSHandler`` so
+    callers that need ``JIRA_VERIFY_SSL=false`` or a custom CA file still get
+    their SSL settings honoured even on the no-proxy path.
+    """
+    https_handler = HTTPSHandler(context=context) if context is not None else HTTPSHandler()
+    return build_opener(ProxyHandler({}), https_handler)
 
 
 # ── Public config resolution ──────────────────────────────────────────────────
@@ -232,8 +248,14 @@ def _jira_get(auth: JiraAuth, path: str, *, timeout: int = 15) -> dict:
         method="GET",
     )
     context = _jira_ssl_context(auth)
+    # Optional: bypass macOS system-level proxy (PAC / scutil) when the
+    # operator's network has a corporate proxy that doesn't route to the
+    # internal Jira host. Env-gated so production behaviour is unchanged.
+    opener = _jira_opener_no_proxy(context=context) if _bypass_system_proxy() else None
     try:
-        if context is None:
+        if opener is not None:
+            response = opener.open(req, timeout=timeout)
+        elif context is None:
             response = urlopen(req, timeout=timeout)
         else:
             response = urlopen(req, timeout=timeout, context=context)
