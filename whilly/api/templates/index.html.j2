@@ -14,31 +14,22 @@
           crossorigin="anonymous"
           defer></script>
   <style>
+    /* ── TUI override: force pure dark palette regardless of OS setting ── */
     :root {
-      --whilly-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      --bg: #f7f8fa;
-      --surface: #ffffff;
-      --surface-strong: #f1f3f6;
-      --text: #1b1f24;
-      --muted: #5b6470;
-      --line: #d7dce2;
-      --line-strong: #aeb6c2;
-      --accent: #0f766e;
-      --danger: #b42318;
-      --warn: #a15c07;
-      --ok: #16703c;
-      --info: #0969da;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --bg: #111315;
-        --surface: #171a1d;
-        --surface-strong: #202428;
-        --text: #eceff3;
-        --muted: #a6adb7;
-        --line: #343a40;
-        --line-strong: #59616b;
-      }
+      --bg:             #111315;
+      --surface:        #171a1d;
+      --surface-strong: #202428;
+      --text:           #eceff3;
+      --muted:          #a6adb7;
+      --line:           #343a40;
+      --line-strong:    #59616b;
+      --accent:         #0f766e;
+      --danger:         #b42318;
+      --warn:           #a15c07;
+      --ok:             #16703c;
+      --info:           #0969da;
+      --whilly-mono:    var(--font-mono);
+      color-scheme:     dark;
     }
     * { box-sizing: border-box; }
     body.operator-console {
@@ -50,6 +41,396 @@
       line-height: 1.45;
       overflow-x: hidden;
     }
+    /* ── Auth nav bar ─────────────────────────────────────────────── */
+    .wui-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 10px;
+      border-bottom: 1px solid var(--line-strong);
+      background: var(--surface-strong);
+      font: 400 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+      gap: 12px;
+    }
+    .wui-nav__identity strong { color: var(--text); }
+    .wui-nav__identity::before { content: "&#9474; "; color: var(--line-strong); }
+    .wui-nav__logout { margin: 0; display: flex; align-items: center; }
+    .wui-nav__logout button {
+      padding: 2px 10px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      font: inherit;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+    }
+    .wui-nav__logout button:hover, .wui-nav__logout button:focus-visible {
+      color: var(--surface);
+      background: var(--text);
+      outline: none;
+    }
+    /* ── Plans section ────────────────────────────────────────────── */
+    .wui-plans {
+      border-bottom: 1px solid var(--line-strong);
+      padding: 10px;
+      background: var(--bg);
+    }
+    .wui-plans__head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .wui-plans__head h2 {
+      font: 700 13px/1.2 var(--whilly-mono);
+      color: var(--accent);
+      margin: 0;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .wui-plans__head h2::before { content: "[ "; color: var(--muted); }
+    .wui-plans__head h2::after  { content: " ]"; color: var(--muted); }
+    .wui-plans__controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+    .wui-plans__new-btn {
+      padding: 3px 10px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0;
+      font: 700 12px/1.4 var(--whilly-mono);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .wui-plans__new-btn:hover, .wui-plans__new-btn:focus-visible {
+      background: var(--accent);
+      color: var(--bg);
+      outline: none;
+    }
+    #plans-filter {
+      min-height: 26px;
+      padding: 3px 8px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      font: 13px/1.4 var(--whilly-mono);
+      flex: 1 1 200px;
+      min-width: 140px;
+    }
+    #plans-filter::placeholder { color: var(--muted); }
+    #plans-filter:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+    .wui-plans__controls label {
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .wui-plans__controls label input[type="checkbox"] { accent-color: var(--accent); }
+    .wui-plans__archived-count {
+      font: 11px/1.4 var(--whilly-mono);
+      color: var(--muted);
+    }
+    .wui-plans__empty-state {
+      color: var(--muted);
+      font: 12px/1.4 var(--whilly-mono);
+      margin: 6px 0 0;
+    }
+    .wui-plans__empty-state button {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0;
+      padding: 2px 8px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .wui-plans__empty-state button:hover { background: var(--accent); color: var(--bg); }
+    .wui-plans table { border: 1px solid var(--line-strong); background: var(--surface); }
+    .wui-plans th { background: var(--surface-strong); color: var(--muted); font: 700 11px/1.2 var(--whilly-mono); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--line-strong); padding: 5px 8px; }
+    .wui-plans td { padding: 5px 8px; border-bottom: 1px solid var(--line); color: var(--text); font: 13px/1.45 var(--whilly-mono); white-space: nowrap; }
+    .wui-plans tbody tr:hover td { background: var(--surface-strong); cursor: pointer; }
+    .wui-plans__empty td { color: var(--muted); font-style: italic; }
+    .wui-plans__actions { position: relative; }
+    .wui-plans__menu { position: relative; display: inline-block; }
+    .wui-plans__menu summary {
+      list-style: none;
+      padding: 2px 8px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 0;
+      font: 13px/1.4 var(--whilly-mono);
+      cursor: pointer;
+    }
+    .wui-plans__menu summary:hover { background: var(--surface-strong); color: var(--text); }
+    .wui-plans__menu[open] summary { color: var(--text); background: var(--surface-strong); }
+    .wui-plans__menu-body {
+      position: absolute;
+      right: 0;
+      top: 100%;
+      z-index: 20;
+      background: var(--surface);
+      border: 1px solid var(--line-strong);
+      min-width: 120px;
+      display: flex;
+      flex-direction: column;
+    }
+    .wui-plans__menu-body button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 5px 10px;
+      background: transparent;
+      color: var(--text);
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      font: 12px/1.4 var(--whilly-mono);
+      cursor: pointer;
+    }
+    .wui-plans__menu-body button:last-child { border-bottom: 0; }
+    .wui-plans__menu-body button:hover { background: var(--surface-strong); color: var(--accent); }
+    /* ── Dialog / modal TUI style ─────────────────────────────────── */
+    dialog {
+      position: fixed;
+      inset: 0;
+      margin: auto;
+      padding: 0;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      width: min(480px, calc(100vw - 40px));
+      max-height: calc(100vh - 80px);
+      overflow-y: auto;
+      font: 13px/1.45 var(--whilly-mono);
+      box-shadow: none;
+    }
+    dialog::backdrop { background: rgba(0,0,0,0.7); }
+    dialog h3 {
+      margin: 0;
+      padding: 7px 12px;
+      font: 700 13px/1.2 var(--whilly-mono);
+      color: var(--accent);
+      background: var(--surface-strong);
+      border-bottom: 1px solid var(--line-strong);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    dialog form { padding: 16px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+    .wui-form-row { display: flex; flex-direction: column; gap: 4px; }
+    .wui-form-row label {
+      font: 700 11px/1.2 var(--whilly-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+    .wui-form-row label::before { content: "\25B8 "; color: var(--accent); }
+    .wui-form-row label small { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); opacity: 0.8; }
+    .wui-form-row input[type="text"],
+    .wui-form-row input[type="number"],
+    .wui-form-row input[type="email"],
+    .wui-form-row input[type="password"],
+    .wui-form-row textarea,
+    .wui-form-row select {
+      padding: 4px 8px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      font: 13px/1.45 var(--whilly-mono);
+    }
+    .wui-form-row input:focus,
+    .wui-form-row textarea:focus,
+    .wui-form-row select:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+    .wui-form-row small#plan_id-help { color: var(--muted); font: 11px/1.3 var(--whilly-mono); }
+    .wui-required { color: var(--danger); }
+    .wui-error { color: var(--danger); font: 11px/1.3 var(--whilly-mono); }
+    .wui-error[hidden] { display: none; }
+    .wui-form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 4px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+    .wui-form-actions button {
+      padding: 4px 16px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0;
+      font: 700 12px/1.4 var(--whilly-mono);
+      cursor: pointer;
+    }
+    .wui-form-actions button:hover, .wui-form-actions button:focus-visible {
+      background: var(--accent);
+      color: var(--bg);
+      outline: none;
+    }
+    .wui-form-actions button[id$="cancel"],
+    .wui-form-actions button.wui-btn--secondary {
+      color: var(--muted);
+      border-color: var(--line-strong);
+    }
+    .wui-form-actions button[id$="cancel"]:hover,
+    .wui-form-actions button.wui-btn--secondary:hover {
+      background: var(--surface-strong);
+      color: var(--text);
+    }
+    .wui-btn--danger {
+      color: var(--danger) !important;
+      border-color: var(--danger) !important;
+    }
+    .wui-btn--danger:hover {
+      background: var(--danger) !important;
+      color: var(--bg) !important;
+    }
+    .wui-banner {
+      padding: 8px 10px;
+      border: 1px solid var(--line-strong);
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--text);
+    }
+    .wui-banner[hidden] { display: none; }
+    .wui-banner--danger {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+    .wui-inline-confirm {
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .task-edit-btn, .task-delete-btn {
+      padding: 2px 8px;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 0;
+      font: 12px/1.4 var(--whilly-mono);
+      cursor: pointer;
+    }
+    .task-edit-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .task-delete-btn:hover { color: var(--danger); border-color: var(--danger); }
+    .tasks-actions { white-space: nowrap; }
+    /* ── Jira import + Create Task panels ─────────────────────────── */
+    .tui-panel-details {
+      margin-bottom: 10px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+    }
+    .tui-panel-details summary {
+      padding: 6px 10px;
+      background: var(--surface-strong);
+      border-bottom: 1px solid var(--line);
+      font: 700 12px/1.4 var(--whilly-mono);
+      color: var(--text);
+      cursor: pointer;
+      list-style: none;
+      letter-spacing: 0.03em;
+    }
+    .tui-panel-details summary:hover { background: var(--surface-strong); color: var(--accent); }
+    .tui-panel-details[open] summary { border-bottom: 1px solid var(--line-strong); color: var(--accent); }
+    .tui-panel-details > summary::marker,
+    .tui-panel-details > summary::-webkit-details-marker { display: none; }
+    .tui-panel-details[open] > summary::before { content: "\25BC "; }
+    .tui-panel-details > summary::before { content: "\25B6 "; color: var(--accent); }
+    .tui-panel-body { padding: 12px 14px; }
+    .tui-form-grid {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 8px 14px;
+      align-items: start;
+    }
+    .tui-form-label {
+      font: 700 11px/1.4 var(--whilly-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      padding-top: 5px;
+    }
+    .tui-form-label::before { content: "\25B8 "; color: var(--accent); }
+    .tui-inp {
+      width: 100%;
+      padding: 4px 8px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line-strong);
+      border-radius: 0;
+      font: 13px/1.45 var(--whilly-mono);
+    }
+    .tui-inp:focus { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+    .tui-inp::placeholder { color: var(--muted); }
+    select.tui-inp { cursor: pointer; }
+    textarea.tui-inp { resize: vertical; }
+    .tui-check-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .tui-check-row input[type="checkbox"] { accent-color: var(--accent); }
+    .tui-btn-row { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .tui-btn {
+      padding: 4px 16px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0;
+      font: 700 12px/1.4 var(--whilly-mono);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .tui-btn:hover, .tui-btn:focus-visible { background: var(--accent); color: var(--bg); outline: none; }
+    .tui-btn-secondary {
+      color: var(--muted);
+      border-color: var(--line-strong);
+    }
+    .tui-btn-secondary:hover { background: var(--surface-strong); color: var(--text); }
+    .tui-status { font: 12px/1.4 var(--whilly-mono); color: var(--muted); }
+    .tui-wizard-panel {
+      margin-top: 14px;
+      padding: 12px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface-strong);
+    }
+    .tui-wizard-panel h3 {
+      margin: 0 0 4px;
+      font: 700 12px/1.2 var(--whilly-mono);
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .tui-wizard-panel p { margin: 0 0 10px; font: 12px/1.4 var(--whilly-mono); color: var(--muted); }
+    /* ── share banner ─────────────────────────────────────────────── */
+    .share-link-banner {
+      padding: 6px 12px;
+      background: var(--surface-strong);
+      border-bottom: 1px solid var(--line-strong);
+      font: 12px/1.4 var(--whilly-mono);
+      color: var(--muted);
+    }
+    .share-link-banner a { color: var(--accent); }
+    /* ── Main operator shell ──────────────────────────────────────── */
     .operator-shell {
       width: min(1440px, calc(100vw - 24px));
       margin: 0 auto;
@@ -88,7 +469,7 @@
       color: var(--text);
       background: var(--surface);
       border: 1px solid var(--line-strong);
-      border-radius: 2px;
+      border-radius: 0;
       font: inherit;
       white-space: nowrap;
     }
@@ -239,7 +620,7 @@
       min-height: 32px;
       padding: 4px 8px;
       border: 1px solid var(--line-strong);
-      border-radius: 2px;
+      border-radius: 0;
       color: var(--text);
       background: var(--surface);
       font: inherit;
@@ -1084,127 +1465,112 @@
       <header><h2>Plans/Tasks</h2></header>
 
       <!-- Jira Import Form (Phase 1 WUI) -->
-      <details open style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--accent); background: var(--surface-strong); cursor: pointer;" data-testid="jira-import-panel">
-        <summary style="font-weight: bold; color: var(--accent);">📥 Import from Jira</summary>
-        <div style="padding: 12px; margin-top: 8px;">
-          <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center;">
-            <label for="jira-ref" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Jira key / URL *</label>
-            <input id="jira-ref" type="text" placeholder="DEMO-9843 or https://jira.../browse/DEMO-9843"
-                   style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+      <details open class="tui-panel-details" data-testid="jira-import-panel">
+        <summary>Import from Jira</summary>
+        <div class="tui-panel-body">
+          <div class="tui-form-grid">
+            <label for="jira-ref" class="tui-form-label">Jira key / URL *</label>
+            <input id="jira-ref" type="text" class="tui-inp" placeholder="DEMO-9843 or https://jira.../browse/DEMO-9843">
 
-            <label for="jira-plan-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Plan ID override</label>
-            <input id="jira-plan-id" type="text" placeholder="default: jira-&lt;key-lowercase&gt;"
-                   style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+            <label for="jira-plan-id" class="tui-form-label">Plan ID override</label>
+            <input id="jira-plan-id" type="text" class="tui-inp" placeholder="default: jira-&lt;key-lowercase&gt;">
           </div>
+          <label class="tui-check-row">
+            <input id="jira-force" type="checkbox">
+            Force re-import (overwrite existing plan + tasks)
+          </label>
 
-          <div style="margin-top: 8px;">
-            <label for="jira-force" style="font-weight: normal; color: var(--muted); font-size: 0.85rem; cursor: pointer;">
-              <input id="jira-force" type="checkbox" style="vertical-align: middle; margin-right: 4px;">
-              Force re-import (overwrite existing plan + tasks)
-            </label>
-          </div>
-
-          <div style="margin-top: 12px;">
-            <button id="jira-import-autonomous" type="button"
-                    style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold; margin-right: 8px;">
-              🤖 Import &amp; Autonomous
+          <div class="tui-btn-row">
+            <button id="jira-import-autonomous" type="button" class="tui-btn">
+              [bot] Import &amp; Autonomous
             </button>
-            <button id="jira-import-wizard" type="button"
-                    style="padding: 8px 16px; background: var(--surface); color: var(--accent); border: 1px solid var(--accent); border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
-              🧙 Import &amp; Wizard
+            <button id="jira-import-wizard" type="button" class="tui-btn tui-btn-secondary">
+              [wiz] Import &amp; Wizard
             </button>
-            <span id="jira-import-status" role="status" aria-live="polite" style="margin-left: 12px; color: var(--muted);"></span>
+            <span id="jira-import-status" class="tui-status" role="status" aria-live="polite"></span>
           </div>
 
           <!-- Wizard panel (hidden until 'Import & Wizard' is clicked + Jira fetched) -->
           <div id="jira-wizard-panel" hidden
                data-testid="jira-wizard-panel"
-               style="margin-top: 16px; padding: 12px; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 4px;">
-            <h3 style="margin-top: 0; color: var(--accent);">🧙 Wizard — refine before agent picks up</h3>
-            <p style="color: var(--muted); font-size: 0.85rem; margin: 4px 0 12px;">
+               class="tui-wizard-panel">
+            <h3>Wizard — refine before agent picks up</h3>
+            <p>
               Imported task: <strong id="wizard-task-summary"></strong>
             </p>
-            <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: start;">
-              <label for="wizard-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Описание / Goal</label>
-              <textarea id="wizard-description" rows="4" placeholder="Override what the agent should do (markdown ok)"
-                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+            <div class="tui-form-grid">
+              <label for="wizard-description" class="tui-form-label">Goal / Description</label>
+              <textarea id="wizard-description" rows="4" class="tui-inp" placeholder="Override what the agent should do (markdown ok)"></textarea>
 
-              <label for="wizard-criteria" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Acceptance criteria</label>
-              <textarea id="wizard-criteria" rows="3" placeholder="One per line"
-                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+              <label for="wizard-criteria" class="tui-form-label">Acceptance criteria</label>
+              <textarea id="wizard-criteria" rows="3" class="tui-inp" placeholder="One per line"></textarea>
 
-              <label for="wizard-key-files" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Key files</label>
-              <textarea id="wizard-key-files" rows="2" placeholder="One path per line"
-                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+              <label for="wizard-key-files" class="tui-form-label">Key files</label>
+              <textarea id="wizard-key-files" rows="2" class="tui-inp" placeholder="One path per line"></textarea>
 
-              <label for="wizard-test-steps" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Test steps</label>
-              <textarea id="wizard-test-steps" rows="2" placeholder="One step per line"
-                        style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+              <label for="wizard-test-steps" class="tui-form-label">Test steps</label>
+              <textarea id="wizard-test-steps" rows="2" class="tui-inp" placeholder="One step per line"></textarea>
             </div>
-            <div style="margin-top: 12px;">
-              <button id="wizard-submit" type="button"
-                      style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
-                ✓ Send to agent (autonomous)
+            <div class="tui-btn-row">
+              <button id="wizard-submit" type="button" class="tui-btn">
+                [ok] Send to agent (autonomous)
               </button>
-              <button id="wizard-cancel" type="button"
-                      style="padding: 8px 16px; background: var(--surface); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 2px; cursor: pointer; font: inherit; margin-left: 8px;">
+              <button id="wizard-cancel" type="button" class="tui-btn tui-btn-secondary">
                 Cancel
               </button>
-              <span id="wizard-status" role="status" aria-live="polite" style="margin-left: 12px; color: var(--muted);"></span>
+              <span id="wizard-status" class="tui-status" role="status" aria-live="polite"></span>
             </div>
           </div>
         </div>
       </details>
 
       <!-- Task Creation Form -->
-      <details style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--line-strong); background: var(--surface-strong); cursor: pointer;">
-        <summary style="font-weight: bold; color: var(--text);">+ Create Task</summary>
+      <details class="tui-panel-details">
+        <summary>+ Create Task</summary>
         <form id="create-task-form"
-              style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center; padding: 12px; margin-top: 8px;"
+              class="tui-panel-body"
               hx-post="/api/v1/tasks"
               hx-trigger="submit"
               hx-swap="none">
+          <div class="tui-form-grid">
+            <label for="task-id" class="tui-form-label">Task ID *</label>
+            <input id="task-id"
+                   type="text"
+                   name="id"
+                   required
+                   pattern="[a-zA-Z0-9\-_]+"
+                   placeholder="e.g., fix-db-constraint"
+                   class="tui-inp">
 
-          <label for="task-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Task ID *</label>
-          <input id="task-id"
-                 type="text"
-                 name="id"
-                 required
-                 pattern="[a-zA-Z0-9\-_]+"
-                 placeholder="e.g., fix-db-constraint"
-                 style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
+            <label for="task-priority" class="tui-form-label">Priority</label>
+            <select id="task-priority"
+                    name="priority"
+                    class="tui-inp">
+              <option value="low">low</option>
+              <option value="medium" selected>medium</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+            </select>
 
-          <label for="task-priority" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Priority</label>
-          <select id="task-priority"
-                  name="priority"
-                  style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
-            <option value="low">Low</option>
-            <option value="medium" selected>Medium</option>
-            <option value="high">High</option>
-            <option value="critical">Critical</option>
-          </select>
+            <label for="task-description" class="tui-form-label">Description</label>
+            <textarea id="task-description"
+                      name="description"
+                      maxlength="2048"
+                      rows="3"
+                      placeholder="What needs to be done?"
+                      class="tui-inp"></textarea>
 
-          <label for="task-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Description</label>
-          <textarea id="task-description"
-                    name="description"
-                    maxlength="2048"
-                    rows="3"
-                    placeholder="What needs to be done?"
-                    style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
+            <label for="task-dependencies" class="tui-form-label">Dependencies</label>
+            <input id="task-dependencies"
+                   type="text"
+                   name="dependencies"
+                   placeholder="Comma-separated task IDs (optional)"
+                   class="tui-inp">
 
-          <label for="task-dependencies" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Dependencies</label>
-          <input id="task-dependencies"
-                 type="text"
-                 name="dependencies"
-                 placeholder="Comma-separated task IDs (optional)"
-                 style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
-
-          <div style="grid-column: 1 / -1;">
-            <button type="submit"
-                    style="padding: 6px 12px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
-              Create Task
-            </button>
-            <span id="create-task-status" role="status" aria-live="polite" style="margin-left: 12px; color: var(--muted);"></span>
+            <div style="grid-column: 1 / -1;" class="tui-btn-row">
+              <button type="submit" class="tui-btn">[ Create Task ]</button>
+              <span id="create-task-status" role="status" aria-live="polite" class="tui-status"></span>
+            </div>
           </div>
         </form>
       </details>

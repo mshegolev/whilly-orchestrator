@@ -1,33 +1,64 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <title>Link already used — Whilly</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
   <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      max-width: 28rem; margin: 6rem auto; padding: 0 1.5rem;
-      line-height: 1.5;
+    body { min-height: 100vh; display: grid; place-items: center; }
+    .login-wrap { width: min(500px, calc(100vw - 32px)); }
+    .login-frame {
+      border: 1px solid var(--line-strong);
+      background: var(--surface);
+      padding: 0;
     }
-    h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
-    p.muted { color: #6b7280; margin-top: 0; }
-    .cta {
-      display: inline-block; margin-top: 1.5rem; padding: 0.6rem 1rem;
-      background: #2563eb; color: white; text-decoration: none;
-      border-radius: 0.375rem; font-weight: 600;
+    .login-titlebar {
+      display: flex; align-items: center; gap: 0;
+      border-bottom: 1px solid var(--line-strong);
+      padding: 6px 10px;
+      background: var(--surface-strong);
+      font: 700 var(--t-body)/var(--lh-tight) var(--font-mono);
+      color: var(--text);
     }
-    .cta:hover { background: #1d4ed8; }
+    .login-titlebar .corner { color: var(--muted); }
+    .login-titlebar .title { flex: 1; color: var(--danger); margin: 0; font: inherit; }
+    .login-body { padding: 20px; font: var(--t-body)/var(--lh-body) var(--font-mono); }
+    .login-body p { margin: 0 0 16px; color: var(--text); }
+    .login-actions { display: flex; margin-top: 4px; }
+    .login-cta {
+      display: inline-block;
+      padding: 4px 20px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 0;
+      font: 700 var(--t-body)/var(--lh-body) var(--font-mono);
+      text-decoration: none;
+      letter-spacing: 0.04em;
+    }
+    .login-cta:hover { background: var(--accent); color: var(--bg); }
   </style>
 </head>
 <body>
-  <h1>This link has already been used or has expired</h1>
-  <p>
-    Sign-in links are single-use and valid for 15 minutes. If you need to sign in
-    again, request a fresh link below.
-  </p>
-
-  <a class="cta" href="/login">Request a new link</a>
+  <div class="login-wrap">
+    <div class="login-frame">
+      <div class="login-titlebar">
+        <span class="corner">&#9581;&#9472; </span>
+        <h1 class="title">This link has already been used or has expired</h1>
+        <span class="corner"> &#9472;&#9585;</span>
+      </div>
+      <div class="login-body">
+        <p>
+          sign-in links are single-use and valid for 15 minutes.
+          if you need to sign in again, request a fresh link below.
+        </p>
+        <div class="login-actions">
+          <a class="login-cta" href="/login">Request a new link</a>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
