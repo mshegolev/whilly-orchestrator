@@ -52,10 +52,11 @@ CSRF_ALLOWLIST_ENV: Final[str] = "WHILLY_CSRF_ORIGIN_ALLOWLIST"
 STATE_MUTATING_METHODS: Final[frozenset[str]] = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 #: Paths whose state-mutating verbs are NOT cookie-protected because they
-#: are the entry points used before any session exists. ``/auth/login`` is
-#: the magic-link submit, ``/auth/magic`` is verified by its own token
+#: are the entry points used before any session exists. ``/auth/login``
+#: is the username+password submit, ``/auth/magic-login`` is the email
+#: passwordless submit, ``/auth/magic`` is verified by its own token
 #: signature so CSRF would be ineffective anyway.
-CSRF_EXEMPT_PATHS: Final[frozenset[str]] = frozenset({"/auth/login", "/auth/magic"})
+CSRF_EXEMPT_PATHS: Final[frozenset[str]] = frozenset({"/auth/login", "/auth/magic-login", "/auth/magic"})
 
 #: Cookie name the middleware looks for to decide "this request is
 #: cookie-authenticated and therefore needs CSRF gating".
