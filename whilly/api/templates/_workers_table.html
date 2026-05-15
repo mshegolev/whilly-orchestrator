@@ -3,6 +3,7 @@
 {% set worker_columns = table_columns.workers %}
 <table id="workers"
        class="tbl"
+       data-testid="workers-table"
        hx-get="/?fragment=workers"
        hx-trigger="every 5s, sse:worker.registered, sse:worker.heartbeat, sse:worker.revoked, sse:worker.offline"
        hx-swap="outerHTML"
@@ -23,20 +24,22 @@
         {% set _l3 = worker_columns[3].label_for("wui") %}
         {% set _l4 = worker_columns[4].label_for("wui") %}
         <tr id="worker-{{ w.worker_id }}"
+            data-testid="worker-row"
+            data-worker-id="{{ w.worker_id }}"
             data-filter-text="{{ w.worker_id }} {{ w.hostname }} {{ w.owner_email or '' }} {{ w.status }}">
-          <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}"><code>{{ w.worker_id }}</code></td>
-          <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}">{{ w.hostname }}</td>
+          <td data-l="{{ _l0 }}" data-mobile-label="{{ _l0 }}" data-testid="worker-row-id"><code>{{ w.worker_id }}</code></td>
+          <td data-l="{{ _l1 }}" data-mobile-label="{{ _l1 }}" data-testid="worker-row-hostname">{{ w.hostname }}</td>
           <td data-l="{{ _l2 }}" data-mobile-label="{{ _l2 }}">{{ w.owner_email if w.owner_email else "—" }}</td>
           <td data-l="{{ _l3 }}" data-mobile-label="{{ _l3 }}">
             <strong class="s s-{{ w.status }} status status-{{ w.status }}">{{ w.status }}</strong>
           </td>
-          <td data-l="{{ _l4 }}" data-mobile-label="{{ _l4 }}">
+          <td data-l="{{ _l4 }}" data-mobile-label="{{ _l4 }}" data-testid="worker-row-last-heartbeat">
             <time datetime="{{ format_iso(w.last_heartbeat) }}">{{ format_human(w.last_heartbeat) }}</time>
           </td>
         </tr>
       {% endfor %}
     {% else %}
-      <tr id="workers-empty">
+      <tr id="workers-empty" data-testid="workers-table-empty-state">
         <td colspan="{{ worker_columns|length }}"><em class="empty-state" style="color:var(--muted)">No workers connected yet.</em></td>
       </tr>
     {% endif %}

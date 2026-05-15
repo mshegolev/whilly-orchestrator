@@ -445,16 +445,16 @@
 </head>
 <body class="operator-console" data-dashboard-state="live" hx-ext="sse" sse-connect="/events/stream{% if events_token %}?token={{ events_token | urlencode }}{% endif %}">
   {% if not auth_email and plan_id_for_share_link %}
-  <div class="share-link-banner" role="status">
-    You're viewing a shared plan. <a href="/login?next=/?plan_id={{ plan_id_for_share_link | urlencode }}">Sign in to manage all plans</a>
+  <div class="share-link-banner" role="status" data-testid="share-link-banner">
+    You're viewing a shared plan. <a href="/login?next=/?plan_id={{ plan_id_for_share_link | urlencode }}" data-testid="share-link-signin-cta">Sign in to manage all plans</a>
   </div>
   {% endif %}
   {% if auth_email %}
-  <header class="wui-nav" role="banner" aria-label="WUI session">
-    <span class="wui-nav__identity">Signed in as <strong>{{ auth_email }}</strong></span>
+  <header class="wui-nav" role="banner" aria-label="WUI session" data-testid="auth-nav">
+    <span class="wui-nav__identity">Signed in as <strong data-testid="auth-nav-email">{{ auth_email }}</strong></span>
     <form method="post" action="/auth/logout" class="wui-nav__logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token | default('') }}">
-      <button type="submit">Log out</button>
+      <button type="submit" data-testid="auth-nav-logout-btn">Log out</button>
     </form>
   </header>
   {% endif %}
@@ -463,13 +463,14 @@
     <header class="wui-plans__head">
       <h2>Plans</h2>
       <div class="wui-plans__controls">
-        <button type="button" id="new-plan-btn" class="wui-plans__new-btn">+ New Plan</button>
-        <input type="search" id="plans-filter" placeholder="Filter by name or plan_id..." aria-label="Filter plans">
-        <label><input type="checkbox" id="show-archived"> Show archived</label>
-        <span id="archived-count" class="wui-plans__archived-count" aria-live="polite"></span>
+        <button type="button" id="new-plan-btn" class="wui-plans__new-btn" data-testid="plans-new-btn">+ New Plan</button>
+        <input type="search" id="plans-filter" placeholder="Filter by name or plan_id..." aria-label="Filter plans" data-testid="plans-filter-input">
+        <label><input type="checkbox" id="show-archived" data-testid="plans-show-archived-checkbox"> Show archived</label>
+        <span id="archived-count" class="wui-plans__archived-count" aria-live="polite" data-testid="plans-archived-count"></span>
       </div>
     </header>
     <table id="plans-table"
+           data-testid="plans-table"
            hx-get="/api/v1/plans"
            hx-trigger="load, refreshPlans from:body"
            hx-swap="none">
@@ -491,41 +492,42 @@
         <tr class="wui-plans__empty"><td colspan="10">Loading plans...</td></tr>
       </tbody>
     </table>
-    <p id="plans-empty-state" class="wui-plans__empty-state" hidden>
+    <p id="plans-empty-state" class="wui-plans__empty-state" data-testid="plans-table-empty-state" hidden>
       No plans yet. <button type="button" id="new-plan-empty-btn">Create your first plan</button>.
     </p>
 
     <!-- PRD-wui-multi-plan v2 Epic B3 — New Plan modal -->
-    <dialog id="new-plan-modal" aria-modal="true" aria-labelledby="new-plan-title">
-      <form id="new-plan-form" method="dialog">
+    <dialog id="new-plan-modal" aria-modal="true" aria-labelledby="new-plan-title" data-testid="new-plan-modal">
+      <form id="new-plan-form" method="dialog" data-testid="new-plan-form">
         <h3 id="new-plan-title">Create new plan</h3>
         <div class="wui-form-row">
           <label for="plan_id">Plan ID <span class="wui-required">*</span></label>
           <input type="text" id="plan_id" name="plan_id" required
                  maxlength="256" pattern="^[a-z0-9][a-z0-9\-_]{0,254}$"
                  aria-describedby="plan_id-help plan_id-error"
-                 autocomplete="off">
+                 autocomplete="off"
+                 data-testid="new-plan-id-input">
           <small id="plan_id-help">lowercase letters, digits, dash, underscore</small>
-          <small id="plan_id-error" class="wui-error" role="alert" hidden></small>
+          <small id="plan_id-error" class="wui-error" role="alert" hidden data-testid="new-plan-id-error"></small>
         </div>
         <div class="wui-form-row">
           <label for="new-plan-name">Name <span class="wui-required">*</span></label>
-          <input type="text" id="new-plan-name" name="name" required maxlength="1024">
+          <input type="text" id="new-plan-name" name="name" required maxlength="1024" data-testid="new-plan-name-input">
         </div>
         <div class="wui-form-row">
           <label for="new-plan-budget">Budget USD (optional)</label>
-          <input type="number" id="new-plan-budget" name="budget_usd" step="0.01" min="0">
+          <input type="number" id="new-plan-budget" name="budget_usd" step="0.01" min="0" data-testid="new-plan-budget-input">
         </div>
-        <small id="new-plan-error" class="wui-error" role="alert" hidden></small>
+        <small id="new-plan-error" class="wui-error" role="alert" hidden data-testid="new-plan-form-error"></small>
         <div class="wui-form-actions">
-          <button type="button" id="new-plan-cancel">Cancel</button>
-          <button type="submit" id="new-plan-submit">Create</button>
+          <button type="button" id="new-plan-cancel" data-testid="new-plan-cancel-btn">Cancel</button>
+          <button type="submit" id="new-plan-submit" data-testid="new-plan-submit-btn">Create</button>
         </div>
       </form>
     </dialog>
 
     <!-- Inline rename / budget modal (reused for both PATCH-name and PATCH-budget paths) -->
-    <dialog id="edit-plan-modal" aria-modal="true" aria-labelledby="edit-plan-title">
+    <dialog id="edit-plan-modal" aria-modal="true" aria-labelledby="edit-plan-title" data-testid="edit-plan-modal">
       <form id="edit-plan-form" method="dialog">
         <h3 id="edit-plan-title">Edit plan</h3>
         <input type="hidden" id="edit-plan-id">
@@ -533,16 +535,16 @@
         <input type="hidden" id="edit-plan-mode">
         <div class="wui-form-row" id="edit-plan-name-row">
           <label for="edit-plan-name">Name</label>
-          <input type="text" id="edit-plan-name" maxlength="1024">
+          <input type="text" id="edit-plan-name" maxlength="1024" data-testid="edit-plan-name-input">
         </div>
         <div class="wui-form-row" id="edit-plan-budget-row">
           <label for="edit-plan-budget">Budget USD</label>
-          <input type="number" id="edit-plan-budget" step="0.01" min="0">
+          <input type="number" id="edit-plan-budget" step="0.01" min="0" data-testid="edit-plan-budget-input">
         </div>
-        <small id="edit-plan-error" class="wui-error" role="alert" hidden></small>
+        <small id="edit-plan-error" class="wui-error" role="alert" hidden data-testid="edit-plan-error"></small>
         <div class="wui-form-actions">
-          <button type="button" id="edit-plan-cancel">Cancel</button>
-          <button type="submit" id="edit-plan-submit">Save</button>
+          <button type="button" id="edit-plan-cancel" data-testid="edit-plan-cancel-btn">Cancel</button>
+          <button type="submit" id="edit-plan-submit" data-testid="edit-plan-submit-btn">Save</button>
         </div>
       </form>
     </dialog>
@@ -607,15 +609,23 @@
             var last = p.last_event_at ? new Date(p.last_event_at).toISOString() : "—";
             var budget = (p.budget_usd == null || p.budget_usd === "") ? "—" : p.budget_usd;
             var tr = document.createElement("tr");
+            tr.setAttribute("data-testid", "plan-row");
             tr.setAttribute("data-plan-id", p.id || "");
             if (p.archived_at != null) { tr.setAttribute("data-archived", "true"); }
             tr.tabIndex = 0;
-            tr.appendChild(makeCell(p.name || ""));
+            var tdName = makeCell(p.name || "");
+            tr.appendChild(tdName);
             tr.appendChild(makeCodeCell(p.id || ""));
-            tr.appendChild(makeCell(counts.pending || 0));
+            var tdPending = makeCell(counts.pending || 0);
+            tdPending.setAttribute("data-testid", "plan-row-pending-count");
+            tr.appendChild(tdPending);
             tr.appendChild(makeCell(inFlight));
-            tr.appendChild(makeCell(counts.done || 0));
-            tr.appendChild(makeCell(counts.failed || 0));
+            var tdDone = makeCell(counts.done || 0);
+            tdDone.setAttribute("data-testid", "plan-row-done-count");
+            tr.appendChild(tdDone);
+            var tdFailed = makeCell(counts.failed || 0);
+            tdFailed.setAttribute("data-testid", "plan-row-failed-count");
+            tr.appendChild(tdFailed);
             tr.appendChild(makeCell(budget));
             tr.appendChild(makeCell("—"));
             tr.appendChild(makeCell(last));
@@ -631,21 +641,25 @@
             var sum = document.createElement("summary");
             sum.textContent = "⋯";  // horizontal ellipsis ⋯
             sum.setAttribute("aria-label", "Plan actions");
+            sum.setAttribute("data-testid", "plan-row-overflow-btn");
             det.appendChild(sum);
             var menu = document.createElement("div");
             menu.className = "wui-plans__menu-body";
             var btnRename = document.createElement("button");
             btnRename.type = "button";
             btnRename.textContent = "Rename";
+            btnRename.setAttribute("data-testid", "plan-row-rename-action");
             btnRename.addEventListener("click", function (ev) { ev.stopPropagation(); det.open = false; openEditModal(p, "name"); });
             var btnBudget = document.createElement("button");
             btnBudget.type = "button";
             btnBudget.textContent = "Edit budget";
+            btnBudget.setAttribute("data-testid", "plan-row-edit-budget-action");
             btnBudget.addEventListener("click", function (ev) { ev.stopPropagation(); det.open = false; openEditModal(p, "budget"); });
             var btnArchive = document.createElement("button");
             btnArchive.type = "button";
             var isArchived = p.archived_at != null;
             btnArchive.textContent = isArchived ? "Restore" : "Archive";
+            btnArchive.setAttribute("data-testid", isArchived ? "plan-row-restore-action" : "plan-row-archive-action");
             btnArchive.addEventListener("click", function (ev) {
               ev.stopPropagation();
               det.open = false;
@@ -960,6 +974,7 @@
       {% for surface, label in surfaces %}
         <button type="button"
                 data-surface-tab="{{ surface }}"
+                data-testid="surface-tab-{{ surface }}"
                 aria-controls="surface-{{ surface }}"
                 aria-selected="{{ 'true' if loop.first else 'false' }}">
           {{ loop.index }} {{ label }}
@@ -986,7 +1001,7 @@
       </section>
     </section>
 
-    <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview">
+    <section id="surface-overview" class="operator-surface surface-panel" data-surface="overview" data-testid="surface-overview">
       <header><h2>Overview</h2></header>
       <div class="table-wrapper">
         <table id="overview-status" role="grid">
@@ -1009,7 +1024,7 @@
       </div>
     </section>
 
-    <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" hidden>
+    <section id="surface-compliance" class="operator-surface surface-panel" data-surface="compliance" data-testid="surface-compliance" hidden>
       <header><h2>Compliance - Human review / verification gaps</h2></header>
       <div class="table-wrapper">
         {% set review_columns = table_columns.review_gaps %}
@@ -1073,20 +1088,22 @@
       </div>
     </section>
 
-    <section id="surface-plans_tasks" class="operator-surface surface-panel" data-surface="plans_tasks" hidden>
+    <section id="surface-plans_tasks" class="operator-surface surface-panel" data-surface="plans_tasks" data-testid="surface-plans_tasks" hidden>
       <header><h2>Plans/Tasks</h2></header>
 
       <!-- Jira Import Form (Phase 1 WUI) -->
-      <details open style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--accent); background: var(--surface-strong); cursor: pointer;">
+      <details open style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--accent); background: var(--surface-strong); cursor: pointer;" data-testid="jira-import-panel">
         <summary style="font-weight: bold; color: var(--accent);">📥 Import from Jira</summary>
         <div style="padding: 12px; margin-top: 8px;">
           <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center;">
             <label for="jira-ref" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Jira key / URL *</label>
             <input id="jira-ref" type="text" placeholder="EORD-9843 or https://jira.../browse/EORD-9843"
+                   data-testid="jira-ref-input"
                    style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
 
             <label for="jira-plan-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Plan ID override</label>
             <input id="jira-plan-id" type="text" placeholder="default: jira-&lt;key-lowercase&gt;"
+                   data-testid="jira-plan-id-input"
                    style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
           </div>
 
@@ -1099,18 +1116,21 @@
 
           <div style="margin-top: 12px;">
             <button id="jira-import-autonomous" type="button"
+                    data-testid="jira-import-autonomous-btn"
                     style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold; margin-right: 8px;">
               🤖 Import &amp; Autonomous
             </button>
             <button id="jira-import-wizard" type="button"
+                    data-testid="jira-import-wizard-btn"
                     style="padding: 8px 16px; background: var(--surface); color: var(--accent); border: 1px solid var(--accent); border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
               🧙 Import &amp; Wizard
             </button>
-            <span id="jira-import-status" style="margin-left: 12px; color: var(--muted);"></span>
+            <span id="jira-import-status" style="margin-left: 12px; color: var(--muted);" data-testid="jira-import-status"></span>
           </div>
 
           <!-- Wizard panel (hidden until 'Import & Wizard' is clicked + Jira fetched) -->
           <div id="jira-wizard-panel" hidden
+               data-testid="jira-wizard-panel"
                style="margin-top: 16px; padding: 12px; border: 1px solid var(--line-strong); background: var(--surface); border-radius: 4px;">
             <h3 style="margin-top: 0; color: var(--accent);">🧙 Wizard — refine before agent picks up</h3>
             <p style="color: var(--muted); font-size: 0.85rem; margin: 4px 0 12px;">
@@ -1119,26 +1139,32 @@
             <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: start;">
               <label for="wizard-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Описание / Goal</label>
               <textarea id="wizard-description" rows="4" placeholder="Override what the agent should do (markdown ok)"
+                        data-testid="jira-wizard-description-textarea"
                         style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
 
               <label for="wizard-criteria" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Acceptance criteria</label>
               <textarea id="wizard-criteria" rows="3" placeholder="One per line"
+                        data-testid="jira-wizard-criteria-textarea"
                         style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
 
               <label for="wizard-key-files" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Key files</label>
               <textarea id="wizard-key-files" rows="2" placeholder="One path per line"
+                        data-testid="jira-wizard-key-files-textarea"
                         style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
 
               <label for="wizard-test-steps" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Test steps</label>
               <textarea id="wizard-test-steps" rows="2" placeholder="One step per line"
+                        data-testid="jira-wizard-test-steps-textarea"
                         style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
             </div>
             <div style="margin-top: 12px;">
               <button id="wizard-submit" type="button"
+                      data-testid="jira-wizard-submit-btn"
                       style="padding: 8px 16px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
                 ✓ Send to agent (autonomous)
               </button>
               <button id="wizard-cancel" type="button"
+                      data-testid="jira-wizard-cancel-btn"
                       style="padding: 8px 16px; background: var(--surface); color: var(--muted); border: 1px solid var(--line-strong); border-radius: 2px; cursor: pointer; font: inherit; margin-left: 8px;">
                 Cancel
               </button>
@@ -1151,52 +1177,58 @@
       <!-- Task Creation Form -->
       <details style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--line-strong); background: var(--surface-strong); cursor: pointer;">
         <summary style="font-weight: bold; color: var(--text);">+ Create Task</summary>
-        <form id="create-task-form" 
+        <form id="create-task-form"
+              data-testid="create-task-form"
               style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 14px; align-items: center; padding: 12px; margin-top: 8px;"
               hx-post="/api/v1/tasks"
               hx-trigger="submit"
               hx-swap="none">
           
           <label for="task-id" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Task ID *</label>
-          <input id="task-id" 
-                 type="text" 
-                 name="id" 
-                 required 
+          <input id="task-id"
+                 type="text"
+                 name="id"
+                 required
                  pattern="[a-zA-Z0-9\-_]+"
                  placeholder="e.g., fix-db-constraint"
+                 data-testid="create-task-id-input"
                  style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
-          
+
           <label for="task-priority" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Priority</label>
-          <select id="task-priority" 
+          <select id="task-priority"
                   name="priority"
+                  data-testid="create-task-priority-select"
                   style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
             <option value="low">Low</option>
             <option value="medium" selected>Medium</option>
             <option value="high">High</option>
             <option value="critical">Critical</option>
           </select>
-          
+
           <label for="task-description" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Description</label>
-          <textarea id="task-description" 
-                    name="description" 
+          <textarea id="task-description"
+                    name="description"
                     maxlength="2048"
                     rows="3"
                     placeholder="What needs to be done?"
+                    data-testid="create-task-description-textarea"
                     style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit; resize: vertical;"></textarea>
-          
+
           <label for="task-dependencies" style="font-weight: bold; color: var(--muted); font-size: 0.85rem; text-transform: uppercase;">Dependencies</label>
-          <input id="task-dependencies" 
-                 type="text" 
-                 name="dependencies" 
+          <input id="task-dependencies"
+                 type="text"
+                 name="dependencies"
                  placeholder="Comma-separated task IDs (optional)"
+                 data-testid="create-task-dependencies-input"
                  style="width: 100%; padding: 6px; border: 1px solid var(--line-strong); border-radius: 2px; font: inherit;">
-          
+
           <div style="grid-column: 1 / -1;">
-            <button type="submit" 
+            <button type="submit"
+                    data-testid="create-task-submit-btn"
                     style="padding: 6px 12px; background: var(--accent); color: white; border: 0; border-radius: 2px; cursor: pointer; font: inherit; font-weight: bold;">
               Create Task
             </button>
-            <span id="create-task-status" style="margin-left: 12px; color: var(--muted);"></span>
+            <span id="create-task-status" style="margin-left: 12px; color: var(--muted);" data-testid="create-task-status"></span>
           </div>
         </form>
       </details>
@@ -1206,7 +1238,7 @@
       </div>
 
       <!-- PRD-wui-multi-plan v2 Epic C — Edit Task modal -->
-      <dialog id="edit-task-modal" aria-modal="true" aria-labelledby="edit-task-title">
+      <dialog id="edit-task-modal" aria-modal="true" aria-labelledby="edit-task-title" data-testid="edit-task-modal">
         <form id="edit-task-form" method="dialog">
           <h3 id="edit-task-title">Edit task</h3>
           <input type="hidden" id="edit-task-id">
@@ -1215,11 +1247,11 @@
           <input type="hidden" id="edit-task-claimed-by">
           <div class="wui-form-row">
             <label for="edit-task-description">Description</label>
-            <textarea id="edit-task-description" rows="3" maxlength="8192"></textarea>
+            <textarea id="edit-task-description" rows="3" maxlength="8192" data-testid="edit-task-description-textarea"></textarea>
           </div>
           <div class="wui-form-row">
             <label for="edit-task-priority">Priority</label>
-            <select id="edit-task-priority">
+            <select id="edit-task-priority" data-testid="edit-task-priority-select">
               <option value="critical">critical</option>
               <option value="high">high</option>
               <option value="medium">medium</option>
@@ -1228,34 +1260,34 @@
           </div>
           <div class="wui-form-row">
             <label for="edit-task-key-files">Key files <small>(one path per line)</small></label>
-            <textarea id="edit-task-key-files" rows="3"></textarea>
+            <textarea id="edit-task-key-files" rows="3" data-testid="edit-task-key-files-textarea"></textarea>
           </div>
           <div class="wui-form-row">
             <label for="edit-task-acceptance">Acceptance criteria <small>(one per line)</small></label>
-            <textarea id="edit-task-acceptance" rows="3"></textarea>
+            <textarea id="edit-task-acceptance" rows="3" data-testid="edit-task-criteria-textarea"></textarea>
           </div>
           <div class="wui-form-row">
             <label for="edit-task-test-steps">Test steps <small>(one per line)</small></label>
-            <textarea id="edit-task-test-steps" rows="3"></textarea>
+            <textarea id="edit-task-test-steps" rows="3" data-testid="edit-task-test-steps-textarea"></textarea>
           </div>
           <div class="wui-form-row">
             <label for="edit-task-dependencies">Dependencies <small>(comma-separated task IDs)</small></label>
-            <input type="text" id="edit-task-dependencies" autocomplete="off">
+            <input type="text" id="edit-task-dependencies" autocomplete="off" data-testid="edit-task-dependencies-input">
           </div>
-          <div id="edit-task-banner" class="wui-banner" role="alert" hidden></div>
-          <div id="edit-task-force-release-confirm" class="wui-banner wui-banner--danger" role="alert" hidden>
+          <div id="edit-task-banner" class="wui-banner" role="alert" hidden data-testid="edit-task-claimed-banner"></div>
+          <div id="edit-task-force-release-confirm" class="wui-banner wui-banner--danger" role="alert" hidden data-testid="edit-task-stale-banner">
             <p><strong>This will interrupt the running worker.</strong>
                The task will return to PENDING and may produce a duplicate result.</p>
             <div class="wui-form-actions">
-              <button type="button" id="edit-task-force-release-cancel">Cancel</button>
+              <button type="button" id="edit-task-force-release-cancel" data-testid="force-release-cancel-btn">Cancel</button>
               <button type="button" id="edit-task-force-release-confirm-btn"
-                      class="wui-btn--danger">Confirm release</button>
+                      class="wui-btn--danger" data-testid="force-release-confirm-btn">Confirm release</button>
             </div>
           </div>
           <small id="edit-task-error" class="wui-error" role="alert" hidden></small>
           <div class="wui-form-actions">
-            <button type="button" id="edit-task-cancel">Cancel</button>
-            <button type="submit" id="edit-task-submit">Save</button>
+            <button type="button" id="edit-task-cancel" data-testid="edit-task-cancel-btn">Cancel</button>
+            <button type="submit" id="edit-task-submit" data-testid="edit-task-submit-btn">Save</button>
           </div>
         </form>
       </dialog>
@@ -1510,14 +1542,14 @@
       </script>
     </section>
 
-    <section id="surface-workers" class="operator-surface surface-panel" data-surface="workers" hidden>
+    <section id="surface-workers" class="operator-surface surface-panel" data-surface="workers" data-testid="surface-workers" hidden>
       <header><h2>Workers</h2></header>
       <div class="table-wrapper">
         {% include "_workers_table.html" %}
       </div>
     </section>
 
-    <section id="surface-events" class="operator-surface surface-panel" data-surface="events" hidden>
+    <section id="surface-events" class="operator-surface surface-panel" data-surface="events" data-testid="surface-events" hidden>
       <header><h2>Events</h2></header>
       <div class="table-wrapper">
         {% set event_columns = table_columns.events %}
