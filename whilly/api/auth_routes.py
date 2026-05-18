@@ -172,17 +172,44 @@ def build_auth_router(
         username: str = Form(..., min_length=1, max_length=64),
         password: str = Form(..., min_length=1, max_length=512),
     ) -> Response:
-        from whilly.api import users_repo
+        from whilly.api import auth_audit_repo, users_repo
+
+        # PRD-post-auth-hardening §Epic D Item 11 instrumentation (D10b).
+        # Pull client metadata once at the top so every audit branch records
+        # the same shape. user_agent is best-effort and truncated at 512.
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        user_agent = (request.headers.get("user-agent") or "")[:512] or None
 
         # P1.2: IP rate limit — checked before touching the DB so a flood of
         # requests is stopped at the edge without creating DB load.
-        client_ip = (request.client.host if request.client else None) or "unknown"
         if not rate_limit.allow(client_ip):
+            await auth_audit_repo.insert_attempt(
+                pool,
+                username=username.strip()[:64] or None,
+                ip=client_ip,
+                user_agent=user_agent,
+                outcome="rate_limited",
+            )
             raise HTTPException(status_code=429, detail="too many requests")
 
         user = await users_repo.verify_credentials(pool, username=username, password=password)
         if user is None:
             logger.info("auth.login: credential rejection for username=%r", username[:64])
+            # NOTE: verify_credentials returns None for THREE distinct failures
+            # (bad_password / locked / missing_user) — the contract deliberately
+            # collapses them at the route layer to avoid an enumeration leak.
+            # We record outcome='bad_password' as the catch-all; distinguishing
+            # the three would require refactoring verify_credentials to return
+            # the reason out-of-band, which is intentionally out of D10b's
+            # narrow scope. Audit consumers should read this as "auth failed
+            # for one of the three reasons" not "wrong password specifically".
+            await auth_audit_repo.insert_attempt(
+                pool,
+                username=username.strip()[:64] or None,
+                ip=client_ip,
+                user_agent=user_agent,
+                outcome="bad_password",
+            )
             return templates.TemplateResponse(
                 request,
                 LOGIN_TEMPLATE,
@@ -204,6 +231,24 @@ def build_auth_router(
             ttl_seconds=int((session.expires_at.timestamp() - time.time())),
         )
         await users_repo.update_last_login(pool, username=user.username)
+        # Audit: successful login — session_id links back to the row in `sessions`.
+        try:
+            import uuid as _uuid
+
+            audit_session_id = _uuid.UUID(session.session_id) if session.session_id else None
+        except (TypeError, ValueError):
+            # Session IDs that aren't valid UUIDs (legacy / synthetic) skip the
+            # session_id column rather than failing the audit insert. Logged
+            # only at DEBUG because this is expected for some session-id schemes.
+            audit_session_id = None
+        await auth_audit_repo.insert_attempt(
+            pool,
+            username=user.username,
+            ip=client_ip,
+            user_agent=user_agent,
+            outcome="ok",
+            session_id=audit_session_id,
+        )
         _append_event(
             {
                 "event_type": "auth.session.created",

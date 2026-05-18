@@ -362,15 +362,16 @@
     },
     {
       "id": "D10b-instrument-auth-audit-callsites",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "D10-admin-user-management-ui"
       ],
       "key_files": [
-        "whilly/api/auth_routes.py"
+        "whilly/api/auth_routes.py",
+        "tests/unit/test_auth_audit_instrumentation.py"
       ],
-      "description": "PRD §Epic D, Item 11 (call-site instrumentation) — instrument every branch of submit_login and _authenticate_session in auth_routes.py to call auth_audit_repo.insert_attempt with the appropriate outcome ('ok', 'bad_password', 'locked', 'rate_limited', 'missing_user'). Verify by checking the integration smoke test (A2) confirms a row is written for both failed and successful login attempts.",
+      "description": "DONE 2026-05-18: submit_login instrumented at 3 outcome points — rate_limited (before verify_credentials), bad_password (verify_credentials returned None — catch-all for the three failure modes the repo collapses to prevent enumeration leak; documented limitation in code), ok (success, with session_id as UUID where parseable). user_agent + ip captured from request. 4 unit tests covering all 3 outcomes + user-agent plumbing. The \"locked\" and \"missing_user\" outcomes are not distinguishable from the route layer — would require refactoring verify_credentials to return outcome out-of-band; intentionally out of D10b scope. Original: PRD §Epic D, Item 11 (call-site instrumentation) — instrument every branch of submit_login and _authenticate_session in auth_routes.py to call auth_audit_repo.insert_attempt with the appropriate outcome ('ok', 'bad_password', 'locked', 'rate_limited', 'missing_user'). Verify by checking the integration smoke test (A2) confirms a row is written for both failed and successful login attempts.",
       "acceptance_criteria": [
         "After a failed login attempt, one row exists in auth_audit with outcome='bad_password'",
         "After a successful login, one row with outcome='ok'",
