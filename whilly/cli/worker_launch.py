@@ -115,6 +115,21 @@ def _config_key(control_url: str, plan_id: str) -> str:
     return f"{control_url.rstrip('/')}|{plan_id}"
 
 
+def _persist_default(key: str, supplied_arg: str | None, resolved_value: str, config: dict[str, Any]) -> None:
+    """Write ``key`` to ``config`` honouring CLI-supplied-vs-defaulted intent.
+
+    H21 fix: ``dict.setdefault`` silently ignores the new value when the
+    key already exists, so a user passing ``--model X`` on a config that
+    already has ``default_model: Y`` would see Y persist. Replace with
+    "overwrite if the CLI flag was explicitly supplied OR the key is
+    absent". ``supplied_arg is None`` is argparse's signal for "user did
+    not pass this flag" — at that point the previously-stored default
+    (if any) is correct, so we only seed when the key is missing.
+    """
+    if supplied_arg is not None or key not in config:
+        config[key] = resolved_value
+
+
 def _pick_plan_interactive(control_url: str) -> str | None:
     """Last-resort plan picker — only used when neither flag nor config has one.
 
@@ -297,13 +312,31 @@ def run_launch_command(argv: list[str]) -> int:
             "hostname": hostname,
         }
         config["last_plan_id"] = plan_id
-        config.setdefault("default_control_url", control_url)
-        config.setdefault("default_model", model)
+        # PRD-post-auth-hardening §Epic H Item 21 — explicit overwrite on
+        # supplied CLI flags. setdefault would silently ignore the new value
+        # if the key already exists; that defeats the user's intent when
+        # they pass --connect / --model expecting it to stick.
+        _persist_default("default_control_url", args.control_url, control_url, config)
+        _persist_default("default_model", args.model, model, config)
         _write_config(cfg_path, config)
         sys.stderr.write(f"whilly worker launch: saved creds to {cfg_path} (worker_id={worker_id})\n")
 
+    # H21: also honour --connect / --model on the reuse path (cached creds).
+    # Without this, a user who runs `whilly worker launch plan --model X` on
+    # an existing config sees the model NOT updated because the fresh-register
+    # branch never ran. Only update + write when the value actually changes
+    # to avoid pointless file churn on every reuse invocation.
+    cfg_dirty = False
+    if args.control_url is not None and config.get("default_control_url") != control_url:
+        config["default_control_url"] = control_url
+        cfg_dirty = True
+    if args.model is not None and config.get("default_model") != model:
+        config["default_model"] = model
+        cfg_dirty = True
     if config.get("last_plan_id") != plan_id:
         config["last_plan_id"] = plan_id
+        cfg_dirty = True
+    if cfg_dirty:
         _write_config(cfg_path, config)
 
     if args.register_only:

@@ -533,6 +533,131 @@ def test_remove_with_no_workers_in_config_returns_error(cfg_path: Path) -> None:
 #     launch happy path that DOES call run_worker_command) ──────────────────
 
 
+# ─── H21: --model / --connect override on reuse path ───────────────────────
+
+
+def test_launch_model_flag_updates_cached_default_model(monkeypatch: pytest.MonkeyPatch, cfg_path: Path) -> None:
+    """H21 AC: second launch with --model overwrites the cached default_model.
+
+    Pre-populate a config with default_model=X and a cached entry, then
+    re-run launch with --model NEW. After the second call, default_model
+    must be NEW (not X).
+    """
+    monkeypatch.setattr(worker_launch, "_register", _stub_register_factory("w1", "tk1"))
+    cache_key = worker_launch._config_key("http://127.0.0.1:8000", "demo-plan")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "default_control_url": "http://127.0.0.1:8000",
+                "default_model": "claude-old-model",
+                "last_plan_id": "demo-plan",
+                "workers": {
+                    cache_key: {
+                        "worker_id": "w1",
+                        "token": "tk1",
+                        "plan_id": "demo-plan",
+                        "control_url": "http://127.0.0.1:8000",
+                    }
+                },
+            }
+        )
+    )
+    rc = worker_launch.run_launch_command(
+        [
+            "demo-plan",
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--claude-bin",
+            "/usr/bin/claude",
+            "--model",
+            "claude-new-model",  # explicit override
+            "--register-only",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    assert rc == worker_launch.EXIT_OK
+    config = json.loads(cfg_path.read_text())
+    assert config["default_model"] == "claude-new-model"
+
+
+def test_launch_without_model_flag_does_not_overwrite_cached_default_model(
+    monkeypatch: pytest.MonkeyPatch, cfg_path: Path
+) -> None:
+    """H21 AC: launch with no --model leaves cached default_model alone."""
+    monkeypatch.setattr(worker_launch, "_register", _stub_register_factory("w1", "tk1"))
+    cache_key = worker_launch._config_key("http://127.0.0.1:8000", "demo-plan")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "default_control_url": "http://127.0.0.1:8000",
+                "default_model": "claude-preserved",
+                "last_plan_id": "demo-plan",
+                "workers": {
+                    cache_key: {
+                        "worker_id": "w1",
+                        "token": "tk1",
+                        "plan_id": "demo-plan",
+                        "control_url": "http://127.0.0.1:8000",
+                    }
+                },
+            }
+        )
+    )
+    rc = worker_launch.run_launch_command(
+        [
+            "demo-plan",
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--claude-bin",
+            "/usr/bin/claude",
+            "--register-only",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    assert rc == worker_launch.EXIT_OK
+    config = json.loads(cfg_path.read_text())
+    assert config["default_model"] == "claude-preserved"
+
+
+def test_launch_connect_flag_updates_cached_default_control_url(
+    monkeypatch: pytest.MonkeyPatch, cfg_path: Path
+) -> None:
+    """H21 AC: --connect on reuse path updates the cached default_control_url."""
+    monkeypatch.setattr(worker_launch, "_register", _stub_register_factory("w1", "tk1"))
+    cache_key = worker_launch._config_key("http://NEW", "demo-plan")
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "default_control_url": "http://OLD",
+                "last_plan_id": "demo-plan",
+                "workers": {
+                    cache_key: {"worker_id": "w1", "token": "tk1", "plan_id": "demo-plan", "control_url": "http://NEW"}
+                },
+            }
+        )
+    )
+    rc = worker_launch.run_launch_command(
+        [
+            "demo-plan",
+            "--connect",
+            "http://NEW",
+            "--claude-bin",
+            "/usr/bin/claude",
+            "--register-only",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    assert rc == worker_launch.EXIT_OK
+    config = json.loads(cfg_path.read_text())
+    assert config["default_control_url"] == "http://NEW"
+
+
 def test_launch_full_path_invokes_worker_loop_after_register(monkeypatch: pytest.MonkeyPatch, cfg_path: Path) -> None:
     """Without --register-only or --print-env, launch should hand off to
     run_worker_command. With the loop stubbed out it returns immediately.

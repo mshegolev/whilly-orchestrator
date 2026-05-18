@@ -630,15 +630,16 @@
     },
     {
       "id": "H21-fix-worker-launch-model-connect-override",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "B4-unit-tests-worker-launch"
       ],
       "key_files": [
-        "whilly/cli/worker_launch.py"
+        "whilly/cli/worker_launch.py",
+        "tests/unit/test_cli_worker_launch.py"
       ],
-      "description": "PRD §Epic H, Item 21 — in whilly/cli/worker_launch.py, replace dict.setdefault usage with explicit overwrite for keys supplied via CLI flags (--model, --connect). A CLI flag at its default value (not explicitly supplied by the user) must NOT overwrite the saved config value. Use argparse's default sentinel pattern or click's is_eager/standalone_mode pattern to distinguish 'supplied' from 'defaulted'.",
+      "description": "DONE 2026-05-18: replaced setdefault with _persist_default helper that overwrites only when CLI flag was explicitly supplied (argparse default sentinel = None) OR key absent. Reuse-path also updated: --connect / --model on cached creds now update the cached defaults (previously the fresh-register branch was the only writer, so reuse silently ignored CLI overrides). cfg_dirty flag avoids pointless file writes when nothing changed. 3 new H21 tests added to test_cli_worker_launch.py: --model overrides cached default; no --model preserves cached default; --connect overrides default_control_url. Total file now has 25 tests. Original: PRD §Epic H, Item 21 — in whilly/cli/worker_launch.py, replace dict.setdefault usage with explicit overwrite for keys supplied via CLI flags (--model, --connect). A CLI flag at its default value (not explicitly supplied by the user) must NOT overwrite the saved config value. Use argparse's default sentinel pattern or click's is_eager/standalone_mode pattern to distinguish 'supplied' from 'defaulted'.",
       "acceptance_criteria": [
         "whilly worker launch plan.json --model claude-opus-4-6 on existing config updates default_model in ~/.config/whilly/worker.json",
         "whilly worker launch plan.json (no --model) does NOT overwrite the existing default_model",
