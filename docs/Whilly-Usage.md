@@ -443,6 +443,35 @@ without going through the login form. Companion knob
 hours); lowering it shortens the window of damage from a leaked token at
 the cost of more frequent re-logins.
 
+### Cluster-aware rate limiting: `WHILLY_NUM_WORKERS` and `WHILLY_REDIS_URL`
+
+The default in-process IP rate limiter is correct for a single-process
+deployment but **silently under-counts** when uvicorn spawns multiple worker
+processes — each process owns its own counter. Two environment variables let
+the control plane detect this and choose the right strategy at startup:
+
+- `WHILLY_NUM_WORKERS` — integer, default `1`. The number of worker processes
+  uvicorn was started with (typically passed via `--workers`).
+- `WHILLY_REDIS_URL` — connection string for a shared Redis instance
+  (`redis://host:port/db`). Required when `WHILLY_NUM_WORKERS > 1` if you
+  want cluster-wide counting.
+
+Decision matrix applied at `create_app` startup:
+
+| `WHILLY_NUM_WORKERS` | `WHILLY_REDIS_URL` | Limiter | Behaviour |
+|---|---|---|---|
+| `1` (default) | either | `IPRateLimiter` | In-process sliding window |
+| `> 1` | unset | `NullRateLimiter` + **WARNING** | **Fail-open**, always allows |
+| `> 1` | set | `RedisRateLimiter` | `INCR`/`EXPIRE` counter |
+
+The fail-open branch is deliberate: bricking the entire auth surface on a
+misconfigured cluster is worse than missing some rate-limit counting. The
+WARNING is loud in startup logs; production deployments should treat it as
+configuration drift and either reduce `WHILLY_NUM_WORKERS` to `1` or supply
+`WHILLY_REDIS_URL`. `redis-py>=5` must be installed when `WHILLY_REDIS_URL`
+is set; if missing, `create_app` raises `RuntimeError` early rather than
+deferring the failure to the first login attempt.
+
 ## Operator Dashboard Parity
 
 The active browser WUI and browserless TUI expose the same canonical operator

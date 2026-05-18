@@ -198,17 +198,18 @@
     },
     {
       "id": "C8-cluster-rate-limit-multi-worker-warning",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [
         "A0-ci-restoration"
       ],
       "key_files": [
         "whilly/api/rate_limit.py",
-        "whilly/api/main.py",
+        "whilly/adapters/transport/server.py",
+        "tests/unit/test_rate_limit_cluster.py",
         "docs/Whilly-Usage.md"
       ],
-      "description": "PRD §Epic C, Item 8 — in whilly/api/rate_limit.py, detect WHILLY_NUM_WORKERS > 1 at startup. When detected and WHILLY_REDIS_URL is absent, emit a WARNING log and disable the in-process limiter (fail-open). When WHILLY_REDIS_URL is set, instantiate a RedisRateLimiter stub that satisfies the RateLimiter protocol using redis-py. Update whilly/api/main.py for the startup warning and docs/Whilly-Usage.md to document WHILLY_NUM_WORKERS and WHILLY_REDIS_URL.",
+      "description": "DONE 2026-05-18: rate_limit.py adds NullRateLimiter (always-allow fallback), RedisRateLimiter (INCR/EXPIRE stub with lazy redis-py import), RateLimiter Protocol, build_rate_limiter() factory with the NUM_WORKERS x REDIS_URL decision matrix, install_rate_limiter() to swap the module singleton. create_app calls build/install at startup so the WARNING fires once when multi-worker is configured without Redis. allow() unchanged at the call site — auth routes never need to know which limiter is active. 7 unit tests (1 skipped when redis-py not installed). docs/Whilly-Usage.md §Cluster-aware rate limiting documents both env vars with a decision-matrix table. Original: PRD §Epic C, Item 8 — in whilly/api/rate_limit.py, detect WHILLY_NUM_WORKERS > 1 at startup. When detected and WHILLY_REDIS_URL is absent, emit a WARNING log and disable the in-process limiter (fail-open). When WHILLY_REDIS_URL is set, instantiate a RedisRateLimiter stub that satisfies the RateLimiter protocol using redis-py. Update whilly/api/main.py for the startup warning and docs/Whilly-Usage.md to document WHILLY_NUM_WORKERS and WHILLY_REDIS_URL.",
       "acceptance_criteria": [
         "WHILLY_NUM_WORKERS=4 without Redis → WARNING logged at startup, rate limiter always returns allow=True",
         "WHILLY_NUM_WORKERS=4 with WHILLY_REDIS_URL=redis://localhost:6379/0 → no warning, RedisRateLimiter instantiated",

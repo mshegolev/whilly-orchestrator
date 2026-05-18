@@ -1350,6 +1350,7 @@ def create_app(
         # /docs (Swagger UI) and /openapi.json on FastAPI defaults —
         # operators expect them there, no reason to relocate.
     )
+    from whilly.api import rate_limit as _rate_limit
     from whilly.api.auth_routes import build_auth_router
     from whilly.api.csrf import WhillySessionCSRFMiddleware
     from whilly.api.dashboard import FileLogStore
@@ -1357,6 +1358,12 @@ def create_app(
     from whilly.api.plans_api import build_plans_router
     from whilly.api.static_mount import mount_static_assets
     from whilly.api.tasks_api_crud import build_tasks_crud_router
+
+    # PRD-post-auth-hardening §Epic C Item 8 — select rate limiter based on
+    # cluster topology (WHILLY_NUM_WORKERS, WHILLY_REDIS_URL). build_rate_limiter
+    # logs a WARNING if multi-worker without Redis and returns a NullRateLimiter
+    # in that case so the auth path stays up (fail-open).
+    _rate_limit.install_rate_limiter(_rate_limit.build_rate_limiter())
 
     mount_static_assets(app)
     app.state.log_store = FileLogStore(Path("whilly_logs"))
