@@ -70,6 +70,15 @@ llmops = [
     "opentelemetry-exporter-otlp-proto-http>=1.28",
     "traceloop-sdk>=0.41",
 ]
+# Optional TOTP (RFC 6238) second-factor stack. Gated at runtime behind
+# WHILLY_TOTP_ENABLED=1 (see PRD-post-auth-hardening §Epic E, Item 14).
+# The 024 migration adds the user_totp_secrets table unconditionally so
+# the schema is portable, but the routes that import pyotp only load when
+# the flag is set — keeping pyotp optional lets a deployment that doesn't
+# use TOTP avoid the extra dependency entirely.
+totp = [
+    "pyotp>=2.9",
+]
 # Convenience: install both deployment shapes in one go (e.g. for an
 # all-in-one demo or for CI that drives both the server and a remote
 # worker through the same venv).
