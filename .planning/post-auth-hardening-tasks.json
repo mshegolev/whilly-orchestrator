@@ -274,7 +274,7 @@
     },
     {
       "id": "D9-self-service-password-change",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "A0-ci-restoration",
@@ -282,9 +282,11 @@
       ],
       "key_files": [
         "whilly/api/auth_routes.py",
-        "whilly/api/users_repo.py"
+        "whilly/api/templates/me_password.html.j2",
+        "whilly/operator_views.py",
+        "tests/unit/test_me_password_routes.py"
       ],
-      "description": "PRD §Epic D, Item 9 — add GET /me/password and POST /me/password routes to whilly/api/auth_routes.py. GET renders a form (current_password + new_password + confirm_new_password). POST validates current password via users_repo.verify_credentials, then calls users_repo.set_password, and clears must_change_password if set. CSRF protected. Create Jinja2 template whilly/templates/me_password.html. Add verify_credentials to users_repo.py if not present.",
+      "description": "DONE 2026-05-18: realised as GET/POST /me/password in whilly/api/auth_routes.py + new template whilly/api/templates/me_password.html.j2 (mirrors password_change.html.j2 layout with added current_password field). verify_credentials already existed in users_repo, no changes needed there. set_password() already clears must_change_password as a side effect (via the UPDATE in 020_users migration), so no separate flag clearing was required. POST flow: _authenticate_session (303→/login if unauth) → resolve session.email to username (strip @local) → verify_credentials (422 'Current password is incorrect' on None — drives the lockout counter too, so brute-force of current_password locks the account) → new==confirm check (422 'do not match') → length check (422 'at least 12 characters') → set_password → invalidate must_change_gate cache for this session → log 'auth.password.changed' event with source='self_service' → 303 redirect to /. Template registered in OPERATOR_WUI_ARTIFACTS so test_wui_artifacts_are_classified passes (WUI contract fence from PR #271). 8 new unit tests in tests/unit/test_me_password_routes.py cover all 4 PRD ACs explicitly (success 303, wrong current 422, mismatched new 422, unauth 303 to /login) plus GET form rendering, GET unauth handling, short-password 422, and gate-cache invalidation on success. Full unit suite 2162 passed (3 pre-existing test-order flakes confirmed unrelated). mypy + import-linter + ruff full repo clean. Original: PRD §Epic D, Item 9 — add GET /me/password and POST /me/password routes to whilly/api/auth_routes.py. GET renders a form (current_password + new_password + confirm_new_password). POST validates current password via users_repo.verify_credentials, then calls users_repo.set_password, and clears must_change_password if set. CSRF protected. Create Jinja2 template whilly/templates/me_password.html. Add verify_credentials to users_repo.py if not present.",
       "acceptance_criteria": [
         "Correct current password → 303 redirect to / with success flash",
         "Wrong current password → 422 with form error 'Current password is incorrect'",

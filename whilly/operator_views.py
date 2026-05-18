@@ -193,6 +193,7 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
     OperatorUiArtifact("whilly/api/templates/login_check_inbox.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/login_consumed.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/password_change.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/me_password.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact(
         "whilly/api/templates/_logs.html",
         OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL,
