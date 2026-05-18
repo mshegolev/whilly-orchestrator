@@ -147,6 +147,7 @@ markers = [
     "wui_e2e: end-to-end WUI workflow tests (plan -> Jira -> worker -> human-review -> PR)",
     "ui: browser-driven UI tests via pytest-playwright (real Chromium, live uvicorn)",
     "live_e2e: full live workflow against real services (Jira, Claude, GitLab) — gated by WHILLY_RUN_LIVE_E2E=1, ~5-15 min runtime",
+    "integration: integration test requiring real backing services (Postgres via testcontainers); auto-skipped without Docker",
 ]
 
 [tool.mypy]
