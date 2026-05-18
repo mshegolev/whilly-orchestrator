@@ -1,0 +1,615 @@
+{
+  "project": "whilly-post-auth-hardening",
+  "prd_file": "docs/PRD-post-auth-hardening.md",
+  "agent_instructions": {
+    "before_start": [
+      "Read this file and run: git log --oneline -20",
+      "Select ONE task with status 'pending' and the highest priority",
+      "Verify all dependencies of that task have status 'done'"
+    ],
+    "during_work": [
+      "Work only on the selected task",
+      "Commit after each logical change",
+      "Do not touch code unrelated to the current task",
+      "Run: python3 -m ruff check --fix whilly/ && python3 -m ruff format whilly/ after every Python edit"
+    ],
+    "before_finish": [
+      "Run ALL test_steps from the task and confirm they pass",
+      "Change status to 'done' ONLY after all tests pass",
+      "Append a one-paragraph summary to progress.md",
+      "FORBIDDEN: deleting or editing other tasks — only change status of the current task"
+    ]
+  },
+  "tasks": [
+    {
+      "id": "A1a-diagnose-auth-form-annotation",
+      "status": "pending",
+      "priority": "critical",
+      "dependencies": [],
+      "key_files": [
+        "whilly/api/auth_routes.py"
+      ],
+      "description": "PRD §Epic A, Item 1 — diagnose the FastAPI RuntimeError in build_auth_router (line 163+) that crashes test_health_* in tests/unit/test_transport_server.py. The new /auth/change-password route was added by the auth-hardening agent and is the most likely defect site. Likely candidates: Form(...) parameter missing its fastapi.Form import, a missing return-type annotation, or a bare Optional not unwrapped under Python 3.10. Do NOT fix yet — just identify the exact line, missing import, or wrong annotation.",
+      "acceptance_criteria": [
+        "Root cause documented in progress.md or PR body",
+        "Exact line number and missing import or annotation identified",
+        "No fix applied yet — diagnosis only"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_transport_server.py::test_health_returns_200_against_healthy_pool -q 2>&1 | tail -30",
+        "python3 -c 'from whilly.api.auth_routes import build_auth_router' 2>&1",
+        "python3 -c 'import ast, sys; ast.parse(open(\"whilly/api/auth_routes.py\").read()); print(\"AST OK\")'"
+      ]
+    },
+    {
+      "id": "A1b-fix-auth-form-annotation",
+      "status": "pending",
+      "priority": "critical",
+      "dependencies": ["A1a-diagnose-auth-form-annotation"],
+      "key_files": [
+        "whilly/api/auth_routes.py",
+        "tests/unit/test_transport_server.py"
+      ],
+      "description": "PRD §Epic A, Item 1 — apply the minimal fix identified in A1a. Add the missing import or annotation to whilly/api/auth_routes.py. Update tests/unit/test_transport_server.py if a fixture needs adjusting. Change must be ≤ 20 lines. Do not restructure build_auth_router beyond the defect site.",
+      "acceptance_criteria": [
+        "pytest tests/unit/test_transport_server.py -q exits 0 with no skips",
+        "ruff check whilly/api/auth_routes.py reports no errors",
+        "The diff to auth_routes.py is ≤ 20 lines changed",
+        "python3 -c 'from whilly.api.auth_routes import build_auth_router' exits 0"
+      ],
+      "test_steps": [
+        "python3 -c 'from whilly.api.auth_routes import build_auth_router' 2>&1",
+        "pytest tests/unit/test_transport_server.py -q 2>&1 | tail -20",
+        "python3 -m ruff check whilly/api/auth_routes.py",
+        "git diff --stat HEAD | grep auth_routes"
+      ]
+    },
+    {
+      "id": "A2-smoke-test-post-auth-journey",
+      "status": "pending",
+      "priority": "critical",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "tests/integration/test_post_auth_smoke.py"
+      ],
+      "description": "PRD §Epic A, Item 2 — write a pytest integration test (new file tests/integration/test_post_auth_smoke.py) covering the end-to-end user journey: POST /auth/login → redirect to /auth/change-password → POST /auth/change-password → tasks table navigation → Reset button on a failed task → whilly worker launch via subprocess → confirm reset task transitions to in_progress within 30s. Mark with @pytest.mark.integration so it is excluded from the default 'pytest -q' run. Seed a user with must_change_password=True in a dedicated fixture. ALSO: the test must assert that after a successful login one row exists in auth_audit with outcome='ok' AND after a deliberately-failed login one row exists with outcome='bad_password'. These auth_audit assertions are conditionally skipped (pytest.skip) when the auth_audit table does not yet exist (i.e. before D11/D10b land); once D10b is in place the assertions become live and the test re-runs in CI verify call-site instrumentation.",
+      "acceptance_criteria": [
+        "Test passes against a live server with WHILLY_PROD_MODE=false and a seeded user with must_change_password=True",
+        "Test is marked @pytest.mark.integration and excluded from default pytest -q run",
+        "Worker claim confirmed by polling /api/v1/tasks/{id} until status == 'in_progress' with 30s timeout",
+        "Test file exists at tests/integration/test_post_auth_smoke.py",
+        "Test contains an auth_audit-row assertion block guarded by `pytest.importorskip` or a table-exists check, so it skips cleanly pre-D11 and asserts post-D10b"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_post_auth_smoke.py -v -m integration 2>&1 | tail -30",
+        "pytest -q 2>&1 | grep -v 'post_auth_smoke' | tail -5"
+      ]
+    },
+    {
+      "id": "B3-unit-tests-reset-endpoint",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "tests/unit/test_tasks_api_crud.py"
+      ],
+      "description": "PRD §Epic B, Item 3 — add unit tests for tasks_api_crud.reset_preview_endpoint and reset_task_endpoint. Cover: 200 happy path (failed task resets to pending), 404 unknown task, 409 task currently in_progress claimed by a worker, 400 wrong status (already pending), cascade list shape, and no-mapping cascade. Mock the DB pool with AsyncMock to avoid Postgres dependency.",
+      "acceptance_criteria": [
+        "6 parametrized test cases exist in tests/unit/test_tasks_api_crud.py, all passing",
+        "Branch coverage on whilly/api/tasks_api_crud.py reaches ≥ 85% (pytest --cov=whilly/api/tasks_api_crud)"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_tasks_api_crud.py -q 2>&1 | tail -20",
+        "pytest --cov=whilly/api/tasks_api_crud --cov-report=term-missing tests/unit/test_tasks_api_crud.py 2>&1 | tail -15"
+      ]
+    },
+    {
+      "id": "B4-unit-tests-worker-launch",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "tests/unit/test_cli_worker_launch.py"
+      ],
+      "description": "PRD §Epic B, Item 4 — add/extend unit tests for whilly/cli/worker_launch.py covering: launch with a new config (registers, writes ~/.config/whilly/worker.json), launch reuse path (existing config, no re-registration), list table output, list --json output, remove single match, remove with ambiguous name, remove --all, reading .env file from disk, and the three bootstrap-token decode paths (base64url, hex, utf-8 fallback). Use tmp_path fixture for config isolation. Mock httpx.AsyncClient or WorkerClient to avoid network calls.",
+      "acceptance_criteria": [
+        "≥ 10 test cases covering all branches listed in the description",
+        "No real network calls in any test (httpx.AsyncClient or WorkerClient mocked)",
+        "All tests pass: pytest tests/unit/test_cli_worker_launch.py -q"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_cli_worker_launch.py -q 2>&1 | tail -20",
+        "pytest tests/unit/test_cli_worker_launch.py -v 2>&1 | grep -E 'PASSED|FAILED|ERROR' | wc -l"
+      ]
+    },
+    {
+      "id": "C7-document-dashboard-token-secret",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": [],
+      "key_files": [
+        ".env.example",
+        "docs/Whilly-Usage.md"
+      ],
+      "description": "PRD §Epic C, Item 7 — document WHILLY_DASHBOARD_TOKEN_SECRET in .env.example (with inline generator one-liner) and in docs/Whilly-Usage.md under a new 'Authentication Configuration' heading. The heading must cover: what the variable does, when to set it (production), rotation procedure (restart required), and security warning (treat as a signing key). This task has no dependency on CI state and can land in parallel with A1.",
+      "acceptance_criteria": [
+        ".env.example contains WHILLY_DASHBOARD_TOKEN_SECRET with an inline generator comment: python -c \"import secrets;print(secrets.token_urlsafe(32))\"",
+        "docs/Whilly-Usage.md has ≥ 150 words on the topic under 'Authentication Configuration'",
+        "The generator one-liner appears in a code block in docs/Whilly-Usage.md"
+      ],
+      "test_steps": [
+        "grep -n 'WHILLY_DASHBOARD_TOKEN_SECRET' .env.example",
+        "grep -c 'WHILLY_DASHBOARD_TOKEN_SECRET' docs/Whilly-Usage.md",
+        "python3 -c \"content=open('docs/Whilly-Usage.md').read(); idx=content.find('Authentication Configuration'); section=content[idx:idx+2000]; words=len(section.split()); print(f'Section word count: {words}'); assert words >= 150\""
+      ]
+    },
+    {
+      "id": "B5-integration-test-session-persistence",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": ["A1b-fix-auth-form-annotation", "C7-document-dashboard-token-secret"],
+      "key_files": [
+        "tests/integration/test_session_persistence.py"
+      ],
+      "description": "PRD §Epic B, Item 5 — write a pytest integration test (new file tests/integration/test_session_persistence.py) that: (a) boots the server with a fixed WHILLY_DASHBOARD_TOKEN_SECRET, (b) logs in and captures the whilly_session cookie, (c) stops and restarts the server with the same secret, (d) uses the cookie on a /api/v1/tasks request, (e) asserts HTTP 200. Also assert that without the env var the cookie is rejected after restart (ephemeral behaviour). Use subprocess.Popen with port-ready polling for server lifecycle.",
+      "acceptance_criteria": [
+        "Test passes with WHILLY_DASHBOARD_TOKEN_SECRET set: cookie survives restart → HTTP 200",
+        "Test passes without WHILLY_DASHBOARD_TOKEN_SECRET: cookie rejected after restart → HTTP 401",
+        "Test marked @pytest.mark.integration",
+        "File exists at tests/integration/test_session_persistence.py"
+      ],
+      "test_steps": [
+        "pytest tests/integration/test_session_persistence.py -v -m integration 2>&1 | tail -20"
+      ]
+    },
+    {
+      "id": "C8-cluster-rate-limit-multi-worker-warning",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "whilly/api/rate_limit.py",
+        "whilly/api/main.py",
+        "docs/Whilly-Usage.md"
+      ],
+      "description": "PRD §Epic C, Item 8 — in whilly/api/rate_limit.py, detect WHILLY_NUM_WORKERS > 1 at startup. When detected and WHILLY_REDIS_URL is absent, emit a WARNING log and disable the in-process limiter (fail-open). When WHILLY_REDIS_URL is set, instantiate a RedisRateLimiter stub that satisfies the RateLimiter protocol using redis-py. Update whilly/api/main.py for the startup warning and docs/Whilly-Usage.md to document WHILLY_NUM_WORKERS and WHILLY_REDIS_URL.",
+      "acceptance_criteria": [
+        "WHILLY_NUM_WORKERS=4 without Redis → WARNING logged at startup, rate limiter always returns allow=True",
+        "WHILLY_NUM_WORKERS=4 with WHILLY_REDIS_URL=redis://localhost:6379/0 → no warning, RedisRateLimiter instantiated",
+        "Unit test: mock os.getenv, verify correct behaviour in both branches (pytest tests/unit/ -k rate_limit -q)"
+      ],
+      "test_steps": [
+        "pytest tests/unit/ -k rate_limit -q 2>&1 | tail -15",
+        "WHILLY_NUM_WORKERS=4 python3 -c 'from whilly.api.rate_limit import build_rate_limiter; import logging; logging.basicConfig(level=logging.WARNING); build_rate_limiter()' 2>&1 | grep -i warning"
+      ]
+    },
+    {
+      "id": "C6-must-change-gate-middleware",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "whilly/api/auth_routes.py",
+        "whilly/api/main.py"
+      ],
+      "description": "PRD §Epic C, Item 6 — implement the per-request must_change_password gate as FastAPI middleware (BaseHTTPMiddleware) or a Depends injected into the session dependency. Whitelist: /auth/change-password, /auth/logout, /health, /static/*. Add an in-process TTL cache (30s) keyed on (session_id, password_version) to avoid a DB round-trip on every request. Cache is invalidated on password change. Verify middleware ordering does not break CSRF protection.",
+      "acceptance_criteria": [
+        "Authenticated request to / with must_change_password=True returns HTTP 303 → /auth/change-password",
+        "Request to /auth/change-password with the flag set returns 200",
+        "After a successful change, the next request to / returns 200",
+        "Cache hit confirmed by asserting DB query count ≤ 1 for 5 rapid successive requests (mock.call_count)",
+        "CSRF middleware still correctly protects POST routes"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_admin_auth.py tests/unit/test_transport_server.py -q 2>&1 | tail -15",
+        "pytest tests/ -k 'must_change or change_password or gate' -q 2>&1 | tail -15"
+      ]
+    },
+    {
+      "id": "C12-smtp-mailer",
+      "status": "pending",
+      "priority": "high",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "whilly/api/mailer.py",
+        "whilly/api/auth_routes.py",
+        ".env.example",
+        "docs/Whilly-Usage.md",
+        "pyproject.toml"
+      ],
+      "description": "PRD §Epic C, Item 12 — create new whilly/api/mailer.py with a Mailer class. Constructor reads WHILLY_SMTP_HOST, WHILLY_SMTP_PORT (default 587), WHILLY_SMTP_USER, WHILLY_SMTP_PASSWORD, WHILLY_SMTP_FROM. If WHILLY_SMTP_HOST is empty/unset, falls back to writing a magic_link.sent event to the existing event log. Uses aiosmtplib for async SMTP (no synchronous SMTP calls in a coroutine). Template: plain-text + HTML multipart. Update auth_routes.py to call mailer.send_magic_link instead of the event-log directly. Add aiosmtplib to pyproject.toml [project.dependencies].",
+      "acceptance_criteria": [
+        "With SMTP configured, POST /auth/magic triggers an aiosmtplib.send call (verified with mock)",
+        "With SMTP absent, the event-log path is taken (no exception raised)",
+        "Unit test covering both paths passes",
+        "aiosmtplib is present in pyproject.toml [project.dependencies]",
+        ".env.example documents all five SMTP vars"
+      ],
+      "test_steps": [
+        "pytest tests/ -k mailer -q 2>&1 | tail -15",
+        "python3 -c 'from whilly.api.mailer import Mailer; m = Mailer(); print(\"Mailer init OK\")'",
+        "grep 'aiosmtplib' pyproject.toml"
+      ]
+    },
+    {
+      "id": "D9-self-service-password-change",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["A1b-fix-auth-form-annotation", "C6-must-change-gate-middleware"],
+      "key_files": [
+        "whilly/api/auth_routes.py",
+        "whilly/api/users_repo.py"
+      ],
+      "description": "PRD §Epic D, Item 9 — add GET /me/password and POST /me/password routes to whilly/api/auth_routes.py. GET renders a form (current_password + new_password + confirm_new_password). POST validates current password via users_repo.verify_credentials, then calls users_repo.set_password, and clears must_change_password if set. CSRF protected. Create Jinja2 template whilly/templates/me_password.html. Add verify_credentials to users_repo.py if not present.",
+      "acceptance_criteria": [
+        "Correct current password → 303 redirect to / with success flash",
+        "Wrong current password → 422 with form error 'Current password is incorrect'",
+        "new_password != confirm_new_password → 422 with appropriate error",
+        "Unauthenticated request → 303 to /login",
+        "Unit tests covering all four paths above pass"
+      ],
+      "test_steps": [
+        "pytest tests/ -k 'me_password or self_service or change_password' -q 2>&1 | tail -20",
+        "python3 -c 'from whilly.api.auth_routes import build_auth_router; r = build_auth_router(); paths = [r.path for r in r.routes]; assert any(\"/me/password\" in p for p in paths), f\"Route not found in {paths}\"'"
+      ]
+    },
+    {
+      "id": "D11-auth-audit-migration-and-repo",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "whilly/adapters/db/migrations/versions/023_auth_audit.py",
+        "whilly/adapters/db/auth_audit_repo.py"
+      ],
+      "description": "PRD §Epic D, Item 11 (migration + repo only) — create Alembic migration 023_auth_audit.py that creates the auth_audit table (id BIGSERIAL PK, ts TIMESTAMPTZ DEFAULT NOW(), username TEXT, ip TEXT, user_agent TEXT, outcome TEXT CHECK IN ('ok','bad_password','locked','rate_limited','missing_user'), session_id UUID). Create whilly/adapters/db/auth_audit_repo.py with an insert_attempt coroutine. Migration must be reversible (downgrade drops the table). Do NOT instrument call sites or add browse UI yet (those are in D10).",
+      "acceptance_criteria": [
+        "Migration 023_auth_audit.py exists and is importable",
+        "Migration downgrade drops the auth_audit table without errors",
+        "auth_audit_repo.py exists with insert_attempt coroutine",
+        "ruff check passes on both new files"
+      ],
+      "test_steps": [
+        "python3 -c 'from whilly.adapters.db.migrations.versions import 023_auth_audit' 2>&1 || python3 -c \"import importlib; importlib.import_module('whilly.adapters.db.migrations.versions.023_auth_audit'); print('OK')\"",
+        "python3 -c 'from whilly.adapters.db.auth_audit_repo import insert_attempt; print(\"insert_attempt importable\")'",
+        "python3 -m ruff check whilly/adapters/db/auth_audit_repo.py whilly/adapters/db/migrations/versions/023_auth_audit.py"
+      ]
+    },
+    {
+      "id": "D10-admin-user-management-ui",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["A1b-fix-auth-form-annotation", "C6-must-change-gate-middleware", "D9-self-service-password-change", "D11-auth-audit-migration-and-repo"],
+      "key_files": [
+        "whilly/api/admin_users_routes.py",
+        "whilly/api/main.py",
+        "whilly/api/sessions.py"
+      ],
+      "description": "PRD §Epic D, Item 10 — create whilly/api/admin_users_routes.py with routes: GET /admin/users (table of all users), POST /admin/users/create (username, email, role, initial password → must_change_password=True), POST /admin/users/{id}/role (set role), POST /admin/users/{id}/reset-password (random password, set must_change_password=True), POST /admin/users/{id}/delete. All routes protected by Depends(require_role('admin')). Create Jinja2 template whilly/templates/admin_users.html. Add require_role to sessions.py if absent. Include router in main.py. Also add GET /admin/auth-audit?page=N&username=X paginated browse route (50 rows/page) and its template, calling auth_audit_repo from D11.",
+      "acceptance_criteria": [
+        "Non-admin access to any /admin/* route returns HTTP 403",
+        "Admin can create, list, role-change, password-reset, and delete a user",
+        "Delete is idempotent (404 on second delete attempt)",
+        "GET /admin/auth-audit renders correctly with paginated results",
+        "pytest tests/ -k admin_users -q passes"
+      ],
+      "test_steps": [
+        "python3 -c 'from whilly.api.admin_users_routes import router; print(\"admin_users_routes importable\")'",
+        "pytest tests/ -k 'admin_users or admin_auth' -q 2>&1 | tail -20",
+        "python3 -c 'from whilly.api.sessions import require_role; print(\"require_role importable\")'"
+      ]
+    },
+    {
+      "id": "D10b-instrument-auth-audit-callsites",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["D10-admin-user-management-ui"],
+      "key_files": [
+        "whilly/api/auth_routes.py"
+      ],
+      "description": "PRD §Epic D, Item 11 (call-site instrumentation) — instrument every branch of submit_login and _authenticate_session in auth_routes.py to call auth_audit_repo.insert_attempt with the appropriate outcome ('ok', 'bad_password', 'locked', 'rate_limited', 'missing_user'). Verify by checking the integration smoke test (A2) confirms a row is written for both failed and successful login attempts.",
+      "acceptance_criteria": [
+        "After a failed login attempt, one row exists in auth_audit with outcome='bad_password'",
+        "After a successful login, one row with outcome='ok'",
+        "Locked/rate_limited outcomes are recorded on the appropriate code paths",
+        "ruff check whilly/api/auth_routes.py passes"
+      ],
+      "test_steps": [
+        "pytest tests/ -k 'audit' -q 2>&1 | tail -15",
+        "python3 -m ruff check whilly/api/auth_routes.py",
+        "grep -n 'insert_attempt' whilly/api/auth_routes.py | head -10"
+      ]
+    },
+    {
+      "id": "D13-startup-route-audit",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["A1b-fix-auth-form-annotation", "C6-must-change-gate-middleware", "D9-self-service-password-change", "D10-admin-user-management-ui", "D10b-instrument-auth-audit-callsites", "C12-smtp-mailer"],
+      "key_files": [
+        "whilly/api/main.py",
+        "tests/unit/test_transport_server.py"
+      ],
+      "description": "PRD §Epic D, Item 13 — after all routers are included in whilly/api/main.py, add a startup lifecycle event that iterates app.routes. For each APIRoute: if the route path is not in _PUBLIC_WHITELIST and none of _AUTH_DEPENDENCIES appear in route.dependencies, raise RuntimeError with the offending path. _PUBLIC_WHITELIST = {'/login', '/login/magic', '/auth/login', '/auth/magic-login', '/auth/magic', '/health', '/static'}. Make skippable via WHILLY_SKIP_ROUTE_AUDIT=1. Add a test to test_transport_server.py that a bare unguarded route triggers RuntimeError.",
+      "acceptance_criteria": [
+        "Adding @router.get('/secret') with no auth dependency causes create_app to raise RuntimeError('Unguarded route: /secret')",
+        "All existing routes pass the check (CI green): pytest tests/unit/test_transport_server.py -q exits 0",
+        "WHILLY_SKIP_ROUTE_AUDIT=1 suppresses the check"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_transport_server.py -q 2>&1 | tail -15",
+        "WHILLY_SKIP_ROUTE_AUDIT=1 python3 -c 'from whilly.api.main import create_app; app = create_app(); print(\"skip works\")'",
+        "pytest tests/ -k route_audit -q 2>&1 | tail -10"
+      ]
+    },
+    {
+      "id": "E16-active-sessions-ui",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["A1b-fix-auth-form-annotation", "D9-self-service-password-change"],
+      "key_files": [
+        "whilly/api/auth_routes.py"
+      ],
+      "description": "PRD §Epic E, Item 16 — add GET /me/sessions (list rows from sessions table filtered by user) and POST /me/sessions/{session_id}/revoke (delete the row). Template whilly/templates/me_sessions.html shows device user-agent, IP, last-seen timestamp, and a Revoke button. Revoking the current session redirects to /login.",
+      "acceptance_criteria": [
+        "Revoking a session ID makes the corresponding cookie return 401 on next use",
+        "GET /me/sessions returns 200 with a list of sessions for the authenticated user",
+        "Revoking the current session redirects to /login",
+        "Unit tests for both routes pass"
+      ],
+      "test_steps": [
+        "pytest tests/ -k 'sessions or revoke' -q 2>&1 | tail -15",
+        "python3 -c 'from whilly.api.auth_routes import build_auth_router; r=build_auth_router(); paths=[rt.path for rt in r.routes]; print([p for p in paths if \"sessions\" in p])'"
+      ]
+    },
+    {
+      "id": "E14a-totp-migration-024",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "whilly/adapters/db/migrations/versions/024_user_totp_secrets.py",
+        "pyproject.toml"
+      ],
+      "description": "PRD §Epic E, Item 14 (migration only) — create Alembic migration 024_user_totp_secrets.py: table user_totp_secrets (user_id FK, secret TEXT, enabled BOOL, created_at TIMESTAMPTZ). Add pyotp as an optional dependency in pyproject.toml under [project.optional-dependencies] totp group. Migration must be reversible.",
+      "acceptance_criteria": [
+        "Migration 024_user_totp_secrets.py exists and is importable",
+        "Downgrade drops the user_totp_secrets table",
+        "pyotp appears in pyproject.toml optional-dependencies under [totp]",
+        "ruff check passes on the migration file"
+      ],
+      "test_steps": [
+        "python3 -c \"import importlib; importlib.import_module('whilly.adapters.db.migrations.versions.024_user_totp_secrets'); print('OK')\"",
+        "grep 'pyotp' pyproject.toml",
+        "python3 -m ruff check whilly/adapters/db/migrations/versions/024_user_totp_secrets.py"
+      ]
+    },
+    {
+      "id": "E14b-totp-setup-and-verify-routes",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["E14a-totp-migration-024", "C6-must-change-gate-middleware", "D9-self-service-password-change", "D13-startup-route-audit"],
+      "key_files": [
+        "whilly/api/auth_routes.py"
+      ],
+      "description": "PRD §Epic E, Item 14 (routes) — gated behind WHILLY_TOTP_ENABLED=1. Add GET/POST /me/totp/setup (QR code via qrcode lib) and GET/POST /auth/totp (second-factor verification after password). Implement totp_pending intermediate session state. Add qrcode to pyproject.toml optional-dependencies totp group. Brute-force locked after 5 failures.",
+      "acceptance_criteria": [
+        "QR code renders at GET /me/totp/setup when WHILLY_TOTP_ENABLED=1",
+        "Valid TOTP code accepted within ±1 window",
+        "Brute-force locked after 5 failures",
+        "Feature is fully inactive when WHILLY_TOTP_ENABLED is unset or 0"
+      ],
+      "test_steps": [
+        "WHILLY_TOTP_ENABLED=1 pytest tests/ -k totp -q 2>&1 | tail -15",
+        "WHILLY_TOTP_ENABLED=0 python3 -c 'from whilly.api.auth_routes import build_auth_router; r=build_auth_router(); paths=[rt.path for rt in r.routes]; assert not any(\"totp\" in p for p in paths), f\"TOTP exposed when disabled: {paths}\"'"
+      ]
+    },
+    {
+      "id": "E15-webauthn-passkeys",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["E14b-totp-setup-and-verify-routes"],
+      "key_files": [
+        "whilly/api/webauthn_routes.py",
+        "whilly/adapters/db/migrations/versions/025_webauthn_credentials.py"
+      ],
+      "description": "PRD §Epic E, Item 15 — add WebAuthn passkey support for admin accounts using the webauthn PyPI package. Create whilly/api/webauthn_routes.py with registration and authentication ceremony routes (admin-only). Create migration 025_webauthn_credentials.py. NOTE: PRD marks this as high-risk; recommend a dedicated sprint for this task.",
+      "acceptance_criteria": [
+        "End-to-end registration + authentication with a software authenticator (py_webauthn test vector) passes",
+        "All WebAuthn routes restricted to admin role → 403 for non-admins",
+        "Migration 025_webauthn_credentials.py is reversible"
+      ],
+      "test_steps": [
+        "pytest tests/ -k webauthn -q 2>&1 | tail -15",
+        "python3 -c 'from whilly.api.webauthn_routes import router; print(\"webauthn importable\")'",
+        "python3 -m ruff check whilly/api/webauthn_routes.py"
+      ]
+    },
+    {
+      "id": "E17-oidc-header-trust",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["A1b-fix-auth-form-annotation", "D13-startup-route-audit"],
+      "key_files": [
+        "whilly/api/oidc_header_auth.py",
+        "whilly/api/main.py",
+        ".env.example"
+      ],
+      "description": "PRD §Epic E, Item 17 — create whilly/api/oidc_header_auth.py. When WHILLY_TRUST_PROXY_AUTH=1, inspect X-Forwarded-User header on every request; if present and user exists, create a transient session (not persisted to DB). Strict: only accept the header from IPs in WHILLY_TRUSTED_PROXY_IPS (CIDR list). When WHILLY_TRUST_PROXY_AUTH is unset or 0, the header is completely ignored. Add conditional middleware registration in main.py. SECURITY NOTE: requires mandatory security review before merge; incorrect IP allowlisting enables header injection.",
+      "acceptance_criteria": [
+        "WHILLY_TRUST_PROXY_AUTH=1 with a seeded user: request with X-Forwarded-User: alice from trusted IP reaches dashboard",
+        "Same request from untrusted IP returns 401",
+        "WHILLY_TRUST_PROXY_AUTH=0 (or unset): header is completely ignored",
+        "WHILLY_TRUSTED_PROXY_IPS must be non-empty before the feature activates"
+      ],
+      "test_steps": [
+        "pytest tests/ -k oidc_header -q 2>&1 | tail -15",
+        "python3 -c 'from whilly.api.oidc_header_auth import OidcHeaderMiddleware; print(\"importable\")'",
+        "WHILLY_TRUST_PROXY_AUTH=1 WHILLY_TRUSTED_PROXY_IPS='' python3 -c 'from whilly.api.main import create_app; app=create_app()' 2>&1 | grep -i 'error\\|warning\\|trusted'"
+      ]
+    },
+    {
+      "id": "F18a-worker-tags-migration",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "key_files": [
+        "whilly/adapters/db/migrations/versions/026_worker_tags.py"
+      ],
+      "description": "PRD §Epic F, Item 18 (migration only) — create Alembic migration 026_worker_tags.py that adds workers.tags TEXT[] NOT NULL DEFAULT '{}' and tasks.required_tags TEXT[] NOT NULL DEFAULT '{}'. Migration must be reversible (drop the columns on downgrade). Migration number is pre-assigned to 026 to avoid collision with E15 (025_webauthn_credentials.py); set down_revision accordingly. If E15 has not landed yet, this migration's down_revision still points to 024 — adjust to 025 after E15 merges.",
+      "acceptance_criteria": [
+        "Migration file exists at whilly/adapters/db/migrations/versions/026_worker_tags.py",
+        "Upgrade adds workers.tags and tasks.required_tags columns",
+        "Downgrade removes both columns without data loss errors",
+        "ruff check passes on the migration file"
+      ],
+      "test_steps": [
+        "python3 -c \"import importlib; importlib.import_module('whilly.adapters.db.migrations.versions.026_worker_tags'); print('migration importable')\"",
+        "python3 -m ruff check whilly/adapters/db/migrations/versions/026_worker_tags.py"
+      ]
+    },
+    {
+      "id": "F18b-worker-tags-claim-and-cli",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["B4-unit-tests-worker-launch", "F18a-worker-tags-migration"],
+      "key_files": [
+        "whilly/api/tasks_api.py",
+        "whilly/api/tasks_api_crud.py",
+        "whilly/cli/worker_launch.py",
+        "docs/Whilly-Usage.md"
+      ],
+      "description": "PRD §Epic F, Item 18 (logic + CLI) — update /tasks/claim SQL in tasks_api_crud.py to filter by: (tasks.required_tags <@ workers.tags OR tasks.required_tags = '{}'). Add --tags flag to whilly worker launch in worker_launch.py. Update docs/Whilly-Usage.md to document the tag-pool model. WUI chip display for tags on worker list and task detail is a stretch within this task.",
+      "acceptance_criteria": [
+        "Worker with tags=['gpu'] claims a task with required_tags=['gpu']",
+        "Worker with tags=['gpu'] does NOT claim a task with required_tags=['signing']",
+        "Worker with any tags claims a task with required_tags=[]",
+        "whilly worker launch --tags gpu,signing persists tags to config file and sends on registration",
+        "Unit tests for all three claim-filter scenarios pass"
+      ],
+      "test_steps": [
+        "pytest tests/ -k 'tag' -q 2>&1 | tail -20",
+        "pytest tests/unit/test_cli_worker_launch.py -q 2>&1 | tail -10",
+        "grep -n 'required_tags\\|worker_tags\\|<@' whilly/api/tasks_api_crud.py"
+      ]
+    },
+    {
+      "id": "G19-publish-claude-anonymizer-repo",
+      "status": "human_loop",
+      "priority": "medium",
+      "dependencies": [],
+      "key_files": [
+        "docs/anonymizer-usage.md"
+      ],
+      "description": "PRD §Epic G, Item 19 — create public GitHub repository mshegolev/claude-anonymizer from /opt/develop/aiqa/claude-anonymizer/. Add README.md and LICENSE (MIT) to the standalone repo. Update docs/anonymizer-usage.md in THIS (whilly) repo to add a direct link to the new GitHub repo. MARKED human_loop: this task spans two repos and requires an interactive `gh repo create` — the Whilly orchestrator chdir's into the plan workspace and cannot reach /opt/develop/aiqa/. Human steps: (1) cd /opt/develop/aiqa/claude-anonymizer && gh repo create mshegolev/claude-anonymizer --public --license=MIT --source=. --remote=origin --push, (2) verify with gh repo view mshegolev/claude-anonymizer, (3) in THIS repo, edit docs/anonymizer-usage.md to add the GitHub link, (4) flip this task to status='pending' and re-run the plan so G20 unblocks. Until step 4, G20 stays blocked (its dependency on G19 will not resolve).",
+      "acceptance_criteria": [
+        "Repository mshegolev/claude-anonymizer is public on GitHub",
+        "docs/anonymizer-usage.md contains a direct link to the GitHub repo",
+        "README.md in the standalone repo documents installation and usage"
+      ],
+      "test_steps": [
+        "gh repo view mshegolev/claude-anonymizer --json name,isPrivate 2>&1",
+        "grep -n 'github.com/mshegolev/claude-anonymizer' docs/anonymizer-usage.md"
+      ]
+    },
+    {
+      "id": "G20-claude-anonymizer-github-actions-ci",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["G19-publish-claude-anonymizer-repo"],
+      "key_files": [
+        "docs/anonymizer-usage.md"
+      ],
+      "description": "PRD §Epic G, Item 20 — in the mshegolev/claude-anonymizer repo (NOT this repo), create .github/workflows/ci.yml with matrix python-version: ['3.10', '3.11', '3.12'], steps: checkout, pip install -e '.[dev]', ruff check, ruff format --check, pytest -q. Trigger on push and pull_request to main. Add CI badge to README.md in that repo. No changes to the whilly repo itself beyond updating the anonymizer-usage.md doc link if the badge URL changes.",
+      "acceptance_criteria": [
+        "CI passes on all three Python versions in mshegolev/claude-anonymizer",
+        "CI badge appears in README.md of mshegolev/claude-anonymizer",
+        "Workflow triggers on push and pull_request to main"
+      ],
+      "test_steps": [
+        "gh workflow list --repo mshegolev/claude-anonymizer 2>&1",
+        "gh run list --repo mshegolev/claude-anonymizer --limit 3 2>&1"
+      ]
+    },
+    {
+      "id": "H21-fix-worker-launch-model-connect-override",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["B4-unit-tests-worker-launch"],
+      "key_files": [
+        "whilly/cli/worker_launch.py"
+      ],
+      "description": "PRD §Epic H, Item 21 — in whilly/cli/worker_launch.py, replace dict.setdefault usage with explicit overwrite for keys supplied via CLI flags (--model, --connect). A CLI flag at its default value (not explicitly supplied by the user) must NOT overwrite the saved config value. Use argparse's default sentinel pattern or click's is_eager/standalone_mode pattern to distinguish 'supplied' from 'defaulted'.",
+      "acceptance_criteria": [
+        "whilly worker launch plan.json --model claude-opus-4-6 on existing config updates default_model in ~/.config/whilly/worker.json",
+        "whilly worker launch plan.json (no --model) does NOT overwrite the existing default_model",
+        "Unit test: assert config after second launch with new --model reflects the new value"
+      ],
+      "test_steps": [
+        "pytest tests/unit/test_cli_worker_launch.py -q -k model 2>&1 | tail -15",
+        "pytest tests/unit/test_cli_worker_launch.py -q 2>&1 | tail -10"
+      ]
+    },
+    {
+      "id": "H22-worker-bootstrap-command",
+      "status": "pending",
+      "priority": "medium",
+      "dependencies": ["A1b-fix-auth-form-annotation", "H21-fix-worker-launch-model-connect-override"],
+      "key_files": [
+        "whilly/cli/worker_launch.py"
+      ],
+      "description": "PRD §Epic H, Item 22 — add whilly worker bootstrap sub-command to worker_launch.py (or new worker_bootstrap.py). Steps: (1) verify Python 3.10+ and pip, (2) pip install whilly if not installed, (3) prompt for server URL and bootstrap token, (4) call whilly worker launch logic to register and write config, (5) run claude --version and print result, (6) print summary with config file path. --non-interactive flag accepts all inputs via env vars (WHILLY_SERVER_URL, WHILLY_BOOTSTRAP_TOKEN). Second run on configured box detects existing config and prompts before overwriting.",
+      "acceptance_criteria": [
+        "whilly worker bootstrap on a box with no config completes without manual JSON edits",
+        "Second run on configured box detects existing config and prompts before overwriting",
+        "--non-interactive flag accepts WHILLY_SERVER_URL and WHILLY_BOOTSTRAP_TOKEN env vars"
+      ],
+      "test_steps": [
+        "whilly worker bootstrap --help 2>&1 | grep -E 'bootstrap|non-interactive'",
+        "pytest tests/ -k bootstrap -q 2>&1 | tail -15",
+        "WHILLY_SERVER_URL=http://localhost:8080 WHILLY_BOOTSTRAP_TOKEN=testtoken whilly worker bootstrap --non-interactive 2>&1 | tail -10"
+      ]
+    },
+    {
+      "id": "I23-refresh-whilly-usage-docs",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["C7-document-dashboard-token-secret", "C8-cluster-rate-limit-multi-worker-warning", "F18b-worker-tags-claim-and-cli", "H21-fix-worker-launch-model-connect-override", "H22-worker-bootstrap-command"],
+      "key_files": [
+        "docs/Whilly-Usage.md"
+      ],
+      "description": "PRD §Epic I, Item 23 — bring docs/Whilly-Usage.md up to date with everything shipped since v4.5. Add or update sections: whilly worker launch/list/remove with all flags; WUI task Reset button and its API endpoint; WHILLY_DASHBOARD_TOKEN_SECRET (cross-reference item C7); WHILLY_PROD_MODE semantics; WHILLY_NUM_WORKERS and WHILLY_REDIS_URL; must_change_password initial-login flow. Remove any references to features removed in v3→v4 migration (grep for USE_WORKSPACE in user-facing prose).",
+      "acceptance_criteria": [
+        "Every env var added since v4.5 is documented with type, default, and example value",
+        "whilly worker sub-commands have at least one usage example each",
+        "No references to USE_WORKSPACE remain in user-facing prose (grep returns empty)"
+      ],
+      "test_steps": [
+        "grep -n 'USE_WORKSPACE' docs/Whilly-Usage.md | grep -v '#'",
+        "grep -c 'WHILLY_' docs/Whilly-Usage.md",
+        "grep -n 'worker bootstrap\\|worker launch\\|worker list\\|worker remove' docs/Whilly-Usage.md"
+      ]
+    },
+    {
+      "id": "I24-adr-auth-hardening",
+      "status": "pending",
+      "priority": "low",
+      "dependencies": ["A1b-fix-auth-form-annotation", "A2-smoke-test-post-auth-journey", "B3-unit-tests-reset-endpoint", "B4-unit-tests-worker-launch", "B5-integration-test-session-persistence", "C6-must-change-gate-middleware", "C7-document-dashboard-token-secret", "C8-cluster-rate-limit-multi-worker-warning", "C12-smtp-mailer"],
+      "key_files": [
+        "docs/adr/ADR-001-auth-hardening-p1.md",
+        "docs/index.md"
+      ],
+      "description": "PRD §Epic I, Item 24 — create docs/adr/ directory. Write docs/adr/ADR-001-auth-hardening-p1.md following Nygard format (Status, Context, Decision, Consequences). Cover all five P1 hardening decisions: P1.1 forced-password-change gate, P1.2 IP rate-limiting with account lockout, P1.3 WHILLY_PROD_MODE umbrella switch, P1.4 SSE cookie authentication, P1.5 prod-mode validators. Link ADR from docs/index.md if it exists.",
+      "acceptance_criteria": [
+        "docs/adr/ADR-001-auth-hardening-p1.md exists with Nygard sections: Status, Context, Decision, Consequences",
+        "All five P1 hardening decisions (P1.1–P1.5) are addressed in the document",
+        "docs/index.md links to the ADR (if docs/index.md exists)",
+        "Reviewed and acknowledged by at least one other contributor (comment in PR)"
+      ],
+      "test_steps": [
+        "ls docs/adr/ADR-001-auth-hardening-p1.md",
+        "grep -c '## ' docs/adr/ADR-001-auth-hardening-p1.md",
+        "grep -E 'P1\\.1|P1\\.2|P1\\.3|P1\\.4|P1\\.5' docs/adr/ADR-001-auth-hardening-p1.md | wc -l"
+      ]
+    }
+  ]
+}
