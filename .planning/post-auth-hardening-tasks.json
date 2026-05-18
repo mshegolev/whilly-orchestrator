@@ -675,7 +675,7 @@
     },
     {
       "id": "I23-refresh-whilly-usage-docs",
-      "status": "skipped",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "C7-document-dashboard-token-secret",
@@ -687,7 +687,7 @@
       "key_files": [
         "docs/Whilly-Usage.md"
       ],
-      "description": "SKIPPED 2026-05-18: This task was scoped around documenting H21, H22 (kept), C8 (done — already documented in C8's PR), and F18b (skipped). With F18b skipped there is no tag-pool feature to document beyond F18a's schema-only mention. The most-valuable remaining content (cluster rate limiting, SMTP) has already shipped as part of the C8 and C12 PRs which each included their own docs/Whilly-Usage.md updates. Re-running this task as a standalone PR would mostly be the H21/H22 footnotes — out-of-proportion docs churn. Per autopilot risk policy, correct deferral; pair with F18b in the future follow-up sprint. Original: PRD §Epic I, Item 23 — bring docs/Whilly-Usage.md up to date with everything shipped since v4.5. Add or update sections: whilly worker launch/list/remove with all flags; WUI task Reset button and its API endpoint; WHILLY_DASHBOARD_TOKEN_SECRET (cross-reference item C7); WHILLY_PROD_MODE semantics; WHILLY_NUM_WORKERS and WHILLY_REDIS_URL; must_change_password initial-login flow. Remove any references to features removed in v3→v4 migration (grep for USE_WORKSPACE in user-facing prose).",
+      "description": "DONE 2026-05-19: docs/Whilly-Usage.md §Remote-worker setup added under Companion commands — documents whilly worker bootstrap (H22), launch with --model/--connect overrides (H21), list (table + --json), remove (single / --connect / --all). Notes F18b SQL is live but register-side plumbing still pending so the tag filter is currently a no-op. C7 dashboard token secret + C8 cluster rate-limit + C12 SMTP transport already had their own dedicated sections from their respective PRs (#272/#283/#284) — confirmed present, not re-duplicated. Original: SKIPPED 2026-05-18: This task was scoped around documenting H21, H22 (kept), C8 (done — already documented in C8's PR), and F18b (skipped). With F18b skipped there is no tag-pool feature to document beyond F18a's schema-only mention. The most-valuable remaining content (cluster rate limiting, SMTP) has already shipped as part of the C8 and C12 PRs which each included their own docs/Whilly-Usage.md updates. Re-running this task as a standalone PR would mostly be the H21/H22 footnotes — out-of-proportion docs churn. Per autopilot risk policy, correct deferral; pair with F18b in the future follow-up sprint. Original: PRD §Epic I, Item 23 — bring docs/Whilly-Usage.md up to date with everything shipped since v4.5. Add or update sections: whilly worker launch/list/remove with all flags; WUI task Reset button and its API endpoint; WHILLY_DASHBOARD_TOKEN_SECRET (cross-reference item C7); WHILLY_PROD_MODE semantics; WHILLY_NUM_WORKERS and WHILLY_REDIS_URL; must_change_password initial-login flow. Remove any references to features removed in v3→v4 migration (grep for USE_WORKSPACE in user-facing prose).",
       "acceptance_criteria": [
         "Every env var added since v4.5 is documented with type, default, and example value",
         "whilly worker sub-commands have at least one usage example each",

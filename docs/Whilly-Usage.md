@@ -155,6 +155,47 @@ whilly --ensure-board-statuses                 # create missing Projects v2 colu
 whilly --post-merge "$PLAN_FILE"               # after an out-of-band merge: flush cards/tickets to Done
 ```
 
+### Remote-worker setup
+
+A standalone worker box runs the orchestrator's worker loop against the central
+control plane. The recommended sequence is:
+
+```bash
+# First-time setup (H22) — prompts for the control-plane URL + bootstrap token
+# OR reads them from env vars; writes ~/.config/whilly/worker.json.
+whilly worker bootstrap demo-plan                                    # interactive
+WHILLY_SERVER_URL=http://control.lan:8000 \
+WHILLY_WORKER_BOOTSTRAP_TOKEN=$BOOT_TK \
+  whilly worker bootstrap demo-plan --non-interactive                # CI-friendly
+
+# Subsequent runs — `launch` resolves the saved creds and starts the loop.
+whilly worker launch demo-plan                                       # uses saved defaults
+whilly worker launch demo-plan --model claude-opus-4-7               # H21: --model
+                                                                     #      overrides
+                                                                     #      cached default
+whilly worker launch demo-plan --connect http://different-host:8000  # H21: --connect
+                                                                     #      override
+
+# Audit / cleanup
+whilly worker list                                                   # tabular cache
+whilly worker list --json                                            # raw JSON dump
+whilly worker remove demo-plan                                       # drop cached entry
+whilly worker remove demo-plan --connect http://control.lan:8000     # disambiguate
+                                                                     # multi-server
+whilly worker remove --all                                           # wipe everything
+```
+
+The `--model` and `--connect` flags on `whilly worker launch` always overwrite
+the cached defaults when supplied (H21 / PR #291) — passing them is the
+documented way to switch a worker box between models or control planes without
+hand-editing `~/.config/whilly/worker.json`. Omitting them preserves the cached
+defaults so a bare `whilly worker launch <plan>` is the steady-state command.
+
+The optional `--tags` plumbing for worker-tag routing (F18b register-side) is
+deferred to a focused follow-up PR; the `<@` SQL filter is already live (PR
+#294) but every worker advertises `tags=[]` until the register-side plumbing
+lands, so the filter is currently a no-op.
+
 ## Inspecting task logs
 
 Every plan run writes per-task artifacts under `whilly_logs/`:
