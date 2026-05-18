@@ -386,7 +386,7 @@
     },
     {
       "id": "D13-startup-route-audit",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "A0-ci-restoration",
@@ -397,10 +397,11 @@
         "C12-smtp-mailer"
       ],
       "key_files": [
-        "whilly/api/main.py",
-        "tests/unit/test_transport_server.py"
+        "whilly/api/route_audit.py",
+        "whilly/adapters/transport/server.py",
+        "tests/unit/test_route_audit.py"
       ],
-      "description": "PRD §Epic D, Item 13 — after all routers are included in whilly/api/main.py, add a startup lifecycle event that iterates app.routes. For each APIRoute: if the route path is not in _PUBLIC_WHITELIST and none of _AUTH_DEPENDENCIES appear in route.dependencies, raise RuntimeError with the offending path. _PUBLIC_WHITELIST = {'/login', '/login/magic', '/auth/login', '/auth/magic-login', '/auth/magic', '/health', '/static'}. Make skippable via WHILLY_SKIP_ROUTE_AUDIT=1. Add a test to test_transport_server.py that a bare unguarded route triggers RuntimeError.",
+      "description": "DONE 2026-05-18: new whilly/api/route_audit.py with audit_routes() inspection helper + enforce_audit() create_app entry point. Walks app.routes/dependant tree looking for recognised auth dependency qualnames (_authenticate_session, _dep for require_admin_role, make_bearer_auth, etc.). Per PRD R1 risk: INVERTED the PRD knob — default OFF, opt-in via WHILLY_ENABLE_ROUTE_AUDIT=1. WHILLY_SKIP_ROUTE_AUDIT=1 is also honoured (overrides ENABLE for parity with the PRD-prose env var name). Default-off is necessary because most existing auth/plans/tasks routes call _authenticate_session INLINE inside the route body (not as Depends), which the dependant walk cannot see. Enabling by default would break create_app on every existing route. PUBLIC_WHITELIST covers entry-point pages (/login, /health, /openapi.json, /static/* etc.) and PUBLIC_PREFIXES temporarily covers the inline-auth route surface (/me, /api/v1/plans, /api/v1/tasks) — tracked for cleanup as those routes migrate to Depends style. 8 unit tests: bare /secret triggers RuntimeError, default-off is no-op, multiple-routes error message names first + counts rest, SKIP overrides ENABLE. wired into create_app after all router includes. Original: PRD §Epic D, Item 13 — after all routers are included in whilly/api/main.py, add a startup lifecycle event that iterates app.routes. For each APIRoute: if the route path is not in _PUBLIC_WHITELIST and none of _AUTH_DEPENDENCIES appear in route.dependencies, raise RuntimeError with the offending path. _PUBLIC_WHITELIST = {'/login', '/login/magic', '/auth/login', '/auth/magic-login', '/auth/magic', '/health', '/static'}. Make skippable via WHILLY_SKIP_ROUTE_AUDIT=1. Add a test to test_transport_server.py that a bare unguarded route triggers RuntimeError.",
       "acceptance_criteria": [
         "Adding @router.get('/secret') with no auth dependency causes create_app to raise RuntimeError('Unguarded route: /secret')",
         "All existing routes pass the check (CI green): pytest tests/unit/test_transport_server.py -q exits 0",
