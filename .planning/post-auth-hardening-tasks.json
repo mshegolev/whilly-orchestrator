@@ -297,7 +297,7 @@
     },
     {
       "id": "D11-auth-audit-migration-and-repo",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "A0-ci-restoration"
@@ -306,7 +306,7 @@
         "whilly/adapters/db/migrations/versions/023_auth_audit.py",
         "whilly/adapters/db/auth_audit_repo.py"
       ],
-      "description": "PRD §Epic D, Item 11 (migration + repo only) — create Alembic migration 023_auth_audit.py that creates the auth_audit table (id BIGSERIAL PK, ts TIMESTAMPTZ DEFAULT NOW(), username TEXT, ip TEXT, user_agent TEXT, outcome TEXT CHECK IN ('ok','bad_password','locked','rate_limited','missing_user'), session_id UUID). Create whilly/adapters/db/auth_audit_repo.py with an insert_attempt coroutine. Migration must be reversible (downgrade drops the table). Do NOT instrument call sites or add browse UI yet (those are in D10).",
+      "description": "DONE 2026-05-18: realised as migration 025_auth_audit.py + repo whilly/api/auth_audit_repo.py. Two PRD-prose deviations recorded for review: (1) migration takes slot 025 (PRD nominated 023, which F18a took); (2) repo lives in whilly/api/ (matching the users_repo/sessions per-table-repo convention) rather than the PRD's whilly/adapters/db/ — that dir is reserved for the big core repository module + pool. Schema: id BIGINT IDENTITY PK (modern spelling of PRD's BIGSERIAL), ts TIMESTAMPTZ DEFAULT NOW(), username TEXT NULL, ip TEXT NULL, user_agent TEXT NULL, outcome TEXT NOT NULL with CHECK for the five outcomes, session_id UUID NULL. Two indexes added eagerly for D10's admin browse: ix_auth_audit_ts (ts DESC) and ix_auth_audit_username_ts (username, ts DESC) partial on username IS NOT NULL. Repo: insert_attempt is best-effort (catches and logs, never raises) so audit failures cannot block the login path — same discipline as users_repo.update_last_login. Python-side AUTH_AUDIT_OUTCOMES tuple + AuthAuditOutcome Literal alias kept in lock-step with the DB CHECK constraint, with a fail-fast validation in insert_attempt. alembic heads → 025_auth_audit. mypy + import-linter + ruff all green. Original: PRD §Epic D, Item 11 (migration + repo only) — create Alembic migration 023_auth_audit.py that creates the auth_audit table (id BIGSERIAL PK, ts TIMESTAMPTZ DEFAULT NOW(), username TEXT, ip TEXT, user_agent TEXT, outcome TEXT CHECK IN ('ok','bad_password','locked','rate_limited','missing_user'), session_id UUID). Create whilly/adapters/db/auth_audit_repo.py with an insert_attempt coroutine. Migration must be reversible (downgrade drops the table). Do NOT instrument call sites or add browse UI yet (those are in D10).",
       "acceptance_criteria": [
         "Migration 023_auth_audit.py exists and is importable",
         "Migration downgrade drops the auth_audit table without errors",
