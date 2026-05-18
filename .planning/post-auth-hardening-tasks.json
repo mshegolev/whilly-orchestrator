@@ -522,15 +522,15 @@
     },
     {
       "id": "F18a-worker-tags-migration",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "A0-ci-restoration"
       ],
       "key_files": [
-        "whilly/adapters/db/migrations/versions/026_worker_tags.py"
+        "whilly/adapters/db/migrations/versions/023_worker_tags.py"
       ],
-      "description": "PRD §Epic F, Item 18 (migration only) — create Alembic migration 026_worker_tags.py that adds workers.tags TEXT[] NOT NULL DEFAULT '{}' and tasks.required_tags TEXT[] NOT NULL DEFAULT '{}'. Migration must be reversible (drop the columns on downgrade). Migration number is pre-assigned to 026 to avoid collision with E15 (025_webauthn_credentials.py); set down_revision accordingly. If E15 has not landed yet, this migration's down_revision still points to 024 — adjust to 025 after E15 merges.",
+      "description": "DONE 2026-05-18: realised as migration 023_worker_tags.py (NOT 026 as PRD pre-assigned — 023-025 reservations turned out to be unallocated at merge time, so took next sequential number; E14a/E15 migrations will renumber against current head when they land). Adds workers.tags TEXT[] NOT NULL DEFAULT '{}' and tasks.required_tags TEXT[] NOT NULL DEFAULT '{}'. Reversible (downgrade drops both). Original: PRD §Epic F, Item 18 (migration only) — create Alembic migration 026_worker_tags.py that adds workers.tags TEXT[] NOT NULL DEFAULT '{}' and tasks.required_tags TEXT[] NOT NULL DEFAULT '{}'. Migration must be reversible (drop the columns on downgrade). Migration number is pre-assigned to 026 to avoid collision with E15 (025_webauthn_credentials.py); set down_revision accordingly. If E15 has not landed yet, this migration's down_revision still points to 024 — adjust to 025 after E15 merges.",
       "acceptance_criteria": [
         "Migration file exists at whilly/adapters/db/migrations/versions/026_worker_tags.py",
         "Upgrade adds workers.tags and tasks.required_tags columns",
