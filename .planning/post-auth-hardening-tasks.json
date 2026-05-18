@@ -328,7 +328,7 @@
     },
     {
       "id": "D10-admin-user-management-ui",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "A0-ci-restoration",
@@ -338,10 +338,15 @@
       ],
       "key_files": [
         "whilly/api/admin_users_routes.py",
-        "whilly/api/main.py",
-        "whilly/api/sessions.py"
+        "whilly/api/users_repo.py",
+        "whilly/api/auth_audit_repo.py",
+        "whilly/api/templates/admin_users.html.j2",
+        "whilly/api/templates/admin_auth_audit.html.j2",
+        "whilly/operator_views.py",
+        "whilly/adapters/transport/server.py",
+        "tests/unit/test_admin_users_routes.py"
       ],
-      "description": "PRD §Epic D, Item 10 — create whilly/api/admin_users_routes.py with routes: GET /admin/users (table of all users), POST /admin/users/create (username, email, role, initial password → must_change_password=True), POST /admin/users/{id}/role (set role), POST /admin/users/{id}/reset-password (random password, set must_change_password=True), POST /admin/users/{id}/delete. All routes protected by Depends(require_role('admin')). Create Jinja2 template whilly/templates/admin_users.html. Add require_role to sessions.py if absent. Include router in main.py. Also add GET /admin/auth-audit?page=N&username=X paginated browse route (50 rows/page) and its template, calling auth_audit_repo from D11.",
+      "description": "DONE 2026-05-18: new whilly/api/admin_users_routes.py with build_admin_users_router factory exposing 6 routes (/admin/users GET, POST /admin/users/create, POST /admin/users/{u}/role|reset-password|delete, /admin/auth-audit GET paginated). require_admin_role dependency factory authenticates session then rejects role!=admin with 403. PRD nominated putting require_role in sessions.py but that module is pure-asyncpg (no FastAPI imports); kept guard in admin_users_routes.py co-located with its only call sites. users_repo.py gained 5 new functions (list_users, create_user, set_role, delete_user, reset_password_to_random — last returns the random plaintext for one-time admin display). auth_audit_repo.py gained list_attempts with optional username filter. Two new Jinja templates (admin_users.html.j2, admin_auth_audit.html.j2) registered in OPERATOR_WUI_ARTIFACTS. create_app sets app.state.pool=pool so helper render functions can recover it without leaking the pool reference into route bodies. Self-deletion guard prevents an admin from bricking the last admin row. Delete is idempotent (returns 200 on first, 404 on second). 13 unit tests cover 403/401, all 5 user CRUD paths, invalid-role 400, idempotent-delete 404, audit pagination (?username filter + page offset arithmetic). Original: PRD §Epic D, Item 10 — create whilly/api/admin_users_routes.py with routes: GET /admin/users (table of all users), POST /admin/users/create (username, email, role, initial password → must_change_password=True), POST /admin/users/{id}/role (set role), POST /admin/users/{id}/reset-password (random password, set must_change_password=True), POST /admin/users/{id}/delete. All routes protected by Depends(require_role('admin')). Create Jinja2 template whilly/templates/admin_users.html. Add require_role to sessions.py if absent. Include router in main.py. Also add GET /admin/auth-audit?page=N&username=X paginated browse route (50 rows/page) and its template, calling auth_audit_repo from D11.",
       "acceptance_criteria": [
         "Non-admin access to any /admin/* route returns HTTP 403",
         "Admin can create, list, role-change, password-reset, and delete a user",
