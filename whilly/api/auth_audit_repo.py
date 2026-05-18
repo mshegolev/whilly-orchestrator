@@ -111,8 +111,49 @@ async def insert_attempt(
         return
 
 
+async def list_attempts(
+    pool: asyncpg.Pool,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    username_filter: str | None = None,
+) -> list[dict[str, object]]:
+    """Read paginated audit rows for the admin browse page.
+
+    Uses the indexes created in migration 025: ``ix_auth_audit_ts`` for the
+    default recent-first order, ``ix_auth_audit_username_ts`` (partial on
+    ``username IS NOT NULL``) when ``username_filter`` is supplied.
+
+    Returns a list of dicts (one per row) rather than a typed dataclass to
+    keep the Jinja2 render straightforward.
+    """
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+    if username_filter:
+        sql = """
+            SELECT id, ts, username, ip, user_agent, outcome, session_id
+            FROM auth_audit
+            WHERE username = $1
+            ORDER BY ts DESC
+            LIMIT $2 OFFSET $3
+        """
+        args: tuple[object, ...] = (username_filter.strip().lower(), limit, offset)
+    else:
+        sql = """
+            SELECT id, ts, username, ip, user_agent, outcome, session_id
+            FROM auth_audit
+            ORDER BY ts DESC
+            LIMIT $1 OFFSET $2
+        """
+        args = (limit, offset)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+    return [dict(r) for r in rows]
+
+
 __all__ = [
     "AUTH_AUDIT_OUTCOMES",
     "AuthAuditOutcome",
     "insert_attempt",
+    "list_attempts",
 ]

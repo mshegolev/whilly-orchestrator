@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>User management — Whilly admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { padding: 24px; max-width: 1100px; margin: 0 auto; }
+    .admin-frame { border: 1px solid var(--line-strong); padding: 16px; margin-bottom: 24px; background: var(--surface); }
+    .admin-title { color: var(--accent); margin: 0 0 12px; font: 700 var(--t-body)/var(--lh-tight) var(--font-mono); }
+    .admin-table { width: 100%; border-collapse: collapse; font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .admin-table th, .admin-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+    .admin-table th { color: var(--muted); font-weight: 700; }
+    .admin-table .role-admin { color: var(--accent); font-weight: 700; }
+    .admin-row form { display: inline; }
+    .admin-row button {
+      background: transparent; border: 1px solid var(--line-strong); color: var(--text);
+      padding: 2px 8px; cursor: pointer; font: inherit;
+    }
+    .admin-row button:hover { background: var(--accent); color: var(--bg); }
+    .admin-row select, .admin-row input { background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); padding: 2px 4px; font: inherit; }
+    .admin-flash, .admin-error {
+      padding: 8px 12px; margin-bottom: 12px;
+      font: var(--t-sm)/var(--lh-body) var(--font-mono);
+    }
+    .admin-flash { border: 1px solid var(--accent); color: var(--accent); }
+    .admin-error { border: 1px solid var(--danger); color: var(--danger); }
+    .admin-create label { display: block; margin-bottom: 4px; color: var(--muted); }
+    .admin-create input, .admin-create select { display: block; margin-bottom: 8px; padding: 4px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); font: var(--t-body)/var(--lh-body) var(--font-mono); }
+    .admin-create button {
+      background: transparent; color: var(--accent); border: 1px solid var(--accent);
+      padding: 4px 16px; font: 700 var(--t-body)/var(--lh-body) var(--font-mono); cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1 class="admin-title">User management</h1>
+  <p style="color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+    Signed in as <strong>{{ current_user }}</strong> (admin). <a href="/me/password" style="color: var(--accent);">change own password</a>
+    &middot; <a href="/admin/auth-audit" style="color: var(--accent);">view auth audit log</a>
+  </p>
+
+  {% if flash %}<div class="admin-flash" role="status">{{ flash }}</div>{% endif %}
+  {% if form_error %}<div class="admin-error" role="alert">{{ form_error }}</div>{% endif %}
+
+  <div class="admin-frame">
+    <h2 class="admin-title">existing users ({{ users|length }})</h2>
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>username</th><th>email</th><th>role</th><th>created</th>
+          <th>last login</th><th>must change</th><th>actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for u in users %}
+        <tr class="admin-row">
+          <td>{{ u.username }}</td>
+          <td>{{ u.email or "—" }}</td>
+          <td class="{% if u.role == 'admin' %}role-admin{% endif %}">{{ u.role }}</td>
+          <td>{{ u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "—" }}</td>
+          <td>{{ u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "—" }}</td>
+          <td>{{ "yes" if u.must_change_password else "no" }}</td>
+          <td>
+            <form method="post" action="/admin/users/{{ u.username }}/role">
+              <select name="role">
+                <option value="operator" {% if u.role == 'operator' %}selected{% endif %}>operator</option>
+                <option value="admin" {% if u.role == 'admin' %}selected{% endif %}>admin</option>
+                <option value="readonly" {% if u.role == 'readonly' %}selected{% endif %}>readonly</option>
+              </select>
+              <button type="submit">set role</button>
+            </form>
+            <form method="post" action="/admin/users/{{ u.username }}/reset-password">
+              <button type="submit">reset pw</button>
+            </form>
+            {% if u.username != current_user %}
+            <form method="post" action="/admin/users/{{ u.username }}/delete">
+              <button type="submit">delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="admin-frame admin-create">
+    <h2 class="admin-title">create new user</h2>
+    <form method="post" action="/admin/users/create">
+      <label>username
+        <input type="text" name="username" required minlength="1" maxlength="64" pattern="[a-z0-9][a-z0-9_-]{0,63}" />
+      </label>
+      <label>email (optional)
+        <input type="email" name="email" maxlength="320" />
+      </label>
+      <label>role
+        <select name="role" required>
+          <option value="operator" selected>operator</option>
+          <option value="admin">admin</option>
+          <option value="readonly">readonly</option>
+        </select>
+      </label>
+      <label>initial password (user will be forced to change on first login)
+        <input type="text" name="initial_password" required minlength="1" maxlength="512" />
+      </label>
+      <button type="submit">[ create user ]</button>
+    </form>
+  </div>
+</body>
+</html>

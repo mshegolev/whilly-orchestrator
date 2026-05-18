@@ -231,10 +231,133 @@ async def set_password(pool: asyncpg.Pool, *, username: str, new_password: str) 
         raise LookupError(f"set_password: no user found with username={normalised!r}")
 
 
+async def list_users(pool: asyncpg.Pool) -> list[User]:
+    """Return every row from ``users`` ordered by ``username`` (admin UI list)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT username, email, role, created_at, last_login_at, must_change_password FROM users ORDER BY username"
+        )
+    return [
+        User(
+            username=r["username"],
+            email=r["email"],
+            role=r["role"],
+            created_at=r["created_at"],
+            last_login_at=r["last_login_at"],
+            must_change_password=bool(r["must_change_password"]),
+        )
+        for r in rows
+    ]
+
+
+async def create_user(
+    pool: asyncpg.Pool,
+    *,
+    username: str,
+    initial_password: str,
+    email: str | None = None,
+    role: str = "operator",
+) -> None:
+    """Insert a new user with ``must_change_password=TRUE``.
+
+    Raises :class:`ValueError` if the username already exists (UniqueViolationError
+    is translated for callers that don't want to depend on asyncpg's exception
+    hierarchy).
+    """
+    if not isinstance(username, str) or not username.strip():
+        raise ValueError("create_user: username must be a non-empty string")
+    if not isinstance(initial_password, str) or not initial_password:
+        raise ValueError("create_user: initial_password must be a non-empty string")
+    if role not in ("operator", "admin", "readonly"):
+        raise ValueError(f"create_user: invalid role {role!r}")
+    normalised = username.strip().lower()
+    salt_hex, hash_hex = hash_password(initial_password)
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """
+                INSERT INTO users (username, password_hash, password_salt, email, role, must_change_password)
+                VALUES ($1, $2, $3, $4, $5, TRUE)
+                """,
+                normalised,
+                hash_hex,
+                salt_hex,
+                (email or None),
+                role,
+            )
+        except asyncpg.exceptions.UniqueViolationError as exc:
+            raise ValueError(f"create_user: username {normalised!r} already exists") from exc
+
+
+async def set_role(pool: asyncpg.Pool, *, username: str, role: str) -> None:
+    """Update ``users.role``. Raises :class:`LookupError` when no row matches."""
+    if role not in ("operator", "admin", "readonly"):
+        raise ValueError(f"set_role: invalid role {role!r}")
+    normalised = username.strip().lower()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET role = $1, updated_at = NOW() WHERE username = $2",
+            role,
+            normalised,
+        )
+    if int((result or "UPDATE 0").split()[-1]) == 0:
+        raise LookupError(f"set_role: no user found with username={normalised!r}")
+
+
+async def delete_user(pool: asyncpg.Pool, *, username: str) -> bool:
+    """Drop a user row. Returns True if a row was deleted, False if absent.
+
+    Returning a boolean (vs raising) lets the admin route give a clean 404
+    on the second delete attempt without try/except gymnastics.
+    """
+    normalised = username.strip().lower()
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM users WHERE username = $1", normalised)
+    return int((result or "DELETE 0").split()[-1]) > 0
+
+
+async def reset_password_to_random(pool: asyncpg.Pool, *, username: str) -> str:
+    """Generate a random URL-safe password, store it, set must_change_password=TRUE.
+
+    Returns the plaintext password so the admin UI can display it ONCE for
+    the operator to communicate to the user out-of-band. The user will be
+    forced to change it on their next login by the must-change gate.
+    """
+    import secrets
+
+    new_password = secrets.token_urlsafe(16)
+    salt_hex, hash_hex = hash_password(new_password)
+    normalised = username.strip().lower()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE users
+               SET password_hash        = $1,
+                   password_salt        = $2,
+                   must_change_password = TRUE,
+                   failed_attempts      = 0,
+                   locked_until         = NULL,
+                   updated_at           = NOW()
+             WHERE username = $3
+            """,
+            hash_hex,
+            salt_hex,
+            normalised,
+        )
+    if int((result or "UPDATE 0").split()[-1]) == 0:
+        raise LookupError(f"reset_password_to_random: no user found with username={normalised!r}")
+    return new_password
+
+
 __all__ = [
     "User",
+    "create_user",
+    "delete_user",
     "get_user_by_username",
+    "list_users",
+    "reset_password_to_random",
     "set_password",
+    "set_role",
     "update_last_login",
     "verify_credentials",
 ]
