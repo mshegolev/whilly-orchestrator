@@ -61,6 +61,7 @@ DEFAULT_SESSION_COOKIE_NAME: Final[str] = COOKIE_NAME
 _HOST_PREFIX_COOKIE_NAME: Final[str] = "__Host-whilly_session"
 
 CHANGE_PASSWORD_TEMPLATE: Final[str] = "password_change.html.j2"
+ME_PASSWORD_TEMPLATE: Final[str] = "me_password.html.j2"
 _MIN_PASSWORD_LENGTH: Final[int] = 12
 """__Host- prefixed name used in prod+secure mode for strongest browser binding."""
 
@@ -457,6 +458,128 @@ def build_auth_router(
         logger.info("auth.change-password: password changed for username=%r", username)
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
+    # PRD-post-auth-hardening §Epic D, Item 9 — voluntary self-service
+    # password change ─────────────────────────────────────────────────────────
+    #
+    # Differs from /auth/change-password in two ways:
+    #   1. Requires the user's *current* password (validated via
+    #      users_repo.verify_credentials) so a stolen session cookie cannot
+    #      rotate the password without knowing the original.
+    #   2. Always requires an authenticated session — there is no
+    #      must_change_password "forced flow" entry path here.
+    #
+    # set_password() clears the must_change_password flag as a side effect, so
+    # if the user happened to be in the forced flow this endpoint also
+    # satisfies it.
+
+    @router.get(
+        "/me/password",
+        response_class=HTMLResponse,
+        include_in_schema=False,
+    )
+    async def me_password_form(request: Request) -> Response:
+        """Render the voluntary self-service password-change form.
+
+        Unauthenticated requests are redirected to ``/login`` so an attacker
+        cannot probe whether an account exists by hitting this URL directly.
+        """
+        try:
+            await _authenticate_session(request, pool=pool, secret=secret, cookie_name=cookie_name)
+        except HTTPException:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+        return templates.TemplateResponse(
+            request,
+            ME_PASSWORD_TEMPLATE,
+            {"form_error": None},
+        )
+
+    @router.post(
+        "/me/password",
+        response_class=HTMLResponse,
+        include_in_schema=True,
+        summary="Voluntary self-service password change (requires current password)",
+    )
+    async def submit_me_password(
+        request: Request,
+        current_password: str = Form(..., min_length=1, max_length=512),
+        new_password: str = Form(..., min_length=1, max_length=512),
+        confirm_new_password: str = Form(..., min_length=1, max_length=512),
+    ) -> Response:
+        """Validate current password, store new password, redirect to dashboard.
+
+        CSRF-protected by :class:`~whilly.api.csrf.WhillySessionCSRFMiddleware`
+        (POST with a session cookie present, not on the CSRF exempt list).
+        """
+        from whilly.api import users_repo
+
+        try:
+            principal = await _authenticate_session(request, pool=pool, secret=secret, cookie_name=cookie_name)
+        except HTTPException:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+        def _render_error(msg: str) -> Response:
+            return templates.TemplateResponse(
+                request,
+                ME_PASSWORD_TEMPLATE,
+                {"form_error": msg},
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        # Resolve the username from the session — same @local-strip logic as
+        # the forced-flow endpoint above.
+        session_email: str = str(principal.get("email", ""))
+        username = session_email.removesuffix("@local") if session_email.endswith("@local") else session_email
+        if not username:
+            logger.warning(
+                "me.password: could not resolve username from session email %r",
+                session_email,
+            )
+            return _render_error("Session error — please log out and log in again.")
+
+        # Validate the *current* password first. This is the key difference
+        # from the forced /auth/change-password endpoint. verify_credentials
+        # also drives the failed-attempts counter and account lockout, so
+        # spraying current_password guesses costs the attacker access after
+        # five wrong tries.
+        verified_user = await users_repo.verify_credentials(pool, username=username, password=current_password)
+        if verified_user is None:
+            return _render_error("Current password is incorrect.")
+
+        # Now the same new/confirm + length checks as the forced flow.
+        if new_password != confirm_new_password:
+            return _render_error("New passwords do not match.")
+        if len(new_password) < _MIN_PASSWORD_LENGTH:
+            return _render_error(f"New password must be at least {_MIN_PASSWORD_LENGTH} characters.")
+
+        try:
+            await users_repo.set_password(pool, username=username, new_password=new_password)
+        except (ValueError, LookupError) as exc:
+            logger.warning("me.password: set_password failed for %r: %s", username, exc)
+            return _render_error("Could not update password. Please try again.")
+
+        # PRD-post-auth-hardening §Epic C Item 6: drop the gate's cached
+        # must_change verdict for this session. Voluntary changes can happen
+        # while must_change_password=True (a returning user noticed the flag
+        # and pre-emptively cleared it), so the next request after this one
+        # must not be bounced back to /auth/change-password by a stale True.
+        session_id_raw = principal.get("session_id")
+        if isinstance(session_id_raw, str) and session_id_raw:
+            from whilly.api.must_change_gate import invalidate_session
+
+            invalidate_session(session_id_raw)
+
+        _append_event(
+            {
+                "event_type": "auth.password.changed",
+                "username": username,
+                "email": session_email,
+                "session_id": principal.get("session_id"),
+                "source": "self_service",
+            }
+        )
+        logger.info("me.password: password changed for username=%r (self-service)", username)
+        return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
     return router
 
 
@@ -607,6 +730,7 @@ __all__ = [
     "DEFAULT_EVENT_LOG_PATH",
     "DEFAULT_SESSION_COOKIE_NAME",
     "EVENT_LOG_PATH_ENV",
+    "ME_PASSWORD_TEMPLATE",
     "_HOST_PREFIX_COOKIE_NAME",
     "authenticate_session_request",
     "build_auth_router",
