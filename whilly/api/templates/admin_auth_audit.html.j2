@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Auth audit log — Whilly admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { padding: 24px; max-width: 1200px; margin: 0 auto; }
+    .audit-title { color: var(--accent); font: 700 var(--t-body)/var(--lh-tight) var(--font-mono); margin: 0 0 16px; }
+    .audit-controls { margin-bottom: 16px; font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .audit-controls input { background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); padding: 4px 8px; font: inherit; }
+    .audit-controls button { background: transparent; color: var(--accent); border: 1px solid var(--accent); padding: 4px 12px; font: inherit; cursor: pointer; }
+    .audit-table { width: 100%; border-collapse: collapse; font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .audit-table th, .audit-table td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .audit-table th { color: var(--muted); font-weight: 700; }
+    .outcome-ok { color: var(--accent); }
+    .outcome-bad_password, .outcome-locked, .outcome-rate_limited, .outcome-missing_user { color: var(--danger); }
+    .audit-pager { margin-top: 16px; font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .audit-pager a { color: var(--accent); text-decoration: none; padding: 4px 8px; border: 1px solid var(--line-strong); }
+  </style>
+</head>
+<body>
+  <h1 class="audit-title">Auth audit log</h1>
+  <p style="color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+    Signed in as <strong>{{ current_user }}</strong>. <a href="/admin/users" style="color: var(--accent);">back to user management</a>
+  </p>
+
+  <form class="audit-controls" method="get" action="/admin/auth-audit">
+    <input type="text" name="username" value="{{ username_filter or '' }}" placeholder="filter by username..." />
+    <button type="submit">filter</button>
+    {% if username_filter %}<a href="/admin/auth-audit" style="margin-left: 8px; color: var(--muted);">clear filter</a>{% endif %}
+  </form>
+
+  <table class="audit-table">
+    <thead>
+      <tr>
+        <th>id</th><th>ts</th><th>username</th><th>ip</th>
+        <th>user_agent</th><th>outcome</th><th>session_id</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.ts.strftime("%Y-%m-%d %H:%M:%S") if r.ts else "—" }}</td>
+        <td>{{ r.username or "—" }}</td>
+        <td>{{ r.ip or "—" }}</td>
+        <td>{{ (r.user_agent or "—")[:60] }}</td>
+        <td class="outcome-{{ r.outcome }}">{{ r.outcome }}</td>
+        <td>{{ (r.session_id|string)[:8] if r.session_id else "—" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" style="color: var(--muted); text-align: center; padding: 16px;">no audit rows</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="audit-pager">
+    page {{ page }} ({{ rows|length }} rows · {{ page_size }} per page)
+    {% if page > 1 %}<a href="/admin/auth-audit?page={{ page - 1 }}{% if username_filter %}&username={{ username_filter }}{% endif %}">&laquo; prev</a>{% endif %}
+    {% if has_next %}<a href="/admin/auth-audit?page={{ page + 1 }}{% if username_filter %}&username={{ username_filter }}{% endif %}">next &raquo;</a>{% endif %}
+  </div>
+</body>
+</html>
