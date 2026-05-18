@@ -397,6 +397,52 @@ touching code. Available placeholders match the
 :class:`whilly.core.notifications.RunCompletedEvent` fields plus
 `{completed_at_iso}`.
 
+## Authentication Configuration
+
+The Whilly control plane mints HMAC-signed session tokens for operator
+dashboard requests. The signing key comes from the
+`WHILLY_DASHBOARD_TOKEN_SECRET` environment variable.
+
+**What it does.** Every dashboard token (the bearer the WUI/TUI presents on
+HTTP requests to the control plane) is signed and verified with this secret.
+A token signed by one secret cannot be verified by a different one — so the
+secret directly controls who can log in and stay logged in.
+
+**When to set it.** Always in production, and in any multi-replica deployment.
+When the env var is unset or empty, `create_app` generates a per-process
+random secret on startup and logs a warning. That fallback is fine for local
+development (single process, restarts often) but breaks two things in prod:
+(1) every restart invalidates every active session, kicking all operators
+back to the login screen; (2) a multi-replica control plane mints tokens one
+replica cannot verify, so requests sticky-routed to a different replica
+return 401.
+
+**How to generate a fresh value.** A 32-byte URL-safe random string is
+sufficient:
+
+```bash
+python -c "import secrets;print(secrets.token_urlsafe(32))"
+```
+
+Store the output in your secret manager and inject it into the control-plane
+process environment (Kubernetes Secret, systemd `EnvironmentFile=`, Docker
+Compose `env_file:`, or your secret-of-choice).
+
+**Rotation.** Rotate by overwriting the env value and restarting the control
+plane. The restart is required — secrets are loaded once at `create_app`
+time. All existing dashboard tokens are immediately invalidated by the
+rotation; operators see a single login prompt. Pair the rotation with a
+forced re-login if your incident playbook says session compromise is
+suspected.
+
+**Security posture.** Treat `WHILLY_DASHBOARD_TOKEN_SECRET` exactly like a
+signing key: never commit it, never paste it into chat, never log it. Anyone
+who learns the value can forge dashboard tokens for any operator email
+without going through the login form. Companion knob
+`WHILLY_DASHBOARD_TOKEN_TTL_SECONDS` controls token lifetime (default 24
+hours); lowering it shortens the window of damage from a leaked token at
+the cost of more frequent re-logins.
+
 ## Operator Dashboard Parity
 
 The active browser WUI and browserless TUI expose the same canonical operator
