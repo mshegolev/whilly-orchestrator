@@ -175,16 +175,17 @@
     },
     {
       "id": "B5-integration-test-session-persistence",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [
         "A0-ci-restoration",
         "C7-document-dashboard-token-secret"
       ],
       "key_files": [
-        "tests/integration/test_session_persistence.py"
+        "tests/integration/test_session_persistence.py",
+        "pyproject.toml"
       ],
-      "description": "PRD §Epic B, Item 5 — write a pytest integration test (new file tests/integration/test_session_persistence.py) that: (a) boots the server with a fixed WHILLY_DASHBOARD_TOKEN_SECRET, (b) logs in and captures the whilly_session cookie, (c) stops and restarts the server with the same secret, (d) uses the cookie on a /api/v1/tasks request, (e) asserts HTTP 200. Also assert that without the env var the cookie is rejected after restart (ephemeral behaviour). Use subprocess.Popen with port-ready polling for server lifecycle.",
+      "description": "DONE 2026-05-18: tests/integration/test_session_persistence.py — 3 cases (fixed-secret survives restart / ephemeral-secret rejected after restart / secret rotation invalidates outstanding cookies). subprocess.Popen-driven: python -m whilly server, port-ready polling via TCP connect with 20s timeout, cleanup on test teardown. pytestmark=[integration, DOCKER_REQUIRED] so it auto-skips when Docker is not available; new \"integration\" marker registered in pyproject.toml. The test uses POST /auth/login with admin/admin bootstrap (may return 303 because must_change_password=True after C6 — cookie is set on the redirect response regardless). /me endpoint is the assertion target — session-only JSON, 200 = cookie accepted, 401 = rejected. Original: PRD §Epic B, Item 5 — write a pytest integration test (new file tests/integration/test_session_persistence.py) that: (a) boots the server with a fixed WHILLY_DASHBOARD_TOKEN_SECRET, (b) logs in and captures the whilly_session cookie, (c) stops and restarts the server with the same secret, (d) uses the cookie on a /api/v1/tasks request, (e) asserts HTTP 200. Also assert that without the env var the cookie is rejected after restart (ephemeral behaviour). Use subprocess.Popen with port-ready polling for server lifecycle.",
       "acceptance_criteria": [
         "Test passes with WHILLY_DASHBOARD_TOKEN_SECRET set: cookie survives restart → HTTP 200",
         "Test passes without WHILLY_DASHBOARD_TOKEN_SECRET: cookie rejected after restart → HTTP 401",
