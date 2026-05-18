@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import io
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -76,18 +77,44 @@ def cfg_path(tmp_path: Path) -> Path:
     return tmp_path / "worker.json"
 
 
+_TRACKED_ENV_VARS = (
+    "WHILLY_WORKER_BOOTSTRAP_TOKEN",
+    "WHILLY_CONTROL_URL",
+    "WHILLY_PLAN_ID",
+    "WHILLY_MODEL",
+    "WHILLY_WORKER_ID",
+    "WHILLY_WORKER_TOKEN",
+    "WHILLY_AGENT_ALLOW_SHELL",
+    "CLAUDE_BIN",
+    "WHILLY_WORKER_CONFIG",
+)
+
+
 @pytest.fixture(autouse=True)
-def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip env vars that would otherwise leak into _resolve_* helpers."""
-    for var in (
-        "WHILLY_WORKER_BOOTSTRAP_TOKEN",
-        "WHILLY_CONTROL_URL",
-        "WHILLY_PLAN_ID",
-        "WHILLY_MODEL",
-        "CLAUDE_BIN",
-        "WHILLY_WORKER_CONFIG",
-    ):
+def _isolate_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Strip pre-test env state AND restore on teardown.
+
+    Critical: the launch happy path calls ``os.environ.update(resolved_env)``
+    in the production code (see worker_launch.run_launch_command around the
+    ``os.environ.update`` line). That bypasses :class:`pytest.MonkeyPatch`'s
+    bookkeeping, so a stale ``WHILLY_MODEL=claude-haiku-...`` leaks into
+    later tests that read it (notably ``test_llm_ops``). Snapshot + restore
+    + post-yield delete fixes the cross-test contamination CI surfaced in
+    PR #280 v1.
+    """
+    import os as _os
+
+    snapshot = {var: _os.environ.get(var) for var in _TRACKED_ENV_VARS}
+    for var in _TRACKED_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    try:
+        yield
+    finally:
+        for var, original in snapshot.items():
+            if original is None:
+                _os.environ.pop(var, None)
+            else:
+                _os.environ[var] = original
 
 
 # ─── _read_dotenv parser ────────────────────────────────────────────────────
