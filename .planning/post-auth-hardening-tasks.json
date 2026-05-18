@@ -113,7 +113,7 @@
     },
     {
       "id": "B3-unit-tests-reset-endpoint",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [
         "A0-ci-restoration"
@@ -121,7 +121,7 @@
       "key_files": [
         "tests/unit/test_tasks_api_crud.py"
       ],
-      "description": "PRD §Epic B, Item 3 — add unit tests for tasks_api_crud.reset_preview_endpoint and reset_task_endpoint. Cover: 200 happy path (failed task resets to pending), 404 unknown task, 409 task currently in_progress claimed by a worker, 400 wrong status (already pending), cascade list shape, and no-mapping cascade. Mock the DB pool with AsyncMock to avoid Postgres dependency.",
+      "description": "DONE 2026-05-18: 9 unit tests in tests/unit/test_tasks_api_crud.py covering reset-preview (200 happy with cascade, 404 unknown, 409 claimed, 400 wrong status, 200 empty cascade) + reset-task (200 with cascade, 409 target claimed between preview/confirm, 400 invalid body, 200 empty body). asyncpg Pool/Connection faked with AsyncMock + MagicMock context managers — no real Postgres. verify_session monkeypatched (autouse) so every test is implicitly authenticated. Original: PRD §Epic B, Item 3 — add unit tests for tasks_api_crud.reset_preview_endpoint and reset_task_endpoint. Cover: 200 happy path (failed task resets to pending), 404 unknown task, 409 task currently in_progress claimed by a worker, 400 wrong status (already pending), cascade list shape, and no-mapping cascade. Mock the DB pool with AsyncMock to avoid Postgres dependency.",
       "acceptance_criteria": [
         "6 parametrized test cases exist in tests/unit/test_tasks_api_crud.py, all passing",
         "Branch coverage on whilly/api/tasks_api_crud.py reaches ≥ 85% (pytest --cov=whilly/api/tasks_api_crud)"
