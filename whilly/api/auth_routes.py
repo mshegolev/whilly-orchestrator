@@ -62,6 +62,7 @@ _HOST_PREFIX_COOKIE_NAME: Final[str] = "__Host-whilly_session"
 
 CHANGE_PASSWORD_TEMPLATE: Final[str] = "password_change.html.j2"
 ME_PASSWORD_TEMPLATE: Final[str] = "me_password.html.j2"
+ME_SESSIONS_TEMPLATE: Final[str] = "me_sessions.html.j2"
 _MIN_PASSWORD_LENGTH: Final[int] = 12
 """__Host- prefixed name used in prod+secure mode for strongest browser binding."""
 
@@ -639,6 +640,84 @@ def build_auth_router(
         logger.info("me.password: password changed for username=%r (self-service)", username)
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
+    # PRD-post-auth-hardening §Epic E, Item 16 — active-sessions UI ──────────
+    #
+    # GET /me/sessions  → list non-revoked sessions for the principal's email
+    # POST /me/sessions/{session_id}/revoke → drop the row; if it was the
+    #   current session, also clear the cookie and 303 to /login.
+    #
+    # The sessions schema (migration 018) does NOT carry user_agent or IP
+    # columns — PRD prose mentions them but they don't exist. The template
+    # shows session_id prefix + created_at + last_seen_at + expires_at,
+    # which is what is actually queryable today. Adding ip/user_agent is
+    # a future migration.
+
+    @router.get("/me/sessions", response_class=HTMLResponse, include_in_schema=False)
+    async def list_me_sessions(request: Request) -> Response:
+        try:
+            principal = await _authenticate_session(request, pool=pool, secret=secret, cookie_name=cookie_name)
+        except HTTPException:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+        principal_email = str(principal.get("email", ""))
+        active = await sessions.list_active_sessions_for_email(pool, email=principal_email)
+        return templates.TemplateResponse(
+            request,
+            ME_SESSIONS_TEMPLATE,
+            {
+                "sessions": active,
+                "current_session_id": principal.get("session_id"),
+                "principal_email": principal_email,
+                "flash": None,
+            },
+        )
+
+    @router.post(
+        "/me/sessions/{session_id}/revoke",
+        response_class=HTMLResponse,
+        include_in_schema=True,
+        summary="Revoke a session (logs out the device); revoking the current session redirects to /login",
+    )
+    async def revoke_me_session(request: Request, session_id: str) -> Response:
+        try:
+            principal = await _authenticate_session(request, pool=pool, secret=secret, cookie_name=cookie_name)
+        except HTTPException:
+            return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+        principal_email = str(principal.get("email", ""))
+        # Guard: the target session must belong to the principal — otherwise
+        # an authenticated user could revoke someone else's session by
+        # guessing the session_id. Look it up via verify_session (which
+        # returns None for expired/revoked/missing) and check the email.
+        target = await sessions.verify_session(pool, session_id=session_id)
+        if target is None or target.email != principal_email:
+            logger.warning(
+                "me.sessions.revoke: %r tried to revoke session %r they don't own",
+                principal_email,
+                session_id[:8] if session_id else "?",
+            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
+        await sessions.revoke_session(pool, session_id=session_id)
+        is_self_revoke = session_id == principal.get("session_id")
+        if is_self_revoke:
+            # Revoking the current session — clear the cookie and bounce
+            # to /login. The cookie clear matches the /auth/logout pattern.
+            response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+            response.delete_cookie(cookie_name, path="/")
+            return response
+        # Other-device revoke — re-render the list with a flash. The
+        # underlying GET handler runs in the same closure, so just call
+        # the list query again here.
+        active = await sessions.list_active_sessions_for_email(pool, email=principal_email)
+        return templates.TemplateResponse(
+            request,
+            ME_SESSIONS_TEMPLATE,
+            {
+                "sessions": active,
+                "current_session_id": principal.get("session_id"),
+                "principal_email": principal_email,
+                "flash": f"revoked session {session_id[:8]}…",
+            },
+        )
+
     return router
 
 
@@ -790,6 +869,7 @@ __all__ = [
     "DEFAULT_SESSION_COOKIE_NAME",
     "EVENT_LOG_PATH_ENV",
     "ME_PASSWORD_TEMPLATE",
+    "ME_SESSIONS_TEMPLATE",
     "_HOST_PREFIX_COOKIE_NAME",
     "authenticate_session_request",
     "build_auth_router",
