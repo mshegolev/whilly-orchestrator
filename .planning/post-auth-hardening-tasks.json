@@ -22,14 +22,36 @@
   },
   "tasks": [
     {
+      "id": "A0-ci-restoration",
+      "status": "done",
+      "priority": "critical",
+      "dependencies": [],
+      "key_files": [
+        "whilly/__init__.py",
+        "pyproject.toml",
+        "tests/unit/test_runner_env.py",
+        "whilly/operator_views.py"
+      ],
+      "description": "Realised by PR #271 (squash commit 01a5b24, 2026-05-18). Restored green CI on main by fixing four contract-test drifts that landed after the auth-hardening-p1 merge: (1) version drift between whilly/__init__.py, pyproject.toml and whilly_worker/pyproject.toml — unified on plain '4.7.0' (PEP 440 local segment not supported by test_runtime_version_is_pep440_parseable); (2) BASE_RUNNER_ENV_ALLOWLIST gained USER/LOGNAME but the tripwire test was not updated; (3) five Phase 1 auth templates (login.html.j2, login_magic.html.j2, login_check_inbox.html.j2, login_consumed.html.j2, password_change.html.j2) were unclassified in OPERATOR_WUI_ARTIFACTS — classified ACTIVE. Replaces the original A1a/A1b hypothesis which assumed a FastAPI RuntimeError in build_auth_router — that defect did not reproduce.",
+      "acceptance_criteria": [
+        "GitHub Actions CI on main is green",
+        "Four previously-failing tests pass: test_version_consistency::test_runtime_version_is_pep440_parseable, test_version_consistency::test_version_is_synchronised_across_release_train_files, test_runner_env::test_base_runner_env_allowlist_contract_is_exact, test_wui_contract_static::test_wui_artifacts_are_classified",
+        "PR #271 merged via squash; remote branch deleted"
+      ],
+      "test_steps": [
+        "gh pr view 271 --json state --jq .state  # MERGED",
+        ".venv/bin/pytest tests/unit/test_version_consistency.py tests/unit/test_runner_env.py tests/unit/test_wui_contract_static.py -q"
+      ]
+    },
+    {
       "id": "A1a-diagnose-auth-form-annotation",
-      "status": "pending",
+      "status": "skipped",
       "priority": "critical",
       "dependencies": [],
       "key_files": [
         "whilly/api/auth_routes.py"
       ],
-      "description": "PRD §Epic A, Item 1 — diagnose the FastAPI RuntimeError in build_auth_router (line 163+) that crashes test_health_* in tests/unit/test_transport_server.py. The new /auth/change-password route was added by the auth-hardening agent and is the most likely defect site. Likely candidates: Form(...) parameter missing its fastapi.Form import, a missing return-type annotation, or a bare Optional not unwrapped under Python 3.10. Do NOT fix yet — just identify the exact line, missing import, or wrong annotation.",
+      "description": "SKIPPED 2026-05-18: defect did not reproduce. pytest tests/unit/test_transport_server.py passed 22/22 on auth-hardening-p1 merge — no FastAPI RuntimeError in build_auth_router. Real CI failure was 4 unrelated contract-test drifts, addressed in new task A0-ci-restoration (PR #271). Original description: PRD §Epic A, Item 1 — diagnose the FastAPI RuntimeError in build_auth_router (line 163+) that crashes test_health_* in tests/unit/test_transport_server.py. The new /auth/change-password route was added by the auth-hardening agent and is the most likely defect site. Likely candidates: Form(...) parameter missing its fastapi.Form import, a missing return-type annotation, or a bare Optional not unwrapped under Python 3.10. Do NOT fix yet — just identify the exact line, missing import, or wrong annotation.",
       "acceptance_criteria": [
         "Root cause documented in progress.md or PR body",
         "Exact line number and missing import or annotation identified",
@@ -43,14 +65,16 @@
     },
     {
       "id": "A1b-fix-auth-form-annotation",
-      "status": "pending",
+      "status": "skipped",
       "priority": "critical",
-      "dependencies": ["A1a-diagnose-auth-form-annotation"],
+      "dependencies": [
+        "A1a-diagnose-auth-form-annotation"
+      ],
       "key_files": [
         "whilly/api/auth_routes.py",
         "tests/unit/test_transport_server.py"
       ],
-      "description": "PRD §Epic A, Item 1 — apply the minimal fix identified in A1a. Add the missing import or annotation to whilly/api/auth_routes.py. Update tests/unit/test_transport_server.py if a fixture needs adjusting. Change must be ≤ 20 lines. Do not restructure build_auth_router beyond the defect site.",
+      "description": "SKIPPED 2026-05-18: A1a defect did not reproduce, so there is no fix to apply. See A0-ci-restoration (PR #271) for the work that actually restored green CI. Dependencies re-pointed from A1b to A0. Original description: PRD §Epic A, Item 1 — apply the minimal fix identified in A1a. Add the missing import or annotation to whilly/api/auth_routes.py. Update tests/unit/test_transport_server.py if a fixture needs adjusting. Change must be ≤ 20 lines. Do not restructure build_auth_router beyond the defect site.",
       "acceptance_criteria": [
         "pytest tests/unit/test_transport_server.py -q exits 0 with no skips",
         "ruff check whilly/api/auth_routes.py reports no errors",
@@ -68,7 +92,9 @@
       "id": "A2-smoke-test-post-auth-journey",
       "status": "pending",
       "priority": "critical",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "tests/integration/test_post_auth_smoke.py"
       ],
@@ -89,7 +115,9 @@
       "id": "B3-unit-tests-reset-endpoint",
       "status": "pending",
       "priority": "high",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "tests/unit/test_tasks_api_crud.py"
       ],
@@ -107,7 +135,9 @@
       "id": "B4-unit-tests-worker-launch",
       "status": "pending",
       "priority": "high",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "tests/unit/test_cli_worker_launch.py"
       ],
@@ -147,7 +177,10 @@
       "id": "B5-integration-test-session-persistence",
       "status": "pending",
       "priority": "high",
-      "dependencies": ["A1b-fix-auth-form-annotation", "C7-document-dashboard-token-secret"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "C7-document-dashboard-token-secret"
+      ],
       "key_files": [
         "tests/integration/test_session_persistence.py"
       ],
@@ -166,7 +199,9 @@
       "id": "C8-cluster-rate-limit-multi-worker-warning",
       "status": "pending",
       "priority": "high",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "whilly/api/rate_limit.py",
         "whilly/api/main.py",
@@ -187,7 +222,9 @@
       "id": "C6-must-change-gate-middleware",
       "status": "pending",
       "priority": "high",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "whilly/api/auth_routes.py",
         "whilly/api/main.py"
@@ -209,7 +246,9 @@
       "id": "C12-smtp-mailer",
       "status": "pending",
       "priority": "high",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "whilly/api/mailer.py",
         "whilly/api/auth_routes.py",
@@ -235,7 +274,10 @@
       "id": "D9-self-service-password-change",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["A1b-fix-auth-form-annotation", "C6-must-change-gate-middleware"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "C6-must-change-gate-middleware"
+      ],
       "key_files": [
         "whilly/api/auth_routes.py",
         "whilly/api/users_repo.py"
@@ -257,7 +299,9 @@
       "id": "D11-auth-audit-migration-and-repo",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "whilly/adapters/db/migrations/versions/023_auth_audit.py",
         "whilly/adapters/db/auth_audit_repo.py"
@@ -279,7 +323,12 @@
       "id": "D10-admin-user-management-ui",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["A1b-fix-auth-form-annotation", "C6-must-change-gate-middleware", "D9-self-service-password-change", "D11-auth-audit-migration-and-repo"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "C6-must-change-gate-middleware",
+        "D9-self-service-password-change",
+        "D11-auth-audit-migration-and-repo"
+      ],
       "key_files": [
         "whilly/api/admin_users_routes.py",
         "whilly/api/main.py",
@@ -303,7 +352,9 @@
       "id": "D10b-instrument-auth-audit-callsites",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["D10-admin-user-management-ui"],
+      "dependencies": [
+        "D10-admin-user-management-ui"
+      ],
       "key_files": [
         "whilly/api/auth_routes.py"
       ],
@@ -324,7 +375,14 @@
       "id": "D13-startup-route-audit",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["A1b-fix-auth-form-annotation", "C6-must-change-gate-middleware", "D9-self-service-password-change", "D10-admin-user-management-ui", "D10b-instrument-auth-audit-callsites", "C12-smtp-mailer"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "C6-must-change-gate-middleware",
+        "D9-self-service-password-change",
+        "D10-admin-user-management-ui",
+        "D10b-instrument-auth-audit-callsites",
+        "C12-smtp-mailer"
+      ],
       "key_files": [
         "whilly/api/main.py",
         "tests/unit/test_transport_server.py"
@@ -345,7 +403,10 @@
       "id": "E16-active-sessions-ui",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["A1b-fix-auth-form-annotation", "D9-self-service-password-change"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "D9-self-service-password-change"
+      ],
       "key_files": [
         "whilly/api/auth_routes.py"
       ],
@@ -365,7 +426,9 @@
       "id": "E14a-totp-migration-024",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "whilly/adapters/db/migrations/versions/024_user_totp_secrets.py",
         "pyproject.toml"
@@ -387,7 +450,12 @@
       "id": "E14b-totp-setup-and-verify-routes",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["E14a-totp-migration-024", "C6-must-change-gate-middleware", "D9-self-service-password-change", "D13-startup-route-audit"],
+      "dependencies": [
+        "E14a-totp-migration-024",
+        "C6-must-change-gate-middleware",
+        "D9-self-service-password-change",
+        "D13-startup-route-audit"
+      ],
       "key_files": [
         "whilly/api/auth_routes.py"
       ],
@@ -407,7 +475,9 @@
       "id": "E15-webauthn-passkeys",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["E14b-totp-setup-and-verify-routes"],
+      "dependencies": [
+        "E14b-totp-setup-and-verify-routes"
+      ],
       "key_files": [
         "whilly/api/webauthn_routes.py",
         "whilly/adapters/db/migrations/versions/025_webauthn_credentials.py"
@@ -428,7 +498,10 @@
       "id": "E17-oidc-header-trust",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["A1b-fix-auth-form-annotation", "D13-startup-route-audit"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "D13-startup-route-audit"
+      ],
       "key_files": [
         "whilly/api/oidc_header_auth.py",
         "whilly/api/main.py",
@@ -451,7 +524,9 @@
       "id": "F18a-worker-tags-migration",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["A1b-fix-auth-form-annotation"],
+      "dependencies": [
+        "A0-ci-restoration"
+      ],
       "key_files": [
         "whilly/adapters/db/migrations/versions/026_worker_tags.py"
       ],
@@ -471,7 +546,10 @@
       "id": "F18b-worker-tags-claim-and-cli",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["B4-unit-tests-worker-launch", "F18a-worker-tags-migration"],
+      "dependencies": [
+        "B4-unit-tests-worker-launch",
+        "F18a-worker-tags-migration"
+      ],
       "key_files": [
         "whilly/api/tasks_api.py",
         "whilly/api/tasks_api_crud.py",
@@ -515,7 +593,9 @@
       "id": "G20-claude-anonymizer-github-actions-ci",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["G19-publish-claude-anonymizer-repo"],
+      "dependencies": [
+        "G19-publish-claude-anonymizer-repo"
+      ],
       "key_files": [
         "docs/anonymizer-usage.md"
       ],
@@ -534,7 +614,9 @@
       "id": "H21-fix-worker-launch-model-connect-override",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["B4-unit-tests-worker-launch"],
+      "dependencies": [
+        "B4-unit-tests-worker-launch"
+      ],
       "key_files": [
         "whilly/cli/worker_launch.py"
       ],
@@ -553,7 +635,10 @@
       "id": "H22-worker-bootstrap-command",
       "status": "pending",
       "priority": "medium",
-      "dependencies": ["A1b-fix-auth-form-annotation", "H21-fix-worker-launch-model-connect-override"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "H21-fix-worker-launch-model-connect-override"
+      ],
       "key_files": [
         "whilly/cli/worker_launch.py"
       ],
@@ -573,7 +658,13 @@
       "id": "I23-refresh-whilly-usage-docs",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["C7-document-dashboard-token-secret", "C8-cluster-rate-limit-multi-worker-warning", "F18b-worker-tags-claim-and-cli", "H21-fix-worker-launch-model-connect-override", "H22-worker-bootstrap-command"],
+      "dependencies": [
+        "C7-document-dashboard-token-secret",
+        "C8-cluster-rate-limit-multi-worker-warning",
+        "F18b-worker-tags-claim-and-cli",
+        "H21-fix-worker-launch-model-connect-override",
+        "H22-worker-bootstrap-command"
+      ],
       "key_files": [
         "docs/Whilly-Usage.md"
       ],
@@ -593,7 +684,17 @@
       "id": "I24-adr-auth-hardening",
       "status": "pending",
       "priority": "low",
-      "dependencies": ["A1b-fix-auth-form-annotation", "A2-smoke-test-post-auth-journey", "B3-unit-tests-reset-endpoint", "B4-unit-tests-worker-launch", "B5-integration-test-session-persistence", "C6-must-change-gate-middleware", "C7-document-dashboard-token-secret", "C8-cluster-rate-limit-multi-worker-warning", "C12-smtp-mailer"],
+      "dependencies": [
+        "A0-ci-restoration",
+        "A2-smoke-test-post-auth-journey",
+        "B3-unit-tests-reset-endpoint",
+        "B4-unit-tests-worker-launch",
+        "B5-integration-test-session-persistence",
+        "C6-must-change-gate-middleware",
+        "C7-document-dashboard-token-secret",
+        "C8-cluster-rate-limit-multi-worker-warning",
+        "C12-smtp-mailer"
+      ],
       "key_files": [
         "docs/adr/ADR-001-auth-hardening-p1.md",
         "docs/index.md"
