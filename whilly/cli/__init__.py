@@ -520,6 +520,10 @@ def main(argv: list[str] | None = None) -> int:
             from whilly.cli.worker_launch import run_launch_command
 
             return run_launch_command(rest[1:])
+        if rest and rest[0] == "bootstrap":
+            from whilly.cli.worker_launch import run_bootstrap_command
+
+            return run_bootstrap_command(rest[1:])
         if rest and rest[0] == "list":
             from whilly.cli.worker_launch import run_list_command
 
