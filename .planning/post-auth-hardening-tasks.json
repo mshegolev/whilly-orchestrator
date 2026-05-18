@@ -462,7 +462,7 @@
     },
     {
       "id": "E14b-totp-setup-and-verify-routes",
-      "status": "pending",
+      "status": "skipped",
       "priority": "low",
       "dependencies": [
         "E14a-totp-migration-024",
@@ -473,7 +473,7 @@
       "key_files": [
         "whilly/api/auth_routes.py"
       ],
-      "description": "PRD §Epic E, Item 14 (routes) — gated behind WHILLY_TOTP_ENABLED=1. Add GET/POST /me/totp/setup (QR code via qrcode lib) and GET/POST /auth/totp (second-factor verification after password). Implement totp_pending intermediate session state. Add qrcode to pyproject.toml optional-dependencies totp group. Brute-force locked after 5 failures.",
+      "description": "SKIPPED 2026-05-18: PRD §Epic E Item 14 risk is High — \"Session state machine extension risks regressions across all auth paths\". This is a P3 stretch goal requiring a new totp_pending session state, /me/totp/setup with QR code (qrcode lib), /auth/totp verification endpoint, and brute-force lock after 5 failures — touches every session-cookie-bearing auth path. Per the autopilot risk policy chosen 2026-05-18 (\"Mark skipped with rationale\"), this is the correct deferral. The migration 024_user_totp_secrets (E14a) + pyotp extras are already in place from PR #276, so a future dedicated sprint can pick this up without schema work. Original: PRD §Epic E, Item 14 (routes) — gated behind WHILLY_TOTP_ENABLED=1. Add GET/POST /me/totp/setup (QR code via qrcode lib) and GET/POST /auth/totp (second-factor verification after password). Implement totp_pending intermediate session state. Add qrcode to pyproject.toml optional-dependencies totp group. Brute-force locked after 5 failures.",
       "acceptance_criteria": [
         "QR code renders at GET /me/totp/setup when WHILLY_TOTP_ENABLED=1",
         "Valid TOTP code accepted within ±1 window",
@@ -487,7 +487,7 @@
     },
     {
       "id": "E15-webauthn-passkeys",
-      "status": "pending",
+      "status": "skipped",
       "priority": "low",
       "dependencies": [
         "E14b-totp-setup-and-verify-routes"
@@ -496,7 +496,7 @@
         "whilly/api/webauthn_routes.py",
         "whilly/adapters/db/migrations/versions/025_webauthn_credentials.py"
       ],
-      "description": "PRD §Epic E, Item 15 — add WebAuthn passkey support for admin accounts using the webauthn PyPI package. Create whilly/api/webauthn_routes.py with registration and authentication ceremony routes (admin-only). Create migration 025_webauthn_credentials.py. NOTE: PRD marks this as high-risk; recommend a dedicated sprint for this task.",
+      "description": "SKIPPED 2026-05-18: PRD §Risk Register R3 + Item 15 prose explicitly recommend \"save for dedicated sprint\" — complex WebAuthn protocol (registration + authentication ceremonies), py_webauthn integration, admin-only scope, depends on the E14b session state machine that has not been built. Per autopilot risk policy (\"Mark skipped with rationale\"), correct deferral. Future sprint: pair with E14b. Original: PRD §Epic E, Item 15 — add WebAuthn passkey support for admin accounts using the webauthn PyPI package. Create whilly/api/webauthn_routes.py with registration and authentication ceremony routes (admin-only). Create migration 025_webauthn_credentials.py. NOTE: PRD marks this as high-risk; recommend a dedicated sprint for this task.",
       "acceptance_criteria": [
         "End-to-end registration + authentication with a software authenticator (py_webauthn test vector) passes",
         "All WebAuthn routes restricted to admin role → 403 for non-admins",
@@ -510,7 +510,7 @@
     },
     {
       "id": "E17-oidc-header-trust",
-      "status": "pending",
+      "status": "skipped",
       "priority": "low",
       "dependencies": [
         "A0-ci-restoration",
@@ -521,7 +521,7 @@
         "whilly/api/main.py",
         ".env.example"
       ],
-      "description": "PRD §Epic E, Item 17 — create whilly/api/oidc_header_auth.py. When WHILLY_TRUST_PROXY_AUTH=1, inspect X-Forwarded-User header on every request; if present and user exists, create a transient session (not persisted to DB). Strict: only accept the header from IPs in WHILLY_TRUSTED_PROXY_IPS (CIDR list). When WHILLY_TRUST_PROXY_AUTH is unset or 0, the header is completely ignored. Add conditional middleware registration in main.py. SECURITY NOTE: requires mandatory security review before merge; incorrect IP allowlisting enables header injection.",
+      "description": "SKIPPED 2026-05-18: PRD §Risk Register R3 flags this as \"Critical impact\" — header injection attack surface when trusting a reverse-proxy identity header. Requires careful WHILLY_TRUSTED_PROXY_IPS allowlist enforcement and mandatory security review per the PRD R3 mitigation. Beyond the safe scope of the autopilot run; should be paired with the security-review process the PRD mandates. Per autopilot risk policy (\"Mark skipped with rationale\"), correct deferral. Original: PRD §Epic E, Item 17 — create whilly/api/oidc_header_auth.py. When WHILLY_TRUST_PROXY_AUTH=1, inspect X-Forwarded-User header on every request; if present and user exists, create a transient session (not persisted to DB). Strict: only accept the header from IPs in WHILLY_TRUSTED_PROXY_IPS (CIDR list). When WHILLY_TRUST_PROXY_AUTH is unset or 0, the header is completely ignored. Add conditional middleware registration in main.py. SECURITY NOTE: requires mandatory security review before merge; incorrect IP allowlisting enables header injection.",
       "acceptance_criteria": [
         "WHILLY_TRUST_PROXY_AUTH=1 with a seeded user: request with X-Forwarded-User: alice from trusted IP reaches dashboard",
         "Same request from untrusted IP returns 401",
