@@ -424,7 +424,7 @@
     },
     {
       "id": "E14a-totp-migration-024",
-      "status": "pending",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "A0-ci-restoration"
@@ -433,7 +433,7 @@
         "whilly/adapters/db/migrations/versions/024_user_totp_secrets.py",
         "pyproject.toml"
       ],
-      "description": "PRD §Epic E, Item 14 (migration only) — create Alembic migration 024_user_totp_secrets.py: table user_totp_secrets (user_id FK, secret TEXT, enabled BOOL, created_at TIMESTAMPTZ). Add pyotp as an optional dependency in pyproject.toml under [project.optional-dependencies] totp group. Migration must be reversible.",
+      "description": "DONE 2026-05-18: realised as migration 024_user_totp_secrets.py — table user_totp_secrets(username TEXT PRIMARY KEY → users.username ON DELETE CASCADE, secret TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()). Column named `username` rather than the PRD's nominal `user_id` to match the actual users PK type (migration 020 made the PK `username TEXT`); FK with CASCADE encodes referential integrity, and PK-on-username encodes the 1:1 invariant in schema. pyotp>=2.9 added under [project.optional-dependencies] totp with explanatory comment block matching the worker/server/llmops style. Reversible (downgrade drops the table). alembic heads → 024_user_totp_secrets. Original: PRD §Epic E, Item 14 (migration only) — create Alembic migration 024_user_totp_secrets.py: table user_totp_secrets (user_id FK, secret TEXT, enabled BOOL, created_at TIMESTAMPTZ). Add pyotp as an optional dependency in pyproject.toml under [project.optional-dependencies] totp group. Migration must be reversible",
       "acceptance_criteria": [
         "Migration 024_user_totp_secrets.py exists and is importable",
         "Downgrade drops the user_totp_secrets table",
