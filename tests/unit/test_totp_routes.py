@@ -26,15 +26,27 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pyotp
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
 
-from whilly.api import auth_tokens, rate_limit, sessions, totp_repo, totp_routes, users_repo
-from whilly.api.auth_routes import build_auth_router
-from whilly.api.csrf import COOKIE_NAME
-from whilly.api.totp_routes import (
+# pyotp ships in the [totp] optional extras only. CI runs without it
+# installed by default, so guard the whole module — every test in this
+# file needs pyotp for code generation/verification.
+pyotp = pytest.importorskip("pyotp")
+
+from fastapi import FastAPI  # noqa: E402 — must come after pytest.importorskip gate
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+
+from whilly.api import (  # noqa: E402
+    auth_tokens,
+    rate_limit,
+    sessions,
+    totp_repo,
+    totp_routes,
+    users_repo,
+)
+from whilly.api.auth_routes import build_auth_router  # noqa: E402
+from whilly.api.csrf import COOKIE_NAME  # noqa: E402
+from whilly.api.totp_routes import (  # noqa: E402
     PENDING_COOKIE_NAME,
     PENDING_MAX_ATTEMPTS,
     TOTP_ENABLED_ENV,
