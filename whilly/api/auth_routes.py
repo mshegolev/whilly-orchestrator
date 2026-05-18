@@ -436,6 +436,16 @@ def build_auth_router(
             logger.warning("auth.change-password: set_password failed for %r: %s", username, exc)
             return _render_error("Could not update password. Please try again.")
 
+        # PRD-post-auth-hardening §Epic C Item 6: drop the gate's cached
+        # must_change verdict for this session so the very next request
+        # (the 303 redirect to /) is not bounced back to the change-password
+        # form by a stale True verdict.
+        session_id_raw = principal.get("session_id")
+        if isinstance(session_id_raw, str) and session_id_raw:
+            from whilly.api.must_change_gate import invalidate_session
+
+            invalidate_session(session_id_raw)
+
         _append_event(
             {
                 "event_type": "auth.password.changed",

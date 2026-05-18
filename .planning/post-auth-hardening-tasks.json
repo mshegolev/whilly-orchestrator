@@ -220,16 +220,18 @@
     },
     {
       "id": "C6-must-change-gate-middleware",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [
         "A0-ci-restoration"
       ],
       "key_files": [
+        "whilly/api/must_change_gate.py",
         "whilly/api/auth_routes.py",
-        "whilly/api/main.py"
+        "whilly/adapters/transport/server.py",
+        "tests/unit/test_must_change_gate.py"
       ],
-      "description": "PRD §Epic C, Item 6 — implement the per-request must_change_password gate as FastAPI middleware (BaseHTTPMiddleware) or a Depends injected into the session dependency. Whitelist: /auth/change-password, /auth/logout, /health, /static/*. Add an in-process TTL cache (30s) keyed on (session_id, password_version) to avoid a DB round-trip on every request. Cache is invalidated on password change. Verify middleware ordering does not break CSRF protection.",
+      "description": "DONE 2026-05-18: realised as new whilly/api/must_change_gate.py (MustChangePasswordGateMiddleware: BaseHTTPMiddleware subclass) + wired into create_app at whilly/adapters/transport/server.py (NOT whilly/api/main.py — that is a re-export shim; real factory lives in transport/server.py) + cache invalidation hook called from the change-password POST handler in whilly/api/auth_routes.py. Middleware ordering: gate registered BEFORE CSRF so CSRF stays outermost (Starlette add_middleware is LIFO) — bad-Origin POSTs are rejected with 403 before the gate queries the DB. Whitelist as PRD plus /auth/login + /auth/magic + /auth/magic-login (entry points). Cache: 30s TTL keyed on session_id alone (NOT (session_id, password_version) as PRD nominates — users table has no password_version column; equivalent guarantee via explicit invalidate_session(session_id) called from change-password POST). Session.email → username conversion via strip-@local suffix (matches existing logic in submit_change_password at auth_routes.py:428). Fail-open on every error mode (DB hiccup, missing session, missing user, malformed cookie) — gate never breaks the request lifecycle. 12 new unit tests in tests/unit/test_must_change_gate.py cover all 4 ACs explicitly (303 redirect, whitelist passthrough, invalidation, 5-rapid-requests-=-1-DB-call) plus CSRF ordering verification, cookie absence, cookie tampering, user-not-found, TTL expiry. All 12 pass; full unit sweep 2155 passed (3 pre-existing test-order flakes confirmed unrelated, pass in isolation). mypy + import-linter + ruff full repo clean. Original: PRD §Epic C, Item 6 — implement the per-request must_change_password gate as FastAPI middleware (BaseHTTPMiddleware) or a Depends injected into the session dependency. Whitelist: /auth/change-password, /auth/logout, /health, /static/*. Add an in-process TTL cache (30s) keyed on (session_id, password_version) to avoid a DB round-trip on every request. Cache is invalidated on password change. Verify middleware ordering does not break CSRF protection.",
       "acceptance_criteria": [
         "Authenticated request to / with must_change_password=True returns HTTP 303 → /auth/change-password",
         "Request to /auth/change-password with the flag set returns 200",
