@@ -76,6 +76,7 @@ successful completion.
 | **[Current vs Target]({{ site.baseurl }}/Current-vs-Target)** | Alignment status against the target documentation pack |
 | **[Interfaces & Tasks]({{ site.baseurl }}/Whilly-Interfaces-and-Tasks)** | Module contracts + the JSON plan schema |
 | **[Architecture Decisions]({{ site.baseurl }}/workshop/adr/)** | Why things are the way they are (if published) |
+| **[ADR-001 — Auth Hardening P1]({{ site.baseurl }}/adr/ADR-001-auth-hardening-p1)** | Forced password change, rate limit + lockout, prod mode, CSRF, route audit |
 
 ## Under the hood
 
