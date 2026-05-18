@@ -650,16 +650,18 @@
     },
     {
       "id": "H22-worker-bootstrap-command",
-      "status": "skipped",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "A0-ci-restoration",
         "H21-fix-worker-launch-model-connect-override"
       ],
       "key_files": [
-        "whilly/cli/worker_launch.py"
+        "whilly/cli/worker_launch.py",
+        "whilly/cli/__init__.py",
+        "tests/unit/test_cli_worker_bootstrap.py"
       ],
-      "description": "SKIPPED 2026-05-19: Convenience wrapper for first-time-setup that prompts for server URL + bootstrap token then calls whilly worker launch. Useful but not functionally critical — operators today can run the same sequence manually (`pip install whilly-orchestrator[worker]; whilly worker launch <plan>`). H21 (PR #291) already fixed the more pressing CLI UX issue (--model/--connect overrides). H22 would add ~150 lines of new sub-command code + interactive prompt logic + --non-interactive env-var path + idempotency guard — out of proportion with autopilot scope, suitable for a focused follow-up. Original: PRD §Epic H, Item 22 — add whilly worker bootstrap sub-command to worker_launch.py (or new worker_bootstrap.py). Steps: (1) verify Python 3.10+ and pip, (2) pip install whilly if not installed, (3) prompt for server URL and bootstrap token, (4) call whilly worker launch logic to register and write config, (5) run claude --version and print result, (6) print summary with config file path. --non-interactive flag accepts all inputs via env vars (WHILLY_SERVER_URL, WHILLY_BOOTSTRAP_TOKEN). Second run on configured box detects existing config and prompts before overwriting.",
+      "description": "DONE 2026-05-19: run_bootstrap_command added to whilly/cli/worker_launch.py + subcommand dispatch in whilly/cli/__init__.py. Thin wrapper that resolves WHILLY_SERVER_URL / WHILLY_WORKER_BOOTSTRAP_TOKEN / plan_id from env (preferred) then interactive prompts (skipped under --non-interactive), then delegates to run_launch_command(--register-only) so the operator chooses when to start the worker loop. Idempotency: detects existing config and refuses without --force (cleaner than mid-stream prompt; CI-friendly). _prompt helper handles the env-vs-stdin precedence cleanly. 7 unit tests: non-interactive-with-env happy path, non-interactive-missing-env fails, existing-config-refuses-without-force, --force overrides, interactive-stdin path, positional-plan_id wins over env, end-to-end CLI dispatch via main(). Original: SKIPPED 2026-05-19: Convenience wrapper for first-time-setup that prompts for server URL + bootstrap token then calls whilly worker launch. Useful but not functionally critical — operators today can run the same sequence manually (`pip install whilly-orchestrator[worker]; whilly worker launch <plan>`). H21 (PR #291) already fixed the more pressing CLI UX issue (--model/--connect overrides). H22 would add ~150 lines of new sub-command code + interactive prompt logic + --non-interactive env-var path + idempotency guard — out of proportion with autopilot scope, suitable for a focused follow-up. Original: PRD §Epic H, Item 22 — add whilly worker bootstrap sub-command to worker_launch.py (or new worker_bootstrap.py). Steps: (1) verify Python 3.10+ and pip, (2) pip install whilly if not installed, (3) prompt for server URL and bootstrap token, (4) call whilly worker launch logic to register and write config, (5) run claude --version and print result, (6) print summary with config file path. --non-interactive flag accepts all inputs via env vars (WHILLY_SERVER_URL, WHILLY_BOOTSTRAP_TOKEN). Second run on configured box detects existing config and prompts before overwriting.",
       "acceptance_criteria": [
         "whilly worker bootstrap on a box with no config completes without manual JSON edits",
         "Second run on configured box detects existing config and prompts before overwriting",
