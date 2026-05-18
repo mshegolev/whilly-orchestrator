@@ -1353,6 +1353,7 @@ def create_app(
     from whilly.api.auth_routes import build_auth_router
     from whilly.api.csrf import WhillySessionCSRFMiddleware
     from whilly.api.dashboard import FileLogStore
+    from whilly.api.must_change_gate import MustChangePasswordGateMiddleware
     from whilly.api.plans_api import build_plans_router
     from whilly.api.static_mount import mount_static_assets
     from whilly.api.tasks_api_crud import build_tasks_crud_router
@@ -1361,6 +1362,17 @@ def create_app(
     app.state.log_store = FileLogStore(Path("whilly_logs"))
     instrument_app(app)
 
+    # PRD-post-auth-hardening §Epic C, Item 6: the must-change-password
+    # gate. Registered BEFORE the CSRF middleware so that CSRF (added next)
+    # becomes the OUTERMOST layer on the request path — Starlette's
+    # ``add_middleware`` is LIFO. The ordering matters: a bad-Origin POST
+    # must be rejected with 403 before the gate ever queries the DB to
+    # decide whether the user needs to change their password.
+    app.add_middleware(
+        MustChangePasswordGateMiddleware,
+        pool=pool,
+        secret=dashboard_token_secret,
+    )
     # PRD-wui-multi-plan v2 Epic A + §6.1: install the CSRF gate BEFORE the
     # auth router and any subsequent CRUD routers. The middleware is a
     # no-op for requests that do not carry the session cookie, so worker
