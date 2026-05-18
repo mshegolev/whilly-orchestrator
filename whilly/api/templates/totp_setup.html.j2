@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Set up TOTP — Whilly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { padding: 24px; max-width: 600px; margin: 0 auto; }
+    .totp-title { color: var(--accent); font: 700 var(--t-body)/var(--lh-tight) var(--font-mono); }
+    .totp-block { border: 1px solid var(--line-strong); padding: 16px; margin: 16px 0; background: var(--surface); }
+    .totp-secret { font: var(--t-body)/var(--lh-tight) var(--font-mono); word-break: break-all; padding: 8px; background: var(--bg); border: 1px solid var(--line); }
+    .totp-uri { font: var(--t-sm)/var(--lh-tight) var(--font-mono); word-break: break-all; padding: 8px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+    .totp-form input { display: block; width: 100%; padding: 6px 10px; margin: 8px 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-strong); font: var(--t-body)/var(--lh-body) var(--font-mono); }
+    .totp-form button { padding: 6px 18px; background: transparent; color: var(--accent); border: 1px solid var(--accent); cursor: pointer; font: 700 var(--t-body)/var(--lh-body) var(--font-mono); }
+    .totp-error { padding: 8px 12px; border: 1px solid var(--danger); color: var(--danger); font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .totp-info { padding: 8px 12px; border: 1px solid var(--accent); color: var(--accent); font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+  </style>
+</head>
+<body>
+  <h1 class="totp-title">Set up two-factor authentication</h1>
+  <p style="color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+    Signed in as <strong>{{ username }}</strong>.
+    {% if already_enrolled %}TOTP is already enabled on your account; re-running setup REPLACES the old secret.{% endif %}
+  </p>
+
+  {% if form_error %}<div class="totp-error" role="alert">{{ form_error }}</div>{% endif %}
+
+  <div class="totp-block">
+    <p>Add this secret to your authenticator app (1Password, Bitwarden, Aegis, Google Authenticator, etc.):</p>
+    <div class="totp-secret"><code>{{ secret }}</code></div>
+    <p style="margin-top: 12px; color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+      Or paste this URI directly into an app that supports it:
+    </p>
+    <div class="totp-uri"><code>{{ otpauth_uri }}</code></div>
+  </div>
+
+  <div class="totp-block">
+    <p>Enter the 6-digit code your authenticator shows for this secret to confirm enrolment:</p>
+    <form class="totp-form" method="post" action="/me/totp/setup" novalidate>
+      <input type="hidden" name="secret_b32" value="{{ secret }}" />
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]{6,8}" minlength="6" maxlength="8"
+             autocomplete="one-time-code" required autofocus placeholder="123456" />
+      <button type="submit">[ confirm enrolment ]</button>
+    </form>
+  </div>
+
+  <p style="color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+    <a href="/me/sessions" style="color: var(--accent);">cancel</a>
+  </p>
+</body>
+</html>
