@@ -268,6 +268,27 @@ async def verify_session(pool: asyncpg.Pool, *, session_id: str) -> Session | No
         return _row_to_session(row)
 
 
+async def list_active_sessions_for_email(pool: asyncpg.Pool, *, email: str) -> list[Session]:
+    """Return every non-revoked, non-expired session for ``email``.
+
+    Used by the ``/me/sessions`` admin-of-self UI (PRD §Epic E Item 16).
+    Ordered last_seen_at DESC so the active devices appear first.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT session_id, email, created_at, last_seen_at, expires_at, revoked_at
+            FROM sessions
+            WHERE email = $1
+              AND revoked_at IS NULL
+              AND expires_at > NOW()
+            ORDER BY last_seen_at DESC
+            """,
+            email,
+        )
+    return [_row_to_session(r) for r in rows]
+
+
 async def revoke_session(pool: asyncpg.Pool, *, session_id: str) -> bool:
     """Mark a session revoked. Returns True on the first revoke, False on subsequent calls."""
     if not isinstance(session_id, str) or not session_id:
@@ -333,6 +354,7 @@ __all__ = [
     "consume_magic_link",
     "create_magic_link",
     "create_session",
+    "list_active_sessions_for_email",
     "purge_expired",
     "revoke_session",
     "verify_session",

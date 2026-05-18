@@ -415,16 +415,20 @@
     },
     {
       "id": "E16-active-sessions-ui",
-      "status": "pending",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "A0-ci-restoration",
         "D9-self-service-password-change"
       ],
       "key_files": [
-        "whilly/api/auth_routes.py"
+        "whilly/api/auth_routes.py",
+        "whilly/api/sessions.py",
+        "whilly/api/templates/me_sessions.html.j2",
+        "whilly/operator_views.py",
+        "tests/unit/test_me_sessions_routes.py"
       ],
-      "description": "PRD §Epic E, Item 16 — add GET /me/sessions (list rows from sessions table filtered by user) and POST /me/sessions/{session_id}/revoke (delete the row). Template whilly/templates/me_sessions.html shows device user-agent, IP, last-seen timestamp, and a Revoke button. Revoking the current session redirects to /login.",
+      "description": "DONE 2026-05-18: GET /me/sessions + POST /me/sessions/{id}/revoke added to auth_routes.build_auth_router. sessions.list_active_sessions_for_email new helper queries the table filtered by principal email + non-revoked + non-expired. Template me_sessions.html.j2 renders session_id prefix + created/last_seen/expires (sessions schema has no ip/user_agent columns — PRD prose mentioned them but they're not present; gap noted in code). Defence-in-depth: revoke checks target session.email == principal email so an authenticated user cannot revoke another user's session by guessing the session_id. Revoking the CURRENT session clears the cookie and 303s to /login (matches /auth/logout pattern); revoking another device keeps user signed in with a flash. 6 unit tests cover unauth-redirect, list-renders-with-current-tag, other-revoke-keeps-signed-in, current-revoke-clears-cookie-303-to-login, foreign-session-404 (privilege escalation guard), nonexistent-session-404. Template registered in OPERATOR_WUI_ARTIFACTS. Original: PRD §Epic E, Item 16 — add GET /me/sessions (list rows from sessions table filtered by user) and POST /me/sessions/{session_id}/revoke (delete the row). Template whilly/templates/me_sessions.html shows device user-agent, IP, last-seen timestamp, and a Revoke button. Revoking the current session redirects to /login.",
       "acceptance_criteria": [
         "Revoking a session ID makes the corresponding cookie return 401 on next use",
         "GET /me/sessions returns 200 with a list of sessions for the authenticated user",

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Active sessions — Whilly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { padding: 24px; max-width: 900px; margin: 0 auto; }
+    .sess-title { color: var(--accent); font: 700 var(--t-body)/var(--lh-tight) var(--font-mono); margin: 0 0 16px; }
+    .sess-table { width: 100%; border-collapse: collapse; font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .sess-table th, .sess-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+    .sess-table th { color: var(--muted); }
+    .sess-current { color: var(--accent); font-weight: 700; }
+    .sess-current-tag { background: var(--accent); color: var(--bg); padding: 1px 6px; font-size: 0.85em; margin-left: 6px; }
+    .sess-revoke {
+      background: transparent; border: 1px solid var(--line-strong); color: var(--text);
+      padding: 2px 8px; cursor: pointer; font: inherit;
+    }
+    .sess-revoke:hover { background: var(--danger); color: var(--bg); border-color: var(--danger); }
+    .sess-current .sess-revoke { border-color: var(--danger); color: var(--danger); }
+    .sess-flash { padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--accent); color: var(--accent); font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+  </style>
+</head>
+<body>
+  <h1 class="sess-title">Active sessions</h1>
+  <p style="color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+    Signed in as <strong>{{ principal_email }}</strong>.
+    <a href="/me/password" style="color: var(--accent);">change password</a> &middot;
+    <a href="/" style="color: var(--accent);">dashboard</a>
+  </p>
+
+  {% if flash %}<div class="sess-flash">{{ flash }}</div>{% endif %}
+
+  <p style="color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono);">
+    Each row is a device currently signed in to your account. Revoking a session immediately
+    invalidates the cookie on that device — the user there is logged out on their next request.
+  </p>
+
+  <table class="sess-table">
+    <thead>
+      <tr>
+        <th>session_id</th><th>created</th><th>last seen</th><th>expires</th><th>action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr class="{% if s.session_id == current_session_id %}sess-current{% endif %}">
+        <td>{{ s.session_id[:12] }}…
+          {% if s.session_id == current_session_id %}<span class="sess-current-tag">this device</span>{% endif %}
+        </td>
+        <td>{{ s.created_at.strftime("%Y-%m-%d %H:%M") if s.created_at else "—" }}</td>
+        <td>{{ s.last_seen_at.strftime("%Y-%m-%d %H:%M") if s.last_seen_at else "—" }}</td>
+        <td>{{ s.expires_at.strftime("%Y-%m-%d %H:%M") if s.expires_at else "—" }}</td>
+        <td>
+          <form method="post" action="/me/sessions/{{ s.session_id }}/revoke" style="display: inline;">
+            <button type="submit" class="sess-revoke">
+              {% if s.session_id == current_session_id %}revoke (log out){% else %}revoke{% endif %}
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="color: var(--muted); text-align: center; padding: 16px;">no active sessions</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
