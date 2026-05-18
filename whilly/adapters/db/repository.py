@@ -438,6 +438,18 @@ WITH picked AS (
             ''
           ) <> '{_HUMAN_REVIEW_APPROVED_EVENT_SQL}'
       )
+      -- PRD-post-auth-hardening §Epic F Item 18 — worker-tag filter.
+      -- A task is claimable by the worker iff its required_tags is
+      -- empty (no tag requirements; matches every worker) OR every
+      -- required tag is also present in the worker's tags array
+      -- (Postgres ``<@`` "is contained by" operator).
+      -- workers.tags + tasks.required_tags both default to '{{}}'::text[]
+      -- (migration 023) so this check is safe for legacy rows that
+      -- never had tags set.
+      AND (
+        t.required_tags = '{{}}'::text[]
+        OR t.required_tags <@ (SELECT w.tags FROM workers w WHERE w.worker_id = $2)
+      )
     ORDER BY {_PRIORITY_RANK_SQL}, t.id
     -- ``FOR UPDATE OF t`` locks the *tasks* row only — not the
     -- single ``plans`` row that every concurrent claimer joins
