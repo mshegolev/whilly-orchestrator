@@ -443,6 +443,29 @@ without going through the login form. Companion knob
 hours); lowering it shortens the window of damage from a leaked token at
 the cost of more frequent re-logins.
 
+### SMTP magic-link delivery: `WHILLY_SMTP_*`
+
+By default Whilly writes magic-link sign-in URLs to
+`whilly_logs/whilly_events.jsonl` as `auth.magic_link.sent` events — the dev /
+loopback path that operators copy from. Production deployments enable SMTP by
+setting `WHILLY_SMTP_HOST`:
+
+```
+WHILLY_SMTP_HOST=smtp.example.com
+WHILLY_SMTP_PORT=587                   # default; STARTTLS submission
+WHILLY_SMTP_USER=...                   # optional
+WHILLY_SMTP_PASSWORD=...               # optional
+WHILLY_SMTP_FROM=whilly@example.com    # default whilly@<hostname>
+```
+
+The transport is async (`aiosmtplib`, hard dependency of the `server`
+extras). On any SMTP error — connection refused, auth failure, bad
+From, timeout — the `Mailer` fails open onto the event-log path so the
+auth flow still completes; operators can recover the link from the audit
+trail even when delivery is broken. The fallback event includes
+`fallback_reason: "smtp_error"` so monitoring can alert on the
+distinction between deliberate dev-mode and broken-prod-SMTP.
+
 ### Cluster-aware rate limiting: `WHILLY_NUM_WORKERS` and `WHILLY_REDIS_URL`
 
 The default in-process IP rate limiter is correct for a single-process
