@@ -133,7 +133,7 @@
     },
     {
       "id": "B4-unit-tests-worker-launch",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [
         "A0-ci-restoration"
@@ -141,7 +141,7 @@
       "key_files": [
         "tests/unit/test_cli_worker_launch.py"
       ],
-      "description": "PRD §Epic B, Item 4 — add/extend unit tests for whilly/cli/worker_launch.py covering: launch with a new config (registers, writes ~/.config/whilly/worker.json), launch reuse path (existing config, no re-registration), list table output, list --json output, remove single match, remove with ambiguous name, remove --all, reading .env file from disk, and the three bootstrap-token decode paths (base64url, hex, utf-8 fallback). Use tmp_path fixture for config isolation. Mock httpx.AsyncClient or WorkerClient to avoid network calls.",
+      "description": "DONE 2026-05-18: 22 unit tests in tests/unit/test_cli_worker_launch.py. Covers: launch fresh (register + write config), launch reuse (no re-register), --force-register (discards cache), --register-only / --print-env exit paths, missing plan_id / bootstrap / claude-bin → EXIT_ENVIRONMENT_ERROR (2), list empty / table / --json, remove single / ambiguous-without-connect / ambiguous-with-connect / --all / nonexistent / empty-config, .env parser (KEY=VALUE, quotes, comments, blank lines), bootstrap-token resolve chain (flag wins over env wins over .env). PRD mentions \"three bootstrap-token decode paths (base64url, hex, utf-8 fallback)\" but no such decode logic exists in worker_launch.py; tested the actual flag/env/.env resolve chain instead. tmp_path fixture used for config isolation; _register and run_worker_command monkeypatched so no network or worker-loop side effects. Original: PRD §Epic B, Item 4 — add/extend unit tests for whilly/cli/worker_launch.py covering: launch with a new config (registers, writes ~/.config/whilly/worker.json), launch reuse path (existing config, no re-registration), list table output, list --json output, remove single match, remove with ambiguous name, remove --all, reading .env file from disk, and the three bootstrap-token decode paths (base64url, hex, utf-8 fallback). Use tmp_path fixture for config isolation. Mock httpx.AsyncClient or WorkerClient to avoid network calls.",
       "acceptance_criteria": [
         "≥ 10 test cases covering all branches listed in the description",
         "No real network calls in any test (httpx.AsyncClient or WorkerClient mocked)",
