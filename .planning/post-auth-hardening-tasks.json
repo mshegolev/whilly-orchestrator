@@ -701,7 +701,7 @@
     },
     {
       "id": "I24-adr-auth-hardening",
-      "status": "pending",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "A0-ci-restoration",
@@ -718,7 +718,7 @@
         "docs/adr/ADR-001-auth-hardening-p1.md",
         "docs/index.md"
       ],
-      "description": "PRD §Epic I, Item 24 — create docs/adr/ directory. Write docs/adr/ADR-001-auth-hardening-p1.md following Nygard format (Status, Context, Decision, Consequences). Cover all five P1 hardening decisions: P1.1 forced-password-change gate, P1.2 IP rate-limiting with account lockout, P1.3 WHILLY_PROD_MODE umbrella switch, P1.4 SSE cookie authentication, P1.5 prod-mode validators. Link ADR from docs/index.md if it exists.",
+      "description": "DONE 2026-05-19: docs/adr/ADR-001-auth-hardening-p1.md created in Nygard format (Status, Context, Decision, Consequences). Five top-level sections; all P1.1-P1.5 decisions addressed (10 mentions across the doc). Sprint-additions table lists every PR shipped (#276-#291). Skipped-with-rationale section enumerates E14b, E15, E17, F18b, A2, H22, I23 with their PRD-risk references. The AC \"Reviewed and acknowledged by at least one other contributor (comment in PR)\" is an autopilot-unfulfillable process requirement; documented in the ADR's \"Open process item\" section. docs/index.md links to the new ADR. Original: PRD §Epic I, Item 24 — create docs/adr/ directory. Write docs/adr/ADR-001-auth-hardening-p1.md following Nygard format (Status, Context, Decision, Consequences). Cover all five P1 hardening decisions: P1.1 forced-password-change gate, P1.2 IP rate-limiting with account lockout, P1.3 WHILLY_PROD_MODE umbrella switch, P1.4 SSE cookie authentication, P1.5 prod-mode validators. Link ADR from docs/index.md if it exists.",
       "acceptance_criteria": [
         "docs/adr/ADR-001-auth-hardening-p1.md exists with Nygard sections: Status, Context, Decision, Consequences",
         "All five P1 hardening decisions (P1.1–P1.5) are addressed in the document",
