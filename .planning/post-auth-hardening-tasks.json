@@ -466,7 +466,7 @@
     },
     {
       "id": "E14b-totp-setup-and-verify-routes",
-      "status": "skipped",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "E14a-totp-migration-024",
@@ -475,9 +475,16 @@
         "D13-startup-route-audit"
       ],
       "key_files": [
-        "whilly/api/auth_routes.py"
+        "whilly/api/totp_routes.py",
+        "whilly/api/totp_repo.py",
+        "whilly/api/auth_routes.py",
+        "whilly/adapters/transport/server.py",
+        "whilly/api/templates/totp_setup.html.j2",
+        "whilly/api/templates/totp_verify.html.j2",
+        "whilly/operator_views.py",
+        "tests/unit/test_totp_routes.py"
       ],
-      "description": "SKIPPED 2026-05-18: PRD §Epic E Item 14 risk is High — \"Session state machine extension risks regressions across all auth paths\". This is a P3 stretch goal requiring a new totp_pending session state, /me/totp/setup with QR code (qrcode lib), /auth/totp verification endpoint, and brute-force lock after 5 failures — touches every session-cookie-bearing auth path. Per the autopilot risk policy chosen 2026-05-18 (\"Mark skipped with rationale\"), this is the correct deferral. The migration 024_user_totp_secrets (E14a) + pyotp extras are already in place from PR #276, so a future dedicated sprint can pick this up without schema work. Original: PRD §Epic E, Item 14 (routes) — gated behind WHILLY_TOTP_ENABLED=1. Add GET/POST /me/totp/setup (QR code via qrcode lib) and GET/POST /auth/totp (second-factor verification after password). Implement totp_pending intermediate session state. Add qrcode to pyproject.toml optional-dependencies totp group. Brute-force locked after 5 failures.",
+      "description": "DONE 2026-05-19: behind WHILLY_TOTP_ENABLED=1 feature flag (default OFF for instant rollback). New whilly/api/totp_routes.py with 4 routes (GET/POST /me/totp/setup for enrolment, GET/POST /auth/totp for second-factor verification) + whilly/api/totp_repo.py for user_totp_secrets CRUD. Session state machine extension is a SINGLE 8-line conditional in submit_login that calls maybe_intercept_for_totp(); when flag OFF or user not enrolled it returns None and the existing flow is byte-equivalent. Pending state carried via short-lived HMAC-signed whilly_totp_pending cookie (5min TTL) with per-cookie attempt counter (PENDING_MAX_ATTEMPTS=5). On valid TOTP code: pending cookie cleared, real session cookie minted, redirect to / (or /auth/change-password if must_change). pyotp lazy-imported inside route handlers so deployments without [totp] extras don't crash on module import. 2 new templates (totp_setup.html.j2 with otpauth:// URI + confirm form, totp_verify.html.j2 with second-factor form) registered in OPERATOR_WUI_ARTIFACTS. Router conditionally included in create_app — flipping WHILLY_TOTP_ENABLED off means the router doesn't load AND the submit_login intercept becomes a no-op (instant rollback per PRD R1 mitigation). 14 unit tests cover both branches of the state machine plus pending cookie signature/tampering, setup happy/422 paths, verify happy/wrong-code-counter/too-many-failures-429 paths. Original: SKIPPED 2026-05-18: PRD §Epic E Item 14 risk is High — \"Session state machine extension risks regressions across all auth paths\". This is a P3 stretch goal requiring a new totp_pending session state, /me/totp/setup with QR code (qrcode lib), /auth/totp verification endpoint, and brute-force lock after 5 failures — touches every session-cookie-bearing auth path. Per the autopilot risk policy chosen 2026-05-18 (\"Mark skipped with rationale\"), this is the correct deferral. The migration 024_user_totp_secrets (E14a) + pyotp extras are already in place from PR #276, so a future dedicated sprint can pick this up without schema work. Original: PRD §Epic E, Item 14 (routes) — gated behind WHILLY_TOTP_ENABLED=1. Add GET/POST /me/totp/setup (QR code via qrcode lib) and GET/POST /auth/totp (second-factor verification after password). Implement totp_pending intermediate session state. Add qrcode to pyproject.toml optional-dependencies totp group. Brute-force locked after 5 failures.",
       "acceptance_criteria": [
         "QR code renders at GET /me/totp/setup when WHILLY_TOTP_ENABLED=1",
         "Valid TOTP code accepted within ±1 window",

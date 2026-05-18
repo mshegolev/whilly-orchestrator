@@ -194,6 +194,23 @@ def build_auth_router(
             raise HTTPException(status_code=429, detail="too many requests")
 
         user = await users_repo.verify_credentials(pool, username=username, password=password)
+
+        # PRD-post-auth-hardening §Epic E Item 14b — TOTP second-factor
+        # integration point. When WHILLY_TOTP_ENABLED=1 AND the user has
+        # totp.enabled=TRUE, this returns a 303 → /auth/totp with a signed
+        # pending cookie carrying the verified username; otherwise None
+        # and the login completes as before. By design, the integration
+        # is a single conditional so flipping WHILLY_TOTP_ENABLED off is
+        # an instant rollback to the byte-equivalent pre-E14b flow.
+        if user is not None:
+            from whilly.api.totp_routes import maybe_intercept_for_totp
+
+            intercept = await maybe_intercept_for_totp(
+                request, pool=pool, secret=secret, user=user, cookie_secure=cookie_secure
+            )
+            if intercept is not None:
+                return intercept
+
         if user is None:
             logger.info("auth.login: credential rejection for username=%r", username[:64])
             # NOTE: verify_credentials returns None for THREE distinct failures

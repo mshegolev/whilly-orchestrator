@@ -1420,6 +1420,19 @@ def create_app(
         build_admin_users_router(pool=pool, secret=dashboard_token_secret),
     )
 
+    # PRD-post-auth-hardening §Epic E Item 14b — TOTP second-factor.
+    # Conditionally registered when WHILLY_TOTP_ENABLED=1 so deployments
+    # without the totp extras (pyotp not installed) don't even reach
+    # the route module's lazy pyotp import. Flipping the flag off after
+    # an incident is an instant rollback — the router doesn't load and
+    # submit_login's intercept point becomes a no-op.
+    from whilly.api.totp_routes import build_totp_router, totp_enabled
+
+    if totp_enabled():
+        app.include_router(
+            build_totp_router(pool=pool, secret=dashboard_token_secret),
+        )
+
     # PRD-post-auth-hardening §Epic D Item 13 — startup route audit.
     # Opt-in via WHILLY_ENABLE_ROUTE_AUDIT=1; default off because many
     # existing routes use inline _authenticate_session (not Depends) which
