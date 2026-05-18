@@ -1351,6 +1351,7 @@ def create_app(
         # operators expect them there, no reason to relocate.
     )
     from whilly.api import rate_limit as _rate_limit
+    from whilly.api.admin_users_routes import build_admin_users_router
     from whilly.api.auth_routes import build_auth_router
     from whilly.api.csrf import WhillySessionCSRFMiddleware
     from whilly.api.dashboard import FileLogStore
@@ -1367,6 +1368,11 @@ def create_app(
 
     mount_static_assets(app)
     app.state.log_store = FileLogStore(Path("whilly_logs"))
+    # PRD-post-auth-hardening §Epic D Item 10 — admin_users_routes reads the
+    # pool from app.state.pool because the routes are factory-bound (cannot
+    # depend on a closure-captured pool when the same instance must also be
+    # accessible to the helper render functions).
+    app.state.pool = pool
     instrument_app(app)
 
     # PRD-post-auth-hardening §Epic C, Item 6: the must-change-password
@@ -1406,6 +1412,12 @@ def create_app(
     # session-only CRUD surface so a single key governs the whole UI.
     app.include_router(
         build_tasks_crud_router(pool=pool, secret=dashboard_token_secret),
+    )
+    # PRD-post-auth-hardening §Epic D Item 10 — admin user management +
+    # auth-audit browse. Role guard (require_admin_role) rejects any
+    # non-admin session with 403 before the route body runs.
+    app.include_router(
+        build_admin_users_router(pool=pool, secret=dashboard_token_secret),
     )
 
     async def _probe_pool() -> tuple[bool, str | None]:
