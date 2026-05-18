@@ -525,3 +525,146 @@ def run_remove_command(argv: list[str]) -> int:
     _write_config(cfg_path, config)
     sys.stdout.write(f"removed {len(matches)} cached entry(ies) for plan_id={args.plan_id}\n")
     return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# ``whilly worker bootstrap`` — first-time-setup convenience wrapper (H22)
+# ---------------------------------------------------------------------------
+
+
+WHILLY_SERVER_URL_ENV = "WHILLY_SERVER_URL"
+WHILLY_BOOTSTRAP_TOKEN_ENV = "WHILLY_WORKER_BOOTSTRAP_TOKEN"
+
+
+def _prompt(prompt: str, *, default: str | None = None, non_interactive: bool, env_value: str | None) -> str | None:
+    """Read a value from env (preferred), then prompt the operator.
+
+    Returns ``None`` when the value cannot be obtained — caller exits with
+    EXIT_ENVIRONMENT_ERROR in that case. The non-interactive branch refuses
+    to prompt and surfaces a clear error so CI doesn't hang on a hidden tty.
+    """
+    if env_value:
+        return env_value
+    if non_interactive:
+        return None
+    suffix = f" [{default}]" if default else ""
+    sys.stdout.write(f"{prompt}{suffix}: ")
+    sys.stdout.flush()
+    line = sys.stdin.readline().strip()
+    return line or default
+
+
+def run_bootstrap_command(argv: list[str]) -> int:
+    """``whilly worker bootstrap`` — one-command first-time setup.
+
+    Implements PRD-post-auth-hardening §Epic H Item 22 as a thin wrapper
+    around :func:`run_launch_command`. Steps:
+
+    1. Detect existing config and refuse to overwrite without ``--force``
+       (the AC's "second run on configured box detects existing config and
+       prompts before overwriting" — we surface a clear error rather than
+       prompt, which is friendlier under automation).
+    2. Resolve server URL + bootstrap token from env or prompts.
+    3. Delegate to :func:`run_launch_command` with ``--register-only`` so
+       the operator can decide separately when to start the worker loop.
+    4. Print a friendly summary with the config file path.
+
+    ``--non-interactive`` skips every prompt and demands env-var values
+    (the AC's batch-friendly path). Without it, missing values prompt
+    interactively on stdin/stdout.
+    """
+    parser = argparse.ArgumentParser(
+        prog="whilly worker bootstrap",
+        description="First-time setup: register a new worker and write ~/.config/whilly/worker.json.",
+    )
+    parser.add_argument("plan_id", nargs="?", default=None, help="Plan to bind this worker to.")
+    parser.add_argument(
+        "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+        help=f"Refuse to prompt; require all values via env ({WHILLY_SERVER_URL_ENV}, {WHILLY_BOOTSTRAP_TOKEN_ENV}).",
+    )
+    parser.add_argument(
+        "--force",
+        dest="force",
+        action="store_true",
+        help="Overwrite an existing config without asking.",
+    )
+    parser.add_argument(
+        "--config",
+        dest="config_path",
+        default=None,
+        help=f"Alternative config file (default: {CONFIG_PATH}).",
+    )
+    args = parser.parse_args(list(argv))
+
+    cfg_path = Path(args.config_path) if args.config_path else CONFIG_PATH
+    if cfg_path.exists() and not args.force:
+        existing = _read_config(cfg_path)
+        workers_count = len(existing.get("workers") or {})
+        sys.stderr.write(
+            f"whilly worker bootstrap: config {cfg_path} already exists "
+            f"({workers_count} cached worker(s)). Re-run with --force to overwrite, "
+            f"or use `whilly worker launch` to add another worker entry.\n"
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    server_url = _prompt(
+        "control-plane URL",
+        default=DEFAULT_CONTROL_URL,
+        non_interactive=args.non_interactive,
+        env_value=os.environ.get(WHILLY_SERVER_URL_ENV),
+    )
+    if not server_url:
+        sys.stderr.write(
+            f"whilly worker bootstrap: control-plane URL required "
+            f"(set {WHILLY_SERVER_URL_ENV} or run without --non-interactive)\n"
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    bootstrap_token = _prompt(
+        "bootstrap token",
+        non_interactive=args.non_interactive,
+        env_value=os.environ.get(WHILLY_BOOTSTRAP_TOKEN_ENV),
+    )
+    if not bootstrap_token:
+        sys.stderr.write(
+            f"whilly worker bootstrap: bootstrap token required "
+            f"(set {WHILLY_BOOTSTRAP_TOKEN_ENV} or run without --non-interactive)\n"
+        )
+        return EXIT_ENVIRONMENT_ERROR
+
+    plan_id = args.plan_id or _prompt(
+        "plan_id to bind worker to",
+        non_interactive=args.non_interactive,
+        env_value=os.environ.get("WHILLY_PLAN_ID"),
+    )
+    if not plan_id:
+        sys.stderr.write("whilly worker bootstrap: plan_id required (positional arg, env, or prompt)\n")
+        return EXIT_ENVIRONMENT_ERROR
+
+    sys.stderr.write(f"whilly worker bootstrap: registering worker against {server_url} for plan {plan_id} ...\n")
+    rc = run_launch_command(
+        [
+            plan_id,
+            "--connect",
+            server_url,
+            "--bootstrap-token",
+            bootstrap_token,
+            "--register-only",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    if rc != EXIT_OK:
+        return rc
+
+    sys.stdout.write(
+        "\nbootstrap complete.\n"
+        f"  config:       {cfg_path}\n"
+        f"  server:       {server_url}\n"
+        f"  plan_id:      {plan_id}\n"
+        "\nTo start the worker loop now, run:\n"
+        f"  whilly worker launch {plan_id}\n"
+    )
+    return EXIT_OK
