@@ -1420,6 +1420,15 @@ def create_app(
         build_admin_users_router(pool=pool, secret=dashboard_token_secret),
     )
 
+    # PRD-post-auth-hardening §Epic D Item 13 — startup route audit.
+    # Opt-in via WHILLY_ENABLE_ROUTE_AUDIT=1; default off because many
+    # existing routes use inline _authenticate_session (not Depends) which
+    # the audit's dependant walk can't see. Future: when those routes are
+    # migrated to Depends-style, the env-var default can be flipped to on.
+    from whilly.api.route_audit import enforce_audit
+
+    enforce_audit(app)
+
     async def _probe_pool() -> tuple[bool, str | None]:
         try:
             async with pool.acquire() as conn:
