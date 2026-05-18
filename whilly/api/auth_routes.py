@@ -258,18 +258,32 @@ def build_auth_router(
 
         link = await sessions.create_magic_link(pool, email=normalised, secret=secret)
         if link.raw_token is not None:
-            # Fresh mint — log the link (dev-mode SMTP-less delivery, Devil's
-            # Advocate #7 single-file decision). On reuse, raw_token is None
-            # and we deliberately do NOT log a second event for the same
-            # email within the reuse window — SC-2.3.
+            # Fresh mint — emit issued event (audit) AND hand off to the Mailer
+            # for delivery. The Mailer auto-falls-back to writing an
+            # auth.magic_link.sent event when SMTP isn't configured, so
+            # dev / loopback keeps the v2 behaviour and prod gets real email
+            # without changes to this call site (PRD-post-auth-hardening §Epic
+            # C Item 12). On reuse, raw_token is None and we deliberately do
+            # NOT mint a duplicate event or re-send the email within the
+            # reuse window — SC-2.3.
+            from whilly.api.mailer import Mailer
+
+            magic_url = _build_magic_url(request, link.raw_token)
+            expires_at_unix = int(link.expires_at.timestamp())
             _append_event(
                 {
                     "event_type": "auth.magic_link.issued",
                     "email": normalised,
-                    "expires_at_unix": int(link.expires_at.timestamp()),
-                    "magic_link_url": _build_magic_url(request, link.raw_token),
+                    "expires_at_unix": expires_at_unix,
+                    "magic_link_url": magic_url,
                 },
             )
+            transport = await Mailer().send_magic_link(
+                email=normalised,
+                magic_url=magic_url,
+                expires_at_unix=expires_at_unix,
+            )
+            logger.info("auth.magic-login: link delivered to %s via %s", normalised, transport)
         else:
             logger.info("auth.magic-login: reused existing unconsumed magic link for %s", normalised)
 

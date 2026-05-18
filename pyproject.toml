@@ -60,6 +60,12 @@ server = [
     "python-multipart>=0.0.9",
     "prometheus-fastapi-instrumentator>=7.1.0",
     "prometheus-client>=0.20",
+    # aiosmtplib for the magic-link SMTP transport (PRD-post-auth-hardening
+    # §Epic C Item 12). Pure-async, no synchronous SMTP calls in coroutines.
+    # The Mailer falls back to the event log when WHILLY_SMTP_HOST is unset,
+    # so this dep is in `server` rather than a separate `mailer` extra —
+    # every server install gets the capability ready, opt-in at runtime.
+    "aiosmtplib>=3.0",
 ]
 # Optional LLM Ops export stack. The core Whilly trace files + Postgres
 # events work without these packages; install this extra when exporting

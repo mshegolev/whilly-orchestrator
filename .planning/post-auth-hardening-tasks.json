@@ -248,7 +248,7 @@
     },
     {
       "id": "C12-smtp-mailer",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [
         "A0-ci-restoration"
@@ -256,11 +256,12 @@
       "key_files": [
         "whilly/api/mailer.py",
         "whilly/api/auth_routes.py",
+        "tests/unit/test_mailer.py",
         ".env.example",
-        "docs/Whilly-Usage.md",
-        "pyproject.toml"
+        "pyproject.toml",
+        "docs/Whilly-Usage.md"
       ],
-      "description": "PRD §Epic C, Item 12 — create new whilly/api/mailer.py with a Mailer class. Constructor reads WHILLY_SMTP_HOST, WHILLY_SMTP_PORT (default 587), WHILLY_SMTP_USER, WHILLY_SMTP_PASSWORD, WHILLY_SMTP_FROM. If WHILLY_SMTP_HOST is empty/unset, falls back to writing a magic_link.sent event to the existing event log. Uses aiosmtplib for async SMTP (no synchronous SMTP calls in a coroutine). Template: plain-text + HTML multipart. Update auth_routes.py to call mailer.send_magic_link instead of the event-log directly. Add aiosmtplib to pyproject.toml [project.dependencies].",
+      "description": "DONE 2026-05-18: new whilly/api/mailer.py with Mailer class. Reads 5 env vars (WHILLY_SMTP_HOST/PORT/USER/PASSWORD/FROM). When WHILLY_SMTP_HOST unset → event-log fallback writing auth.magic_link.sent (preserves v2 behaviour). When set → aiosmtplib.send with STARTTLS, plain+html multipart. Fail-open on any SMTP error (logs warning + falls back to event log). aiosmtplib added to [project.optional-dependencies].server. auth_routes.submit_magic_login wired to call await Mailer().send_magic_link AFTER the existing issued event so audit trail unchanged. 7 unit tests (both branches + 3 fail-open scenarios + port parsing + From synthesis + deep-path mkdir). .env.example documents all 5 SMTP vars. docs/Whilly-Usage.md §SMTP magic-link delivery explains the fail-open contract. Original: PRD §Epic C, Item 12 — create new whilly/api/mailer.py with a Mailer class. Constructor reads WHILLY_SMTP_HOST, WHILLY_SMTP_PORT (default 587), WHILLY_SMTP_USER, WHILLY_SMTP_PASSWORD, WHILLY_SMTP_FROM. If WHILLY_SMTP_HOST is empty/unset, falls back to writing a magic_link.sent event to the existing event log. Uses aiosmtplib for async SMTP (no synchronous SMTP calls in a coroutine). Template: plain-text + HTML multipart. Update auth_routes.py to call mailer.send_magic_link instead of the event-log directly. Add aiosmtplib to pyproject.toml [project.dependencies].",
       "acceptance_criteria": [
         "With SMTP configured, POST /auth/magic triggers an aiosmtplib.send call (verified with mock)",
         "With SMTP absent, the event-log path is taken (no exception raised)",
