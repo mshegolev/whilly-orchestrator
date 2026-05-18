@@ -154,14 +154,14 @@
     },
     {
       "id": "C7-document-dashboard-token-secret",
-      "status": "pending",
+      "status": "done",
       "priority": "high",
       "dependencies": [],
       "key_files": [
         ".env.example",
         "docs/Whilly-Usage.md"
       ],
-      "description": "PRD §Epic C, Item 7 — document WHILLY_DASHBOARD_TOKEN_SECRET in .env.example (with inline generator one-liner) and in docs/Whilly-Usage.md under a new 'Authentication Configuration' heading. The heading must cover: what the variable does, when to set it (production), rotation procedure (restart required), and security warning (treat as a signing key). This task has no dependency on CI state and can land in parallel with A1.",
+      "description": "DONE 2026-05-18: realised manually (no Whilly orchestrator). .env.example +12 lines (WHILLY_DASHBOARD_TOKEN_SECRET stub with inline generator, plus WHILLY_DASHBOARD_TOKEN_TTL_SECONDS hint). docs/Whilly-Usage.md +45 lines (new ## Authentication Configuration section, 325 words). Original: PRD §Epic C, Item 7 — document WHILLY_DASHBOARD_TOKEN_SECRET in .env.example (with inline generator one-liner) and in docs/Whilly-Usage.md under a new 'Authentication Configuration' heading. The heading must cover: what the variable does, when to set it (production), rotation procedure (restart required), and security warning (treat as a signing key). This task has no dependency on CI state and can land in parallel with A1.",
       "acceptance_criteria": [
         ".env.example contains WHILLY_DASHBOARD_TOKEN_SECRET with an inline generator comment: python -c \"import secrets;print(secrets.token_urlsafe(32))\"",
         "docs/Whilly-Usage.md has ≥ 150 words on the topic under 'Authentication Configuration'",
