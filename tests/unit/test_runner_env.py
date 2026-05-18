@@ -28,6 +28,8 @@ def test_base_runner_env_allowlist_contract_is_exact() -> None:
     assert BASE_RUNNER_ENV_ALLOWLIST == (
         "PATH",
         "HOME",
+        "USER",
+        "LOGNAME",
         "LANG",
         "LC_ALL",
         "LC_CTYPE",
