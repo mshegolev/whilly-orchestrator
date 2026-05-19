@@ -609,10 +609,14 @@ async def test_register_uses_bootstrap_token_and_register_path() -> None:
     assert captured["path"] == REGISTER_PATH
     # The bootstrap header MUST be in place — not the per-worker token.
     assert captured["auth"] == "Bearer boot-secret"
-    # Body round-trips the pydantic schema.
+    # Body round-trips the pydantic schema. ``tags`` is always present
+    # (PRD-post-auth-hardening §Epic F Item 18 + the schema module's
+    # ``extra="forbid"`` policy that deliberately fails closed on
+    # version skew) — for a worker that advertises no capabilities it
+    # is the empty list.
     import json
 
-    assert json.loads(captured["body"]) == {"hostname": "host-alpha"}
+    assert json.loads(captured["body"]) == {"hostname": "host-alpha", "tags": []}
 
 
 async def test_register_does_not_mutate_per_worker_token() -> None:
@@ -685,6 +689,83 @@ async def test_register_propagates_auth_error_on_401() -> None:
             await client.register(hostname="host")
 
     assert excinfo.value.status_code == 401
+
+
+async def test_register_sends_tags_in_wire_body() -> None:
+    """A worker registering with ``tags=['gpu', 'signing']`` advertises them on the wire.
+
+    Pinned because this is the producer half of PRD-post-auth-hardening
+    §Epic F Item 18 — the consumer half (``_CLAIM_SQL``'s ``<@``
+    containment filter) is already covered by
+    ``test_claim_sql_tag_filter.py``. A regression that dropped tags
+    from the wire would silently downgrade every newly-registered
+    worker to "no capabilities" and starve tag-restricted tasks at
+    claim time.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(201, json={"worker_id": "w-tagged", "token": "tk"})
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        await client.register(hostname="host-gpu", tags=["gpu", "signing"])
+
+    import json
+
+    assert json.loads(captured["body"]) == {
+        "hostname": "host-gpu",
+        "tags": ["gpu", "signing"],
+    }
+
+
+async def test_register_defaults_tags_to_empty_list_on_wire() -> None:
+    """Omitting ``tags`` ships an explicit empty list, not a missing key.
+
+    The schema module's ``extra="forbid"`` policy is the documented
+    project-wide signal: version skew should surface as a 422 at the
+    boundary, not be papered over by selectively-omitted fields. The
+    empty-list-on-wire shape is therefore the deliberate contract; a
+    regression that switched to "omit when empty" would weaken that
+    skew detector.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(201, json={"worker_id": "w-plain", "token": "tk"})
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        await client.register(hostname="host-plain")
+
+    import json
+
+    body = json.loads(captured["body"])
+    assert body == {"hostname": "host-plain", "tags": []}
+    assert "tags" in body  # explicit presence assertion
+
+
+async def test_register_rejects_malformed_tag_at_schema_layer() -> None:
+    """Tag-shape rejection happens locally — the malformed value never reaches the wire.
+
+    Same rationale as ``test_register_rejects_empty_hostname_at_schema_layer``:
+    schema validation is the right tier for programmer errors so the
+    operator sees the failure in the worker's own stack trace, not
+    via an opaque server-side 422 log entry.
+    """
+    handler_calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — never called
+        handler_calls["n"] += 1
+        return httpx.Response(201, json={"worker_id": "w", "token": "t"})
+
+    from pydantic import ValidationError
+
+    async with _make_client(handler, bootstrap_token="boot") as client:
+        with pytest.raises(ValidationError):
+            await client.register(hostname="host", tags=["valid", "bad space"])
+
+    assert handler_calls["n"] == 0
 
 
 async def test_register_rejects_empty_hostname_at_schema_layer() -> None:
