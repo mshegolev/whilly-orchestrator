@@ -143,11 +143,22 @@ def _pick_plan_interactive(control_url: str) -> str | None:
     return line or None
 
 
-async def _register(control_url: str, bootstrap_token: str, hostname: str) -> tuple[str, str]:
+async def _register(
+    control_url: str,
+    bootstrap_token: str,
+    hostname: str,
+    tags: list[str] | None = None,
+) -> tuple[str, str]:
     """Call ``POST /workers/register`` via :class:`RemoteWorkerClient`.
 
-    Returns ``(worker_id, token)``. Raises the underlying transport
-    exception on failure so the caller can format it consistently.
+    Returns ``(worker_id, token)``. ``tags`` advertise worker
+    capabilities (PRD-post-auth-hardening §Epic F Item 18) and are
+    forwarded as the ``tags`` field of :class:`RegisterRequest`. Pass
+    ``None`` or an empty list to register with no capability tags
+    (the default; pairs with ``required_tags = '{}'`` short-circuit
+    in :data:`whilly.adapters.db.repository._CLAIM_SQL`). Raises the
+    underlying transport exception on failure so the caller can format
+    it consistently.
     """
     from whilly.adapters.transport.client import RemoteWorkerClient
 
@@ -156,8 +167,23 @@ async def _register(control_url: str, bootstrap_token: str, hostname: str) -> tu
         token="register-placeholder",
         bootstrap_token=bootstrap_token,
     ) as client:
-        resp = await client.register(hostname)
+        resp = await client.register(hostname, tags=tags)
     return resp.worker_id, resp.token
+
+
+def _parse_tags_arg(raw: str | None) -> list[str]:
+    """Split a ``--tags gpu,signing`` argument into a clean list.
+
+    Tolerant of whitespace around commas (``"gpu, signing"`` works the
+    same as ``"gpu,signing"``) and of empty/missing input (returns
+    ``[]``). Individual tag validation happens at the schema layer
+    (:class:`whilly.adapters.transport.schemas.RegisterRequest`), so
+    callers get a consistent error path regardless of how the tags
+    arrived (CLI flag, library API, JSON wire body).
+    """
+    if not raw:
+        return []
+    return [tag.strip() for tag in raw.split(",") if tag.strip()]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -207,6 +233,20 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="hostname",
         default=None,
         help="Self-reported hostname for register (default: socket.gethostname()).",
+    )
+    parser.add_argument(
+        "--tags",
+        dest="tags",
+        default=None,
+        help=(
+            "Comma-separated worker capability tags (PRD-post-auth-hardening "
+            "Epic F Item 18), e.g. `--tags gpu,signing`. Only effective on the "
+            "first register or with --force-register — tags become part of the "
+            "worker row in Postgres and the claim-time filter routes tasks to "
+            "workers whose tags satisfy each task's required_tags. Each tag "
+            "must match the kubernetes-label-value shape "
+            "([a-zA-Z0-9][a-zA-Z0-9._:-]*); the list is capped at 16 entries."
+        ),
     )
     parser.add_argument(
         "--allow-shell",
@@ -297,9 +337,10 @@ def run_launch_command(argv: list[str]) -> int:
             )
             return EXIT_ENVIRONMENT_ERROR
         hostname = args.hostname or socket.gethostname()
+        tags = _parse_tags_arg(args.tags)
         sys.stderr.write(f"whilly worker launch: registering new worker against {control_url} ...\n")
         try:
-            worker_id, worker_token = asyncio.run(_register(control_url, bootstrap_token, hostname))
+            worker_id, worker_token = asyncio.run(_register(control_url, bootstrap_token, hostname, tags))
         except Exception as exc:  # noqa: BLE001 — surface the actual transport error
             sys.stderr.write(f"whilly worker launch: register failed: {exc}\n")
             return EXIT_ENVIRONMENT_ERROR
@@ -310,6 +351,13 @@ def run_launch_command(argv: list[str]) -> int:
             "control_url": control_url,
             "registered_at": int(time.time()),
             "hostname": hostname,
+            # PRD-post-auth-hardening §Epic F Item 18 — record the
+            # advertised tags so ``whilly worker list`` can show them
+            # and operators have a local record of capability mappings
+            # without round-tripping the control plane. Tags are
+            # immutable on a registered worker row in Postgres; to
+            # change them, re-register with ``--force-register``.
+            "tags": tags,
         }
         config["last_plan_id"] = plan_id
         # PRD-post-auth-hardening §Epic H Item 21 — explicit overwrite on
@@ -423,16 +471,23 @@ def run_list_command(argv: list[str]) -> int:
     sys.stdout.write(f"config: {cfg_path}\n")
     sys.stdout.write(f"default_control_url: {default_url or '—'}\n")
     sys.stdout.write(f"last_plan_id: {last_plan or '—'}\n\n")
-    header = f"{'plan_id':<28}  {'worker_id':<18}  {'control_url':<32}  {'registered':<16}  hostname"
+    header = f"{'plan_id':<28}  {'worker_id':<18}  {'control_url':<32}  {'registered':<16}  {'hostname':<20}  tags"
     sys.stdout.write(header + "\n")
     sys.stdout.write("-" * len(header) + "\n")
     for entry in sorted(workers.values(), key=lambda w: (w.get("control_url", ""), w.get("plan_id", ""))):
+        # PRD F18 Item 18 — surface advertised tags in the local view so
+        # operators can sanity-check capability mappings without round-
+        # tripping the control plane. Legacy entries that pre-date the
+        # tags field fall back to ``—``.
+        raw_tags = entry.get("tags")
+        tags_display = ",".join(raw_tags) if isinstance(raw_tags, list) and raw_tags else "—"
         sys.stdout.write(
             f"{entry.get('plan_id', '—'):<28}  "
             f"{entry.get('worker_id', '—'):<18}  "
             f"{entry.get('control_url', '—'):<32}  "
             f"{_format_ts(entry.get('registered_at')):<16}  "
-            f"{entry.get('hostname', '—')}\n"
+            f"{entry.get('hostname', '—'):<20}  "
+            f"{tags_display}\n"
         )
     return EXIT_OK
 

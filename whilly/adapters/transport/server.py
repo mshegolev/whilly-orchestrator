@@ -1597,6 +1597,14 @@ def create_app(
                 token_hash,
                 resolved_owner_email,
                 bootstrap_token_hash=bootstrap_token_hash,
+                # PRD-post-auth-hardening §Epic F Item 18 — persist the
+                # worker's capability advertisement so the claim-time
+                # SQL filter (``required_tags <@ workers.tags`` in
+                # :data:`_CLAIM_SQL`) can route tasks to capable
+                # workers. ``payload.tags`` is already shape-validated
+                # by :class:`RegisterRequest` (kubernetes-style, bounded
+                # by :data:`MAX_TAGS_PER_WORKER`).
+                tags=payload.tags,
             )
         except asyncpg.UniqueViolationError:
             # Defensive: 64 bits of entropy makes this nearly impossible.
