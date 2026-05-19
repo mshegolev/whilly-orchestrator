@@ -66,7 +66,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -1027,8 +1027,8 @@ WHERE worker_id = $1
 # it ever does happen, the unique-violation surface lets the caller retry
 # with a fresh id rather than silently overwriting another worker's row.
 _INSERT_WORKER_SQL: str = """
-INSERT INTO workers (worker_id, hostname, token_hash, owner_email)
-VALUES ($1, $2, $3, $4)
+INSERT INTO workers (worker_id, hostname, token_hash, owner_email, tags)
+VALUES ($1, $2, $3, $4, $5)
 """
 
 
@@ -3217,6 +3217,7 @@ class TaskRepository:
         owner_email: str | None = None,
         *,
         bootstrap_token_hash: str | None = None,
+        tags: Sequence[str] | None = None,
     ) -> None:
         """Insert a new row in ``workers`` for a freshly-registered worker (PRD FR-1.1).
 
@@ -3249,9 +3250,22 @@ class TaskRepository:
             anything else would just leak the asyncpg row object into a
             layer that doesn't need it.
         """
+        # ``workers.tags`` is ``NOT NULL DEFAULT '{}'::text[]`` (migration
+        # 023). asyncpg encodes a Python list into a Postgres text[] for
+        # ARRAY columns, so the empty list maps to the default. We
+        # normalise ``None`` → ``[]`` here so the SQL bind position is
+        # always populated.
+        tags_for_insert: list[str] = list(tags) if tags else []
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                await conn.execute(_INSERT_WORKER_SQL, worker_id, hostname, token_hash, owner_email)
+                await conn.execute(
+                    _INSERT_WORKER_SQL,
+                    worker_id,
+                    hostname,
+                    token_hash,
+                    owner_email,
+                    tags_for_insert,
+                )
                 event_payload: dict[str, Any] = {
                     "worker_id": worker_id,
                     "hostname": hostname,
@@ -3260,6 +3274,11 @@ class TaskRepository:
                     event_payload["owner_email"] = owner_email
                 if bootstrap_token_hash is not None:
                     event_payload["bootstrap_token_hash"] = bootstrap_token_hash
+                if tags_for_insert:
+                    # Only record non-empty tag lists in the audit payload —
+                    # the legacy "no tags" registrations would otherwise gain
+                    # a noisy ``"tags": []`` key that doesn't add information.
+                    event_payload["tags"] = tags_for_insert
                 await conn.execute(
                     _INSERT_EVENT_SQL,
                     None,
@@ -3267,10 +3286,11 @@ class TaskRepository:
                     json.dumps(event_payload),
                 )
         logger.info(
-            "register_worker: registered worker %s on %s (owner_email=%s)",
+            "register_worker: registered worker %s on %s (owner_email=%s, tags=%s)",
             worker_id,
             hostname,
             owner_email if owner_email is not None else "<none>",
+            tags_for_insert if tags_for_insert else "<none>",
         )
         self._emit_jsonl(
             WORKER_REGISTERED_EVENT_TYPE,
