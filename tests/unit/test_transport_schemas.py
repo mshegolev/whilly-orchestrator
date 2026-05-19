@@ -230,6 +230,7 @@ def test_register_request_response_happy_path() -> None:
     resp = RegisterResponse(worker_id="w-abc", token="opaque-bearer")
     assert req.hostname == "worker-01.local"
     assert req.owner_email is None
+    assert req.tags == []
     assert resp.worker_id == "w-abc"
     assert resp.token == "opaque-bearer"
 
@@ -256,6 +257,81 @@ def test_register_request_rejects_malformed_owner_email(bad_email: str) -> None:
     """Malformed ``owner_email`` values surface as 422 at the wire boundary."""
     with pytest.raises(ValidationError):
         RegisterRequest(hostname="worker-01.local", owner_email=bad_email)
+
+
+def test_register_request_defaults_tags_to_empty_list() -> None:
+    """A worker that omits ``tags`` advertises no capabilities (PRD F18 Item 18).
+
+    The default factory is critical: a shared class-level ``[]`` literal
+    would alias across instances and let one worker mutate another's tag
+    list. Pin the per-instance independence so future refactors can't
+    silently regress to the shared-mutable-default footgun.
+    """
+    req_a = RegisterRequest(hostname="a")
+    req_b = RegisterRequest(hostname="b")
+    assert req_a.tags == [] and req_b.tags == []
+    # Frozen + per-instance: two separate empty lists, not the same object.
+    assert req_a.tags is not req_b.tags
+
+
+def test_register_request_accepts_kubernetes_style_tags() -> None:
+    """Real-world tag shapes round-trip: ``gpu``, ``team:platform``, ``env.prod``."""
+    req = RegisterRequest(
+        hostname="worker-01.local",
+        tags=["gpu", "signing", "team:platform", "env.prod", "gpu-v100"],
+    )
+    assert req.tags == ["gpu", "signing", "team:platform", "env.prod", "gpu-v100"]
+
+
+@pytest.mark.parametrize(
+    "bad_tag",
+    [
+        pytest.param("", id="empty-string"),
+        pytest.param(" ", id="whitespace-only"),
+        pytest.param("gpu signing", id="internal-space"),
+        pytest.param("-leading-dash", id="leading-dash"),
+        pytest.param(".leading-dot", id="leading-dot"),
+        pytest.param(":leading-colon", id="leading-colon"),
+        pytest.param("trailing space ", id="trailing-space"),
+        pytest.param("a" * 65, id="too-long"),
+        pytest.param("emoji-🚀", id="non-ascii"),
+        pytest.param("slash/in-name", id="forward-slash"),
+    ],
+)
+def test_register_request_rejects_malformed_tag(bad_tag: str) -> None:
+    """Each per-tag constraint surfaces as a 422 at the wire boundary.
+
+    Surfacing schema rejection here (not at SQL insert time) means a
+    misconfigured operator gets a deterministic 422 with a useful error
+    instead of an asyncpg encoding failure deep inside the handler.
+    """
+    with pytest.raises(ValidationError):
+        RegisterRequest(hostname="w", tags=[bad_tag])
+
+
+def test_register_request_rejects_too_many_tags() -> None:
+    """Defensive cap against pathological registration payloads."""
+    too_many = [f"tag{i}" for i in range(17)]  # MAX_TAGS_PER_WORKER + 1
+    with pytest.raises(ValidationError):
+        RegisterRequest(hostname="w", tags=too_many)
+
+
+def test_register_request_accepts_max_tags_boundary() -> None:
+    """Exactly :data:`MAX_TAGS_PER_WORKER` (16) is fine — the cap is inclusive."""
+    at_limit = [f"tag{i}" for i in range(16)]
+    req = RegisterRequest(hostname="w", tags=at_limit)
+    assert len(req.tags) == 16
+
+
+def test_register_request_rejects_tags_extra_field_typo() -> None:
+    """The ``extra="forbid"`` policy still applies — ``tag`` (typo) → 422.
+
+    Pinned because an operator who types ``"tag": ["gpu"]`` instead of
+    ``"tags": ["gpu"]`` deserves a fast, loud failure rather than a
+    silent capability mismatch at claim time.
+    """
+    with pytest.raises(ValidationError):
+        RegisterRequest.model_validate({"hostname": "w", "tag": ["gpu"]})
 
 
 def test_claim_response_empty_queue_is_none() -> None:

@@ -42,9 +42,20 @@ from whilly.cli import worker_launch
 
 
 def _stub_register_factory(worker_id: str = "w-test-001", token: str = "tk-test") -> Any:
-    """Build an async stub matching the signature of ``_register``."""
+    """Build an async stub matching the signature of ``_register``.
 
-    async def _stub(control_url: str, bootstrap_token: str, hostname: str) -> tuple[str, str]:
+    Mirrors the production signature including the F18b ``tags`` arg
+    (PRD-post-auth-hardening §Epic F Item 18); the stub ignores its
+    inputs but accepting them keeps the call site source-compatible
+    with the real function.
+    """
+
+    async def _stub(
+        control_url: str,
+        bootstrap_token: str,
+        hostname: str,
+        tags: list[str] | None = None,
+    ) -> tuple[str, str]:
         return worker_id, token
 
     return _stub
@@ -376,6 +387,187 @@ def test_launch_missing_plan_id_returns_environment_error(monkeypatch: pytest.Mo
         ]
     )
     assert rc == worker_launch.EXIT_ENVIRONMENT_ERROR
+
+
+# ─── --tags wiring (PRD F18 Item 18) ────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        pytest.param(None, [], id="none"),
+        pytest.param("", [], id="empty"),
+        pytest.param("   ", [], id="whitespace-only"),
+        pytest.param("gpu", ["gpu"], id="single"),
+        pytest.param("gpu,signing", ["gpu", "signing"], id="two-no-spaces"),
+        pytest.param("gpu, signing", ["gpu", "signing"], id="two-with-spaces"),
+        pytest.param(" gpu , signing ", ["gpu", "signing"], id="padded"),
+        pytest.param("gpu,,signing", ["gpu", "signing"], id="drops-empty-middle"),
+        pytest.param("gpu,signing,", ["gpu", "signing"], id="trailing-comma"),
+    ],
+)
+def test_parse_tags_arg_handles_real_world_shapes(raw: str | None, expected: list[str]) -> None:
+    """The CLI helper is tolerant of operator-typed shapes (spaces, trailing commas)."""
+    assert worker_launch._parse_tags_arg(raw) == expected
+
+
+def test_launch_with_tags_forwards_to_register_and_persists_in_config(
+    monkeypatch: pytest.MonkeyPatch, cfg_path: Path
+) -> None:
+    """``whilly worker launch --tags gpu,signing`` round-trips into config + register call.
+
+    Pins the two PRD F18 Item 18 AC bullets for the CLI side:
+      * tags persist to the config file under the per-worker entry, and
+      * tags are forwarded to ``_register`` (which in turn ships them
+        in the wire body via ``client.register(..., tags=...)``).
+
+    A capturing stub records the kwarg so a regression that silently
+    dropped ``tags`` on the way from CLI to client.register would fail
+    here — not just at runtime against a live server.
+    """
+    captured_kwargs: dict[str, Any] = {}
+
+    async def _capturing_stub(
+        control_url: str,
+        bootstrap_token: str,
+        hostname: str,
+        tags: list[str] | None = None,
+    ) -> tuple[str, str]:
+        captured_kwargs["control_url"] = control_url
+        captured_kwargs["hostname"] = hostname
+        captured_kwargs["tags"] = tags
+        return "w-tagged", "tk-tagged"
+
+    monkeypatch.setattr(worker_launch, "_register", _capturing_stub)
+
+    rc = worker_launch.run_launch_command(
+        [
+            "demo-plan",
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "boot-tk",
+            "--claude-bin",
+            "/usr/bin/claude",
+            "--tags",
+            "gpu, signing",
+            "--register-only",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    assert rc == worker_launch.EXIT_OK
+    # _register received the parsed list — not the raw string.
+    assert captured_kwargs["tags"] == ["gpu", "signing"]
+    # Tags persisted under the worker cache entry so subsequent
+    # ``whilly worker list`` (or another invocation that wants to know
+    # what this worker advertised) can read them without a server
+    # round-trip.
+    config = json.loads(cfg_path.read_text())
+    cache_key = worker_launch._config_key("http://127.0.0.1:8000", "demo-plan")
+    entry = config["workers"][cache_key]
+    assert entry["tags"] == ["gpu", "signing"]
+
+
+def test_launch_without_tags_persists_empty_list_in_config(monkeypatch: pytest.MonkeyPatch, cfg_path: Path) -> None:
+    """Omitting ``--tags`` records an explicit empty list, not a missing key.
+
+    Pinning the empty-list shape matters because :func:`run_list_command`
+    branches on ``isinstance(tags, list)`` to render the chip column —
+    a regression that wrote ``None`` (or omitted the key entirely)
+    would change the worker-list rendering for every legacy launch.
+    """
+    captured_kwargs: dict[str, Any] = {}
+
+    async def _capturing_stub(
+        control_url: str,
+        bootstrap_token: str,
+        hostname: str,
+        tags: list[str] | None = None,
+    ) -> tuple[str, str]:
+        captured_kwargs["tags"] = tags
+        return "w-plain", "tk-plain"
+
+    monkeypatch.setattr(worker_launch, "_register", _capturing_stub)
+
+    rc = worker_launch.run_launch_command(
+        [
+            "demo-plan",
+            "--connect",
+            "http://127.0.0.1:8000",
+            "--bootstrap-token",
+            "boot-tk",
+            "--claude-bin",
+            "/usr/bin/claude",
+            "--register-only",
+            "--config",
+            str(cfg_path),
+        ]
+    )
+    assert rc == worker_launch.EXIT_OK
+    assert captured_kwargs["tags"] == []
+    config = json.loads(cfg_path.read_text())
+    cache_key = worker_launch._config_key("http://127.0.0.1:8000", "demo-plan")
+    entry = config["workers"][cache_key]
+    assert entry["tags"] == []
+
+
+def test_list_renders_tags_column(cfg_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """``whilly worker list`` surfaces advertised tags so operators can sanity-check capability mappings."""
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    key = worker_launch._config_key("http://127.0.0.1:8000", "demo")
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "workers": {
+                    key: {
+                        "worker_id": "w-gpu",
+                        "plan_id": "demo",
+                        "control_url": "http://127.0.0.1:8000",
+                        "registered_at": 1_700_000_000,
+                        "hostname": "gpu-box",
+                        "tags": ["gpu", "signing"],
+                    }
+                },
+            }
+        )
+    )
+    rc = worker_launch.run_list_command(["--config", str(cfg_path)])
+    assert rc == worker_launch.EXIT_OK
+    out = capsys.readouterr().out
+    # The header advertises the new column and the data row prints the
+    # comma-joined values — defensive against future column reorders.
+    assert "tags" in out
+    assert "gpu,signing" in out
+
+
+def test_list_renders_em_dash_for_legacy_entries_without_tags(
+    cfg_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Pre-F18b worker entries (no ``tags`` key) fall back to ``—`` in the table."""
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    key = worker_launch._config_key("http://127.0.0.1:8000", "legacy")
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "workers": {
+                    key: {
+                        "worker_id": "w-legacy",
+                        "plan_id": "legacy",
+                        "control_url": "http://127.0.0.1:8000",
+                        "registered_at": 1_700_000_000,
+                        "hostname": "old-box",
+                    }
+                },
+            }
+        )
+    )
+    rc = worker_launch.run_list_command(["--config", str(cfg_path)])
+    assert rc == worker_launch.EXIT_OK
+    out = capsys.readouterr().out
+    # The em-dash placeholder is the legacy-row signal — fine-grained
+    # assertion would couple too tightly to column widths.
+    assert "—" in out
 
 
 # ─── run_list_command ───────────────────────────────────────────────────────

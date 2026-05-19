@@ -99,7 +99,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from types import TracebackType
 import sys
@@ -788,7 +788,12 @@ class RemoteWorkerClient:
                 response_body=body,
             ) from exc
 
-    async def register(self, hostname: str) -> RegisterResponse:
+    async def register(
+        self,
+        hostname: str,
+        *,
+        tags: Sequence[str] | None = None,
+    ) -> RegisterResponse:
         """Mint a new worker identity (``POST /workers/register``, PRD FR-1.1).
 
         Sends the cluster-join secret (``bootstrap_token`` from the
@@ -822,6 +827,16 @@ class RemoteWorkerClient:
             which surfaces as a :class:`pydantic.ValidationError` here
             *before* the network call — that's the right tier for a
             programmer error, not a wire-level 422.
+        tags:
+            Worker capability tags (PRD-post-auth-hardening §Epic F,
+            Item 18). Optional; ``None`` and the empty sequence both
+            advertise "no special capabilities" and the field is then
+            omitted from the wire body. Each tag must match the
+            :data:`whilly.adapters.transport.schemas.WorkerTag` shape
+            (kubernetes-label-value syntax). Validation runs in this
+            method, before the network call, so a malformed tag
+            surfaces as a :class:`pydantic.ValidationError` here
+            rather than as a wire-level 422 from the server.
 
         Returns
         -------
@@ -845,7 +860,16 @@ class RemoteWorkerClient:
             block, or if no ``bootstrap_token`` was supplied to the
             constructor.
         """
-        request = RegisterRequest(hostname=hostname)
+        tag_list = list(tags) if tags else []
+        request = RegisterRequest(hostname=hostname, tags=tag_list)
+        # ``tags`` is always present on the wire — including as an empty
+        # list — because :class:`RegisterRequest` defines it with
+        # ``Field(default_factory=list)`` and the schema module's
+        # ``extra="forbid"`` policy *deliberately* fails closed on
+        # version skew (see :class:`_FrozenModel`'s class docstring).
+        # A new client talking to a legacy server that predates F18b
+        # gets a loud 422 rather than a silently-dropped capability
+        # advertisement.
         response = await self._request(
             "POST",
             REGISTER_PATH,

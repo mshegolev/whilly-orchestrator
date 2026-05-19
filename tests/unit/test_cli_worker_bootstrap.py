@@ -47,7 +47,12 @@ def cfg_path(tmp_path: Path) -> Path:
 
 
 def _stub_register(*args: Any, **kwargs: Any) -> Any:
-    async def _impl(control_url: str, bootstrap_token: str, hostname: str) -> tuple[str, str]:
+    async def _impl(
+        control_url: str,
+        bootstrap_token: str,
+        hostname: str,
+        tags: list[str] | None = None,
+    ) -> tuple[str, str]:
         return "w-bootstrap-test", "tk-bootstrap-test"
 
     return _impl

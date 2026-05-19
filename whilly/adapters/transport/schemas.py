@@ -102,12 +102,35 @@ MAX_TOKEN_LEN: Final[int] = 1024
 MAX_REASON_LEN: Final[int] = 2048
 MAX_DESCRIPTION_LEN: Final[int] = 8192
 MAX_EMAIL_LEN: Final[int] = 320  # RFC 5321 §4.5.3.1.3 (64 local + 1 @ + 255 domain)
+# Worker-tag bounds (PRD-post-auth-hardening §Epic F, Item 18). Per-tag cap
+# matches kubernetes label-value conventions (DNS-1123 label, max 63 chars)
+# with one extra char of headroom. The per-worker cap is a defensive bound
+# against pathological payloads — operators advertising 16+ capabilities on
+# a single worker is well outside the design centre.
+MAX_TAG_LEN: Final[int] = 64
+MAX_TAGS_PER_WORKER: Final[int] = 16
 
 NonEmptyShortStr = Annotated[str, Field(min_length=1, max_length=MAX_ID_LEN)]
 NonEmptyHostname = Annotated[str, Field(min_length=1, max_length=MAX_HOSTNAME_LEN)]
 NonEmptyToken = Annotated[str, Field(min_length=1, max_length=MAX_TOKEN_LEN)]
 NonEmptyReason = Annotated[str, Field(min_length=1, max_length=MAX_REASON_LEN)]
 NonNegativeVersion = Annotated[int, Field(ge=0)]
+# Worker capability tag — restricted to kubernetes-label-value shape so the
+# string is safe to splice into log lines, dashboard chips, and (if ever
+# needed) URL paths without further escaping. Must start with an
+# alphanumeric to avoid leading-dot / leading-dash quirks; inner separators
+# allow ``.``, ``_``, ``-``, ``:`` (the colon supports namespaced tags like
+# ``team:platform``). Whitespace is intentionally excluded — operators can
+# pass either ``--tags gpu,signing`` (no spaces) or
+# ``--tags "gpu, signing"`` (the CLI splits + strips before validation).
+WorkerTag = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_TAG_LEN,
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._:-]*$",
+    ),
+]
 # Lightweight email shape check — pydantic's ``EmailStr`` would pull in the
 # optional ``email-validator`` dependency, which is not in [server]/[dev]
 # extras. The regex enforces a single ``@`` separating a non-empty local
@@ -307,10 +330,21 @@ class RegisterRequest(_FrozenModel):
     Validation is a lightweight regex shape check (single ``@`` between
     non-empty local part and a dotted domain) — enough to reject typos
     without pulling in the optional ``email-validator`` dependency.
+
+    ``tags`` advertises worker capabilities for tag-based task routing
+    (PRD-post-auth-hardening §Epic F, Item 18). The control plane's
+    ``_CLAIM_SQL`` matches ``tasks.required_tags <@ workers.tags`` so a
+    task is only handed to a worker that has every required capability.
+    Empty list is the default and the safe fallback: it pairs with the
+    "any worker" short-circuit (``required_tags = '{}'::text[]``) so a
+    legacy worker that omits ``tags`` keeps claiming legacy tasks
+    unchanged. Each tag must match the :data:`WorkerTag` shape; the list
+    itself is capped at :data:`MAX_TAGS_PER_WORKER` entries.
     """
 
     hostname: NonEmptyHostname
     owner_email: OwnerEmail | None = None
+    tags: list[WorkerTag] = Field(default_factory=list, max_length=MAX_TAGS_PER_WORKER)
 
 
 class RegisterResponse(_FrozenModel):
@@ -750,8 +784,11 @@ __all__ = [
     "MAX_HOSTNAME_LEN",
     "MAX_ID_LEN",
     "MAX_REASON_LEN",
+    "MAX_TAG_LEN",
+    "MAX_TAGS_PER_WORKER",
     "MAX_TOKEN_LEN",
     "OwnerEmail",
+    "WorkerTag",
     "ClaimRequest",
     "ClaimResponse",
     "CompleteRequest",
