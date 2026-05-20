@@ -765,6 +765,15 @@ async def _authenticate_session(
     secret: bytes,
     cookie_name: str,
 ) -> dict[str, object]:
+    # PRD §Item 17 (E17) — reverse-proxy header trust. When the OIDC
+    # header-trust middleware is mounted (WHILLY_TRUST_PROXY_AUTH=1) and it
+    # validated this request's direct peer IP + X-Forwarded-User, it attached a
+    # transient principal here. Honoured before the cookie path. The middleware
+    # is NOT mounted in the default config, so request.state.proxy_principal is
+    # never set and this branch is a no-op — see whilly/api/oidc_header_auth.py.
+    proxy_principal = getattr(request.state, "proxy_principal", None)
+    if isinstance(proxy_principal, dict):
+        return proxy_principal
     cookie_raw = request.cookies.get(cookie_name)
     if not cookie_raw:
         raise HTTPException(status_code=401, detail="no session cookie")
