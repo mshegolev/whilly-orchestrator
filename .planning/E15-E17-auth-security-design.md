@@ -151,13 +151,17 @@ The whole feature is a deliberately-trusted identity header. If any client can r
 - Flag off → header completely ignored even from a trusted IP.
 - Proxy login is recorded in `auth_audit` (gate #4).
 
-### 3.5 Open questions for the reviewer
-- Should a proxy-authed identity be allowed to perform admin actions, or read-only until they also
-  pass a real login? (Defense-in-depth vs. usability.)
-- Trusted-hop count: single proxy assumed. If chained proxies are in scope, the peer-IP check needs a
-  documented `num_trusted_hops`.
-- Interaction with `WHILLY_ENABLE_ROUTE_AUDIT=1`: the new middleware-based auth must be visible to the
-  route-audit dependant-walk, or it'll trip the audit. Decide before enabling both.
+### 3.5 Reviewer decisions (resolved 2026-05-21 — see ADR-001 §P1.6)
+- **Admin actions:** RESOLVED → proxy-authed identity keeps its full role from the `users` row (not
+  read-only). The trust decision is made at the flag; downgrading a trusted identity adds branching for
+  marginal benefit.
+- **`WHILLY_ENABLE_ROUTE_AUDIT=1` interaction:** RESOLVED → no conflict. The route audit walks
+  `app.routes`; header trust adds no routes (it is middleware feeding the already-recognised
+  `_authenticate_session`), so the two flags coexist.
+- **`must_change_password`:** RESOLVED → bypassed for proxy-authed users by design (password lifecycle
+  is the proxy's responsibility in an SSO deployment).
+- **Still open (out of scope for this PR):** trusted-hop count — a single proxy is assumed. If chained
+  proxies are ever in scope, the peer-IP check needs a documented `num_trusted_hops`.
 
 ---
 
