@@ -53,8 +53,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # REPO_ROOT defaults to the repository this script lives in (two parents up).
@@ -465,19 +467,77 @@ def _resolve_audit_source() -> Path | None:
     return None
 
 
-def _mirror_file_idempotent(src: Path, dst: Path) -> str:
+# Liquid-trigger tokens that break a Jekyll/GitHub-Pages build if rendered
+# literally. ``_RAW_SPAN`` matches an existing ``{% raw %}…{% endraw %}`` block
+# (kept verbatim so escaping is idempotent); ``_LIQUID_TOKEN`` matches a single
+# ``{{ … }}`` output or ``{% … %}`` tag.
+_RAW_SPAN = re.compile(r"\{%\s*raw\s*%\}.*?\{%\s*endraw\s*%\}", re.DOTALL)
+_LIQUID_TOKEN = re.compile(r"\{\{.*?\}\}|\{%.*?%\}", re.DOTALL)
+
+
+def escape_liquid_for_jekyll(text: str) -> str:
+    """Wrap bare Liquid-trigger tokens in ``{% raw %}…{% endraw %}`` for Jekyll.
+
+    ``docs/distributed-audit/`` is published via GitHub Pages, which renders
+    every ``.md`` through Jekyll's Liquid engine *before* markdown. Literal
+    ``{{ … }}`` / ``{% … %}`` snippets in the audit reports (Go templates,
+    Jinja examples) would otherwise be interpreted and stripped, breaking the
+    Pages build — the exact regression f6071f4 hand-patched. This reproduces
+    that patch mechanically so the canonical source (``.planning/`` /
+    ``library/``) can stay clean and readable.
+
+    Idempotent: tokens already inside a ``{% raw %}`` span — and the
+    ``raw``/``endraw`` tags themselves — are left untouched, so re-escaping
+    already-escaped text returns it unchanged.
+    """
+
+    def _wrap_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        inner = token[2:-2].strip()
+        if inner in ("raw", "endraw"):  # never escape the raw/endraw tags themselves
+            return token
+        return "{% raw %}" + token + "{% endraw %}"
+
+    out: list[str] = []
+    pos = 0
+    for raw_span in _RAW_SPAN.finditer(text):
+        out.append(_LIQUID_TOKEN.sub(_wrap_token, text[pos : raw_span.start()]))
+        out.append(raw_span.group(0))  # preserve an existing raw block verbatim
+        pos = raw_span.end()
+    out.append(_LIQUID_TOKEN.sub(_wrap_token, text[pos:]))
+    return "".join(out)
+
+
+def _jekyll_escape_bytes(src_bytes: bytes) -> bytes:
+    """``escape_liquid_for_jekyll`` over UTF-8 bytes (mirror transform)."""
+    return escape_liquid_for_jekyll(src_bytes.decode("utf-8")).encode("utf-8")
+
+
+def _mirror_file_idempotent(
+    src: Path,
+    dst: Path,
+    *,
+    transform: Callable[[bytes], bytes] | None = None,
+) -> str:
     """Copy ``src`` → ``dst`` only if missing or drifted (byte-equality).
 
-    Returns one of ``"created"``, ``"updated"``, ``"unchanged"``.
+    When ``transform`` is given the *transformed* source bytes are what gets
+    compared and written — used to Liquid-escape markdown into the
+    Pages-published ``docs/`` mirror while leaving the ``library/`` mirror
+    verbatim. Returns one of ``"created"``, ``"updated"``, ``"unchanged"``.
     """
     src_bytes = src.read_bytes()
+    payload = transform(src_bytes) if transform is not None else src_bytes
     if dst.exists():
-        if dst.read_bytes() == src_bytes:
+        if dst.read_bytes() == payload:
             return "unchanged"
-        dst.write_bytes(src_bytes)
+        dst.write_bytes(payload)
         return "updated"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
+    if transform is None:
+        shutil.copy2(src, dst)
+    else:
+        dst.write_bytes(payload)
     return "created"
 
 
@@ -556,6 +616,7 @@ def main() -> int:
             REPO_ROOT / "library" / "distributed-audit",
         )
         src_resolved = src_dir.resolve()
+        docs_mirror = (REPO_ROOT / "docs" / "distributed-audit").resolve()
         for dst_dir in mirror_destinations:
             # If the destination IS the resolved source (e.g. ``library/`` is
             # the fallback source), skip — copying onto self is a guaranteed
@@ -564,16 +625,22 @@ def main() -> int:
             if dst_dir.resolve() == src_resolved:
                 continue
             dst_dir.mkdir(parents=True, exist_ok=True)
+            # The docs/ mirror is published via GitHub Pages (Jekyll/Liquid):
+            # escape literal {{…}}/{%…%} snippets in markdown so the build
+            # stays green. The library/ mirror is a plain tracked copy —
+            # mirror it verbatim.
+            is_docs_mirror = dst_dir.resolve() == docs_mirror
             for src_file in sorted(src_dir.iterdir()):
                 if not src_file.is_file():
                     continue
                 dst_file = dst_dir / src_file.name
+                transform = _jekyll_escape_bytes if (is_docs_mirror and src_file.suffix == ".md") else None
                 mirror_label = dst_dir.relative_to(REPO_ROOT).as_posix()
                 actions.append(
                     (
                         f"{mirror_label}/{src_file.name}",
                         dst_file,
-                        _mirror_file_idempotent(src_file, dst_file),
+                        _mirror_file_idempotent(src_file, dst_file, transform=transform),
                     )
                 )
 
