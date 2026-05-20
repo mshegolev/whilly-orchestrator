@@ -26,6 +26,37 @@ from tests.conftest import FIXTURES_DIR, load_fixture
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _load_baseline_script_module():
+    """Import ``scripts/m1_baseline_fixtures.py`` as a module (no ``main()`` run).
+
+    Lets tests reuse the script's own ``escape_liquid_for_jekyll`` so the
+    expected docs-mirror bytes are derived from the same transform the script
+    applies, rather than hard-coding the escaping.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "m1_baseline_fixtures", REPO_ROOT / "scripts" / "m1_baseline_fixtures.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _expected_docs_bytes(src_file: Path) -> bytes:
+    """Bytes the script should write into the Pages-published ``docs/`` mirror.
+
+    Markdown is Liquid-escaped (so the Jekyll build stays green); every other
+    file type is mirrored verbatim.
+    """
+    src_bytes = src_file.read_bytes()
+    if src_file.suffix != ".md":
+        return src_bytes
+    escape = _load_baseline_script_module().escape_liquid_for_jekyll
+    return escape(src_bytes.decode("utf-8")).encode("utf-8")
+
+
 def _resolve_audit_source(repo_root: Path = REPO_ROOT) -> Path | None:
     """Return the canonical audit-report source for the current checkout.
 
@@ -335,8 +366,9 @@ def test_distributed_audit_docs_mirror_canonical_source() -> None:
     src_names = {p.name for p in src.iterdir() if p.is_file()}
     dst_names = {p.name for p in dst.iterdir() if p.is_file()}
     assert src_names == dst_names, f"only-in-src: {src_names - dst_names}, only-in-dst: {dst_names - src_names}"
+    # docs/ markdown carries the Jekyll Liquid-escapes; non-markdown is verbatim.
     for name in src_names:
-        assert (src / name).read_bytes() == (dst / name).read_bytes(), f"drift: {name}"
+        assert (dst / name).read_bytes() == _expected_docs_bytes(src / name), f"drift: {name}"
 
 
 def test_distributed_audit_library_mirror_canonical_source() -> None:
@@ -375,14 +407,11 @@ def test_m1_baseline_fixtures_script_is_idempotent_on_rerun(tmp_path) -> None:
     """Re-running ``scripts/m1_baseline_fixtures.py`` is a no-op on the second pass.
 
     Runs against a *synthetic* repo (via ``WHILLY_M1_BASELINE_ROOT``) rather
-    than the real checkout. This matters: the script mirrors
-    ``library/distributed-audit/`` into ``docs/distributed-audit/`` byte-for-byte,
-    but the real, committed ``docs/`` copy intentionally carries Jekyll
-    ``{% raw %}`` escapes (added by f6071f4 to keep the GitHub Pages build
-    green) that the ``library/`` copy lacks. Running the script against
-    ``REPO_ROOT`` would therefore overwrite the published docs and leave the
-    working tree dirty on every test run — a test-hygiene violation. The
-    synthetic-tree isolation mirrors the sibling regression tests above.
+    than the real checkout — a test must never mutate tracked working-tree
+    files. (The script now Liquid-escapes markdown on the way into ``docs/``
+    so a real-repo run is idempotent against the committed escaped docs, but
+    sandboxing it is still the correct pattern and matches the sibling
+    regression tests above.)
 
     Captures the script's stdout summary table over two consecutive
     invocations and asserts the second pass reports nothing as ``created``
@@ -404,6 +433,29 @@ def test_m1_baseline_fixtures_script_is_idempotent_on_rerun(tmp_path) -> None:
         assert "created" not in line.split() and "updated" not in line.split(), (
             f"non-idempotent re-run produced action line: {line!r}"
         )
+
+
+def test_escape_liquid_for_jekyll_wraps_bare_tokens_and_is_idempotent() -> None:
+    """The Jekyll escaper wraps bare Liquid tokens once and never double-wraps.
+
+    Pins the transform the docs/ mirror relies on: bare ``{{ … }}`` / ``{% … %}``
+    tokens get a ``{% raw %}`` wrapper, plain text and the ``raw``/``endraw``
+    tags themselves are left alone, and re-escaping is a fixed point.
+    """
+    escape = _load_baseline_script_module().escape_liquid_for_jekyll
+
+    # Bare output + tag tokens get wrapped (matches the two real audit-doc snippets).
+    assert escape("a {{.X}} b") == "a {% raw %}{{.X}}{% endraw %} b"
+    assert escape('{% include "x.html" %}') == '{% raw %}{% include "x.html" %}{% endraw %}'
+
+    # Plain text is untouched.
+    assert escape("no liquid here") == "no liquid here"
+
+    # Idempotent: already-escaped text is a fixed point and raw/endraw tags
+    # are never themselves wrapped.
+    once = escape("docker --format '{{.Names}}'")
+    assert once == "docker --format '{% raw %}{{.Names}}{% endraw %}'"
+    assert escape(once) == once
 
 
 # ─── Regression: clean-clone fallback chain ──────────────────────────────
@@ -494,8 +546,9 @@ def test_m1_baseline_fixtures_script_succeeds_without_planning_dir(tmp_path) -> 
     assert library_names == docs_names, (
         f"only-in-library: {library_names - docs_names}, only-in-docs: {docs_names - library_names}"
     )
+    # docs/ markdown is Liquid-escaped for Jekyll; non-markdown is verbatim.
     for name in library_names:
-        assert (fake_library / name).read_bytes() == (fake_docs / name).read_bytes(), f"drift: {name}"
+        assert (fake_docs / name).read_bytes() == _expected_docs_bytes(fake_library / name), f"drift: {name}"
 
     # The four canonical fixture files must also be present.
     for rel in (
