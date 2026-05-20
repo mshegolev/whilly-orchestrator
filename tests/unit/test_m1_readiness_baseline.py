@@ -372,22 +372,31 @@ def test_distributed_audit_library_mirror_canonical_source() -> None:
 
 
 def test_m1_baseline_fixtures_script_is_idempotent_on_rerun(tmp_path) -> None:
-    """Re-running ``scripts/m1_baseline_fixtures.py`` on a clean checkout is a no-op.
+    """Re-running ``scripts/m1_baseline_fixtures.py`` is a no-op on the second pass.
+
+    Runs against a *synthetic* repo (via ``WHILLY_M1_BASELINE_ROOT``) rather
+    than the real checkout. This matters: the script mirrors
+    ``library/distributed-audit/`` into ``docs/distributed-audit/`` byte-for-byte,
+    but the real, committed ``docs/`` copy intentionally carries Jekyll
+    ``{% raw %}`` escapes (added by f6071f4 to keep the GitHub Pages build
+    green) that the ``library/`` copy lacks. Running the script against
+    ``REPO_ROOT`` would therefore overwrite the published docs and leave the
+    working tree dirty on every test run — a test-hygiene violation. The
+    synthetic-tree isolation mirrors the sibling regression tests above.
 
     Captures the script's stdout summary table over two consecutive
-    invocations and asserts the second pass reports nothing as
-    ``created`` or ``updated`` — every action line ends with
-    ``unchanged`` instead.
+    invocations and asserts the second pass reports nothing as ``created``
+    or ``updated`` — every action line ends with ``unchanged`` instead.
     """
-    import subprocess
+    repo = _build_synthetic_repo(tmp_path, with_planning=False, with_library=True)
 
-    script = REPO_ROOT / "scripts" / "m1_baseline_fixtures.py"
-    # First run primes any drift; the assertion runs on the second pass
-    # so this test never trips on a fresh clone where the fixtures
-    # legitimately need creating.
-    subprocess.run(["python3", str(script)], cwd=REPO_ROOT, check=True, capture_output=True)
-    second = subprocess.run(["python3", str(script)], cwd=REPO_ROOT, check=True, capture_output=True, text=True)
-    for line in second.stdout.splitlines():
+    # First run primes the synthetic tree (everything is "created"); the
+    # assertion runs on the second pass so a fresh tree never trips it.
+    code, _, stderr = _run_synthetic_script(repo)
+    assert code == 0, f"non-zero exit on priming run; stderr={stderr!r}"
+    code, stdout, stderr = _run_synthetic_script(repo)
+    assert code == 0, f"non-zero exit on second run; stderr={stderr!r}"
+    for line in stdout.splitlines():
         if not line.strip():
             continue
         # Each action line is "  <name>  <status>  <relpath>"; status is
