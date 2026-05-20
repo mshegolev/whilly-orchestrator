@@ -10,10 +10,43 @@ file-to-file.
 
 from __future__ import annotations
 
+import os
 import socket
 from collections.abc import Iterator
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_os_environ() -> Iterator[None]:
+    """Snapshot ``os.environ`` before every unit test and restore it after.
+
+    Several CLI composition tests (``test_cli_run``, ``test_run_slack_hook``,
+    ``test_cli_worker``) exercise the *real* ``run_run_command`` →
+    :func:`whilly.config.load_layered` → :func:`whilly.config.load_dotenv`
+    chain, which writes the developer's local ``.env`` straight into
+    ``os.environ`` — bypassing :class:`pytest.MonkeyPatch`'s bookkeeping.
+    Without this guard a local ``.env`` containing ``JIRA_VERIFY_SSL=false``
+    leaks into later Jira tests (``test_qa_release_collector``,
+    ``test_prompt_sanitizer_wiring``), flipping ``JiraAuth.verify_ssl`` so
+    ``_jira_get`` takes the ``urlopen(..., context=ctx)`` branch and their
+    ``fake_urlopen`` stub — which has no ``context`` parameter — raises
+    ``TypeError``. CI never had a ``.env`` so the breakage only reproduced
+    locally (the "3 pre-existing test-order flakes" in the 2026-05-19 handoff).
+
+    A full snapshot is required rather than a tracked allow-list because
+    ``load_dotenv`` injects whatever keys the operator's ``.env`` holds.
+    This fixture is dependency-free so it initialises before every other
+    autouse/explicit fixture and finalises last — i.e. it is the outermost
+    env guard, restoring true pre-test state regardless of what inner
+    fixtures or production code mutated.
+    """
+    snapshot = dict(os.environ)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(snapshot)
 
 
 @pytest.fixture(autouse=True)
