@@ -521,7 +521,7 @@
     },
     {
       "id": "E17-oidc-header-trust",
-      "status": "skipped",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "A0-ci-restoration",
@@ -532,7 +532,7 @@
         "whilly/api/main.py",
         ".env.example"
       ],
-      "description": "SKIPPED 2026-05-18: PRD §Risk Register R3 flags this as \"Critical impact\" — header injection attack surface when trusting a reverse-proxy identity header. Requires careful WHILLY_TRUSTED_PROXY_IPS allowlist enforcement and mandatory security review per the PRD R3 mitigation. Beyond the safe scope of the autopilot run; should be paired with the security-review process the PRD mandates. Per autopilot risk policy (\"Mark skipped with rationale\"), correct deferral. Original: PRD §Epic E, Item 17 — create whilly/api/oidc_header_auth.py. When WHILLY_TRUST_PROXY_AUTH=1, inspect X-Forwarded-User header on every request; if present and user exists, create a transient session (not persisted to DB). Strict: only accept the header from IPs in WHILLY_TRUSTED_PROXY_IPS (CIDR list). When WHILLY_TRUST_PROXY_AUTH is unset or 0, the header is completely ignored. Add conditional middleware registration in main.py. SECURITY NOTE: requires mandatory security review before merge; incorrect IP allowlisting enables header injection.",
+      "description": "DONE 2026-05-21: shipped in PR #306 (flag-gated, default OFF) under explicit security review. whilly/api/oidc_header_auth.py provides ProxyHeaderAuthConfig.from_env() (fail-closed: raises if WHILLY_TRUST_PROXY_AUTH=1 with empty/invalid WHILLY_TRUSTED_PROXY_IPS) + ProxyHeaderAuthMiddleware which, for a trusted DIRECT peer carrying X-Forwarded-User, sets a transient request.state.proxy_principal (no DB session) and audits. _authenticate_session honours that principal before the cookie path (no-op when the feature is off). Mounted conditionally in whilly/adapters/transport/server.py (NOTE: that is the real app factory, not main.py as the original scope said) as the innermost auth layer; CSRF stays outermost. 15 unit tests pin all five gates. Reviewer decisions (full role from DB; must_change bypass by design; no route-audit conflict) recorded in docs/adr/ADR-001 §P1.6. Operational gate: do NOT enable in prod until the proxy strips client X-Forwarded-User. — Superseded prior SKIPPED 2026-05-18: PRD §Risk Register R3 flags this as \"Critical impact\" — header injection attack surface when trusting a reverse-proxy identity header. Requires careful WHILLY_TRUSTED_PROXY_IPS allowlist enforcement and mandatory security review per the PRD R3 mitigation. Beyond the safe scope of the autopilot run; should be paired with the security-review process the PRD mandates. Per autopilot risk policy (\"Mark skipped with rationale\"), correct deferral. Original: PRD §Epic E, Item 17 — create whilly/api/oidc_header_auth.py. When WHILLY_TRUST_PROXY_AUTH=1, inspect X-Forwarded-User header on every request; if present and user exists, create a transient session (not persisted to DB). Strict: only accept the header from IPs in WHILLY_TRUSTED_PROXY_IPS (CIDR list). When WHILLY_TRUST_PROXY_AUTH is unset or 0, the header is completely ignored. Add conditional middleware registration in main.py. SECURITY NOTE: requires mandatory security review before merge; incorrect IP allowlisting enables header injection.",
       "acceptance_criteria": [
         "WHILLY_TRUST_PROXY_AUTH=1 with a seeded user: request with X-Forwarded-User: alice from trusted IP reaches dashboard",
         "Same request from untrusted IP returns 401",
