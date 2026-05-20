@@ -1375,6 +1375,21 @@ def create_app(
     app.state.pool = pool
     instrument_app(app)
 
+    # PRD-post-auth-hardening §Epic E, Item 17 (E17): reverse-proxy header
+    # trust. Resolved + validated here so a misconfigured allowlist fails the
+    # whole app at construction time (loud) rather than per-request (silent).
+    # ⚠️ Trusts X-Forwarded-User from allowlisted peers — see the threat model
+    # in .planning/E15-E17-auth-security-design.md. DEFAULT OFF: when
+    # WHILLY_TRUST_PROXY_AUTH is unset/0 the middleware is not mounted and the
+    # header is ignored entirely. Added FIRST so it is the INNERMOST middleware
+    # (runs last, just before the routes resolve identity); CSRF stays
+    # outermost.
+    from whilly.api.oidc_header_auth import ProxyHeaderAuthConfig, ProxyHeaderAuthMiddleware
+
+    proxy_auth_config = ProxyHeaderAuthConfig.from_env()
+    if proxy_auth_config.enabled:
+        app.add_middleware(ProxyHeaderAuthMiddleware, pool=pool, config=proxy_auth_config)
+
     # PRD-post-auth-hardening §Epic C, Item 6: the must-change-password
     # gate. Registered BEFORE the CSRF middleware so that CSRF (added next)
     # becomes the OUTERMOST layer on the request path — Starlette's
