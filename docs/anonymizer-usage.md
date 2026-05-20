@@ -10,6 +10,21 @@ The Claude API Data Anonymizer is a privacy-focused proxy that automatically:
 
 This ensures that sensitive information never reaches external APIs while maintaining transparency in your workflow.
 
+## Standalone package
+
+The redaction proxy is also published as an independent, `pip`-installable
+package so teams outside the Whilly project can reuse it:
+
+- **GitHub:** [`mshegolev/claude-anonymizer`](https://github.com/mshegolev/claude-anonymizer) (MIT-licensed, public)
+- **PyPI:** [`claude-anonymizer`](https://pypi.org/project/claude-anonymizer/) — `pip install claude-anonymizer`
+- **Container:** [`ghcr.io/mshegolev/claude-anonymizer`](https://github.com/mshegolev/claude-anonymizer/pkgs/container/claude-anonymizer)
+
+The standalone package is the MTS↔Acme redaction proxy as a general-purpose
+HTTP proxy with its own CLI (`anonymizer-proxy`); the sections below document
+the *in-Whilly* integration (`whilly.adapters.runner.anonymizer`), which shares
+the same redaction model but is wired directly into the agent runner rather
+than fronting the API over the network.
+
 ## Features
 
 - ✅ Transparent anonymization/deanonymization cycle

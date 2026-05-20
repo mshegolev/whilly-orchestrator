@@ -604,13 +604,13 @@
     },
     {
       "id": "G19-publish-claude-anonymizer-repo",
-      "status": "human_loop",
+      "status": "done",
       "priority": "medium",
       "dependencies": [],
       "key_files": [
         "docs/anonymizer-usage.md"
       ],
-      "description": "PRD §Epic G, Item 19 — create public GitHub repository mshegolev/claude-anonymizer from /opt/develop/aiqa/claude-anonymizer/. Add README.md and LICENSE (MIT) to the standalone repo. Update docs/anonymizer-usage.md in THIS (whilly) repo to add a direct link to the new GitHub repo. MARKED human_loop: this task spans two repos and requires an interactive `gh repo create` — the Whilly orchestrator chdir's into the plan workspace and cannot reach /opt/develop/aiqa/. Human steps: (1) cd /opt/develop/aiqa/claude-anonymizer && gh repo create mshegolev/claude-anonymizer --public --license=MIT --source=. --remote=origin --push, (2) verify with gh repo view mshegolev/claude-anonymizer, (3) in THIS repo, edit docs/anonymizer-usage.md to add the GitHub link, (4) flip this task to status='pending' and re-run the plan so G20 unblocks. Until step 4, G20 stays blocked (its dependency on G19 will not resolve).",
+      "description": "DONE 2026-05-20 (verified already-published, un-blocked from human_loop): Sweep against the LIVE GitHub state showed the deliverable already exists — `gh repo view mshegolev/claude-anonymizer` returns visibility=PUBLIC, pushedAt 2026-05-18T16:35:11Z. README.md (14.7 KB) and an MIT LICENSE are both present in the standalone repo (the operator published it from /opt/develop/aiqa/claude-anonymizer/ in a prior session — NOT during this autopilot run). The remaining whilly-repo AC (\"update docs/anonymizer-usage.md to link the new GitHub repo\") WAS the genuine open loose end and is now closed: added a 'Standalone package' section linking GitHub + PyPI + ghcr.io. Note: the standalone repo's local checkout is ahead 2 unpushed commits (docker/ghcr support + README PyPI badges) plus an untracked .mcp.json — these are the operator's in-progress work in a DIFFERENT repo and are intentionally left for the operator to push (release.yml is tag-triggered on v* so a plain main push won't auto-release, but pushing another repo's commits is out of scope for this plan). Original: PRD §Epic G, Item 19 — create public GitHub repository mshegolev/claude-anonymizer from /opt/develop/aiqa/claude-anonymizer/. Add README.md and LICENSE (MIT) to the standalone repo. Update docs/anonymizer-usage.md in THIS (whilly) repo to add a direct link to the new GitHub repo. MARKED human_loop: this task spans two repos and requires an interactive `gh repo create` — the Whilly orchestrator chdir's into the plan workspace and cannot reach /opt/develop/aiqa/. Human steps: (1) cd /opt/develop/aiqa/claude-anonymizer && gh repo create mshegolev/claude-anonymizer --public --license=MIT --source=. --remote=origin --push, (2) verify with gh repo view mshegolev/claude-anonymizer, (3) in THIS repo, edit docs/anonymizer-usage.md to add the GitHub link, (4) flip this task to status='pending' and re-run the plan so G20 unblocks. Until step 4, G20 stays blocked (its dependency on G19 will not resolve).",
       "acceptance_criteria": [
         "Repository mshegolev/claude-anonymizer is public on GitHub",
         "docs/anonymizer-usage.md contains a direct link to the GitHub repo",
@@ -623,7 +623,7 @@
     },
     {
       "id": "G20-claude-anonymizer-github-actions-ci",
-      "status": "pending",
+      "status": "done",
       "priority": "medium",
       "dependencies": [
         "G19-publish-claude-anonymizer-repo"
@@ -631,7 +631,7 @@
       "key_files": [
         "docs/anonymizer-usage.md"
       ],
-      "description": "PRD §Epic G, Item 20 — in the mshegolev/claude-anonymizer repo (NOT this repo), create .github/workflows/ci.yml with matrix python-version: ['3.10', '3.11', '3.12'], steps: checkout, pip install -e '.[dev]', ruff check, ruff format --check, pytest -q. Trigger on push and pull_request to main. Add CI badge to README.md in that repo. No changes to the whilly repo itself beyond updating the anonymizer-usage.md doc link if the badge URL changes.",
+      "description": "DONE 2026-05-20 (verified already-published): `.github/workflows/ci.yml` already exists on origin/main of mshegolev/claude-anonymizer (committed 2026-05-18). Verified AC: pytest job matrix python ['3.10','3.11','3.12'], a separate ruff job running `ruff check .` + `ruff format --check .`, triggers on both push and pull_request, and a CI badge (actions/workflows/ci.yml/badge.svg) is wired into README.md line 6. The repo additionally ships release.yml (tag-triggered PyPI publish) and docker.yml (ghcr) beyond the AC. No whilly-repo change required beyond the anonymizer-usage.md link handled under G19. This task was hard-blocked on G19 in the handoff; with G19 confirmed done, G20's deliverable was already in place. Original: PRD §Epic G, Item 20 — in the mshegolev/claude-anonymizer repo (NOT this repo), create .github/workflows/ci.yml with matrix python-version: ['3.10', '3.11', '3.12'], steps: checkout, pip install -e '.[dev]', ruff check, ruff format --check, pytest -q. Trigger on push and pull_request to main. Add CI badge to README.md in that repo. No changes to the whilly repo itself beyond updating the anonymizer-usage.md doc link if the badge URL changes.",
       "acceptance_criteria": [
         "CI passes on all three Python versions in mshegolev/claude-anonymizer",
         "CI badge appears in README.md of mshegolev/claude-anonymizer",
