@@ -189,8 +189,9 @@ didn't ship:
 - **E15 (WebAuthn / passkeys):** PRD R3 explicitly recommends a
   dedicated sprint. Complex protocol, depends on E14b.
 - **E17 (OIDC header trust):** PRD R3 flags Critical impact from
-  header-injection attack surface. Mandates a security review process
-  beyond the autopilot scope.
+  header-injection attack surface. Deferred from the main sprint, then
+  implemented under explicit security review on 2026-05-21 (flag-gated,
+  default OFF) — see the P1.6 addendum below.
 - **F18b (worker-tag claim filter + CLI):** Full plumbing touches the
   API contract (RegisterRequest schema, server handler, client method,
   CLI flag). F18a's schema is in place; the claim-side logic is paused.
@@ -210,6 +211,35 @@ didn't ship:
   sprint; the human acknowledgement happens at merge approval time. A
   future-author can amend this ADR via a follow-up PR if any of the
   decisions above need revisiting.
+
+---
+
+## P1.6 — E17 OIDC header-trust (addendum, 2026-05-21)
+
+Item 17 (reverse-proxy header trust) was implemented after the main sprint —
+flag-gated, default OFF. See [`whilly/api/oidc_header_auth.py`](../../whilly/api/oidc_header_auth.py)
+and the design in
+[`.planning/E15-E17-auth-security-design.md`](../../.planning/E15-E17-auth-security-design.md).
+The three review questions left open in the design were resolved as follows:
+
+- **Proxy-authed identity gets its full role from the `users` row (not
+  read-only).** Header trust already places full trust in the proxy to
+  authenticate users; downgrading a trusted identity to read-only adds
+  branching through every mutation path for marginal benefit. If you do not
+  trust the proxy enough to grant admin, do not enable the feature.
+- **The `must_change_password` gate is bypassed for proxy-authed users — by
+  design.** In an SSO deployment the password lifecycle is the proxy's
+  responsibility; the user may hold no usable local password, so routing them
+  through Whilly's change-password flow is incoherent.
+- **No conflict with `WHILLY_ENABLE_ROUTE_AUDIT=1`.** The route audit walks
+  `app.routes`; header trust adds no routes (it is middleware that feeds the
+  already-recognised `_authenticate_session`), so the two flags coexist.
+
+**Operational gate (separate from the merge gate).** `WHILLY_TRUST_PROXY_AUTH=1`
+must NOT be enabled in any deployment until (a) the reverse proxy is confirmed
+to strip any client-supplied `X-Forwarded-User`, and (b) `WHILLY_TRUSTED_PROXY_IPS`
+is set to the proxy's CIDR(s). With the flag off (the default) the header is
+ignored entirely and the middleware is not mounted.
 
 ---
 
