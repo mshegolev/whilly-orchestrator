@@ -25,6 +25,7 @@ from starlette.routing import Route
 from whilly.api import auth_audit_repo, users_repo
 from whilly.api.oidc_header_auth import (
     TRUST_PROXY_AUTH_ENV,
+    TRUSTED_PROXY_HOP_COUNT_ENV,
     TRUSTED_PROXY_IPS_ENV,
     ProxyHeaderAuthConfig,
     ProxyHeaderAuthMiddleware,
@@ -208,3 +209,92 @@ async def test_authenticate_session_honours_proxy_principal() -> None:
     # before touching the cookie. Passing sentinels proves that.
     result = await _authenticate_session(request, pool=object(), secret=b"x", cookie_name="whilly_session")
     assert result == principal
+
+
+# ─── P1.8: trusted-proxy hop count (chained proxies) ─────────────────────────
+
+_2HOP_CFG = ProxyHeaderAuthConfig(enabled=True, networks=(ipaddress.ip_network("10.0.0.0/24"),), trusted_hops=2)
+
+
+def test_config_default_hop_count_is_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(TRUST_PROXY_AUTH_ENV, "1")
+    monkeypatch.setenv(TRUSTED_PROXY_IPS_ENV, "10.0.0.0/24")
+    monkeypatch.delenv(TRUSTED_PROXY_HOP_COUNT_ENV, raising=False)
+    assert ProxyHeaderAuthConfig.from_env().trusted_hops == 1
+
+
+def test_config_parses_hop_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(TRUST_PROXY_AUTH_ENV, "1")
+    monkeypatch.setenv(TRUSTED_PROXY_IPS_ENV, "10.0.0.0/24")
+    monkeypatch.setenv(TRUSTED_PROXY_HOP_COUNT_ENV, "2")
+    assert ProxyHeaderAuthConfig.from_env().trusted_hops == 2
+
+
+def test_config_fail_closed_on_non_integer_hop_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(TRUST_PROXY_AUTH_ENV, "1")
+    monkeypatch.setenv(TRUSTED_PROXY_IPS_ENV, "10.0.0.0/24")
+    monkeypatch.setenv(TRUSTED_PROXY_HOP_COUNT_ENV, "two")
+    with pytest.raises(RuntimeError, match="integer"):
+        ProxyHeaderAuthConfig.from_env()
+
+
+def test_config_fail_closed_on_zero_hop_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(TRUST_PROXY_AUTH_ENV, "1")
+    monkeypatch.setenv(TRUSTED_PROXY_IPS_ENV, "10.0.0.0/24")
+    monkeypatch.setenv(TRUSTED_PROXY_HOP_COUNT_ENV, "0")
+    with pytest.raises(RuntimeError, match="range"):
+        ProxyHeaderAuthConfig.from_env()
+
+
+def test_chain_hop1_ignores_forwarded_for() -> None:
+    # Default single hop: a forged XFF naming a trusted IP must not widen trust.
+    cfg = _TRUSTED_CFG
+    assert cfg.chain_is_trusted(peer_ip="10.0.0.7", forwarded_for="9.9.9.9") is True
+    assert cfg.chain_is_trusted(peer_ip="203.0.113.9", forwarded_for="10.0.0.7") is False
+
+
+def test_chain_hop2_requires_both_nearest_hops_trusted() -> None:
+    # client → P2(10.0.0.8) → P1(peer 10.0.0.7) → Whilly. XFF = "client, P2".
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="10.0.0.7", forwarded_for="203.0.113.5, 10.0.0.8") is True
+    # Second-nearest hop (XFF[-1]) untrusted → reject.
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="10.0.0.7", forwarded_for="203.0.113.5, 192.168.1.9") is False
+    # Direct peer untrusted → reject regardless of XFF.
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="203.0.113.9", forwarded_for="10.0.0.8, 10.0.0.9") is False
+
+
+def test_chain_hop2_short_or_missing_xff_fails_closed() -> None:
+    # Need 2 hops but only the direct peer is available → reject.
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="10.0.0.7", forwarded_for=None) is False
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="10.0.0.7", forwarded_for="") is False
+
+
+def test_chain_hop2_client_spoof_in_xff_is_ignored() -> None:
+    # The (N+1)-th entry is the purported client; spoofing it to a trusted-looking
+    # IP changes nothing — trust is decided by the 2 nearest hops only.
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="10.0.0.7", forwarded_for="10.0.0.250, 10.0.0.8") is True
+    # And an attacker on an untrusted peer can't fake a 2-hop chain.
+    assert _2HOP_CFG.chain_is_trusted(peer_ip="203.0.113.9", forwarded_for="10.0.0.7, 10.0.0.8") is False
+
+
+async def test_middleware_hop2_trusts_chain(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = SimpleNamespace(username="alice", email="alice@example.test", role="admin")
+    recorded = _patch_user(monkeypatch, user)
+    resp = await _get(
+        _build_app(_2HOP_CFG),
+        peer="10.0.0.7",
+        headers={"X-Forwarded-User": "alice", "X-Forwarded-For": "203.0.113.5, 10.0.0.8"},
+    )
+    assert resp.json()["principal"] is not None
+    assert recorded and recorded[-1]["outcome"] == "ok"
+
+
+async def test_middleware_hop2_rejects_untrusted_second_hop(monkeypatch: pytest.MonkeyPatch) -> None:
+    user = SimpleNamespace(username="alice", email="alice@example.test", role="admin")
+    recorded = _patch_user(monkeypatch, user)
+    resp = await _get(
+        _build_app(_2HOP_CFG),
+        peer="10.0.0.7",
+        headers={"X-Forwarded-User": "alice", "X-Forwarded-For": "203.0.113.5, 192.168.1.9"},
+    )
+    assert resp.json()["principal"] is None
+    assert recorded == []
