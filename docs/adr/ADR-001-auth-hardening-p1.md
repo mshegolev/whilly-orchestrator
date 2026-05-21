@@ -358,6 +358,37 @@ the assertion check.
 
 ---
 
+## P1.11 — Auth URL safety (broader auth-surface review)
+
+A review of the rest of the auth surface (login / magic-link / change-password /
+sessions, beyond E15/E17) found the token, session and CSRF primitives sound
+(`hmac.compare_digest`, explicit `alg=HS256`, `typ`-claim separation, 256-bit
+session ids, atomic single-use magic-link consume, email-scoped session list,
+IDOR-guarded session revoke). Two URL-handling weaknesses were fixed:
+
+- **Finding 5 (Medium) — host-header injection in magic links.** `_build_magic_url`
+  built the link from `request.base_url` (the client-controlled `Host`). An
+  attacker could request a link for a *victim's* email while spoofing
+  `Host: attacker.test`; the victim's email would point at the attacker, who
+  harvests the valid single-use token on click → account takeover. Fixed by
+  `_public_base_url`: prefer `WHILLY_PUBLIC_ORIGIN` (already used by E15), falling
+  back to `request.base_url` only when unset (dev/loopback).
+- **Finding 7 (Low) — open-redirect via backslash in `?next=`.** Browsers fold
+  `\` to `/`, so `/\evil.com` becomes protocol-relative `//evil.com`.
+  `_sanitise_next_path` now rejects any path containing a backslash.
+
+**Also noted, NOT changed here — Finding 6 (Low).** `POST /auth/change-password`
+(the forced first-login flow) requires an authenticated session but neither the
+current password nor `must_change_password=True`, so a session that was hijacked
+(cookie theft) or left open could rotate the password without the current one —
+the check `POST /me/password` enforces. It is *not* CSRF-exploitable (SameSite=
+Strict cookie + Origin allowlist; the path is not CSRF-exempt). Recommended
+follow-up: gate the forced path to `must_change_password=True`, else redirect to
+`/me/password`. Deferred because it touches the must-change-gate flow and is
+lower-risk than the URL fixes above.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)

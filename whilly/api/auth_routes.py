@@ -821,9 +821,31 @@ def _set_session_cookie(
     )
 
 
+#: Configured public origin (shared with E15 WebAuthn). When set, auth URLs are
+#: built from it instead of the request's Host header — see _public_base_url.
+PUBLIC_ORIGIN_ENV: Final[str] = "WHILLY_PUBLIC_ORIGIN"
+
+
+def _public_base_url(request: Request) -> str:
+    """Return the base URL for auth links, preferring the configured origin.
+
+    Building a magic-link URL from ``request.base_url`` trusts the client-
+    controlled ``Host`` header — a host-header-injection vector: an attacker can
+    trigger a link for a *victim's* email while spoofing ``Host: attacker.test``,
+    so the email the victim receives points at the attacker, who harvests the
+    valid single-use token when the victim clicks. ``WHILLY_PUBLIC_ORIGIN`` pins
+    the origin; we fall back to ``request.base_url`` only when it is unset (dev /
+    loopback), where the Host is not attacker-reachable.
+    """
+    configured = (os.environ.get(PUBLIC_ORIGIN_ENV) or "").strip().rstrip("/")
+    if configured:
+        return configured
+    return str(request.base_url).rstrip("/")
+
+
 def _build_magic_url(request: Request, token: str) -> str:
     """Construct the absolute /auth/magic URL emitted to the event log."""
-    base = str(request.base_url).rstrip("/")
+    base = _public_base_url(request)
     return f"{base}/auth/magic?token={urllib.parse.quote(token, safe='')}"
 
 
@@ -831,7 +853,12 @@ def _sanitise_next_path(raw: str) -> str:
     """Constrain ``?next=`` to local paths so /auth/magic cannot be an open redirect."""
     if not raw or not isinstance(raw, str):
         return "/"
-    if raw.startswith("//") or raw.startswith("\\\\"):
+    # Browsers fold backslashes to forward slashes, so "/\\evil.com" and
+    # "\\/evil.com" become protocol-relative "//evil.com" → open redirect.
+    # A legitimate local path never contains a backslash, so reject outright.
+    if "\\" in raw:
+        return "/"
+    if raw.startswith("//"):
         return "/"
     parsed = urllib.parse.urlparse(raw)
     if parsed.scheme or parsed.netloc:
