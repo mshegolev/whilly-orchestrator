@@ -195,17 +195,19 @@ def build_auth_router(
 
         user = await users_repo.verify_credentials(pool, username=username, password=password)
 
-        # PRD-post-auth-hardening §Epic E Item 14b — TOTP second-factor
-        # integration point. When WHILLY_TOTP_ENABLED=1 AND the user has
-        # totp.enabled=TRUE, this returns a 303 → /auth/totp with a signed
-        # pending cookie carrying the verified username; otherwise None
-        # and the login completes as before. By design, the integration
-        # is a single conditional so flipping WHILLY_TOTP_ENABLED off is
-        # an instant rollback to the byte-equivalent pre-E14b flow.
+        # PRD-post-auth-hardening §Epic E — second-factor integration point
+        # (Items 14b TOTP + 15 WebAuthn). After the password check this single
+        # conditional hands off to the coordinator in whilly.api.second_factor,
+        # which returns a 303 to the right factor (/auth/totp, /auth/webauthn, or
+        # the /auth/2fa chooser) with a signed pending cookie — or None to let the
+        # login complete as before. When WHILLY_WEBAUTHN_ENABLED is off the
+        # coordinator delegates to the unchanged TOTP intercept, so the pre-E15
+        # behaviour is byte-identical and flipping either flag is an instant
+        # rollback.
         if user is not None:
-            from whilly.api.totp_routes import maybe_intercept_for_totp
+            from whilly.api.second_factor import maybe_intercept_for_second_factor
 
-            intercept = await maybe_intercept_for_totp(
+            intercept = await maybe_intercept_for_second_factor(
                 request, pool=pool, secret=secret, user=user, cookie_secure=cookie_secure
             )
             if intercept is not None:

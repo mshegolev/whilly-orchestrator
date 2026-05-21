@@ -44,8 +44,6 @@ Hardening
 
 from __future__ import annotations
 
-import hmac
-import json
 import logging
 import os
 import time
@@ -68,6 +66,15 @@ from whilly.api.auth_tokens import (
     DEFAULT_SESSION_TTL_SECONDS,
     mint_session_cookie_value,
 )
+from whilly.api.second_factor import (
+    PENDING_COOKIE_NAME,
+    PENDING_COOKIE_TTL_SECONDS,
+    PENDING_MAX_ATTEMPTS,
+    _clear_pending_cookie,
+    _mint_pending_cookie,
+    _set_pending_cookie,
+    _verify_pending_cookie,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,66 +82,16 @@ TOTP_ENABLED_ENV: Final[str] = "WHILLY_TOTP_ENABLED"
 TOTP_SETUP_TEMPLATE: Final[str] = "totp_setup.html.j2"
 TOTP_VERIFY_TEMPLATE: Final[str] = "totp_verify.html.j2"
 
-#: Short-lived signed cookie that carries the "credentials verified,
-#: awaiting TOTP" intermediate state. HMAC-signed with the same secret
-#: used for session cookies so a tampered value can't bypass the gate.
-PENDING_COOKIE_NAME: Final[str] = "whilly_totp_pending"
-PENDING_COOKIE_TTL_SECONDS: Final[int] = 5 * 60  # 5 minutes
-PENDING_MAX_ATTEMPTS: Final[int] = 5
+# The pending-cookie machinery (PENDING_COOKIE_NAME, _mint/_verify/_set/_clear)
+# now lives in whilly.api.second_factor and is imported above so TOTP and
+# WebAuthn share one implementation. The names are re-exported in __all__ for
+# backward compatibility with callers/tests that import them from here.
 
 
 def totp_enabled() -> bool:
     """Single source of truth for the feature flag."""
     raw = (os.environ.get(TOTP_ENABLED_ENV) or "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
-
-
-def _mint_pending_cookie(secret: bytes, *, username: str, attempts: int = 0) -> str:
-    """Sign ``{username, exp, attempts}`` with HMAC-SHA256. Returns ``payload.sig``."""
-    payload = {
-        "u": username,
-        "exp": int(time.time()) + PENDING_COOKIE_TTL_SECONDS,
-        "a": attempts,
-    }
-    body = urllib.parse.quote(json.dumps(payload, separators=(",", ":"), sort_keys=True))
-    sig = hmac.new(secret, body.encode("utf-8"), "sha256").hexdigest()
-    return f"{body}.{sig}"
-
-
-def _verify_pending_cookie(secret: bytes, raw: str) -> dict | None:
-    """Return the decoded payload or ``None`` on any failure (bad sig, expired, malformed)."""
-    if not raw or "." not in raw:
-        return None
-    body, _, sig = raw.rpartition(".")
-    expected = hmac.new(secret, body.encode("utf-8"), "sha256").hexdigest()
-    if not hmac.compare_digest(sig, expected):
-        return None
-    try:
-        payload = json.loads(urllib.parse.unquote(body))
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    exp = payload.get("exp")
-    if not isinstance(exp, int) or exp < int(time.time()):
-        return None
-    return payload
-
-
-def _set_pending_cookie(response: Response, *, value: str, secure: bool) -> None:
-    response.set_cookie(
-        key=PENDING_COOKIE_NAME,
-        value=value,
-        max_age=PENDING_COOKIE_TTL_SECONDS,
-        path="/",
-        httponly=True,
-        secure=secure,
-        samesite="strict",
-    )
-
-
-def _clear_pending_cookie(response: Response) -> None:
-    response.delete_cookie(PENDING_COOKIE_NAME, path="/")
 
 
 async def maybe_intercept_for_totp(
