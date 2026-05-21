@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Choose a second factor — Whilly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .wa-wrap { width: min(420px, calc(100vw - 32px)); border: 1px solid var(--line-strong); padding: 20px; background: var(--surface); }
+    .wa-title { color: var(--accent); margin: 0 0 12px; font: 700 var(--t-body)/var(--lh-tight) var(--font-mono); }
+    .wa-hint { color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono); margin-bottom: 16px; }
+    .wa-choice { display: block; width: 100%; padding: 10px; margin-bottom: 12px; text-align: center; background: transparent; color: var(--accent); border: 1px solid var(--accent); font: 700 var(--t-body)/var(--lh-body) var(--font-mono); text-decoration: none; box-sizing: border-box; }
+    .wa-alt { margin-top: 12px; text-align: center; color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .wa-alt a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wa-wrap">
+    <h1 class="wa-title">Choose how to verify</h1>
+    <p class="wa-hint">
+      Signed in as <strong>{{ username }}</strong>. Pick a second factor to finish
+      signing in.
+    </p>
+    <a class="wa-choice" href="/auth/webauthn">[ use a passkey ]</a>
+    <a class="wa-choice" href="/auth/totp">[ use an authenticator code ]</a>
+    <p class="wa-alt"><a href="/login">cancel and start over</a></p>
+  </div>
+</body>
+</html>
