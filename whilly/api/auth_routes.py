@@ -510,6 +510,20 @@ def build_auth_router(
             logger.warning("auth.change-password: could not resolve username from session email %r", session_email)
             return _render_error("Session error — please log out and log in again.")
 
+        # SECURITY (Finding 6): this forced-flow endpoint sets a password WITHOUT
+        # the current one — acceptable only while the account is actually in the
+        # must-change state (first login on a bootstrap/temp password). For any
+        # other session, route to /me/password, which requires the current
+        # password, so a hijacked or idle session cannot silently rotate it.
+        forced_user = await users_repo.get_user_by_username(pool, username=username)
+        if forced_user is None or not forced_user.must_change_password:
+            logger.info(
+                "auth.change-password: POST for username=%r without must_change_password set — "
+                "redirecting to /me/password (current password required there)",
+                username,
+            )
+            return RedirectResponse(url="/me/password", status_code=status.HTTP_303_SEE_OTHER)
+
         try:
             await users_repo.set_password(pool, username=username, new_password=new_password)
         except (ValueError, LookupError) as exc:
