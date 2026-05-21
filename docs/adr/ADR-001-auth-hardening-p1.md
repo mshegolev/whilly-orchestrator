@@ -273,6 +273,53 @@ an existing lock and is IP-rate-limited.
 
 ---
 
+## P1.8 — E17 chained-proxy trust (`num_trusted_hops`) — DEFERRED, scoped here
+
+**Status:** Open / deferred (no code). Scoped so the open question from §P1.6
+("single proxy assumed; chained proxies would need a documented
+`num_trusted_hops`") is recorded rather than lost.
+
+**Problem.** E17 (`whilly/api/oidc_header_auth.py`) trusts the `X-Forwarded-User`
+header only when the **direct TCP peer** (`request.client.host`) is in
+`WHILLY_TRUSTED_PROXY_IPS`, and it deliberately ignores `X-Forwarded-For`. That
+is exactly correct for the **single-hop** topology it was designed for
+(`client → reverse-proxy → Whilly`). It does **not** cover multi-hop chains
+(`client → CDN / L4 load-balancer → auth-proxy → Whilly`):
+
+- If Whilly's direct peer is an L4 LB that is *not* the auth-injecting proxy,
+  `peer_is_trusted` is checked against the LB. Putting the LB in the allowlist
+  would trust a hop that did not necessarily strip a client-supplied
+  `X-Forwarded-User` at the right boundary.
+- If the auth-proxy is not the direct peer at all, the feature simply fails to
+  authenticate (fail-closed — not a vulnerability, but a deployment blocker).
+
+**Current behaviour is safe by default.** With the single-hop model, the worst
+case behind an unanticipated LB is *no* proxy auth (401 → cookie login), never a
+bypass. So this is a capability gap, not an open vulnerability.
+
+**Proposed design (only if a multi-hop deployment actually needs it).** Add
+`WHILLY_TRUSTED_PROXY_HOP_COUNT` (default `1` = today's behaviour). When `> 1`,
+walk `X-Forwarded-For` **from the right** (nearest hop first), validating each of
+the N nearest entries against `WHILLY_TRUSTED_PROXY_IPS`; accept the header only
+if **all N nearest hops are trusted** and stop at the first untrusted hop.
+`X-Forwarded-For` is still never trusted blindly — only entries that match the
+allowlist count, and the count bounds how far the walk goes.
+
+**Acceptance criteria for the future task.**
+- Default `1` is byte-equivalent to the current peer-IP-only path.
+- With `N` configured, a request is trusted iff the `N` nearest XFF hops are all
+  in the allowlist; any untrusted hop within the first `N` → reject (fail-closed).
+- A short/empty/malformed `X-Forwarded-For` under `N>1` → reject, never trust.
+- Spoofing the *(N+1)*th entry (the purported client) must not grant trust.
+- Tests mirror `test_oidc_header_auth.py` (trusted/untrusted peer, missing user)
+  plus hop-walk and spoof cases.
+
+**Not doing now because:** no chained-proxy deployment exists; building
+multi-hop XFF trust speculatively adds the highest-risk kind of auth code (the
+one that parses a client-controlled header) for no current consumer.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)
