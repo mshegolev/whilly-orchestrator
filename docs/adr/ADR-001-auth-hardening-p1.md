@@ -320,6 +320,28 @@ one that parses a client-controlled header) for no current consumer.
 
 ---
 
+## P1.9 — Server-side single-use WebAuthn challenge (post-E15 review, Finding 2)
+
+The E15 WebAuthn challenge was carried inside the HMAC-signed pending/registration
+cookie. HMAC gives integrity but not **freshness**: single-use rested on the
+cookie being cleared on success plus the sign-count regression check — and that
+check is a no-op for **counter-less synced passkeys** (iCloud/Google), which
+report `sign_count = 0` forever. A captured `(cookie, assertion)` pair could
+therefore be replayed within the 5-minute TTL.
+
+**Decision.** Move the challenge **server-side** (migration `027_webauthn_challenges`,
+`whilly/api/webauthn_challenge_repo.py`). `begin` inserts a row keyed by a random
+`challenge_id`; the cookie now carries only that id. `verify`/`finish` redeem the
+challenge with an atomic `DELETE … RETURNING`, **before** verifying the assertion —
+so even a failed verify burns it and any replay finds nothing. The challenge is
+bound to its ceremony via a `purpose` CHECK (`register` / `authenticate`) so a
+registration challenge can't be redeemed by the auth path. Applies to **both**
+ceremonies for one auditable mechanism. DB-backed (not in-process) is forced by
+correctness: a `begin` on one uvicorn worker must be redeemable by `verify` on
+another.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)

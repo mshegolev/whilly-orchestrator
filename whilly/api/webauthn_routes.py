@@ -31,8 +31,11 @@ Chooser:
 
 Security posture (see .planning/E15-E17-auth-security-design.md §2):
 
-* The challenge is server-generated (``os.urandom(32)``), single-use, carried
-  inside the HMAC-signed pending/registration cookie, and expires with it.
+* The challenge is server-generated (``os.urandom(32)``) and stored **server-side**
+  in ``webauthn_challenges`` (migration 027); the cookie carries only its random
+  ``challenge_id``. ``verify``/``finish`` consume it atomically (``DELETE …
+  RETURNING``) so it is truly single-use — a replayed ``(cookie, assertion)`` pair
+  finds nothing even for counter-less synced passkeys (Finding 2).
 * ``expected_origin`` / ``rp_id`` come from :class:`WebAuthnConfig` (resolved
   from ``WHILLY_PUBLIC_ORIGIN`` at router build time) — **never** from a request
   header. Building the router with the flag on but no origin raises (fail-closed).
@@ -61,7 +64,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from whilly.api import rate_limit, sessions, users_repo, webauthn_repo
+from whilly.api import rate_limit, sessions, users_repo, webauthn_challenge_repo, webauthn_repo
 from whilly.api.admin_users_routes import require_admin_role
 from whilly.api.auth_routes import (
     DEFAULT_SESSION_COOKIE_NAME,
@@ -74,6 +77,7 @@ from whilly.api.auth_tokens import DEFAULT_SESSION_TTL_SECONDS, mint_session_coo
 from whilly.api.prod_mode import cookie_secure_default
 from whilly.api.second_factor import (
     PENDING_COOKIE_NAME,
+    PENDING_COOKIE_TTL_SECONDS,
     PENDING_MAX_ATTEMPTS,
     _clear_pending_cookie,
     _mint_pending_cookie,
@@ -219,7 +223,12 @@ def build_webauthn_router(
             exclude_credentials=exclude,
         )
         response = Response(content=options_to_json(options), media_type="application/json")
-        reg_cookie = _mint_pending_cookie(secret, username=username, challenge=_b64url_encode(challenge))
+        # Store the challenge server-side (single-use); the cookie carries only
+        # its id, never the challenge itself (Finding 2).
+        challenge_id = await webauthn_challenge_repo.create_challenge(
+            pool, username=username, purpose="register", challenge=challenge, ttl_seconds=PENDING_COOKIE_TTL_SECONDS
+        )
+        reg_cookie = _mint_pending_cookie(secret, username=username, challenge=challenge_id)
         _set_pending_cookie(response, value=reg_cookie, secure=cookie_secure, name=REG_COOKIE_NAME)
         return response
 
@@ -230,16 +239,22 @@ def build_webauthn_router(
 
         username = str(principal["username"])
         reg = _verify_pending_cookie(secret, request.cookies.get(REG_COOKIE_NAME, ""))
-        challenge_b64 = reg.get("c") if reg else None
-        if not reg or not isinstance(challenge_b64, str) or str(reg.get("u")) != username:
+        challenge_id = reg.get("c") if reg else None
+        if not reg or not isinstance(challenge_id, str) or str(reg.get("u")) != username:
             # Cookie missing/expired/forged, or bound to a different user than
             # the authenticated admin — refuse (cannot enroll a key for someone else).
+            raise HTTPException(status_code=400, detail="registration session expired — start over")
+        # Redeem the single-use challenge from the server-side store (Finding 2).
+        challenge = await webauthn_challenge_repo.consume_challenge(
+            pool, challenge_id=challenge_id, username=username, purpose="register"
+        )
+        if challenge is None:
             raise HTTPException(status_code=400, detail="registration session expired — start over")
         body = await request.json()
         try:
             verified = verify_registration_response(
                 credential=body,
-                expected_challenge=_b64url_decode(challenge_b64),
+                expected_challenge=challenge,
                 expected_rp_id=config.rp_id,
                 expected_origin=config.expected_origin,
                 require_user_verification=False,
@@ -310,12 +325,13 @@ def build_webauthn_router(
             user_verification=UserVerificationRequirement.PREFERRED,
         )
         response = Response(content=options_to_json(options), media_type="application/json")
-        # Re-mint the pending cookie with the fresh challenge bound to it
-        # (single-use, expires with the cookie — security gate #1), preserving
-        # the failed-attempt counter across the begin→verify round-trip.
-        new_pending = _mint_pending_cookie(
-            secret, username=username, attempts=attempts, challenge=_b64url_encode(challenge)
+        # Store the challenge server-side (single-use, consumed at verify) and
+        # carry only its id in the re-minted pending cookie, preserving the
+        # failed-attempt counter across the begin→verify round-trip (Finding 2).
+        challenge_id = await webauthn_challenge_repo.create_challenge(
+            pool, username=username, purpose="authenticate", challenge=challenge, ttl_seconds=PENDING_COOKIE_TTL_SECONDS
         )
+        new_pending = _mint_pending_cookie(secret, username=username, attempts=attempts, challenge=challenge_id)
         _set_pending_cookie(response, value=new_pending, secure=cookie_secure)
         return response
 
@@ -328,8 +344,8 @@ def build_webauthn_router(
         if not rate_limit.allow(client_ip):
             raise HTTPException(status_code=429, detail="too many requests")
         pending = _verify_pending_cookie(secret, request.cookies.get(PENDING_COOKIE_NAME, ""))
-        challenge_b64 = pending.get("c") if pending else None
-        if not pending or not isinstance(challenge_b64, str):
+        challenge_id = pending.get("c") if pending else None
+        if not pending or not isinstance(challenge_id, str):
             raise HTTPException(status_code=401, detail="login session expired — start over")
         username = str(pending.get("u", ""))
         attempts = int(pending.get("a", 0))
@@ -344,6 +360,15 @@ def build_webauthn_router(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             )
 
+        # Redeem the single-use challenge UP FRONT: even a failed verify burns it,
+        # so a replayed (cookie, assertion) within the TTL finds nothing — the
+        # replay defense that does not depend on the (counter-less) sign count.
+        challenge = await webauthn_challenge_repo.consume_challenge(
+            pool, challenge_id=challenge_id, username=username, purpose="authenticate"
+        )
+        if challenge is None:
+            return _handle_failed_assertion(secret, username=username, attempts=attempts, cookie_secure=cookie_secure)
+
         body = await request.json()
         raw_id = body.get("rawId") or body.get("id") if isinstance(body, dict) else None
         stored = None
@@ -357,7 +382,7 @@ def build_webauthn_router(
             try:
                 verified = verify_authentication_response(
                     credential=body,
-                    expected_challenge=_b64url_decode(challenge_b64),
+                    expected_challenge=challenge,
                     expected_rp_id=config.rp_id,
                     expected_origin=config.expected_origin,
                     credential_public_key=stored.public_key,

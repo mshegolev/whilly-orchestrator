@@ -25,8 +25,10 @@ is centralised here:
 
 The pending cookie is factor-agnostic — it only states "password verified for
 user X, awaiting a second factor" — so every verify route (TOTP or WebAuthn)
-redeems the same cookie. The WebAuthn ceremony additionally re-mints it with a
-single-use ``challenge`` embedded (security gate #1); TOTP omits that field.
+redeems the same cookie. The WebAuthn ceremony additionally re-mints it carrying
+a server-side ``challenge_id`` (the random handle for the single-use challenge
+row in ``webauthn_challenges`` — migration 027); TOTP omits that field. The
+challenge itself is never in the cookie.
 
 The pending-cookie helpers used to live in :mod:`whilly.api.totp_routes`;
 they were moved here unchanged (apart from the rename below) so there is a
@@ -73,10 +75,11 @@ def _mint_pending_cookie(
 ) -> str:
     """Sign ``{username, exp, attempts[, challenge]}`` with HMAC-SHA256.
 
-    Returns ``payload.sig``. ``challenge`` (a base64url string) is only present
-    for the WebAuthn assertion ceremony, where the server-generated challenge
-    must survive the begin→verify round-trip bound to this cookie and expire
-    with it (security gate #1). TOTP never sets it.
+    Returns ``payload.sig``. ``challenge`` here is the WebAuthn ceremony's
+    server-side ``challenge_id`` (the random handle for the single-use row in
+    ``webauthn_challenges``), carried so it survives the begin→verify round-trip
+    bound to this cookie; the challenge bytes themselves stay server-side. TOTP
+    never sets it.
     """
     payload: dict[str, object] = {
         "u": username,

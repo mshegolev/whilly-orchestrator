@@ -25,7 +25,14 @@ from fastapi import FastAPI  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse  # noqa: E402
 
-from whilly.api import auth_tokens, rate_limit, sessions, users_repo, webauthn_repo  # noqa: E402
+from whilly.api import (  # noqa: E402
+    auth_tokens,
+    rate_limit,
+    sessions,
+    users_repo,
+    webauthn_challenge_repo,
+    webauthn_repo,
+)
 from whilly.api.csrf import COOKIE_NAME  # noqa: E402
 from whilly.api.second_factor import PENDING_COOKIE_NAME, PENDING_MAX_ATTEMPTS, _mint_pending_cookie  # noqa: E402
 from whilly.api.webauthn_routes import (  # noqa: E402
@@ -98,6 +105,13 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     # server-side lockout; neutralise both by default (tests override per case).
     monkeypatch.setattr(rate_limit, "allow", lambda key: True)
     monkeypatch.setattr(users_repo, "is_account_locked", AsyncMock(return_value=False))
+    # The challenge now lives server-side (migration 027): begin mints an id,
+    # verify/finish consume the challenge bytes. Default the store so the
+    # ceremony tests stay deterministic; single-use tests override consume.
+    monkeypatch.setattr(
+        webauthn_challenge_repo, "create_challenge", AsyncMock(return_value="11111111-1111-1111-1111-111111111111")
+    )
+    monkeypatch.setattr(webauthn_challenge_repo, "consume_challenge", AsyncMock(return_value=_CHALLENGE))
     app = FastAPI()
     app.include_router(build_webauthn_router(pool=None, secret=_TEST_SECRET, cookie_secure=False))  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
@@ -391,6 +405,68 @@ async def test_choose_factor_renders_both_options(client: AsyncClient) -> None:
     resp = await client.get("/auth/2fa")
     assert resp.status_code == 200
     assert "/auth/webauthn" in resp.text and "/auth/totp" in resp.text
+
+
+# ── server-side single-use challenge (Finding 2) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_auth_begin_persists_challenge_server_side(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """begin stores the challenge in the DB and the cookie carries only its id —
+    never the challenge bytes."""
+    monkeypatch.setattr(webauthn_repo, "get_credentials_by_username", AsyncMock(return_value=[_stored_cred()]))
+    create = AsyncMock(return_value="abcdef00-0000-4000-8000-000000000000")
+    monkeypatch.setattr(webauthn_challenge_repo, "create_challenge", create)
+    client.cookies.set(PENDING_COOKIE_NAME, _mint_pending_cookie(_TEST_SECRET, username=_USERNAME))
+    resp = await client.post("/auth/webauthn/begin")
+    assert resp.status_code == 200
+    assert create.await_args.kwargs["purpose"] == "authenticate"
+    # The re-minted pending cookie carries the challenge_id, not a challenge.
+    from whilly.api.second_factor import _verify_pending_cookie
+
+    new_pending = next(
+        v.split(f"{PENDING_COOKIE_NAME}=")[1].split(";")[0]
+        for v in resp.headers.get_list("set-cookie")
+        if PENDING_COOKIE_NAME in v
+    )
+    payload = _verify_pending_cookie(_TEST_SECRET, new_pending)
+    assert payload is not None and payload.get("c") == "abcdef00-0000-4000-8000-000000000000"
+
+
+@pytest.mark.asyncio
+async def test_auth_verify_replayed_challenge_rejected(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The single-use proof: when consume returns None (already redeemed / expired
+    / replayed), verify is rejected before any assertion check or session mint."""
+    monkeypatch.setattr(webauthn_challenge_repo, "consume_challenge", AsyncMock(return_value=None))
+    get_cred = AsyncMock(return_value=_stored_cred())
+    monkeypatch.setattr(webauthn_repo, "get_credential_by_id", get_cred)
+    create_sess = AsyncMock(return_value=_session())
+    monkeypatch.setattr(sessions, "create_session", create_sess)
+    pending = _mint_pending_cookie(_TEST_SECRET, username=_USERNAME, challenge="dead0000-0000-4000-8000-000000000000")
+    client.cookies.set(PENDING_COOKIE_NAME, pending)
+    resp = await client.post("/auth/webauthn/verify", json={"rawId": _b64url_encode(_CRED_ID), "response": {}})
+    assert resp.status_code == 401  # _handle_failed_assertion (attempts < max)
+    # Never looked the credential up, never minted a session.
+    assert get_cred.await_count == 0
+    assert create_sess.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_register_finish_consumed_challenge_400(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A registration finish whose challenge was already consumed/expired is 400."""
+    monkeypatch.setattr(sessions, "verify_session", AsyncMock(return_value=_session()))
+    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=_user()))
+    monkeypatch.setattr(webauthn_challenge_repo, "consume_challenge", AsyncMock(return_value=None))
+    insert = AsyncMock(return_value=None)
+    monkeypatch.setattr(webauthn_repo, "insert_credential", insert)
+    client.cookies.set(COOKIE_NAME, _session_cookie())
+    reg_cookie = _mint_pending_cookie(
+        _TEST_SECRET, username=_USERNAME, challenge="beef0000-0000-4000-8000-000000000000"
+    )
+    client.cookies.set(REG_COOKIE_NAME, reg_cookie)
+    resp = await client.post("/me/webauthn/register/finish", json={"id": "x", "response": {}})
+    assert resp.status_code == 400
+    assert insert.await_count == 0
 
 
 # silence unused-import lint for the round-trip decode helper
