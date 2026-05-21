@@ -85,12 +85,25 @@ llmops = [
 totp = [
     "pyotp>=2.9",
 ]
+# Optional WebAuthn / passkey second-factor stack (PRD-post-auth-hardening
+# §Epic E, Item 15 / E15). Gated at runtime behind WHILLY_WEBAUTHN_ENABLED=1.
+# The 026 migration adds the webauthn_credentials table unconditionally so the
+# schema stays portable, but webauthn_routes imports `webauthn` lazily (only
+# when the flag is on) — keeping it optional lets a deployment that doesn't use
+# passkeys avoid the dependency entirely, exactly like the totp/pyotp precedent.
+webauthn = [
+    "webauthn>=2.0",
+]
 # Convenience: install both deployment shapes in one go (e.g. for an
 # all-in-one demo or for CI that drives both the server and a remote
 # worker through the same venv).
 all = ["whilly-orchestrator[worker,server]"]
 dev = [
     "whilly-orchestrator[worker,server]",
+    # WebAuthn is pulled into the dev/CI venv (unlike pyotp) so the E15
+    # ceremony tests actually RUN under `pytest` rather than silently skipping
+    # via importorskip. The runtime extra above stays optional for deployments.
+    "whilly-orchestrator[webauthn]",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-xdist>=3.6",

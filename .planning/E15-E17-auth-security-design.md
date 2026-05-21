@@ -1,11 +1,14 @@
 # E15 (WebAuthn) + E17 (OIDC header-trust) — Security Design & Implementation Plan
 
-> **STATUS: DESIGN ONLY — NOT IMPLEMENTED.**
-> Per [`docs/PRD-post-auth-hardening.md`](../docs/PRD-post-auth-hardening.md) Risk Register **R3**,
-> no code for these items ships without a security-review sign-off. This document is
-> that review's input artifact: it states the threat model, the concrete plan grounded
-> in the code that already exists, and the explicit gates that must be green before merge.
-> It deliberately contains **no production auth code**.
+> **STATUS: IMPLEMENTED (both, flag-gated, default OFF).** E17 shipped in #306 (2026-05-21);
+> E15 (WebAuthn) shipped in a follow-up session (2026-05-21) — `whilly/api/webauthn_routes.py`
+> + `webauthn_repo.py` + the shared `second_factor.py` coordinator + migration
+> `026_webauthn_credentials`. Per [`docs/PRD-post-auth-hardening.md`](../docs/PRD-post-auth-hardening.md)
+> Risk Register **R3**, neither shipped without a security-review sign-off; this document was that
+> review's input artifact (threat model, the concrete plan grounded in the code that existed, and
+> the gates that had to be green before merge). The sections below are retained as the as-built
+> reference — see §2.3 for what changed vs. the original sketch (a coordinator replaced the
+> "sibling intercept", the migration is `026` not `025`, and the table keys on `username`).
 
 Author: autonomous session 2026-05-20. Reviewer: _(unassigned — operator acts as security reviewer)_.
 

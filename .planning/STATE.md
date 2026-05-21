@@ -42,29 +42,31 @@ firms up.
 Current Milestone: v1.1 (archived) — no v1.2 declared yet
 Phase: Out-of-band follow-up (`post-auth-hardening`) — functionally complete
 Plan: `.planning/post-auth-hardening-tasks.json`
-Status: 26 done, 3 skipped (A1a, A1b, E15), 0 pending (of 29 total)
+Status: 27 done, 2 skipped (A1a, A1b), 0 pending (of 29 total)
 Last Activity: 2026-05-21
 Last Activity Description: Closed the 2026-05-19 handoff leftovers. Shipped PRs #303
 (root-caused the "3 flakes" to a local `.env`→`os.environ` leak; fixed via unit-conftest env
 restore + isolated the m1 baseline test), #304 (Jekyll-safe `docs/` mirror in
 `m1_baseline_fixtures.py`), #305 (E15/E17 security-design doc), #306 (E17 OIDC header-trust,
 flag-gated default OFF, under explicit security review — decisions in ADR-001 §P1.6). E17
-flipped skipped→done. E15 remains deferred to a dedicated sprint (the `webauthn` package is not
-installable in this environment). Wrote [`SESSION-HANDOFF-2026-05-21.md`](SESSION-HANDOFF-2026-05-21.md).
+flipped skipped→done. E15 (WebAuthn passkeys) then implemented in a follow-up session: flag-gated
+(`WHILLY_WEBAUTHN_ENABLED`, default OFF), second-factor-only, sharing the E14b pending-cookie state
+machine via the new `whilly/api/second_factor.py` coordinator; `webauthn 2.7.1` installed via
+`pip --trusted-host` (corporate MITM cert). Wrote [`SESSION-HANDOFF-2026-05-21.md`](SESSION-HANDOFF-2026-05-21.md).
 
 Progress (v1.1 milestone): [##########] 100%
-Progress (post-auth-hardening, by count): 26 done + 3 skipped = 29/29 resolved (100%)
+Progress (post-auth-hardening, by count): 27 done + 2 skipped = 29/29 resolved (100%)
 
 ## Active Scope
 
 **Out-of-band:** [`post-auth-hardening`](post-auth-hardening-tasks.json) plan, scoped by
 [`docs/PRD-post-auth-hardening.md`](../docs/PRD-post-auth-hardening.md). Now functionally
-complete (26 done, 3 skipped). Latest handoff lives at
+complete (27 done, 2 skipped). Latest handoff lives at
 [`SESSION-HANDOFF-2026-05-21.md`](SESSION-HANDOFF-2026-05-21.md). Handoff files are
 date-stamped so the history accumulates rather than being overwritten — start the next
-session by reading the most recent one. Only remaining deferred work: **E15 (WebAuthn)**, held
-for a dedicated sprint where the `webauthn` package is installable (see the design doc at
-[`E15-E17-auth-security-design.md`](E15-E17-auth-security-design.md)).
+session by reading the most recent one. No remaining deferred work from this plan: **E15
+(WebAuthn)** is now implemented (flag-gated, default OFF); only A1a/A1b stay skipped (see the
+design doc at [`E15-E17-auth-security-design.md`](E15-E17-auth-security-design.md)).
 
 **Archived v1.1 evidence:**
 

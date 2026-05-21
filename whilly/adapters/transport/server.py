@@ -1448,6 +1448,21 @@ def create_app(
             build_totp_router(pool=pool, secret=dashboard_token_secret),
         )
 
+    # PRD-post-auth-hardening §Epic E Item 15 (E15) — WebAuthn / passkeys.
+    # Conditionally registered when WHILLY_WEBAUTHN_ENABLED=1 (same instant-
+    # rollback property as TOTP — when off, the router is not mounted and the
+    # second-factor coordinator delegates straight to the TOTP path). Building
+    # the router calls WebAuthnConfig.from_env(), which RAISES here at
+    # create_app time if the flag is on but WHILLY_PUBLIC_ORIGIN is empty or
+    # invalid — fail-closed, so a misconfigured deploy never serves the
+    # phishing-vulnerable degenerate case rather than failing silently.
+    from whilly.api.webauthn_routes import build_webauthn_router, webauthn_enabled
+
+    if webauthn_enabled():
+        app.include_router(
+            build_webauthn_router(pool=pool, secret=dashboard_token_secret),
+        )
+
     # PRD-post-auth-hardening §Epic D Item 13 — startup route audit.
     # Opt-in via WHILLY_ENABLE_ROUTE_AUDIT=1; default off because many
     # existing routes use inline _authenticate_session (not Depends) which
