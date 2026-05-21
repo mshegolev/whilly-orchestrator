@@ -61,7 +61,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from whilly.api import sessions, users_repo, webauthn_repo
+from whilly.api import rate_limit, sessions, users_repo, webauthn_repo
 from whilly.api.admin_users_routes import require_admin_role
 from whilly.api.auth_routes import (
     DEFAULT_SESSION_COOKIE_NAME,
@@ -287,6 +287,9 @@ def build_webauthn_router(
         from webauthn import generate_authentication_options, options_to_json
         from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
 
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            raise HTTPException(status_code=429, detail="too many requests")
         pending = _verify_pending_cookie(secret, request.cookies.get(PENDING_COOKIE_NAME, ""))
         if pending is None:
             raise HTTPException(status_code=401, detail="login session expired — start over")
@@ -321,12 +324,25 @@ def build_webauthn_router(
         from webauthn import verify_authentication_response
         from webauthn.helpers.exceptions import InvalidAuthenticationResponse
 
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            raise HTTPException(status_code=429, detail="too many requests")
         pending = _verify_pending_cookie(secret, request.cookies.get(PENDING_COOKIE_NAME, ""))
         challenge_b64 = pending.get("c") if pending else None
         if not pending or not isinstance(challenge_b64, str):
             raise HTTPException(status_code=401, detail="login session expired — start over")
         username = str(pending.get("u", ""))
         attempts = int(pending.get("a", 0))
+
+        # Respect the shared server-side lockout (a failed TOTP factor can set it).
+        # WebAuthn assertions are not brute-forceable, so a failed assertion does
+        # NOT itself bump the counter — that would let a fumbled passkey lock the
+        # account (incl. password login) for no security gain.
+        if await users_repo.is_account_locked(pool, username=username):
+            return JSONResponse(
+                {"verified": False, "error": "Account temporarily locked. Start over from /login.", "locked": True},
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
 
         body = await request.json()
         raw_id = body.get("rawId") or body.get("id") if isinstance(body, dict) else None

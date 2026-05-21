@@ -25,7 +25,7 @@ from fastapi import FastAPI  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse  # noqa: E402
 
-from whilly.api import auth_tokens, sessions, users_repo, webauthn_repo  # noqa: E402
+from whilly.api import auth_tokens, rate_limit, sessions, users_repo, webauthn_repo  # noqa: E402
 from whilly.api.csrf import COOKIE_NAME  # noqa: E402
 from whilly.api.second_factor import PENDING_COOKIE_NAME, PENDING_MAX_ATTEMPTS, _mint_pending_cookie  # noqa: E402
 from whilly.api.webauthn_routes import (  # noqa: E402
@@ -94,6 +94,10 @@ def _session_cookie() -> str:
 
 @pytest.fixture
 async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
+    # The auth ceremony now IP-rate-limits begin/verify and honours the shared
+    # server-side lockout; neutralise both by default (tests override per case).
+    monkeypatch.setattr(rate_limit, "allow", lambda key: True)
+    monkeypatch.setattr(users_repo, "is_account_locked", AsyncMock(return_value=False))
     app = FastAPI()
     app.include_router(build_webauthn_router(pool=None, secret=_TEST_SECRET, cookie_secure=False))  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
@@ -304,6 +308,37 @@ async def test_auth_verify_invalid_increments_attempts(client: AsyncClient, monk
     assert resp.status_code == 401
     assert resp.json()["remaining"] == PENDING_MAX_ATTEMPTS - 1
     assert any(PENDING_COOKIE_NAME in v for v in resp.headers.get_list("set-cookie"))
+
+
+@pytest.mark.asyncio
+async def test_auth_begin_rate_limited_429(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Layer 1: begin is IP-rate-limited (caps a flood before the DB lookup)."""
+    monkeypatch.setattr(rate_limit, "allow", lambda key: False)
+    creds = AsyncMock(return_value=[_stored_cred()])
+    monkeypatch.setattr(webauthn_repo, "get_credentials_by_username", creds)
+    client.cookies.set(PENDING_COOKIE_NAME, _mint_pending_cookie(_TEST_SECRET, username=_USERNAME))
+    resp = await client.post("/auth/webauthn/begin")
+    assert resp.status_code == 429
+    assert creds.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_verify_blocked_when_account_locked(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify honours the shared server-side lockout (e.g. tripped by failed TOTP)
+    even with a valid pending cookie + challenge — before any assertion check."""
+    monkeypatch.setattr(users_repo, "is_account_locked", AsyncMock(return_value=True))
+    get_cred = AsyncMock(return_value=_stored_cred())
+    monkeypatch.setattr(webauthn_repo, "get_credential_by_id", get_cred)
+    create = AsyncMock(return_value=_session())
+    monkeypatch.setattr(sessions, "create_session", create)
+    pending = _mint_pending_cookie(_TEST_SECRET, username=_USERNAME, challenge=_b64url_encode(_CHALLENGE))
+    client.cookies.set(PENDING_COOKIE_NAME, pending)
+    resp = await client.post("/auth/webauthn/verify", json={"rawId": _b64url_encode(_CRED_ID), "response": {}})
+    assert resp.status_code == 429
+    assert resp.json()["locked"] is True
+    # Never reached the credential lookup or session mint.
+    assert get_cred.await_count == 0
+    assert create.await_count == 0
 
 
 @pytest.mark.asyncio
