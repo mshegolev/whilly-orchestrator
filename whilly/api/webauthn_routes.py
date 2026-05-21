@@ -211,11 +211,13 @@ def build_webauthn_router(
             for c in existing
         ]
         challenge = os.urandom(_CHALLENGE_BYTES)
+        # Opaque, rename-stable user handle instead of the PII username (Finding 3).
+        user_handle = await webauthn_repo.get_or_create_user_handle(pool, username=username)
         options = generate_registration_options(
             rp_id=config.rp_id,
             rp_name=config.rp_name,
             user_name=username,
-            user_id=username.encode("utf-8"),
+            user_id=user_handle,
             challenge=challenge,
             authenticator_selection=AuthenticatorSelectionCriteria(
                 user_verification=UserVerificationRequirement.PREFERRED

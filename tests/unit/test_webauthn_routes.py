@@ -112,6 +112,8 @@ async def client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
         webauthn_challenge_repo, "create_challenge", AsyncMock(return_value="11111111-1111-1111-1111-111111111111")
     )
     monkeypatch.setattr(webauthn_challenge_repo, "consume_challenge", AsyncMock(return_value=_CHALLENGE))
+    # Opaque per-user handle (Finding 3); default it so register_begin tests run.
+    monkeypatch.setattr(webauthn_repo, "get_or_create_user_handle", AsyncMock(return_value=b"\x07" * 32))
     app = FastAPI()
     app.include_router(build_webauthn_router(pool=None, secret=_TEST_SECRET, cookie_secure=False))  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
@@ -467,6 +469,26 @@ async def test_register_finish_consumed_challenge_400(client: AsyncClient, monke
     resp = await client.post("/me/webauthn/register/finish", json={"id": "x", "response": {}})
     assert resp.status_code == 400
     assert insert.await_count == 0
+
+
+# ── opaque user handle (Finding 3) ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_register_begin_uses_opaque_user_handle(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """register options carry the random server-side handle as user.id — never
+    the (PII) username."""
+    monkeypatch.setattr(sessions, "verify_session", AsyncMock(return_value=_session()))
+    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=_user()))
+    monkeypatch.setattr(webauthn_repo, "get_credentials_by_username", AsyncMock(return_value=[]))
+    handle = b"\x42" * 32
+    monkeypatch.setattr(webauthn_repo, "get_or_create_user_handle", AsyncMock(return_value=handle))
+    client.cookies.set(COOKIE_NAME, _session_cookie())
+    resp = await client.post("/me/webauthn/register/begin")
+    assert resp.status_code == 200
+    user_id_b64 = resp.json()["user"]["id"]
+    assert _b64url_decode(user_id_b64) == handle
+    assert _b64url_decode(user_id_b64) != _USERNAME.encode("utf-8")
 
 
 # silence unused-import lint for the round-trip decode helper
