@@ -377,15 +377,17 @@ IDOR-guarded session revoke). Two URL-handling weaknesses were fixed:
   `\` to `/`, so `/\evil.com` becomes protocol-relative `//evil.com`.
   `_sanitise_next_path` now rejects any path containing a backslash.
 
-**Also noted, NOT changed here — Finding 6 (Low).** `POST /auth/change-password`
-(the forced first-login flow) requires an authenticated session but neither the
-current password nor `must_change_password=True`, so a session that was hijacked
-(cookie theft) or left open could rotate the password without the current one —
-the check `POST /me/password` enforces. It is *not* CSRF-exploitable (SameSite=
-Strict cookie + Origin allowlist; the path is not CSRF-exempt). Recommended
-follow-up: gate the forced path to `must_change_password=True`, else redirect to
-`/me/password`. Deferred because it touches the must-change-gate flow and is
-lower-risk than the URL fixes above.
+**Finding 6 (Low) — FIXED.** `POST /auth/change-password` (the forced first-login
+flow) sets a new password WITHOUT the current one. It required an authenticated
+session but neither the current password nor `must_change_password=True`, so a
+session that was hijacked (cookie theft) or left open could rotate the password
+without the current one — the check `POST /me/password` enforces. (Not CSRF-
+exploitable: SameSite=Strict cookie + Origin allowlist; the path is not CSRF-
+exempt.) The handler now reads the user row and proceeds only when
+`must_change_password=True`; any other session (or a missing user row) is
+redirected to `/me/password`, which requires the current password. The forced
+first-login flow is unchanged (bootstrap admin has the flag set). Verified by
+`tests/unit/test_change_password_gate.py`.
 
 ---
 
