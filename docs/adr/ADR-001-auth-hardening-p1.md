@@ -342,6 +342,23 @@ another.
 
 ---
 
+## P1.10 — Opaque WebAuthn user handle (post-E15 review, Finding 3)
+
+Registration used the username as the WebAuthn user handle
+(`user_id=username.encode("utf-8")`). The spec recommends an **opaque, random**
+handle (≤64 bytes): it is stored on the authenticator / passkey provider, so a
+username leaks identity to that provider and is not stable across a rename.
+
+**Decision.** A random 32-byte handle per user, stored in
+`webauthn_user_handles` (migration `028`) and created on first enrolment via
+`webauthn_repo.get_or_create_user_handle` (atomic upsert → stable across calls,
+so a user's multiple passkeys share one handle). `register/begin` uses it as
+`user.id`. Verify is unchanged — it still looks credentials up by `credential_id`,
+so the handle is a registration-time privacy/stability improvement, not part of
+the assertion check.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)
