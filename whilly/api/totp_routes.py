@@ -31,12 +31,21 @@ single conditional in ``submit_login``.
 
 Hardening
 ---------
-* Brute-force lock-out: 5 wrong codes invalidate the pending cookie
-  and bounce the user back to ``/login``. The lock is per-cookie not
-  per-user — restarting the login flow gets a fresh budget, but every
-  password verify also drives the existing account-lockout counter
-  from :mod:`whilly.api.users_repo`, so password+TOTP guessing is
-  rate-limited by both.
+* Brute-force lock-out has TWO layers, because the per-cookie attempt
+  counter alone is bypassable: it lives in the client-held signed pending
+  cookie, so an attacker can reset it by replaying an older ``a=0`` cookie
+  before each guess (HMAC stops *editing* the counter, not *reusing* an old
+  signed value). And the password account-lockout does NOT backstop this —
+  once the password is correct no further password failures accrue while the
+  attacker brute-forces the code. So:
+  1. **IP rate-limit** (``rate_limit.allow``) on ``POST /auth/totp`` — the
+     same edge cap the password endpoint has, which the verify path lacked.
+  2. **Server-side per-user lockout** (``users_repo.is_account_locked`` /
+     ``register_failed_second_factor``) — shares the ``failed_attempts`` /
+     ``locked_until`` columns with the password path, so a wrong code counts
+     toward a 15-minute account lock that a cookie replay cannot reset. A
+     successful verify clears it via ``users_repo.update_last_login``.
+  The per-cookie counter is retained only for the "N attempts remaining" UX.
 * ``pyotp`` is a lazy import: when the feature flag is off (default)
   the module never reaches for it, so deployments without the ``totp``
   extras don't crash on import.
@@ -55,7 +64,7 @@ from fastapi import APIRouter, Form, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from whilly.api import sessions, totp_repo, users_repo
+from whilly.api import auth_audit_repo, rate_limit, sessions, totp_repo, users_repo
 from whilly.api.auth_routes import (
     DEFAULT_SESSION_COOKIE_NAME,
     TEMPLATES_DIR,
@@ -233,6 +242,33 @@ def build_totp_router(
         attempts = int(pending.get("a", 0))
         if not username:
             return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+        # Layer 1 — IP rate-limit (the password endpoint has this; the verify
+        # endpoint did not). Stop a flood before touching the DB.
+        client_ip = (request.client.host if request.client else None) or "unknown"
+        if not rate_limit.allow(client_ip):
+            await auth_audit_repo.insert_attempt(
+                pool,
+                username=username[:64] or None,
+                ip=client_ip,
+                user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+                outcome="rate_limited",
+            )
+            return templates.TemplateResponse(
+                request,
+                TOTP_VERIFY_TEMPLATE,
+                {"username": username, "form_error": "Too many attempts. Please wait a moment and try again."},
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        # Layer 2 — server-side per-user lockout, which a replayed pending cookie
+        # cannot reset (the cookie-side `a` counter can). See the module docstring.
+        if await users_repo.is_account_locked(pool, username=username):
+            logger.warning("totp.verify: blocked locked account username=%r", username)
+            response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+            _clear_pending_cookie(response)
+            return response
+
         row = await totp_repo.get_totp_secret(pool, username=username)
         if row is None or not row.enabled:
             # User's TOTP was disabled between login and verify — bail.
@@ -243,6 +279,9 @@ def build_totp_router(
 
         totp = pyotp.TOTP(row.secret)
         if not totp.verify(code, valid_window=1):
+            # Server-side budget (authoritative, cookie-replay-proof) + the
+            # per-cookie counter (UX only).
+            await users_repo.register_failed_second_factor(pool, username=username)
             attempts += 1
             if attempts >= PENDING_MAX_ATTEMPTS:
                 logger.warning("totp.verify: %d failed attempts for %r — locking pending cookie", attempts, username)
