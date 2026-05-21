@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: UI parity completion
 status: completed
-last_updated: "2026-05-21T00:00:00Z"
+last_updated: "2026-05-21T10:42:33Z"
 last_activity: 2026-05-21
 progress:
   total_phases: 7
@@ -17,8 +17,8 @@ active_out_of_band:
   prd_file: docs/PRD-post-auth-hardening.md
   latest_handoff: .planning/SESSION-HANDOFF-2026-05-21.md
   status_counts:
-    done: 26
-    skipped: 3
+    done: 27
+    skipped: 2
     human_loop: 0
     pending: 0
     total: 29
