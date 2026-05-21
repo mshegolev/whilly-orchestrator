@@ -195,6 +195,78 @@ async def update_last_login(pool: asyncpg.Pool, *, username: str) -> None:
         return
 
 
+async def is_account_locked(pool: asyncpg.Pool, *, username: str) -> bool:
+    """Return True if ``username`` is currently locked out.
+
+    The server-side gate the second-factor verify routes consult *before*
+    honouring a request. The 2FA per-cookie attempt counter lives in the
+    client-held pending cookie and can be reset by replaying an older signed
+    cookie, so it cannot be the only brute-force control. This lockout state
+    lives in the ``users`` row (shared with the password path) and a cookie
+    replay cannot touch it. A successful login clears it via
+    :func:`update_last_login`.
+
+    Best-effort: any error returns ``False`` (fail-open), matching the
+    rate-limiter's posture — a transient DB blip must not hard-brick login.
+    """
+    if not isinstance(username, str) or not username.strip():
+        return False
+    normalised = username.strip().lower()
+    try:
+        async with pool.acquire() as conn:
+            locked = await conn.fetchval(
+                "SELECT locked_until IS NOT NULL AND locked_until > NOW() FROM users WHERE username = $1",
+                normalised,
+            )
+    except Exception:  # noqa: BLE001 — fail-open, never hard-brick the verify path
+        return False
+    return bool(locked)
+
+
+async def register_failed_second_factor(pool: asyncpg.Pool, *, username: str) -> bool:
+    """Count a wrong second factor against the shared ``failed_attempts`` budget.
+
+    Mirrors the password-mismatch branch of :func:`verify_credentials`, but in a
+    single atomic statement (no read-then-write race): at
+    :data:`_MAX_FAILED_ATTEMPTS` it sets ``locked_until = NOW() + 15 min`` and
+    resets the counter, otherwise it increments. Because this is server-side and
+    keyed on the user, an attacker who replays a fresh pending cookie (resetting
+    the cookie-side counter) still hits a per-user wall that only a successful
+    login clears.
+
+    Returns True if the account is now locked. Best-effort: never raises.
+    """
+    if not isinstance(username, str) or not username.strip():
+        return False
+    normalised = username.strip().lower()
+    try:
+        async with pool.acquire() as conn:
+            locked = await conn.fetchval(
+                f"""
+                UPDATE users
+                   SET failed_attempts = CASE WHEN failed_attempts + 1 >= $2 THEN 0
+                                              ELSE failed_attempts + 1 END,
+                       locked_until    = CASE WHEN failed_attempts + 1 >= $2
+                                              THEN NOW() + INTERVAL '{_LOCKOUT_MINUTES} minutes'
+                                              ELSE locked_until END
+                 WHERE username = $1
+                 RETURNING locked_until IS NOT NULL AND locked_until > NOW()
+                """,
+                normalised,
+                _MAX_FAILED_ATTEMPTS,
+            )
+    except Exception:  # noqa: BLE001 — best-effort, must never fail the verify path
+        logger.warning(
+            "users_repo: register_failed_second_factor failed for username=%r — swallowed",
+            normalised,
+            exc_info=True,
+        )
+        return False
+    if locked:
+        logger.warning("users_repo: account locked for username=%r after repeated failed second factors", normalised)
+    return bool(locked)
+
+
 async def set_password(pool: asyncpg.Pool, *, username: str, new_password: str) -> None:
     """Hash ``new_password`` and atomically update the users row.
 
@@ -354,7 +426,9 @@ __all__ = [
     "create_user",
     "delete_user",
     "get_user_by_username",
+    "is_account_locked",
     "list_users",
+    "register_failed_second_factor",
     "reset_password_to_random",
     "set_password",
     "set_role",

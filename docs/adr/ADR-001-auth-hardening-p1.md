@@ -243,6 +243,36 @@ ignored entirely and the middleware is not mounted.
 
 ---
 
+## P1.7 — Second-factor brute-force lockout (post-E15 security review)
+
+A review of the merged E15 surface surfaced a **pre-existing** weakness (E14b
+code that E15 relocated into `whilly/api/second_factor.py`): the 2FA failed-
+attempt lockout lived **only** in the client-held, HMAC-signed pending cookie.
+HMAC prevents *editing* the counter but not *replaying* an older `a=0` cookie
+before each guess, so the 5-try lockout was bypassable. The password account-
+lockout did not backstop it — once the password is correct, no further password
+failures accrue while the attacker brute-forces the (rotating, but small) TOTP
+code. The verify endpoints also had no IP rate-limit (the password endpoint did).
+
+**Decision — defense in depth, two layers:**
+
+1. **IP rate-limit** (`rate_limit.allow`) on `POST /auth/totp` and the WebAuthn
+   `begin`/`verify` endpoints — the same edge cap `submit_login` already had.
+2. **Server-side per-user lockout** — `users_repo.is_account_locked` /
+   `register_failed_second_factor` reuse the existing `users.failed_attempts` /
+   `locked_until` columns, so a wrong **TOTP** code counts toward the same
+   15-minute account lock the password path uses, and a cookie replay cannot
+   reset it. Cleared on success via `update_last_login`. The per-cookie counter
+   is retained for the "N attempts remaining" UX only.
+
+**Scope decision — WebAuthn does not bump the lockout.** A WebAuthn assertion
+cannot be brute-forced (it needs the private key), so a failed assertion does
+*not* increment the shared counter — that would let a fumbled passkey lock the
+account (including password login) for no security gain. WebAuthn still *respects*
+an existing lock and is IP-rate-limited.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)

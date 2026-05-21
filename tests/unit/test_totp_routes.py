@@ -235,6 +235,12 @@ async def test_submit_login_unchanged_when_user_totp_disabled_but_enrolled(
 async def totp_client(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[AsyncClient]:
     monkeypatch.setattr(sessions, "verify_session", AsyncMock(return_value=_session()))
     monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=_user()))
+    # The verify endpoint now IP-rate-limits and consults a server-side lockout
+    # (fix for the cookie-replay brute-force). Neutralise both by default so the
+    # functional verify tests are deterministic; individual tests override them.
+    monkeypatch.setattr(rate_limit, "allow", lambda key: True)
+    monkeypatch.setattr(users_repo, "is_account_locked", AsyncMock(return_value=False))
+    monkeypatch.setattr(users_repo, "register_failed_second_factor", AsyncMock(return_value=False))
     app = FastAPI()
     app.include_router(build_totp_router(pool=None, secret=_TEST_SECRET))  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
@@ -357,6 +363,79 @@ async def test_totp_verify_post_too_many_failures_clears_cookie(
     # Pending cookie cleared.
     set_cookie = resp.headers.get("set-cookie", "")
     assert "whilly_totp_pending=;" in set_cookie or "Max-Age=0" in set_cookie
+
+
+# ─── brute-force hardening (fix: client-cookie counter was bypassable) ──────
+
+
+@pytest.mark.asyncio
+async def test_totp_verify_rate_limited_returns_429(totp_client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Layer 1: the verify endpoint is now IP-rate-limited like the password one."""
+    from whilly.api import auth_audit_repo
+
+    monkeypatch.setattr(rate_limit, "allow", lambda key: False)
+    audit = AsyncMock(return_value=None)
+    monkeypatch.setattr(auth_audit_repo, "insert_attempt", audit)
+    get_totp = AsyncMock(return_value=_totp_row())
+    monkeypatch.setattr(totp_repo, "get_totp_secret", get_totp)
+    pending = _mint_pending_cookie(_TEST_SECRET, username=_USERNAME)
+    resp = await totp_client.post(
+        "/auth/totp",
+        cookies={PENDING_COOKIE_NAME: pending},
+        data=dict(code="000000"),  # noqa: C408
+    )
+    assert resp.status_code == 429
+    # Rate-limited before any TOTP secret lookup, and audited as 'rate_limited'.
+    assert get_totp.await_count == 0
+    assert audit.await_args.kwargs["outcome"] == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_totp_verify_server_lock_beats_fresh_cookie(
+    totp_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Layer 2 / the core fix: a pristine ``a=0`` pending cookie AND a correct
+    code are still rejected when the server-side lockout is set — proving the
+    cookie-replay bypass of the per-cookie counter no longer grants attempts."""
+    monkeypatch.setattr(users_repo, "is_account_locked", AsyncMock(return_value=True))
+    create = AsyncMock(return_value=_session())
+    monkeypatch.setattr(sessions, "create_session", create)
+    get_totp = AsyncMock(return_value=_totp_row())
+    monkeypatch.setattr(totp_repo, "get_totp_secret", get_totp)
+    fresh_cookie = _mint_pending_cookie(_TEST_SECRET, username=_USERNAME, attempts=0)
+    correct_code = pyotp.TOTP(_TEST_TOTP_SECRET).now()
+    resp = await totp_client.post(
+        "/auth/totp",
+        cookies={PENDING_COOKIE_NAME: fresh_cookie},
+        data=dict(code=correct_code),  # noqa: C408
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
+    # No session minted, and we never even reached the TOTP verify.
+    assert create.await_count == 0
+    assert get_totp.await_count == 0
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "whilly_totp_pending=;" in set_cookie or "Max-Age=0" in set_cookie
+
+
+@pytest.mark.asyncio
+async def test_totp_verify_wrong_code_bumps_server_side_counter(
+    totp_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A wrong code increments the server-side budget, not just the cookie."""
+    monkeypatch.setattr(totp_repo, "get_totp_secret", AsyncMock(return_value=_totp_row()))
+    bump = AsyncMock(return_value=False)
+    monkeypatch.setattr(users_repo, "register_failed_second_factor", bump)
+    pending = _mint_pending_cookie(_TEST_SECRET, username=_USERNAME)
+    resp = await totp_client.post(
+        "/auth/totp",
+        cookies={PENDING_COOKIE_NAME: pending},
+        data=dict(code="000000"),  # noqa: C408
+    )
+    assert resp.status_code == 422
+    bump.assert_awaited_once()
+    assert bump.await_args.kwargs["username"] == _USERNAME
 
 
 # silence unused-import lint
