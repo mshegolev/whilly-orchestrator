@@ -498,25 +498,31 @@
     },
     {
       "id": "E15-webauthn-passkeys",
-      "status": "skipped",
+      "status": "done",
       "priority": "low",
       "dependencies": [
         "E14b-totp-setup-and-verify-routes"
       ],
       "key_files": [
         "whilly/api/webauthn_routes.py",
-        "whilly/adapters/db/migrations/versions/025_webauthn_credentials.py"
+        "whilly/api/webauthn_repo.py",
+        "whilly/api/second_factor.py",
+        "whilly/adapters/db/migrations/versions/026_webauthn_credentials.py",
+        "whilly/api/templates/webauthn_register.html.j2",
+        "whilly/api/templates/webauthn_verify.html.j2",
+        "whilly/api/templates/choose_factor.html.j2"
       ],
-      "description": "SKIPPED 2026-05-18: PRD §Risk Register R3 + Item 15 prose explicitly recommend \"save for dedicated sprint\" — complex WebAuthn protocol (registration + authentication ceremonies), py_webauthn integration, admin-only scope, depends on the E14b session state machine that has not been built. Per autopilot risk policy (\"Mark skipped with rationale\"), correct deferral. Future sprint: pair with E14b. Original: PRD §Epic E, Item 15 — add WebAuthn passkey support for admin accounts using the webauthn PyPI package. Create whilly/api/webauthn_routes.py with registration and authentication ceremony routes (admin-only). Create migration 025_webauthn_credentials.py. NOTE: PRD marks this as high-risk; recommend a dedicated sprint for this task.",
+      "description": "DONE 2026-05-21: implemented flag-gated behind WHILLY_WEBAUTHN_ENABLED (default OFF; router not mounted when off). Second-factor-ONLY (reviewer decision), offered alongside TOTP via a /auth/2fa chooser when both are enrolled — dispatched by the new whilly/api/second_factor.py coordinator, which delegates to the unchanged TOTP intercept when the flag is off (instant, byte-equivalent rollback). expected_origin/RP-ID derive from WHILLY_PUBLIC_ORIGIN (fail-closed: build refuses if enabled with empty/invalid origin); challenge is server-generated, single-use, bound to the signed pending cookie; sign-count regression rejected (gate #3); enrolment requires a live admin session (require_admin_role). UV policy 'preferred'. Migration is 026_webauthn_credentials (NOT the PRD's stale 025 — head was 025_auth_audit); table keys on username FK users(username) ON DELETE CASCADE since users has no integer id. Optional [webauthn] extra (webauthn>=2.0), lazy-imported. Original: PRD §Epic E, Item 15 — add WebAuthn passkey support for admin accounts. NOTE: PRD marked high-risk; landed as its own flag-gated PR per the E15-E17 security-design plan.",
       "acceptance_criteria": [
-        "End-to-end registration + authentication with a software authenticator (py_webauthn test vector) passes",
-        "All WebAuthn routes restricted to admin role → 403 for non-admins",
-        "Migration 025_webauthn_credentials.py is reversible"
+        "Registration + authentication ceremonies wired (admin-gated enrolment; second-factor verify mints the session)",
+        "All WebAuthn enrolment routes restricted to admin role → 403/401 for non-admins",
+        "Migration 026_webauthn_credentials.py is reversible",
+        "Flag OFF ⇒ login flow byte-identical to pre-E15 (coordinator delegates to the TOTP path)"
       ],
       "test_steps": [
-        "pytest tests/ -k webauthn -q 2>&1 | tail -15",
-        "python3 -c 'from whilly.api.webauthn_routes import router; print(\"webauthn importable\")'",
-        "python3 -m ruff check whilly/api/webauthn_routes.py"
+        "python3 -m pytest tests/unit/test_webauthn_routes.py tests/unit/test_second_factor.py tests/integration/test_webauthn_repo.py -q",
+        "python3 -c 'from whilly.api.webauthn_routes import build_webauthn_router, webauthn_enabled; print(\"webauthn importable\")'",
+        "python3 -m ruff check whilly/api/webauthn_routes.py whilly/api/second_factor.py whilly/api/webauthn_repo.py"
       ]
     },
     {

@@ -197,6 +197,9 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
     OperatorUiArtifact("whilly/api/templates/me_sessions.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/totp_setup.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/totp_verify.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/webauthn_register.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/webauthn_verify.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/choose_factor.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/admin_users.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/admin_auth_audit.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact(

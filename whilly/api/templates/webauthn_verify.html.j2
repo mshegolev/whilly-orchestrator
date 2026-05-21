@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>Passkey verification — Whilly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    .wa-wrap { width: min(420px, calc(100vw - 32px)); border: 1px solid var(--line-strong); padding: 20px; background: var(--surface); }
+    .wa-title { color: var(--accent); margin: 0 0 12px; font: 700 var(--t-body)/var(--lh-tight) var(--font-mono); }
+    .wa-hint { color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono); margin-bottom: 16px; }
+    .wa-btn { width: 100%; padding: 8px; background: transparent; color: var(--accent); border: 1px solid var(--accent); font: 700 var(--t-body)/var(--lh-body) var(--font-mono); cursor: pointer; }
+    .wa-error { padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--danger); color: var(--danger); font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .wa-alt { margin-top: 12px; text-align: center; color: var(--muted); font: var(--t-sm)/var(--lh-body) var(--font-mono); }
+    .wa-alt a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wa-wrap">
+    <h1 class="wa-title">Verify with your passkey</h1>
+    <p class="wa-hint">
+      Signed in as <strong>{{ username }}</strong>. Use your hardware key, phone, or
+      platform authenticator to finish signing in.
+    </p>
+    <div id="wa-error" class="wa-error" role="alert" hidden></div>
+    <button id="wa-go" class="wa-btn" type="button">[ use passkey ]</button>
+    <p class="wa-alt"><a href="/auth/totp">use an authenticator code instead</a></p>
+    <p class="wa-alt"><a href="/login">cancel and start over</a></p>
+  </div>
+  <script>
+    function b64urlToBuf(s) {
+      s = s.replace(/-/g, "+").replace(/_/g, "/");
+      const pad = s.length % 4 ? "=".repeat(4 - (s.length % 4)) : "";
+      const bin = atob(s + pad);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      return buf.buffer;
+    }
+    function bufToB64url(buf) {
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      for (const b of bytes) bin += String.fromCharCode(b);
+      return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function showError(msg) {
+      const el = document.getElementById("wa-error");
+      el.textContent = msg;
+      el.hidden = false;
+    }
+    async function authenticate() {
+      document.getElementById("wa-error").hidden = true;
+      let options;
+      try {
+        const beginResp = await fetch("/auth/webauthn/begin", { method: "POST" });
+        if (!beginResp.ok) { showError("Could not start verification. Start over from /login."); return; }
+        options = await beginResp.json();
+      } catch (e) { showError("Network error starting verification."); return; }
+      options.challenge = b64urlToBuf(options.challenge);
+      (options.allowCredentials || []).forEach((c) => { c.id = b64urlToBuf(c.id); });
+      let assertion;
+      try {
+        assertion = await navigator.credentials.get({ publicKey: options });
+      } catch (e) { showError("Passkey was cancelled or failed. Try again."); return; }
+      const payload = {
+        id: assertion.id,
+        rawId: bufToB64url(assertion.rawId),
+        type: assertion.type,
+        response: {
+          clientDataJSON: bufToB64url(assertion.response.clientDataJSON),
+          authenticatorData: bufToB64url(assertion.response.authenticatorData),
+          signature: bufToB64url(assertion.response.signature),
+          userHandle: assertion.response.userHandle ? bufToB64url(assertion.response.userHandle) : null,
+        },
+        clientExtensionResults: assertion.getClientExtensionResults(),
+      };
+      let result;
+      try {
+        const verifyResp = await fetch("/auth/webauthn/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        result = await verifyResp.json();
+      } catch (e) { showError("Network error verifying passkey."); return; }
+      if (result.verified) { window.location.href = result.redirect || "/"; }
+      else if (result.locked) { window.location.href = "/login"; }
+      else { showError(result.error || "Verification failed. Try again."); }
+    }
+    document.getElementById("wa-go").addEventListener("click", authenticate);
+    if (!window.PublicKeyCredential) {
+      showError("This browser does not support passkeys. Use an authenticator code instead.");
+      document.getElementById("wa-go").disabled = true;
+    }
+  </script>
+</body>
+</html>
