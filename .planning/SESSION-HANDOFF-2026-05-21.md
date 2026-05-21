@@ -5,6 +5,17 @@ Plan file: [`.planning/post-auth-hardening-tasks.json`](post-auth-hardening-task
 ADR: [`docs/adr/ADR-001-auth-hardening-p1.md`](../docs/adr/ADR-001-auth-hardening-p1.md)
 Prev handoff: [`SESSION-HANDOFF-2026-05-19.md`](SESSION-HANDOFF-2026-05-19.md)
 
+> **⚠️ Addendum (same day, after this handoff was written): E15 shipped.**
+> This handoff was authored at 00:55 when E15 was still `skipped`. Later the
+> same day E15 (WebAuthn / passkeys) was **implemented** — flag-gated behind
+> `WHILLY_WEBAUTHN_ENABLED` (default OFF), second-factor-only, sharing the E14b
+> pending-cookie state machine via the new `whilly/api/second_factor.py`
+> coordinator. Migration `026_webauthn_credentials`; ceremony tests gated with
+> `pytest.importorskip("webauthn")` and exercised on CI (the `[dev]` extra pulls
+> in `[webauthn]`). Plan is now **`done=27, skipped=2`** (only `A1a`/`A1b`).
+> Merged via PR #308. **The "What's left → E15" and "skipped=3" notes below are
+> superseded** — kept for history. See `.planning/STATE.md` for current truth.
+
 ## TL;DR
 
 Started from the 2026-05-19 handoff's leftovers (the "3 pre-existing flakes,
@@ -51,7 +62,8 @@ local-only test-hygiene bugs**, both fixed. Then closed the deferred
 
 ## What's left
 
-- **E15 (WebAuthn / passkeys)** — `skipped`, **held for a dedicated sprint**.
+- **E15 (WebAuthn / passkeys)** — ~~`skipped`, **held for a dedicated sprint**~~
+  **SUPERSEDED: shipped same day (PR #308) — see addendum at top.** Original note:
   Blocker on *this* machine: the `webauthn` PyPI package can't be installed
   (no network / PyPI access), so the ceremony code can't be run or verified —
   do it where PyPI + CI are available. Full plan in
