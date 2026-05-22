@@ -14,6 +14,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from whilly.core.task_id import safe_task_id_filename
+
 log = logging.getLogger("whilly.verifier")
 
 
@@ -237,7 +239,9 @@ def verify_task(
 
     if log_dir:
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"{task_id}_verify.log"
+        # Flatten the id so a crafted '/abs' or hierarchical 'a/b' id cannot
+        # escape / miss log_dir (see whilly.core.task_id.safe_task_id_filename).
+        log_file = log_dir / f"{safe_task_id_filename(task_id)}_verify.log"
         with open(log_file, "w") as f:
             f.write(f"Task: {task_id}\nPassed: {passed}\n\n")
             f.write(f"=== LINT (ok={lint_ok}) ===\n{lint_out}\n\n")
