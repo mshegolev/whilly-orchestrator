@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from whilly.agents.base import spawn_with_eagain_retry
+from whilly.core.task_id import safe_task_id_filename
 
 log = logging.getLogger("whilly")
 
@@ -101,12 +102,18 @@ def launch_agent(
         backend = active_backend_from_env()
 
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{task_id}.log"
-    session_name = f"whilly-{task_id}"
+    # task.id may legitimately contain '/' or ':' (hierarchical / namespaced ids);
+    # flatten to a safe single component before using it as a filename or tmux
+    # target so a crafted id like '/etc/cron.d/x' cannot escape log_dir, and so
+    # 'epic.subepic/leaf' does not reference a non-existent subdir. See
+    # whilly.core.task_id.safe_task_id_filename.
+    safe_id = safe_task_id_filename(task_id)
+    log_file = log_dir / f"{safe_id}.log"
+    session_name = f"whilly-{safe_id}"
 
     _tmux_run([TMUX, "kill-session", "-t", session_name], capture_output=True)
 
-    prompt_file = log_dir / f"{task_id}_prompt.txt"
+    prompt_file = log_dir / f"{safe_id}_prompt.txt"
     prompt_file.write_text(prompt)
 
     log_file_q = shlex.quote(str(log_file))

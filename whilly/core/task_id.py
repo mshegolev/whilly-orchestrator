@@ -21,10 +21,16 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["VALID_TASK_ID_RE", "validate_task_id"]
+__all__ = ["VALID_TASK_ID_RE", "safe_task_id_filename", "validate_task_id"]
 
 
 VALID_TASK_ID_RE = re.compile(r"^[A-Za-z0-9._:/-]+$")
+
+#: Characters that are unsafe in a *filesystem path component* or a *tmux session
+#: target*. ``validate_task_id`` deliberately permits ``/`` (hierarchical ids like
+#: ``epic.subepic/leaf``) and ``:`` (namespaced ids like ``0123:abc``), but those
+#: must NOT survive into a filename or session name — see :func:`safe_task_id_filename`.
+_UNSAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def validate_task_id(task_id: object) -> str:
@@ -52,3 +58,30 @@ def validate_task_id(task_id: object) -> str:
             f"task id {task_id!r} contains forbidden characters; must match ^[A-Za-z0-9._:/-]+$",
         )
     return task_id
+
+
+def safe_task_id_filename(task_id: str) -> str:
+    """Flatten a task id into a single path/session-safe component.
+
+    :func:`validate_task_id` blocks shell metacharacters and ``..`` traversal but
+    deliberately permits ``/`` (hierarchical ids, e.g. ``epic.subepic/leaf``) and
+    ``:`` (namespaced ids, e.g. ``0123:abc``). Those are unsafe the moment an id is
+    interpolated into a filename or a tmux target:
+
+    * a leading ``/`` makes ``log_dir / f"{id}.log"`` resolve to an **absolute**
+      path (pathlib joins an absolute right-hand operand by discarding the base),
+      so a crafted id like ``/etc/cron.d/x`` escapes ``log_dir`` entirely — an
+      arbitrary-location write primitive;
+    * any ``/`` makes ``log_dir / f"{id}.log"`` reference a non-existent subdir,
+      so even the *legitimate* hierarchical ``epic.subepic/leaf`` crashes the
+      writer; and
+    * ``:`` confuses tmux's ``session:window.pane`` target syntax.
+
+    Replace every character outside ``[A-Za-z0-9_.-]`` with ``_`` and strip
+    leading/trailing ``._`` (so a leading slash can't leave a leading separator).
+    Mirrors :func:`whilly.llm_ops._safe_part` and the worktree slugifier so the
+    whole codebase flattens ids identically. Self-contained — safe even if the id
+    was never run through :func:`validate_task_id`.
+    """
+    safe = _UNSAFE_FILENAME_RE.sub("_", str(task_id)).strip("._")
+    return safe or "task"

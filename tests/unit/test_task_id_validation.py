@@ -18,7 +18,7 @@ import pytest
 
 from whilly.adapters.filesystem.plan_io import PlanParseError, parse_plan, parse_plan_dict
 from whilly.cli import validate_schema
-from whilly.core.task_id import validate_task_id
+from whilly.core.task_id import safe_task_id_filename, validate_task_id
 from whilly.task_manager import Task as LegacyTask
 
 
@@ -90,6 +90,44 @@ def test_validate_task_id_rejects_empty_string() -> None:
 def test_validate_task_id_rejects_non_string() -> None:
     with pytest.raises(ValueError, match="must be a string"):
         validate_task_id(42)
+
+
+# ── safe_task_id_filename: path/session sink hardening ───────────────────────
+#
+# validate_task_id permits '/' and ':' (hierarchical / namespaced ids), so the
+# file-path + tmux-session sinks must flatten them — otherwise a leading-slash id
+# escapes the log dir (arbitrary write) and 'a/b' references a missing subdir.
+
+
+@pytest.mark.parametrize(
+    ("task_id", "expected"),
+    [
+        ("EORD-9509", "EORD-9509"),  # real ids round-trip unchanged (no-op)
+        ("TASK-001", "TASK-001"),
+        ("epic.subepic/leaf", "epic.subepic_leaf"),  # hierarchical → flat
+        ("0123:abc", "0123_abc"),  # ':' confuses tmux target syntax
+        ("/etc/cron.d/evil", "etc_cron.d_evil"),  # absolute → no leading sep, no '/'
+        ("a/b/c", "a_b_c"),
+    ],
+)
+def test_safe_task_id_filename_flattens(task_id: str, expected: str) -> None:
+    assert safe_task_id_filename(task_id) == expected
+
+
+@pytest.mark.parametrize("task_id", ["/etc/cron.d/evil", "a/b/c", "epic.subepic/leaf", "0123:abc", "../x", ".."])
+def test_safe_task_id_filename_never_escapes_base(task_id: str) -> None:
+    base = Path("/var/whilly_logs")
+    # The result must be a single path component that stays strictly under base.
+    safe = safe_task_id_filename(task_id)
+    assert "/" not in safe
+    resolved = (base / f"{safe}.log").resolve()
+    assert str(resolved).startswith(str(base.resolve()) + "/")
+
+
+def test_safe_task_id_filename_falls_back_on_empty_result() -> None:
+    # An id that is all separators flattens to empty → deterministic fallback.
+    assert safe_task_id_filename("..") == "task"
+    assert safe_task_id_filename("///") == "task"
 
 
 # ── legacy Task.from_dict (whilly/task_manager.py) ────────────────────────
