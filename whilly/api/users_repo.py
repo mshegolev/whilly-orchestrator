@@ -76,6 +76,65 @@ async def get_user_by_username(pool: asyncpg.Pool, *, username: str) -> User | N
         )
 
 
+async def get_user_by_email(pool: asyncpg.Pool, *, email: str) -> User | None:
+    """Return the ``User`` whose ``email`` matches exactly, or ``None``.
+
+    ``users.email`` is nullable and NOT unique, so this is defensive: it uses
+    ``LIMIT 2`` and returns ``None`` unless there is exactly one match (zero or
+    ambiguous → ``None``). Used by the must-change gate to resolve a session
+    whose ``email`` is a real address that does not round-trip to a username
+    (e.g. the seeded admin ``admin@whilly.local``); without it the gate would
+    fail-open and silently stop enforcing must-change for that account.
+    """
+    if not isinstance(email, str) or not email.strip():
+        return None
+    normalised = email.strip()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT username, email, role, created_at, last_login_at, must_change_password
+            FROM users WHERE email = $1
+            LIMIT 2
+            """,
+            normalised,
+        )
+    if len(rows) != 1:
+        return None
+    row = rows[0]
+    return User(
+        username=row["username"],
+        email=row["email"],
+        role=row["role"],
+        created_at=row["created_at"],
+        last_login_at=row["last_login_at"],
+        must_change_password=bool(row["must_change_password"]),
+    )
+
+
+async def get_user_by_session_email(pool: asyncpg.Pool, *, session_email: str) -> User | None:
+    """Resolve the ``User`` from a ``sessions.email`` value, or ``None``.
+
+    The username+password login stores the synthetic ``<username>@local`` as the
+    session email; the magic-link path and a password user with a real email set
+    (e.g. the seeded admin ``admin@whilly.local``) store a real address. The
+    single canonical resolver for "who is this session?":
+
+    * ``<username>@local`` → strip and look up by username;
+    * any other value      → look up by email (``None`` if no/ambiguous row,
+                              which is the correct fail-open for magic-link-only
+                              users that have no ``users`` row).
+
+    Centralising this is what stopped several auth call sites (must-change gate,
+    both change-password endpoints) from naively ``removesuffix("@local")`` —
+    which silently broke for every user whose email was not ``<username>@local``.
+    """
+    if not isinstance(session_email, str) or not session_email:
+        return None
+    if session_email.endswith("@local"):
+        return await get_user_by_username(pool, username=session_email.removesuffix("@local"))
+    return await get_user_by_email(pool, email=session_email)
+
+
 async def verify_credentials(pool: asyncpg.Pool, *, username: str, password: str) -> User | None:
     """Validate ``username``/``password`` and return the ``User`` on success.
 
@@ -425,6 +484,8 @@ __all__ = [
     "User",
     "create_user",
     "delete_user",
+    "get_user_by_email",
+    "get_user_by_session_email",
     "get_user_by_username",
     "is_account_locked",
     "list_users",
