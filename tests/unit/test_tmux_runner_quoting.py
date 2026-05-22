@@ -218,3 +218,48 @@ def test_backend_name_with_metacharacter_does_not_execute(tmp_path: Path) -> Non
     )
 
     assert not canary.exists(), "canary file created — backend.name metacharacters executed despite shlex.quote"
+
+
+def test_slashed_task_id_stays_inside_log_dir(tmp_path: Path) -> None:
+    """A task id containing '/' must be flattened so its prompt/log files land
+    inside log_dir and the tmux session name carries no path separator.
+
+    Without the sink-side ``safe_task_id_filename`` flatten, ``log_dir /
+    f"{task_id}.log"`` for a hierarchical id like ``a/b/c`` references a missing
+    subdir (write crashes), and a leading-slash id escapes log_dir entirely.
+    """
+    from whilly import tmux_runner
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.append(list(cmd))
+        result = MagicMock()
+        result.returncode = 0
+        return result
+
+    with (
+        patch.object(tmux_runner, "TMUX", "/usr/bin/tmux"),
+        patch.object(tmux_runner.subprocess, "run", side_effect=fake_run),
+    ):
+        agent = tmux_runner.launch_agent(
+            task_id="a/b/c",
+            prompt="hi",
+            model="m",
+            log_dir=log_dir,
+            cwd=None,
+            backend=_FakeBackend(),
+        )
+
+    # Session name flattened — no '/' that would confuse tmux targeting.
+    assert agent.session_name == "whilly-a_b_c"
+    new_session = [c for c in captured if len(c) >= 2 and c[1] == "new-session"][-1]
+    assert new_session[4] == "whilly-a_b_c"
+    # The prompt + log files were written INSIDE log_dir, flattened — not into a
+    # (non-existent) a/b/ subdir and not anywhere outside log_dir.
+    assert (log_dir / "a_b_c_prompt.txt").exists()
+    assert agent.log_file == log_dir / "a_b_c.log"
+    assert not (log_dir / "a").exists()  # no subdir was created/escaped
