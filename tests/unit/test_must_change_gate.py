@@ -97,21 +97,21 @@ def patched_sessions(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
 
 @pytest.fixture
 def patched_users_must_change(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    """Patch ``users_repo.get_user_by_username`` to return a must-change user."""
+    """Patch the gate's user resolver to return a must-change user."""
     mock = AsyncMock(return_value=_make_user(must_change=True))
-    # The gate imports the function directly into its own namespace, so
+    # The gate imports the resolver directly into its own namespace, so
     # patching the module-level binding inside ``must_change_gate`` is
-    # required — patching ``users_repo.get_user_by_username`` alone would
+    # required — patching ``users_repo.get_user_by_session_email`` alone would
     # not redirect the call site inside ``_lookup_must_change``.
-    monkeypatch.setattr(must_change_gate, "get_user_by_username", mock)
+    monkeypatch.setattr(must_change_gate, "get_user_by_session_email", mock)
     return mock
 
 
 @pytest.fixture
 def patched_users_ok(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    """Patch ``users_repo.get_user_by_username`` to return a no-must-change user."""
+    """Patch the gate's user resolver to return a no-must-change user."""
     mock = AsyncMock(return_value=_make_user(must_change=False))
-    monkeypatch.setattr(must_change_gate, "get_user_by_username", mock)
+    monkeypatch.setattr(must_change_gate, "get_user_by_session_email", mock)
     return mock
 
 
@@ -210,7 +210,7 @@ async def test_invalidate_session_clears_cache_after_password_change(
     returns must_change=False and the request to / is served (200).
     """
     user_mock = AsyncMock(side_effect=[_make_user(must_change=True), _make_user(must_change=False)])
-    monkeypatch.setattr(must_change_gate, "get_user_by_username", user_mock)
+    monkeypatch.setattr(must_change_gate, "get_user_by_session_email", user_mock)
     cookie = _mint_cookie()
 
     # First request — cache miss, returns the must_change=True user → 303.
@@ -322,7 +322,7 @@ async def test_user_not_found_passes_through(
     monkeypatch: pytest.MonkeyPatch,
     patched_sessions: AsyncMock,
 ) -> None:
-    monkeypatch.setattr(must_change_gate, "get_user_by_username", AsyncMock(return_value=None))
+    monkeypatch.setattr(must_change_gate, "get_user_by_session_email", AsyncMock(return_value=None))
     cookie = _mint_cookie()
     response = await client.get("/", cookies={COOKIE_NAME: cookie}, follow_redirects=False)
     assert response.status_code == 200

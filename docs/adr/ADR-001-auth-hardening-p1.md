@@ -391,6 +391,41 @@ first-login flow is unchanged (bootstrap admin has the flag set). Verified by
 
 ---
 
+## P1.12 — Session-identity resolution (`<username>@local` vs real email, Finding 8)
+
+**Severity: Medium — found while making the post-auth smoke test pass.** Several
+auth call sites recovered the username from `sessions.email` by
+`removesuffix("@local")`. That works for password users with no email (the
+synthetic `<username>@local`), but **the seeded admin's email is the real
+`admin@whilly.local`** (migration 020). For it, the strip is a no-op, leaving
+`admin@whilly.local`, which has no `users` row — so:
+
+- the **must-change gate fail-opened** → the default `admin/admin` account was
+  never actually forced to change its password (it could navigate past the
+  one-time login redirect to any page); and
+- **both change-password endpoints broke** for the admin (`set_password` /
+  `verify_credentials` got a non-existent username) — the seeded admin literally
+  could not change its password through either flow.
+
+`submit_login` works because it has the `User` object directly; only the
+email→username *reconstruction* sites were affected.
+
+**Fix.** One canonical resolver, `users_repo.get_user_by_session_email`:
+`<username>@local` → strip + `get_user_by_username`; any other value →
+`get_user_by_email` (defensive `LIMIT 2`, exactly-one-match else `None`; a
+magic-link-only user with no row still → `None` → gate fail-open, which is
+correct). Routed through it: the must-change gate, `POST /auth/change-password`,
+and `POST /me/password`. Verified by the now-passing
+`tests/integration/test_post_auth_smoke.py` plus
+`tests/integration/test_user_email_resolution.py` (against the real seeded admin).
+
+> Note: `tests/integration/test_post_auth_smoke.py` also needed an explicit
+> `Origin` header on its change-password POST — a *test* gap (a browser sends
+> `Origin` on a same-origin form POST; the CSRF middleware is correct), not a
+> product issue.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)

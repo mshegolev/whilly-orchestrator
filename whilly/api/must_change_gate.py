@@ -63,7 +63,7 @@ from starlette.types import ASGIApp
 
 from whilly.api import auth_tokens, sessions
 from whilly.api.csrf import COOKIE_NAME, _HOST_PREFIX_COOKIE_NAME
-from whilly.api.users_repo import get_user_by_username
+from whilly.api.users_repo import get_user_by_session_email
 
 logger = logging.getLogger(__name__)
 
@@ -153,24 +153,6 @@ def _extract_session_id(request: Request, *, secret: bytes, cookie_name: str) ->
     return sid
 
 
-def _session_email_to_username(session_email: str) -> str:
-    """Recover the username from a ``sessions.email`` value.
-
-    The username+password login path synthesises ``<username>@local`` as
-    the ``sessions.email`` value (see
-    :mod:`whilly.api.auth_routes.submit_login`); the magic-link path
-    stores a real email. The username PK CHECK constraint
-    (``^[a-z0-9][a-z0-9_-]{0,63}$``) means a real email never round-trips
-    through :func:`get_user_by_username` — those users have no row in
-    ``users`` at all, so the lookup returns ``None`` and the gate
-    fail-opens. The synthetic case is the one that matters: strip
-    ``@local`` and recover the original username.
-    """
-    if session_email.endswith("@local"):
-        return session_email.removesuffix("@local")
-    return session_email
-
-
 class MustChangePasswordGateMiddleware(BaseHTTPMiddleware):
     """Redirect every cookie-authenticated request to the change-password
     form while the signed-in user has ``must_change_password=True``.
@@ -243,19 +225,25 @@ class MustChangePasswordGateMiddleware(BaseHTTPMiddleware):
             return False
         if session is None:
             return False
-        username = _session_email_to_username(session.email)
+        # Resolve the user via the single canonical resolver, which handles both
+        # the synthetic ``<username>@local`` and a real email (e.g. the seeded
+        # admin ``admin@whilly.local``, whose email does NOT round-trip to a
+        # username). Resolving real emails is what stops the gate silently
+        # bypassing must-change for that account; a magic-link user with no
+        # ``users`` row still resolves to None → fail-open (correct).
         try:
-            user = await get_user_by_username(self._pool, username=username)
+            user = await get_user_by_session_email(self._pool, session_email=session.email)
         except Exception:  # noqa: BLE001 — gate must never crash the request
             logger.warning(
-                "must_change_gate: get_user_by_username raised for %r — fail-open",
-                username,
+                "must_change_gate: user lookup raised for session email %r — fail-open",
+                session.email,
                 exc_info=True,
             )
             return False
         if user is None:
-            # Magic-link user with no ``users`` row, or stale session whose
-            # user has been deleted. Pass through; downstream handlers cope.
+            # Magic-link user with no ``users`` row, ambiguous email, or stale
+            # session whose user has been deleted. Pass through; downstream
+            # handlers cope.
             return False
         return bool(user.must_change_password)
 
