@@ -140,10 +140,14 @@ def test_post_auth_journey_login_change_password_tasks_audit(
         assert root_resp.status_code == 303
         assert "change-password" in (root_resp.headers.get("location") or "")
 
-        # Step 3 — submit the change-password form.
+        # Step 3 — submit the change-password form. A real browser sends an
+        # Origin header on a same-origin form POST; httpx does not by default,
+        # so set it explicitly or the CSRF middleware (correctly) rejects the
+        # cookie-authenticated POST with 403.
         cp_resp = client.post(
             "/auth/change-password",
             cookies={"whilly_session": cookie},
+            headers={"Origin": base},
             data={"new_password": _NEW_PASSWORD, "confirm_new_password": _NEW_PASSWORD},
         )
         assert cp_resp.status_code == 303, (

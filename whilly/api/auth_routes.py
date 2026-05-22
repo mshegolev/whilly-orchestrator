@@ -501,22 +501,24 @@ def build_auth_router(
         if len(new_password) < _MIN_PASSWORD_LENGTH:
             return _render_error(f"Password must be at least {_MIN_PASSWORD_LENGTH} characters.")
 
-        # Extract username from the session email.  The email stored in the
-        # sessions table is either the real email or the ``<username>@local``
-        # synthetic address produced by submit_login.
+        # Resolve the user from the session identity via the single canonical
+        # resolver. Critically this handles a real email (e.g. the seeded admin
+        # ``admin@whilly.local``) — a naive removesuffix("@local") leaves the full
+        # email, which has no ``users`` row, so the admin could never change its
+        # password here (Finding 8).
         session_email: str = str(principal.get("email", ""))
-        username = session_email.removesuffix("@local") if session_email.endswith("@local") else session_email
-        if not username:
-            logger.warning("auth.change-password: could not resolve username from session email %r", session_email)
+        forced_user = await users_repo.get_user_by_session_email(pool, session_email=session_email)
+        if forced_user is None:
+            logger.warning("auth.change-password: could not resolve user from session email %r", session_email)
             return _render_error("Session error — please log out and log in again.")
+        username = forced_user.username
 
         # SECURITY (Finding 6): this forced-flow endpoint sets a password WITHOUT
         # the current one — acceptable only while the account is actually in the
         # must-change state (first login on a bootstrap/temp password). For any
         # other session, route to /me/password, which requires the current
         # password, so a hijacked or idle session cannot silently rotate it.
-        forced_user = await users_repo.get_user_by_username(pool, username=username)
-        if forced_user is None or not forced_user.must_change_password:
+        if not forced_user.must_change_password:
             logger.info(
                 "auth.change-password: POST for username=%r without must_change_password set — "
                 "redirecting to /me/password (current password required there)",
@@ -618,16 +620,19 @@ def build_auth_router(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
-        # Resolve the username from the session — same @local-strip logic as
-        # the forced-flow endpoint above.
+        # Resolve the user from the session via the canonical resolver — handles
+        # both ``<username>@local`` and a real email (e.g. the seeded admin),
+        # which a naive removesuffix("@local") would mangle so the admin could
+        # never self-service change its password (Finding 8).
         session_email: str = str(principal.get("email", ""))
-        username = session_email.removesuffix("@local") if session_email.endswith("@local") else session_email
-        if not username:
+        session_user = await users_repo.get_user_by_session_email(pool, session_email=session_email)
+        if session_user is None:
             logger.warning(
-                "me.password: could not resolve username from session email %r",
+                "me.password: could not resolve user from session email %r",
                 session_email,
             )
             return _render_error("Session error — please log out and log in again.")
+        username = session_user.username
 
         # Validate the *current* password first. This is the key difference
         # from the forced /auth/change-password endpoint. verify_credentials

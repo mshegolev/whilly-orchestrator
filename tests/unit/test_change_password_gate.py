@@ -75,7 +75,7 @@ async def _post(client: AsyncClient, *, with_cookie: bool) -> Any:
 @pytest.mark.asyncio
 async def test_proceeds_when_must_change_password_set(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sessions, "verify_session", AsyncMock(return_value=_session()))
-    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=_user(must_change=True)))
+    monkeypatch.setattr(users_repo, "get_user_by_session_email", AsyncMock(return_value=_user(must_change=True)))
     set_pw = AsyncMock(return_value=None)
     monkeypatch.setattr(users_repo, "set_password", set_pw)
     resp = await _post(client, with_cookie=True)
@@ -89,7 +89,7 @@ async def test_redirects_to_me_password_when_not_must_change(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sessions, "verify_session", AsyncMock(return_value=_session()))
-    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=_user(must_change=False)))
+    monkeypatch.setattr(users_repo, "get_user_by_session_email", AsyncMock(return_value=_user(must_change=False)))
     set_pw = AsyncMock(return_value=None)
     monkeypatch.setattr(users_repo, "set_password", set_pw)
     resp = await _post(client, with_cookie=True)
@@ -100,14 +100,16 @@ async def test_redirects_to_me_password_when_not_must_change(
 
 
 @pytest.mark.asyncio
-async def test_redirects_when_user_row_missing(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_session_error_when_user_unresolvable(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The session authenticated, but the identity does not resolve to a users
+    # row (deleted user / magic-link-only). Treat as a session error rather than
+    # bouncing to /me/password (which would also fail to resolve). No write.
     monkeypatch.setattr(sessions, "verify_session", AsyncMock(return_value=_session()))
-    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=None))
+    monkeypatch.setattr(users_repo, "get_user_by_session_email", AsyncMock(return_value=None))
     set_pw = AsyncMock(return_value=None)
     monkeypatch.setattr(users_repo, "set_password", set_pw)
     resp = await _post(client, with_cookie=True)
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/me/password"
+    assert resp.status_code == 422
     assert set_pw.await_count == 0
 
 

@@ -97,6 +97,16 @@ def patched_set_password(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return mock
 
 
+@pytest.fixture(autouse=True)
+def _patched_session_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """submit_me_password resolves the user via ``get_user_by_session_email``
+    before checking the current password (so the seeded admin's real email
+    round-trips — Finding 8). Default it to the test user so the pool=None mock
+    harness never dereferences a real connection; reaching tests then drive the
+    ``verify_credentials`` mock as before."""
+    monkeypatch.setattr(users_repo, "get_user_by_session_email", AsyncMock(return_value=_make_user()))
+
+
 @pytest.fixture
 async def client() -> AsyncIterator[AsyncClient]:
     """A minimal app wired with build_auth_router + no CSRF (POST tests need to
