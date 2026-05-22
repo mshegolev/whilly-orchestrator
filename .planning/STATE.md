@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: UI parity completion
 status: completed
-last_updated: "2026-05-21T10:42:33Z"
-last_activity: 2026-05-21
+last_updated: "2026-05-22T00:00:00Z"
+last_activity: 2026-05-22
 progress:
   total_phases: 7
   completed_phases: 7
@@ -15,7 +15,7 @@ active_out_of_band:
   plan: post-auth-hardening
   plan_file: .planning/post-auth-hardening-tasks.json
   prd_file: docs/PRD-post-auth-hardening.md
-  latest_handoff: .planning/SESSION-HANDOFF-2026-05-21.md
+  latest_handoff: .planning/SESSION-HANDOFF-2026-05-22.md
   status_counts:
     done: 27
     skipped: 2
@@ -43,8 +43,17 @@ Current Milestone: v1.1 (archived) — no v1.2 declared yet
 Phase: Out-of-band follow-up (`post-auth-hardening`) — functionally complete
 Plan: `.planning/post-auth-hardening-tasks.json`
 Status: 27 done, 2 skipped (A1a, A1b), 0 pending (of 29 total)
-Last Activity: 2026-05-21
-Last Activity Description: Closed the 2026-05-19 handoff leftovers. Shipped PRs #303
+Last Activity: 2026-05-22
+Last Activity Description: Continued the security-review loop. Audited the
+agent-exec "task-id → path/tmux/shell" sink class opened by PR #318: #318 fixed the
+write sinks (`tmux_runner`, `verifier`) but left the symmetric **read** sink in
+`dashboard._resolve_task_log_path` (raw id → log unviewable for hierarchical ids +
+leading-slash absolute-path read) and shipped with no ADR section. Fixed the reader
+(flatten via `safe_task_id_filename`, reader == writer), added 2 regression tests,
+swept the rest of the class (clean: `workspaces`, `worktree_runner`, `prd_wizard`,
+`llm_ops`), and backfilled the docs as ADR-001 §P1.13 (covers #318 + this fix).
+Handoff: [`SESSION-HANDOFF-2026-05-22.md`](SESSION-HANDOFF-2026-05-22.md).
+Earlier (2026-05-21): Closed the 2026-05-19 handoff leftovers. Shipped PRs #303
 (root-caused the "3 flakes" to a local `.env`→`os.environ` leak; fixed via unit-conftest env
 restore + isolated the m1 baseline test), #304 (Jekyll-safe `docs/` mirror in
 `m1_baseline_fixtures.py`), #305 (E15/E17 security-design doc), #306 (E17 OIDC header-trust,
