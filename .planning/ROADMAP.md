@@ -62,8 +62,20 @@ at Phase 18.
   3. Each smoke run writes a persisted report file (JSON or Markdown) the operator can read after the run completes
   4. Smoke failure messages identify which check failed and what the operator should verify (credentials, project key, repo path), not just a raw exception
 
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 4 plans
+
+**Wave 1**
+
+  - [ ] 19-01-PLAN.md — Shared SmokeReport helper: accumulator, redacted report writer, exit codes (LIVE-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+  - [ ] 19-02-PLAN.md — `whilly jira smoke` action: read-only poll-cycle checks + report (LIVE-01, LIVE-03)
+  - [ ] 19-03-PLAN.md — `whilly gitlab` group + smoke action: token-auth ping + repo-hint + registration (LIVE-02, LIVE-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+  - [ ] 19-04-PLAN.md — Live smoke docs section + docs regression test (LIVE-01, LIVE-02, LIVE-03)
 
 ### Phase 20: Jira Watcher Daemon
 
@@ -85,7 +97,7 @@ at Phase 18.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 18. Migration Chain Validation | 2/2 | Complete    | 2026-06-11 |
-| 19. Live Authenticated Smoke | 0/? | Not started | - |
+| 19. Live Authenticated Smoke | 0/4 | Planned | - |
 | 20. Jira Watcher Daemon | 0/? | Not started | - |
 
 ## Deferred Scope
