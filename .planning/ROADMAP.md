@@ -31,40 +31,53 @@ at Phase 18.
 ## Phase Details
 
 ### Phase 18: Migration Chain Validation
+
 **Goal**: The full Alembic migration chain is verified repeatable from a clean state, giving operators and CI confidence in the data layer before live integration work begins.
 **Depends on**: Nothing (standalone Docker infrastructure)
 **Requirements**: MIG-01, MIG-02
 **Success Criteria** (what must be TRUE):
+
   1. Operator runs a single command against an empty Docker Postgres and all migrations apply without error
   2. The same command re-runs from a reset container and produces the identical green result (idempotency proof)
   3. A CI entry point (script or Makefile target) exists that can be invoked without manual steps or operator-specific environment setup
-  4. The chain result is recorded as evidence an operator can inspect (exit code, migration count, final schema hash or revision)
-**Plans**: 2 plans
+  4. The chain result is recorded as evidence an operator can inspect (exit code, migration count, final schema hash or revision)**Plans**: 2 plans
+
+**Wave 1**
+
   - [ ] 18-01-PLAN.md — Extend full-chain test to 028 + write inspectable evidence (MIG-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
   - [ ] 18-02-PLAN.md — migrate-chain Makefile target + migration-chain CI job (MIG-02)
 
 ### Phase 19: Live Authenticated Smoke
+
 **Goal**: Jira and GitLab integrations are validated on a real operator machine with real credentials, and every smoke run leaves persisted audit evidence for review.
 **Depends on**: Phase 18 (data layer verified before live sessions hit the DB)
 **Requirements**: LIVE-01, LIVE-02, LIVE-03
 **Success Criteria** (what must be TRUE):
+
   1. Operator follows documented setup steps, runs `whilly jira smoke` (or equivalent), and gets a pass/fail result against a real Jira project with classify, history, comments, and link checks exercised
   2. Operator runs `whilly gitlab smoke` (or equivalent) and gets a pass/fail result against a real repository with link-refresh and repo-hint checks exercised
   3. Each smoke run writes a persisted report file (JSON or Markdown) the operator can read after the run completes
   4. Smoke failure messages identify which check failed and what the operator should verify (credentials, project key, repo path), not just a raw exception
+
 **Plans**: TBD
 **UI hint**: yes
 
 ### Phase 20: Jira Watcher Daemon
+
 **Goal**: Operators can run a continuous Jira intake daemon that wraps the validated one-shot poll cycle, with full lifecycle controls and the existing global-pause and readiness gates honored before any autonomous work is dispatched.
 **Depends on**: Phase 19 (poll cycle validated on real Jira before daemon wraps it)
 **Requirements**: WATCH-01, WATCH-02, WATCH-03
 **Success Criteria** (what must be TRUE):
+
   1. Operator runs `whilly jira watch` and the daemon executes the one-shot poll cycle on a configurable interval without manual intervention
   2. Operator can stop the watcher gracefully and inspect its current status (running/stopped, last poll time, error count) via a status command or log
   3. Transient Jira/GitLab failures are retried with exponential backoff and each retry and failure is recorded as an audit event the operator can query
   4. When global worker pause is active, the watcher does not dispatch any autonomous work until pause is lifted
   5. When code/test readiness gates are not satisfied, the watcher records the block reason as an audit event and waits rather than dispatching
+
 **Plans**: TBD
 
 ## Progress Table

@@ -511,7 +511,7 @@ Path("migration-chain-evidence.json").write_text(json.dumps(evidence, indent=2))
 - `EXPECTED_CHAIN` ending at `016_jira_work_sessions`: stale, needs update to 028.
 - Head assertion `"016_jira_work_sessions"` in test_full_chain: stale, needs update.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should downgrade assertions cover all 28 tables or only the core set?**
    - What we know: The existing test checks 9 core tables after downgrade base.
