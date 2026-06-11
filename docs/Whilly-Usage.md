@@ -649,7 +649,7 @@ you have evidence of what was checked and when.
 ```bash
 export JIRA_SERVER_URL=https://company.atlassian.net
 export JIRA_USERNAME=you@example.com
-export JIRA_API_TOKEN=<token>
+export JIRA_API_TOKEN=$JIRA_API_TOKEN_VALUE
 
 whilly jira smoke --issue PROJECT-123
 ```
@@ -682,7 +682,7 @@ Token resolution order: `GITLAB_TOKEN` → `GITLAB_API_TOKEN` →
 
 ```bash
 export GITLAB_URL=https://gitlab.example.com
-export GITLAB_TOKEN=<token>
+export GITLAB_TOKEN=$GITLAB_TOKEN_VALUE
 
 whilly gitlab smoke --repo-url https://gitlab.example.com/group/project.git
 ```
