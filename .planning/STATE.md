@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
-status: executing
-last_updated: "2026-06-11T22:51:52.221Z"
-last_activity: 2026-06-12 -- Phase 19 Plan 03 complete (whilly gitlab smoke command)
+status: verifying
+last_updated: "2026-06-11T23:35:01.426Z"
+last_activity: 2026-06-11
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
-  percent: 33
+  completed_plans: 6
+  percent: 67
 ---
 
 # Project State
@@ -27,8 +27,8 @@ human control, and verification before claiming success.
 
 Phase: 19 (Live Authenticated Smoke) — EXECUTING
 Plan: 4 of 4
-Status: Executing Phase 19 (3 of 4 plans complete)
-Last activity: 2026-06-12 -- Phase 19 Plan 03 complete (whilly gitlab smoke command)
+Status: Phase complete — ready for verification
+Last activity: 2026-06-11
 
 ## Active Roadmap
 
@@ -147,6 +147,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | 19 | 01 | 16 min | 2 | 2 |
 | Phase 19 P02 | 20min | 2 tasks | 2 files |
 | 19 | 03 | 23 min | 3 | 3 |
+| Phase 19 P04 | 24 | 2 tasks | 2 files |
 
 ## Previous Milestones
 
@@ -187,3 +188,4 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase 19-03]: _resolve_gitlab_config_state exposes GITLAB_TOKEN as highest-priority env var per CONTEXT.md token precedence
 - [Phase 19-03]: _resolve_project_path strips '..' components before URL-encoding to satisfy T-19-06 traversal threat
 - [Phase 19-03]: gitlab_getter injection defaults to _gitlab_get at call time for clean test injection without circular imports
+- [Phase ?]: Phase 19-04: Bash code blocks use env-var references not angle-brackets to satisfy bash -n validation in docs
