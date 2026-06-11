@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
 status: executing
-last_updated: "2026-06-11T07:51:54.494Z"
-last_activity: 2026-06-11 -- Phase 18 planning complete
+last_updated: "2026-06-11T08:27:18.363Z"
+last_activity: 2026-06-11
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 2
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (updated 2026-06-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Milestone v1.2 Adoption & live-ops — roadmap defined, ready to plan Phase 18.
+**Current focus:** Phase 18 — Migration Chain Validation
 
 ## Current Position
 
-Phase: 18 (next to start)
-Plan: —
+Phase: 18 (Migration Chain Validation) — EXECUTING
+Plan: 2 of 2
 Status: Ready to execute
-Last activity: 2026-06-11 -- Phase 18 planning complete
+Last activity: 2026-06-11
 
 ## Active Roadmap
 
@@ -143,6 +143,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | 15 | 01 | focused | 2 | 1 |
 | 16 | 01 | focused | 2 | 4 |
 | 17 | 01-05 | focused | 5 | 12 |
+| Phase 18-migration-chain-validation P01 | 19 min | 3 tasks | 2 files |
 
 ## Previous Milestones
 
@@ -168,3 +169,9 @@ Archives:
 ## Next Step
 
 Plan Phase 18 with `/gsd-plan-phase 18`.
+
+## Decisions
+
+- [Phase ?]: Use EXPECTED_CHAIN[-1] as single source of truth for head revision; no second literal in test
+- [Phase ?]: Post-downgrade assertion remains empty-set; all 017-028 migrations have real drop_table/drop_column
+- [Phase ?]: Evidence file contains only revision string, count, booleans; no DSN/password
