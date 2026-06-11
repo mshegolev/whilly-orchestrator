@@ -385,6 +385,37 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     }
     assert jira_work_tables == {"jira_work_sessions", "jira_work_events"}
 
+    # 017: ``scheduler_rules`` and ``scheduler_poll_cycles`` tables exist.
+    scheduler_tables = {
+        row["table_name"]
+        for row in asyncio.run(
+            _fetchall(
+                empty_postgres_dsn,
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN ('scheduler_rules', 'scheduler_poll_cycles')
+                """,
+            )
+        )
+    }
+    assert scheduler_tables == {"scheduler_rules", "scheduler_poll_cycles"}, (
+        f"Migration 017 tables missing: {scheduler_tables}"
+    )
+
+    # 019a: ``plans.archived_at`` and ``plans.last_event_at`` columns exist.
+    archived_at_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'plans'
+              AND column_name IN ('archived_at', 'last_event_at')
+            """,
+        )
+    )
+    assert int(archived_at_count) == 2  # 019a added both columns
+
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
 
@@ -411,7 +442,17 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                     'funnel_url',
                     'control_state',
                     'jira_work_sessions',
-                    'jira_work_events'
+                    'jira_work_events',
+                    'scheduler_rules',
+                    'scheduler_poll_cycles',
+                    'sessions',
+                    'magic_links',
+                    'users',
+                    'user_totp_secrets',
+                    'auth_audit',
+                    'webauthn_credentials',
+                    'webauthn_challenges',
+                    'webauthn_user_handles'
                   )
                 """,
             )
