@@ -668,7 +668,7 @@ no user confirmation needed. (It is not empty; A1-A3 require planner awareness.)
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **GitLab "whoami" check — `glab api` vs. direct `urllib` HTTP GET**
    - What we know: `_resolve_gitlab_token` already resolves a Bearer token;
