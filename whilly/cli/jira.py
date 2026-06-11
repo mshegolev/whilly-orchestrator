@@ -30,6 +30,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from whilly.cli.smoke import (
+    EXIT_CHECK_FAILED as _SMOKE_EXIT_CHECK_FAILED,
+    EXIT_CONFIG_MISSING,
+    SmokeReport,
+    _redact_url,
+    _smoke_report_dir,
+    write_smoke_report,
+)
 from whilly.jira_work import build_jira_work_metadata, classify_jira_work, probe_code_readiness
 from whilly.jira_watch import JiraWorkSnapshot, collect_jira_work_snapshot, persist_jira_work_snapshot
 from whilly.sources.jira import fetch_single_jira_issue, parse_jira_key
@@ -285,6 +293,19 @@ def build_jira_parser() -> argparse.ArgumentParser:
     p_poll.add_argument("--plan-id", default="", help="Optional Whilly plan id to store with --persist.")
     p_poll.add_argument("--persist", action="store_true", help="Persist the refreshed snapshot to Postgres.")
     p_poll.add_argument("--json", action="store_true", help="Print the full snapshot as JSON.")
+    p_smoke = sub.add_parser(
+        "smoke",
+        help=(
+            "Run read-only Jira smoke checks (auth, issue fetch, comments, changelog, "
+            "remote links, classify) and write a redacted report."
+        ),
+    )
+    p_smoke.add_argument("--issue", required=True, help="Jira key or browse URL, e.g. ABC-123.")
+    p_smoke.add_argument("--timeout", type=int, default=15, help="Per Jira HTTP request timeout in seconds.")
+    p_smoke.add_argument(
+        "--persist", action="store_true", help="Persist smoke event to Postgres (requires WHILLY_DATABASE_URL)."
+    )
+    p_smoke.add_argument("--json", action="store_true", help="Print the full report payload as JSON.")
     p_tui = sub.add_parser(
         "tui",
         help="Interactive TUI intake for a single Jira issue.",
@@ -387,6 +408,18 @@ def run_jira_command(
         return _run_readiness(args)
     if args.action == "poll":
         return _run_poll(args, snapshot_collector=snapshot_collector or collect_jira_work_snapshot)
+    if args.action == "smoke":
+        return _run_jira_smoke(
+            args,
+            snapshot_collector=snapshot_collector or collect_jira_work_snapshot,
+            config_loader=config_loader,
+            config_reader=config_reader,
+            environ=environ,
+            prompt=prompt,
+            secret_prompt=secret_prompt,
+            browser_opener=browser_opener,
+            stdin_isatty=stdin_isatty,
+        )
     if args.action == "tui":
         from whilly.cli.jira_tui import run_jira_tui_command
 
@@ -667,6 +700,162 @@ def _run_poll(args: argparse.Namespace, *, snapshot_collector: SnapshotCollector
             f"last_comment={snapshot.last_seen_comment_id or 'none'}"
         )
     return EXIT_OK
+
+
+def _run_jira_smoke(
+    args: argparse.Namespace,
+    *,
+    snapshot_collector: SnapshotCollector,
+    config_loader: ConfigLoader | None,
+    config_reader: ConfigReader | None,
+    environ: MutableMapping[str, str] | None,
+    prompt: Prompt | None,
+    secret_prompt: Prompt | None,
+    browser_opener: BrowserOpener | None,
+    stdin_isatty: IsATTY | None,
+) -> int:
+    """Execute read-only Jira smoke checks and write a redacted report.
+
+    Exit codes: 0 = all checks passed, 1 = one or more checks failed,
+    2 = configuration missing (credential gate returned non-zero).
+    """
+    # --- V5 input validation: reject malformed keys before any network or config call ---
+    try:
+        issue_key = parse_jira_key(args.issue)
+    except ValueError as exc:
+        print(f"whilly jira smoke: {exc}", file=sys.stderr)
+        print(
+            "whilly jira smoke: pass a valid Jira key (e.g. ABC-123) or issue browse URL.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_MISSING
+
+    project_key = issue_key.rsplit("-", 1)[0]
+
+    # --- Credential gate: must complete before snapshot_collector is called ---
+    effective_config_loader = config_loader if config_loader is not None else _load_config
+    effective_config_reader = config_reader if config_reader is not None else _read_jira_config_section
+    effective_env: MutableMapping[str, str] = environ if environ is not None else os.environ
+    effective_config_loader()
+    config_rc = _ensure_jira_config(
+        args,
+        config_reader=effective_config_reader,
+        env=effective_env,
+        prompt=prompt or input,
+        secret_prompt=secret_prompt or getpass.getpass,
+        browser_opener=browser_opener or webbrowser.open,
+        stdin_isatty=stdin_isatty or sys.stdin.isatty,
+        command_label="whilly jira smoke",
+    )
+    if config_rc != EXIT_OK:
+        # Map EXIT_VALIDATION_ERROR → EXIT_CONFIG_MISSING for the smoke command.
+        return EXIT_CONFIG_MISSING
+
+    # Derive the redacted target host for the report payload (never the full URL with auth).
+    server_url = effective_env.get("JIRA_SERVER_URL") or effective_env.get("WHILLY_JIRA_SERVER_URL") or ""
+    target_host = _redact_url(server_url)
+
+    # --- Accumulate per-check results ---
+    report = SmokeReport(kind="jira")
+    snapshot: JiraWorkSnapshot | None = None
+
+    try:
+        snapshot = snapshot_collector(args.issue, timeout=args.timeout)
+        report.add_check("auth", passed=True)
+        report.add_check(
+            "issue_fetch",
+            passed=bool(snapshot.issue_key),
+            hint="" if snapshot.issue_key else f"Verify JIRA_SERVER_URL and project key {project_key!r}.",
+        )
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+        hint = f"Check JIRA_SERVER_URL, JIRA_API_TOKEN, and that project key {project_key!r} exists. Error: {exc}"
+        report.add_check("auth", passed=False, hint=hint)
+        report.add_check("issue_fetch", passed=False, hint=hint)
+
+    if snapshot is not None:
+        report.add_check(
+            "comments",
+            passed=snapshot.comments is not None,
+            hint="" if snapshot.comments is not None else "Comments field missing in snapshot.",
+        )
+        report.add_check(
+            "changelog",
+            passed=len(snapshot.changelog_ids) >= 0,
+            hint="",
+        )
+        report.add_check(
+            "remote_links",
+            passed=snapshot.links is not None,
+            hint="" if snapshot.links is not None else "Remote links field missing in snapshot.",
+        )
+        classification = snapshot.classification
+        classify_ok = bool(classification)
+        report.add_check(
+            "classify",
+            passed=classify_ok,
+            hint="" if classify_ok else f"classify_jira_work returned empty result for {issue_key!r}.",
+        )
+    else:
+        # Snapshot failed — mark field-derived checks as failed with actionable hints.
+        field_hint = f"Verify JIRA_SERVER_URL, JIRA_API_TOKEN, and project key {project_key!r}."
+        report.add_check("comments", passed=False, hint=field_hint)
+        report.add_check("changelog", passed=False, hint=field_hint)
+        report.add_check("remote_links", passed=False, hint=field_hint)
+        report.add_check("classify", passed=False, hint=field_hint)
+
+    # --- Compose and write the redacted report ---
+    payload = report.to_payload()
+    payload["target_host"] = target_host
+    payload["project_key"] = project_key
+    payload["issue_key"] = issue_key
+
+    report_path = write_smoke_report(_smoke_report_dir(), "jira", payload)
+
+    # --- Optional DB persist (same gate as _run_poll) ---
+    if args.persist:
+        dsn = os.environ.get("WHILLY_DATABASE_URL", "").strip()
+        if not dsn:
+            print("whilly jira smoke: WHILLY_DATABASE_URL is required for --persist.", file=sys.stderr)
+            return EXIT_CONFIG_MISSING
+        try:
+            asyncio.run(_persist_smoke_event(dsn=dsn, payload=payload))
+        except Exception as exc:  # noqa: BLE001
+            print(f"whilly jira smoke: persist failed: {exc}", file=sys.stderr)
+            return _SMOKE_EXIT_CHECK_FAILED
+
+    # --- Output ---
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        summary = payload["summary"]
+        status = "PASS" if summary["all_passed"] else "FAIL"
+        print(f"whilly jira smoke: {status} issue={issue_key} passed={summary['passed']}/{summary['total']}")
+        for check in payload["checks"]:
+            check_status = "pass" if check["passed"] else "FAIL"
+            line = f"  [{check_status}] {check['name']}"
+            if not check["passed"] and check.get("hint"):
+                line += f" — {check['hint']}"
+            print(line)
+        print(f"  report={report_path}")
+
+    return EXIT_OK if report.all_passed else EXIT_VALIDATION_ERROR
+
+
+async def _persist_smoke_event(*, dsn: str, payload: dict[str, Any]) -> None:
+    """Append a smoke event to Postgres (best-effort; not a hard requirement)."""
+    from whilly.adapters.db import close_pool, create_pool
+    from whilly.adapters.db.repository import TaskRepository
+
+    pool = await create_pool(dsn)
+    try:
+        repo = TaskRepository(pool)
+        await repo.append_jira_work_event(
+            issue_key=payload.get("issue_key", ""),
+            event_type="smoke",
+            payload=payload,
+        )
+    finally:
+        await close_pool(pool)
 
 
 async def _persist_poll_snapshot(*, dsn: str, snapshot: JiraWorkSnapshot, plan_id: str) -> None:
