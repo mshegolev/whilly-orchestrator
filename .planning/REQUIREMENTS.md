@@ -28,7 +28,7 @@ Requirements for milestone v1.2. Each maps to roadmap phases.
 ### Migration Chain
 
 - [x] **MIG-01**: The full Alembic migration chain runs green from an empty Postgres in Docker.
-- [ ] **MIG-02**: Chain validation is repeatable via a scripted/CI entry point, not a one-off
+- [x] **MIG-02**: Chain validation is repeatable via a scripted/CI entry point, not a one-off
   manual run.
 
 ## Future Requirements
@@ -57,7 +57,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | MIG-01 | Phase 18 | Complete |
-| MIG-02 | Phase 18 | Pending |
+| MIG-02 | Phase 18 | Complete |
 | LIVE-01 | Phase 19 | Pending |
 | LIVE-02 | Phase 19 | Pending |
 | LIVE-03 | Phase 19 | Pending |
