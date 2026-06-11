@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
-status: verifying
-last_updated: "2026-06-11T08:56:08.336Z"
+status: ready_to_plan
+last_updated: 2026-06-11T17:51:46.234Z
 last_activity: 2026-06-11
 progress:
   total_phases: 3
@@ -11,6 +11,7 @@ progress:
   total_plans: 2
   completed_plans: 2
   percent: 33
+stopped_at: Phase 18 complete (2/2) — ready to discuss Phase 19
 ---
 
 # Project State
@@ -21,13 +22,13 @@ See: `.planning/PROJECT.md` (updated 2026-06-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Phase 18 — Migration Chain Validation
+**Current focus:** Phase 19 — live authenticated smoke
 
 ## Current Position
 
-Phase: 18 (Migration Chain Validation) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
+Phase: 19
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-06-11
 
 ## Active Roadmap
