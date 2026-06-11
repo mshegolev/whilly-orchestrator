@@ -12,35 +12,72 @@ next milestone state.
 |-----------|--------|---------|----------|
 | v1.0 | Shipped | 2026-05-08 | `.planning/milestones/v1.0-ROADMAP.md`, `.planning/milestones/v1.0-REQUIREMENTS.md`, `.planning/milestones/v1.0-MILESTONE-AUDIT.md` |
 | v1.1 UI parity completion | Shipped | 2026-05-11 | `.planning/milestones/v1.1-ROADMAP.md`, `.planning/milestones/v1.1-REQUIREMENTS.md`, `.planning/milestones/v1.1-MILESTONE-AUDIT.md`, `.planning/milestones/v1.1-RETROSPECTIVE.md` |
+| v1.2 Adoption & live-ops | Active | — | This file |
 
-## Current Milestone
+## Current Milestone: v1.2 Adoption & live-ops
 
-No active milestone.
+**Goal:** Take Whilly from "functionally complete on the dev machine" to "operable against real
+Jira/GitLab work on an operator machine" by closing the deferred live-validation and ops backlog.
 
-## Completed Milestone Summary
+**Phase numbering:** v1.0 used phases 1–12; v1.1 used phases 13–17 (plus 13.1, 13.2). v1.2 starts
+at Phase 18.
 
-v1.1 closed the post-v1.0 WUI/TUI interface gap, added explicit version update controls, added a
-GitHub feedback reporter, and introduced Jira-driven intake with classification, history refresh,
-repo hints, and code/test readiness gates.
+## Phases
 
-Completed phases:
-- Phase 13: Canonical UI parity contract.
-- Phase 13.1: Version update checks and manual/automatic update modes.
-- Phase 13.2: GitHub feedback issue reporter.
-- Phase 14: WUI method and fragment wiring.
-- Phase 15: TUI capability parity.
-- Phase 16: UI parity verification and docs.
-- Phase 17: Jira work classification and code readiness routing.
+- [ ] **Phase 18: Migration Chain Validation** - Alembic chain runs green from empty Postgres in Docker with a repeatable CI entry point
+- [ ] **Phase 19: Live Authenticated Smoke** - Jira and GitLab smoke runs execute on a real operator machine and produce persisted audit evidence
+- [ ] **Phase 20: Jira Watcher Daemon** - Long-running `whilly jira watch` daemon wraps one-shot poll with configurable interval, lifecycle controls, and global-pause/readiness gates
+
+## Phase Details
+
+### Phase 18: Migration Chain Validation
+**Goal**: The full Alembic migration chain is verified repeatable from a clean state, giving operators and CI confidence in the data layer before live integration work begins.
+**Depends on**: Nothing (standalone Docker infrastructure)
+**Requirements**: MIG-01, MIG-02
+**Success Criteria** (what must be TRUE):
+  1. Operator runs a single command against an empty Docker Postgres and all migrations apply without error
+  2. The same command re-runs from a reset container and produces the identical green result (idempotency proof)
+  3. A CI entry point (script or Makefile target) exists that can be invoked without manual steps or operator-specific environment setup
+  4. The chain result is recorded as evidence an operator can inspect (exit code, migration count, final schema hash or revision)
+**Plans**: TBD
+
+### Phase 19: Live Authenticated Smoke
+**Goal**: Jira and GitLab integrations are validated on a real operator machine with real credentials, and every smoke run leaves persisted audit evidence for review.
+**Depends on**: Phase 18 (data layer verified before live sessions hit the DB)
+**Requirements**: LIVE-01, LIVE-02, LIVE-03
+**Success Criteria** (what must be TRUE):
+  1. Operator follows documented setup steps, runs `whilly jira smoke` (or equivalent), and gets a pass/fail result against a real Jira project with classify, history, comments, and link checks exercised
+  2. Operator runs `whilly gitlab smoke` (or equivalent) and gets a pass/fail result against a real repository with link-refresh and repo-hint checks exercised
+  3. Each smoke run writes a persisted report file (JSON or Markdown) the operator can read after the run completes
+  4. Smoke failure messages identify which check failed and what the operator should verify (credentials, project key, repo path), not just a raw exception
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 20: Jira Watcher Daemon
+**Goal**: Operators can run a continuous Jira intake daemon that wraps the validated one-shot poll cycle, with full lifecycle controls and the existing global-pause and readiness gates honored before any autonomous work is dispatched.
+**Depends on**: Phase 19 (poll cycle validated on real Jira before daemon wraps it)
+**Requirements**: WATCH-01, WATCH-02, WATCH-03
+**Success Criteria** (what must be TRUE):
+  1. Operator runs `whilly jira watch` and the daemon executes the one-shot poll cycle on a configurable interval without manual intervention
+  2. Operator can stop the watcher gracefully and inspect its current status (running/stopped, last poll time, error count) via a status command or log
+  3. Transient Jira/GitLab failures are retried with exponential backoff and each retry and failure is recorded as an audit event the operator can query
+  4. When global worker pause is active, the watcher does not dispatch any autonomous work until pause is lifted
+  5. When code/test readiness gates are not satisfied, the watcher records the block reason as an audit event and waits rather than dispatching
+**Plans**: TBD
+
+## Progress Table
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 18. Migration Chain Validation | 0/? | Not started | - |
+| 19. Live Authenticated Smoke | 0/? | Not started | - |
+| 20. Jira Watcher Daemon | 0/? | Not started | - |
 
 ## Deferred Scope
 
-- Browser and assistive-technology QA for the full WUI operator workflow.
-- Live authenticated Jira/GitLab smoke on a real operator machine.
-- Full Docker-backed Alembic chain run outside the focused static migration coverage.
-- Long-running Jira watcher/daemon wrapper around the current one-shot `whilly jira poll`.
+- Browser and assistive-technology QA for the full WUI operator workflow (OPQA-01, future milestone).
 - New operator modules beyond the pulled logs/admin/PRD artifacts.
 - Replacement of the current Jinja/HTMX WUI or Rich TUI architecture.
 
-## Next Step
-
-Start the next milestone with `$gsd-new-milestone`.
+---
+*Roadmap created: 2026-06-11 for milestone v1.2*
