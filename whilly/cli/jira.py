@@ -306,6 +306,16 @@ def build_jira_parser() -> argparse.ArgumentParser:
         "--persist", action="store_true", help="Persist smoke event to Postgres (requires WHILLY_DATABASE_URL)."
     )
     p_smoke.add_argument("--json", action="store_true", help="Print the full report payload as JSON.")
+    p_smoke.add_argument(
+        "--interactive-config",
+        action="store_true",
+        help="Prompt for missing Jira settings before running smoke checks.",
+    )
+    p_smoke.add_argument(
+        "--no-interactive-config",
+        action="store_true",
+        help="Never prompt for missing Jira settings; print setup instructions instead.",
+    )
     p_tui = sub.add_parser(
         "tui",
         help="Interactive TUI intake for a single Jira issue.",
