@@ -41,6 +41,38 @@ from whilly.adapters.db import MIGRATIONS_DIR
 pytestmark = DOCKER_REQUIRED
 
 
+# Per-test outcome accumulator for the machine-readable evidence file
+# (MIG-01 / MIG-02). Each test flips its own flag to True only after its
+# assertions pass; the session-scoped ``_write_evidence`` fixture below
+# emits the file with ``.get(..., False)`` defaults so a skipped or
+# failed test produces honest ``false`` flags instead of fabricated
+# ``true`` constants.
+_RESULTS: dict[str, bool] = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _write_evidence() -> Iterator[None]:
+    """Write migration-chain evidence after all tests in this module ran.
+
+    Flags reflect actual outcomes recorded in :data:`_RESULTS` — a flag
+    is ``true`` only if the corresponding test ran to completion. No DSN
+    / connection string is included (it carries the ephemeral container
+    password). Under xdist each worker writes its own view; the
+    dedicated ``make migrate-chain`` gate is single-process, where this
+    is exact.
+    """
+    yield
+    evidence = {
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "head_revision": EXPECTED_CHAIN[-1],
+        "migration_count": len(EXPECTED_CHAIN),
+        "upgrade_ok": _RESULTS.get("upgrade_ok", False),
+        "downgrade_ok": _RESULTS.get("downgrade_ok", False),
+        "idempotent_ok": _RESULTS.get("idempotent_ok", False),
+    }
+    Path("migration-chain-evidence.json").write_text(json.dumps(evidence, indent=2))
+
+
 # Ordered chain of migrations the suite expects on disk. If a future
 # migration shifts the chain this test calls it out loudly rather than
 # silently letting the chain grow without coverage.
@@ -419,6 +451,9 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(archived_at_count) == 2  # 019a added both columns
 
+    # Upgrade-side assertions all passed — record the real outcome.
+    _RESULTS["upgrade_ok"] = True
+
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
 
@@ -463,6 +498,9 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     }
     assert post_downgrade_tables == set()
 
+    # Downgrade round-trip passed — record the real outcome.
+    _RESULTS["downgrade_ok"] = True
+
 
 def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     """``upgrade head`` → ``upgrade head`` is a no-op (alembic-version unchanged).
@@ -481,14 +519,7 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
     assert second_version == EXPECTED_CHAIN[-1]
 
-    # Write machine-readable evidence — head revision, count, and pass flags only.
-    # No DSN / connection string (carries ephemeral container password).
-    evidence = {
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-        "head_revision": EXPECTED_CHAIN[-1],
-        "migration_count": len(EXPECTED_CHAIN),
-        "upgrade_ok": True,
-        "downgrade_ok": True,
-        "idempotent_ok": True,
-    }
-    Path("migration-chain-evidence.json").write_text(json.dumps(evidence, indent=2))
+    # Idempotency assertions passed — record the real outcome. The
+    # evidence file itself is written by the ``_write_evidence``
+    # session fixture from actual per-test outcomes.
+    _RESULTS["idempotent_ok"] = True
