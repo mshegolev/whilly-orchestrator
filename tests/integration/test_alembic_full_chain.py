@@ -17,8 +17,11 @@ migration).
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import os
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -477,3 +480,15 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
     assert second_version == EXPECTED_CHAIN[-1]
+
+    # Write machine-readable evidence — head revision, count, and pass flags only.
+    # No DSN / connection string (carries ephemeral container password).
+    evidence = {
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "head_revision": EXPECTED_CHAIN[-1],
+        "migration_count": len(EXPECTED_CHAIN),
+        "upgrade_ok": True,
+        "downgrade_ok": True,
+        "idempotent_ok": True,
+    }
+    Path("migration-chain-evidence.json").write_text(json.dumps(evidence, indent=2))
