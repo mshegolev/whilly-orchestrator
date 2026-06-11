@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
 status: executing
-last_updated: "2026-06-12T00:00:00.000Z"
-last_activity: 2026-06-12 -- Phase 19 Plan 02 complete (whilly jira smoke command)
+last_updated: "2026-06-11T22:51:52.221Z"
+last_activity: 2026-06-12 -- Phase 19 Plan 03 complete (whilly gitlab smoke command)
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 33
 ---
 
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 19 (Live Authenticated Smoke) — EXECUTING
-Plan: 3 of 4
-Status: Executing Phase 19
-Last activity: 2026-06-12 -- Phase 19 Plan 02 complete (whilly jira smoke command)
+Plan: 4 of 4
+Status: Executing Phase 19 (3 of 4 plans complete)
+Last activity: 2026-06-12 -- Phase 19 Plan 03 complete (whilly gitlab smoke command)
 
 ## Active Roadmap
 
@@ -146,6 +146,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | Phase 18-migration-chain-validation P01 | 19 min | 3 tasks | 2 files |
 | 19 | 01 | 16 min | 2 | 2 |
 | Phase 19 P02 | 20min | 2 tasks | 2 files |
+| 19 | 03 | 23 min | 3 | 3 |
 
 ## Previous Milestones
 
@@ -183,3 +184,6 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase 19-02]: Import EXIT_CHECK_FAILED as _SMOKE_EXIT_CHECK_FAILED to preserve EXIT_VALIDATION_ERROR constant in jira.py
 - [Phase 19-02]: Smoke subparser requires --interactive-config flags because _ensure_jira_config accesses args.interactive_config
 - [Phase 19-02]: classify check reads snapshot.classification as pure field access — no extra Jira call, read-only guarantee
+- [Phase 19-03]: _resolve_gitlab_config_state exposes GITLAB_TOKEN as highest-priority env var per CONTEXT.md token precedence
+- [Phase 19-03]: _resolve_project_path strips '..' components before URL-encoding to satisfy T-19-06 traversal threat
+- [Phase 19-03]: gitlab_getter injection defaults to _gitlab_get at call time for clean test injection without circular imports
