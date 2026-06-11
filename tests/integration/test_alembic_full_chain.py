@@ -455,7 +455,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
         )
     }
     assert scheduler_tables == {"scheduler_rules", "scheduler_poll_cycles"}, (
-        f"Migration 017 tables missing: {scheduler_tables}"
+        f"Migration 017 tables missing: {sorted({'scheduler_rules', 'scheduler_poll_cycles'} - scheduler_tables)}"
     )
 
     # 019a: ``plans.archived_at`` and ``plans.last_event_at`` columns exist.
