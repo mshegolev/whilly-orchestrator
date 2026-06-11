@@ -19,7 +19,7 @@ Requirements for milestone v1.2. Each maps to roadmap phases.
 
 ### Live Smoke
 
-- [ ] **LIVE-01**: Operator can run an authenticated Jira smoke (classify, history, comments,
+- [x] **LIVE-01**: Operator can run an authenticated Jira smoke (classify, history, comments,
   links) against a real Jira project with documented setup.
 - [ ] **LIVE-02**: Operator can run an authenticated GitLab smoke (link refresh, repo hints)
   against a real repository.
@@ -58,7 +58,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | MIG-01 | Phase 18 | Complete |
 | MIG-02 | Phase 18 | Complete |
-| LIVE-01 | Phase 19 | Pending |
+| LIVE-01 | Phase 19 | Complete |
 | LIVE-02 | Phase 19 | Pending |
 | LIVE-03 | Phase 19 | Complete |
 | WATCH-01 | Phase 20 | Pending |
