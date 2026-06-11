@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
 status: executing
-last_updated: "2026-06-11T20:55:47.098Z"
-last_activity: 2026-06-12 -- Phase 19 Plan 01 complete (smoke report foundation)
+last_updated: "2026-06-12T00:00:00.000Z"
+last_activity: 2026-06-12 -- Phase 19 Plan 02 complete (whilly jira smoke command)
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 6
-  completed_plans: 3
+  completed_plans: 4
   percent: 33
 ---
 
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 19 (Live Authenticated Smoke) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Executing Phase 19
-Last activity: 2026-06-12 -- Phase 19 Plan 01 complete (smoke report foundation)
+Last activity: 2026-06-12 -- Phase 19 Plan 02 complete (whilly jira smoke command)
 
 ## Active Roadmap
 
@@ -145,6 +145,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | 17 | 01-05 | focused | 5 | 12 |
 | Phase 18-migration-chain-validation P01 | 19 min | 3 tasks | 2 files |
 | 19 | 01 | 16 min | 2 | 2 |
+| Phase 19 P02 | 20min | 2 tasks | 2 files |
 
 ## Previous Milestones
 
@@ -179,3 +180,6 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase 19-01]: Import _log_dir from whilly.llm_ops so WHILLY_LOG_DIR is honored by smoke report dir
 - [Phase 19-01]: SmokeReport.add_check never raises on False — per-check accumulation is a hard contract
 - [Phase 19-01]: write_smoke_report takes explicit report_dir param for testability; callers use _smoke_report_dir() for production default
+- [Phase 19-02]: Import EXIT_CHECK_FAILED as _SMOKE_EXIT_CHECK_FAILED to preserve EXIT_VALIDATION_ERROR constant in jira.py
+- [Phase 19-02]: Smoke subparser requires --interactive-config flags because _ensure_jira_config accesses args.interactive_config
+- [Phase 19-02]: classify check reads snapshot.classification as pure field access — no extra Jira call, read-only guarantee
