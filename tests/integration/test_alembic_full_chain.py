@@ -472,7 +472,11 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     assert base_version is None
 
     # ── Step 5: schema returned to pre-001 baseline ──────────────────
-    post_downgrade_tables = {
+    # No hand-curated table list: after ``downgrade base`` *no* user
+    # table may remain (only alembic's own bookkeeping table). This is
+    # self-maintaining — a future migration whose downgrade leaves a
+    # table behind fails here without anyone updating a list.
+    post_downgrade_tables = sorted(
         row["table_name"]
         for row in asyncio.run(
             _fetchall(
@@ -480,32 +484,12 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN (
-                    'workers',
-                    'plans',
-                    'tasks',
-                    'events',
-                    'bootstrap_tokens',
-                    'funnel_url',
-                    'control_state',
-                    'jira_work_sessions',
-                    'jira_work_events',
-                    'scheduler_rules',
-                    'scheduler_poll_cycles',
-                    'sessions',
-                    'magic_links',
-                    'users',
-                    'user_totp_secrets',
-                    'auth_audit',
-                    'webauthn_credentials',
-                    'webauthn_challenges',
-                    'webauthn_user_handles'
-                  )
+                  AND table_name <> 'alembic_version'
                 """,
             )
         )
-    }
-    assert post_downgrade_tables == set()
+    )
+    assert post_downgrade_tables == [], f"Tables left behind after downgrade base: {post_downgrade_tables}"
 
     # Downgrade round-trip passed — record the real outcome.
     _RESULTS["downgrade_ok"] = True
