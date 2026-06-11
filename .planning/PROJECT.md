@@ -64,6 +64,8 @@ Jira/GitLab work on an operator machine" by closing the deferred live-validation
   validation).
 - Full Docker-backed Alembic migration chain run beyond the focused static migration coverage.
 
+**Progress:** Phase 18 complete — full Alembic chain (001→028) validated live in Docker with honest evidence flags, `make migrate-chain` entry point, and a `migration-chain` CI job (first live CI run pending push).
+
 **Key context:** The out-of-band `post-auth-hardening` plan is functionally complete (27 done,
 2 skipped as non-issues) — its auth stack (sessions, flag-gated OIDC header trust, flag-gated
 WebAuthn second factor) and the ADR-001 path-sink fixes are prerequisites this milestone builds
