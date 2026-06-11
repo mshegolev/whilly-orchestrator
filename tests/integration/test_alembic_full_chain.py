@@ -40,6 +40,13 @@ from whilly.adapters.db import MIGRATIONS_DIR
 
 pytestmark = DOCKER_REQUIRED
 
+# Repo root (tests/integration/ → two levels up). The evidence file is
+# anchored here so it lands in the same place regardless of the
+# directory pytest was launched from — the CI artifact upload step
+# expects it at the repo root.
+REPO_ROOT: Path = Path(__file__).resolve().parents[2]
+EVIDENCE_PATH: Path = REPO_ROOT / "migration-chain-evidence.json"
+
 
 # Per-test outcome accumulator for the machine-readable evidence file
 # (MIG-01 / MIG-02). Each test flips its own flag to True only after its
@@ -70,7 +77,7 @@ def _write_evidence() -> Iterator[None]:
         "downgrade_ok": _RESULTS.get("downgrade_ok", False),
         "idempotent_ok": _RESULTS.get("idempotent_ok", False),
     }
-    Path("migration-chain-evidence.json").write_text(json.dumps(evidence, indent=2))
+    EVIDENCE_PATH.write_text(json.dumps(evidence, indent=2))
 
 
 # Ordered chain of migrations the suite expects on disk. If a future
