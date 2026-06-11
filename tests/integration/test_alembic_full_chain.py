@@ -460,6 +460,67 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     )
     assert int(archived_at_count) == 2  # 019a added both columns
 
+    # 018 / 020 / 024 / 025 / 026–028: auth + security tables exist.
+    expected_auth_tables = {
+        "sessions",
+        "magic_links",
+        "users",
+        "user_totp_secrets",
+        "auth_audit",
+        "webauthn_credentials",
+        "webauthn_challenges",
+        "webauthn_user_handles",
+    }
+    auth_tables = {
+        row["table_name"]
+        for row in asyncio.run(
+            _fetchall(
+                empty_postgres_dsn,
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN (
+                    'sessions', 'magic_links', 'users', 'user_totp_secrets',
+                    'auth_audit', 'webauthn_credentials', 'webauthn_challenges',
+                    'webauthn_user_handles'
+                  )
+                """,
+            )
+        )
+    }
+    assert auth_tables == expected_auth_tables, (
+        f"Auth tables missing after upgrade head: {sorted(expected_auth_tables - auth_tables)}"
+    )
+
+    # 021 / 022: users gained the password-policy + lockout columns.
+    users_policy_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'users'
+              AND column_name IN (
+                'must_change_password', 'updated_at',
+                'failed_attempts', 'locked_until'
+              )
+            """,
+        )
+    )
+    assert int(users_policy_column_count) == 4, "Migration 021/022 users columns missing"
+
+    # 023: ``workers.tags`` and ``tasks.required_tags`` array columns exist.
+    tags_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE (table_name = 'workers' AND column_name = 'tags')
+               OR (table_name = 'tasks' AND column_name = 'required_tags')
+            """,
+        )
+    )
+    assert int(tags_column_count) == 2, "Migration 023 tag columns missing"
+
     # Upgrade-side assertions all passed — record the real outcome.
     _RESULTS["upgrade_ok"] = True
 
