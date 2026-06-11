@@ -109,11 +109,20 @@ EXPECTED_CHAIN: tuple[str, ...] = (
 
 
 def test_expected_chain_files_exist_on_disk() -> None:
-    """Every expected migration file ships at the canonical path."""
+    """On-disk migrations match :data:`EXPECTED_CHAIN` exactly (set equality).
+
+    Subset checking is not enough: a newly added migration that is not
+    listed here would otherwise pass silently, and the only assertion
+    that would catch it lives in the Docker-gated tests that auto-skip
+    on machines without Docker — exactly how the chain went stale at
+    016. This test always runs and fails loudly on any drift.
+    """
     versions_dir = MIGRATIONS_DIR / "versions"
-    for revision in EXPECTED_CHAIN:
-        path = versions_dir / f"{revision}.py"
-        assert path.is_file(), f"Missing migration file at {path}"
+    on_disk = {p.stem for p in versions_dir.glob("*.py") if p.stem != "__init__"}
+    assert on_disk == set(EXPECTED_CHAIN), (
+        f"Chain drift — extra on disk: {sorted(on_disk - set(EXPECTED_CHAIN))}, "
+        f"missing on disk: {sorted(set(EXPECTED_CHAIN) - on_disk)}"
+    )
 
 
 @pytest.fixture
