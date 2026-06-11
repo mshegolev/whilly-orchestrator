@@ -39,7 +39,9 @@ at Phase 18.
   2. The same command re-runs from a reset container and produces the identical green result (idempotency proof)
   3. A CI entry point (script or Makefile target) exists that can be invoked without manual steps or operator-specific environment setup
   4. The chain result is recorded as evidence an operator can inspect (exit code, migration count, final schema hash or revision)
-**Plans**: TBD
+**Plans**: 2 plans
+  - [ ] 18-01-PLAN.md — Extend full-chain test to 028 + write inspectable evidence (MIG-01)
+  - [ ] 18-02-PLAN.md — migrate-chain Makefile target + migration-chain CI job (MIG-02)
 
 ### Phase 19: Live Authenticated Smoke
 **Goal**: Jira and GitLab integrations are validated on a real operator machine with real credentials, and every smoke run leaves persisted audit evidence for review.
@@ -69,7 +71,7 @@ at Phase 18.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 18. Migration Chain Validation | 0/? | Not started | - |
+| 18. Migration Chain Validation | 0/2 | Planned | - |
 | 19. Live Authenticated Smoke | 0/? | Not started | - |
 | 20. Jira Watcher Daemon | 0/? | Not started | - |
 
