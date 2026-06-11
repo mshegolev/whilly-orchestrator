@@ -66,7 +66,7 @@ at Phase 18.
 
 **Wave 1**
 
-  - [ ] 19-01-PLAN.md — Shared SmokeReport helper: accumulator, redacted report writer, exit codes (LIVE-03)
+  - [x] 19-01-PLAN.md — Shared SmokeReport helper: accumulator, redacted report writer, exit codes (LIVE-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -97,7 +97,7 @@ at Phase 18.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 18. Migration Chain Validation | 2/2 | Complete    | 2026-06-11 |
-| 19. Live Authenticated Smoke | 0/4 | Planned | - |
+| 19. Live Authenticated Smoke | 1/4 | In Progress|  |
 | 20. Jira Watcher Daemon | 0/? | Not started | - |
 
 ## Deferred Scope

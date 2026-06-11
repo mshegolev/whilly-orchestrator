@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
 status: executing
-last_updated: "2026-06-11T20:26:10.819Z"
-last_activity: 2026-06-11 -- Phase 19 planning complete
+last_updated: "2026-06-11T20:55:47.098Z"
+last_activity: 2026-06-12 -- Phase 19 Plan 01 complete (smoke report foundation)
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 6
-  completed_plans: 2
+  completed_plans: 3
   percent: 33
 ---
 
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (updated 2026-06-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Phase 19 — live authenticated smoke
+**Current focus:** Phase 19 — Live Authenticated Smoke
 
 ## Current Position
 
-Phase: 19
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-11 -- Phase 19 planning complete
+Phase: 19 (Live Authenticated Smoke) — EXECUTING
+Plan: 2 of 4
+Status: Executing Phase 19
+Last activity: 2026-06-12 -- Phase 19 Plan 01 complete (smoke report foundation)
 
 ## Active Roadmap
 
@@ -144,6 +144,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | 16 | 01 | focused | 2 | 4 |
 | 17 | 01-05 | focused | 5 | 12 |
 | Phase 18-migration-chain-validation P01 | 19 min | 3 tasks | 2 files |
+| 19 | 01 | 16 min | 2 | 2 |
 
 ## Previous Milestones
 
@@ -175,3 +176,6 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase ?]: Use EXPECTED_CHAIN[-1] as single source of truth for head revision; no second literal in test
 - [Phase ?]: Post-downgrade assertion remains empty-set; all 017-028 migrations have real drop_table/drop_column
 - [Phase ?]: Evidence file contains only revision string, count, booleans; no DSN/password
+- [Phase 19-01]: Import _log_dir from whilly.llm_ops so WHILLY_LOG_DIR is honored by smoke report dir
+- [Phase 19-01]: SmokeReport.add_check never raises on False — per-check accumulation is a hard contract
+- [Phase 19-01]: write_smoke_report takes explicit report_dir param for testability; callers use _smoke_report_dir() for production default
