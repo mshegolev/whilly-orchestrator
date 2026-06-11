@@ -44,7 +44,7 @@ at Phase 18.
 
 **Wave 1**
 
-  - [ ] 18-01-PLAN.md — Extend full-chain test to 028 + write inspectable evidence (MIG-01)
+  - [x] 18-01-PLAN.md — Extend full-chain test to 028 + write inspectable evidence (MIG-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -84,7 +84,7 @@ at Phase 18.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 18. Migration Chain Validation | 0/2 | Planned | - |
+| 18. Migration Chain Validation | 1/2 | In Progress|  |
 | 19. Live Authenticated Smoke | 0/? | Not started | - |
 | 20. Jira Watcher Daemon | 0/? | Not started | - |
 
