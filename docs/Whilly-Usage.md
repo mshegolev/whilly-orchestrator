@@ -624,6 +624,97 @@ tmux attach -t whilly-TASK-001
 tmux kill-session -t whilly-TASK-001
 ```
 
+## Live smoke
+
+Live smoke commands run a series of **read-only** integration checks against
+real credentials and live infrastructure. They are safe to run against
+production systems — no comments are posted, no transitions are made, no
+writes occur.
+
+Each run exits with a structured summary and writes a redacted JSON report so
+you have evidence of what was checked and when.
+
+### Jira smoke
+
+**Required env vars**
+
+| Variable | Description |
+|----------|-------------|
+| `JIRA_SERVER_URL` | Full base URL, e.g. `https://company.atlassian.net` |
+| `JIRA_USERNAME` | Basic-auth email address |
+| `JIRA_API_TOKEN` | Jira Cloud API token (or PAT for Server/DC) |
+
+**Command**
+
+```bash
+export JIRA_SERVER_URL=https://company.atlassian.net
+export JIRA_USERNAME=you@example.com
+export JIRA_API_TOKEN=<token>
+
+whilly jira smoke --issue PROJECT-123
+```
+
+**What it checks:** auth (whoami), issue fetch, comments, changelog, remote
+links, and classify. All six checks run even when an earlier one fails, so
+you get a full picture on each invocation.
+
+**Optional flags**
+
+| Flag | Description |
+|------|-------------|
+| `--timeout N` | Per-request timeout in seconds (default 30) |
+| `--persist` | Append a DB audit event (requires `WHILLY_DATABASE_URL`) |
+| `--json` | Print full report JSON to stdout instead of the human summary |
+
+### GitLab smoke
+
+**Required env vars**
+
+| Variable | Description |
+|----------|-------------|
+| `GITLAB_URL` | GitLab base URL, e.g. `https://gitlab.example.com` |
+| `GITLAB_TOKEN` | Personal access token with `read_api` scope (highest priority) |
+
+Token resolution order: `GITLAB_TOKEN` → `GITLAB_API_TOKEN` →
+`WHILLY_GITLAB_API_TOKEN` → `glab config get token` CLI fallback.
+
+**Command**
+
+```bash
+export GITLAB_URL=https://gitlab.example.com
+export GITLAB_TOKEN=<token>
+
+whilly gitlab smoke --repo-url https://gitlab.example.com/group/project.git
+```
+
+**What it checks:** auth (`/api/v4/user`), project access
+(`/api/v4/projects/{path}`), and repo-hint validation (confirming the
+project's recorded path matches the requested URL).
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks passed |
+| `1` | One or more checks failed |
+| `2` | Configuration missing (env vars not set) |
+
+### Report location
+
+Every run writes a redacted JSON report to:
+
+```
+whilly_logs/smoke/jira-smoke-{timestamp}.json   # Jira
+whilly_logs/smoke/gitlab-smoke-{timestamp}.json  # GitLab
+```
+
+Reports contain per-check pass/fail results, durations, and a redacted target
+(hostname only — no tokens, DSNs, or full URLs with credentials).
+
+**DB audit events (`--persist`):** A best-effort audit event is appended to
+the database only when `WHILLY_DATABASE_URL` is set. The report file is
+always written regardless of database availability.
+
 ## Troubleshooting
 
 | Problem | Solution |
