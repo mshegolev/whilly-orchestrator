@@ -58,6 +58,18 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "014_control_state",
     "015_plan_verification_commands",
     "016_jira_work_sessions",
+    "017_scheduler_rules_and_cycles",
+    "018_sessions_and_magic_links",
+    "019a_plans_archived_at",  # 'a' suffix is intentional — not a typo
+    "020_users",
+    "021_users_must_change_password",
+    "022_users_failed_login_counters",
+    "023_worker_tags",
+    "024_user_totp_secrets",
+    "025_auth_audit",
+    "026_webauthn_credentials",
+    "027_webauthn_challenges",
+    "028_webauthn_user_handles",
 )
 
 
@@ -143,7 +155,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "016_jira_work_sessions"
+    assert head_version == EXPECTED_CHAIN[-1]
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -419,8 +431,8 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "016_jira_work_sessions"
+    assert first_version == EXPECTED_CHAIN[-1]
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "016_jira_work_sessions"
+    assert second_version == EXPECTED_CHAIN[-1]
