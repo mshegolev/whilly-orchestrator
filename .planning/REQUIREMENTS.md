@@ -56,20 +56,20 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| WATCH-01 | — | Pending |
-| WATCH-02 | — | Pending |
-| WATCH-03 | — | Pending |
-| LIVE-01 | — | Pending |
-| LIVE-02 | — | Pending |
-| LIVE-03 | — | Pending |
-| MIG-01 | — | Pending |
-| MIG-02 | — | Pending |
+| MIG-01 | Phase 18 | Pending |
+| MIG-02 | Phase 18 | Pending |
+| LIVE-01 | Phase 19 | Pending |
+| LIVE-02 | Phase 19 | Pending |
+| LIVE-03 | Phase 19 | Pending |
+| WATCH-01 | Phase 20 | Pending |
+| WATCH-02 | Phase 20 | Pending |
+| WATCH-03 | Phase 20 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 8 total
-- Mapped to phases: 0
-- Unmapped: 8 ⚠️ (roadmap pending)
+- Mapped to phases: 8
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-06-11*
-*Last updated: 2026-06-11 after initial definition*
+*Last updated: 2026-06-11 — phase mappings added after roadmap creation*

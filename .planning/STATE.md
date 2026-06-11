@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
-status: planning
-last_updated: "2026-06-11T05:09:31.784Z"
+status: roadmap_approved
+last_updated: "2026-06-11T00:00:00.000Z"
 last_activity: 2026-06-11
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,32 +17,34 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-11)
+See: `.planning/PROJECT.md` (updated 2026-06-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Out-of-band follow-up plan `post-auth-hardening` is active (no formal v1.2
-milestone declared yet). See [`SESSION-HANDOFF-2026-05-18.md`](SESSION-HANDOFF-2026-05-18.md)
-for the latest handoff. Promote to a v1.2 milestone with `$gsd-new-milestone` when the scope
-firms up.
+**Current focus:** Milestone v1.2 Adoption & live-ops — roadmap defined, ready to plan Phase 18.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 18 (next to start)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-11 — Milestone v1.2 started
+Status: Roadmap approved, ready to plan Phase 18
+Last activity: 2026-06-11 — Roadmap created for v1.2
+
+## Active Roadmap
+
+See: `.planning/ROADMAP.md`
+
+| Phase | Name | Requirements | Status |
+|-------|------|--------------|--------|
+| 18 | Migration Chain Validation | MIG-01, MIG-02 | Not started |
+| 19 | Live Authenticated Smoke | LIVE-01, LIVE-02, LIVE-03 | Not started |
+| 20 | Jira Watcher Daemon | WATCH-01, WATCH-02, WATCH-03 | Not started |
 
 ## Active Scope
 
-**Out-of-band:** [`post-auth-hardening`](post-auth-hardening-tasks.json) plan, scoped by
-[`docs/PRD-post-auth-hardening.md`](../docs/PRD-post-auth-hardening.md). Now functionally
-complete (27 done, 2 skipped). Latest handoff lives at
-[`SESSION-HANDOFF-2026-05-21.md`](SESSION-HANDOFF-2026-05-21.md). Handoff files are
-date-stamped so the history accumulates rather than being overwritten — start the next
-session by reading the most recent one. No remaining deferred work from this plan: **E15
-(WebAuthn)** is now implemented (flag-gated, default OFF); only A1a/A1b stay skipped (see the
-design doc at [`E15-E17-auth-security-design.md`](E15-E17-auth-security-design.md)).
+**Out-of-band complete:** `post-auth-hardening` plan is functionally complete (27 done, 2 skipped).
+Auth stack (sessions, flag-gated OIDC header trust, flag-gated WebAuthn second factor) and
+ADR-001 path-sink fixes are prerequisites this milestone builds on.
 
 **Archived v1.1 evidence:**
 
@@ -52,6 +54,16 @@ design doc at [`E15-E17-auth-security-design.md`](E15-E17-auth-security-design.m
 - `.planning/milestones/v1.1-RETROSPECTIVE.md`
 
 ## Recent Decisions
+
+- Phase 18 (MIG) is sequenced first: Docker-backed Alembic chain validation is standalone
+  infrastructure with no credential dependencies. Running it first gives confidence in the data
+  layer before live sessions write to Postgres.
+
+- Phase 19 (LIVE) is sequenced second: live smoke validates the existing poll/link-refresh code
+  paths that the watcher will wrap. Must pass before Phase 20 can be trusted.
+
+- Phase 20 (WATCH) is sequenced last: the daemon wraps a validated poll cycle (Phase 19) and
+  writes to a validated data layer (Phase 18).
 
 - Phase 13 Plan 01 kept UI-01 metadata in `whilly/operator_views.py` to extend the existing pure
   operator contract pattern.
@@ -117,6 +129,7 @@ design doc at [`E15-E17-auth-security-design.md`](E15-E17-auth-security-design.m
 
 - Phase 13.2 inserted after Phase 13.1: GitHub feedback issue reporter (URGENT).
 - Phase 17 added after Phase 16: Jira work classification and code readiness routing.
+- Phases 18-20 defined for milestone v1.2: migration validation, live smoke, watcher daemon.
 
 ## Performance Metrics
 
@@ -148,10 +161,10 @@ Archives:
 
 ## Deferred Items
 
-- Browser/screen-reader QA for the complete WUI operator workflow.
+- Browser/screen-reader QA for the complete WUI operator workflow (OPQA-01).
 - New operator modules beyond the pulled logs/admin/PRD artifacts.
 - Replacement of the current Jinja/HTMX dashboard or Rich TUI architecture.
 
 ## Next Step
 
-Start the next milestone with `$gsd-new-milestone`.
+Plan Phase 18 with `/gsd-plan-phase 18`.
