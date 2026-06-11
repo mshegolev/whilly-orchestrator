@@ -22,6 +22,11 @@ requirements covered. v1.1 is complete and audited: 7 phases, 12 plans, and 23/2
 requirements covered. It closes UI parity gaps and adds the operator-adoption controls needed to
 run Whilly on another machine against real Jira/GitLab work.
 
+After v1.1, the out-of-band `post-auth-hardening` plan shipped the authentication stack (session
+auth, gated password change, flag-gated OIDC header trust, flag-gated WebAuthn second factor) and
+a security-review loop that closed the task-id path-traversal sink class (ADR-001 §P1.x, PRs
+#303–#318). It is functionally complete: 27 done, 2 skipped as non-issues.
+
 The shipped v1.0 scope includes:
 
 - WUI/TUI operator pause parity and a shared review-decision command path.
@@ -47,9 +52,22 @@ The shipped v1.1 scope includes:
 - Jira-driven work intake can classify incoming issues, persist task history, reread Jira/GitLab
   links, and gate autonomous execution on code/test readiness.
 
-## Current Milestone
+## Current Milestone: v1.2 Adoption & live-ops
 
-No active milestone. Start the next product slice with `$gsd-new-milestone`.
+**Goal:** Take Whilly from "functionally complete on the dev machine" to "operable against real
+Jira/GitLab work on an operator machine" by closing the deferred live-validation and ops backlog.
+
+**Target features:**
+- Long-running Jira watcher/daemon wrapping the one-shot `whilly jira poll` so intake is
+  continuous instead of manual.
+- Live authenticated Jira/GitLab smoke validation on a real operator machine (v1.1 deferred
+  validation).
+- Full Docker-backed Alembic migration chain run beyond the focused static migration coverage.
+
+**Key context:** The out-of-band `post-auth-hardening` plan is functionally complete (27 done,
+2 skipped as non-issues) — its auth stack (sessions, flag-gated OIDC header trust, flag-gated
+WebAuthn second factor) and the ADR-001 path-sink fixes are prerequisites this milestone builds
+on. A1a/A1b are excluded: the defect never reproduced.
 
 ## Requirements
 
@@ -133,5 +151,22 @@ No active milestone. Start the next product slice with `$gsd-new-milestone`.
 | Treat hotfix as urgency, not a primary Jira work kind | Hotfix can apply to bugs, tasks, or DevOps changes and should add safety gates instead of changing the whole taxonomy | Good |
 | Gate autonomous Jira work on code/test readiness | Linked repos, GitLab refs, unit tests, and verification commands must be known before workers mutate code | Good |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
-*Last updated: 2026-05-11 after archiving v1.1*
+*Last updated: 2026-06-11 after starting milestone v1.2*
