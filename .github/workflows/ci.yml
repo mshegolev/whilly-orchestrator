@@ -324,11 +324,23 @@ jobs:
         run: pip install -e '.[dev]'
       - name: Run full migration chain validation
         run: make migrate-chain
+      - name: Assert evidence was produced (tests actually ran, not skipped)
+        # Hard post-condition: if Docker/testcontainers is unreachable the
+        # whole module skips, pytest exits 0 and `make migrate-chain`
+        # "succeeds" having validated nothing. The evidence file is only
+        # written when the tests actually executed, so its absence here
+        # must fail the gate. Runs only when the make step claimed success
+        # (default `if: success()`).
+        run: test -f migration-chain-evidence.json
       - name: Upload migration chain evidence
+        # `if: always()` so a failing run still uploads its (honest,
+        # false-flagged) evidence; `warn` instead of `error` because on
+        # failure paths the file may legitimately not exist — the hard
+        # existence gate is the dedicated step above.
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: migration-chain-evidence
           path: migration-chain-evidence.json
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 30
