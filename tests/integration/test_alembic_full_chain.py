@@ -70,7 +70,7 @@ def _write_evidence() -> Iterator[None]:
     """
     yield
     evidence = {
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
         "head_revision": EXPECTED_CHAIN[-1],
         "migration_count": len(EXPECTED_CHAIN),
         "upgrade_ok": _RESULTS.get("upgrade_ok", False),
