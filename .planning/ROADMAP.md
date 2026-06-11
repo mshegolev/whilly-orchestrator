@@ -71,7 +71,7 @@ at Phase 18.
 **Wave 2** *(blocked on Wave 1 completion)*
 
   - [x] 19-02-PLAN.md — `whilly jira smoke` action: read-only poll-cycle checks + report (LIVE-01, LIVE-03)
-  - [ ] 19-03-PLAN.md — `whilly gitlab` group + smoke action: token-auth ping + repo-hint + registration (LIVE-02, LIVE-03)
+  - [x] 19-03-PLAN.md — `whilly gitlab` group + smoke action: token-auth ping + repo-hint + registration (LIVE-02, LIVE-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -97,7 +97,7 @@ at Phase 18.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 18. Migration Chain Validation | 2/2 | Complete    | 2026-06-11 |
-| 19. Live Authenticated Smoke | 2/4 | In Progress|  |
+| 19. Live Authenticated Smoke | 3/4 | In Progress|  |
 | 20. Jira Watcher Daemon | 0/? | Not started | - |
 
 ## Deferred Scope
