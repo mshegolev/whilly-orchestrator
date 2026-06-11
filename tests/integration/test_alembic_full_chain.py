@@ -1,11 +1,14 @@
-"""End-to-end alembic chain test (TASK-108a + M3 fix-feature).
+"""End-to-end alembic chain test (TASK-108a + M3 fix-feature + Phase 18).
 
-Pins the assertion that ``alembic upgrade head`` applies migrations
-``001 → 002 → 003 → 004 → 005 → 006 → 007`` in order on a fresh
-Postgres and ``alembic downgrade base`` reverts every step cleanly.
-Mirrors the per-migration tests but exercises the whole linear
-chain in one go so a single broken edge between revisions surfaces
-here even when each per-migration test passes in isolation.
+Pins the assertion that ``alembic upgrade head`` applies the full
+migration chain in :data:`EXPECTED_CHAIN` (currently 001 through
+``028_webauthn_user_handles``) in order on a fresh Postgres and
+``alembic downgrade base`` reverts every step cleanly. Mirrors the
+per-migration tests but exercises the whole linear chain in one go so
+a single broken edge between revisions surfaces here even when each
+per-migration test passes in isolation. ``EXPECTED_CHAIN`` is the
+single source of truth — docstrings deliberately avoid hardcoding
+revision names so they cannot drift the way the pre-Phase-18 prose did.
 
 Note that ``information_schema`` is the source of truth for column
 shape; ``alembic_version`` is the source of truth for the recorded
@@ -191,14 +194,15 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     Steps:
       1. Empty Postgres (no whilly tables).
       2. Apply ``upgrade head`` — every migration in :data:`EXPECTED_CHAIN`
-         lands; alembic_version reports ``006_plan_github_ref``.
-      3. Verify the migration-006 deltas exist (column +
-         partial UNIQUE index).
+         lands; alembic_version reports the chain head
+         (``EXPECTED_CHAIN[-1]``).
+      3. Verify per-migration structural deltas exist (tables, columns,
+         indexes, triggers added along the chain).
       4. Apply ``downgrade base`` — every migration's downgrade runs
          in reverse order; alembic_version table is left empty (no
          applied revisions).
-      5. Verify the whilly tables and the migration-006 column are
-         gone — schema returned to the pre-001 baseline.
+      5. Verify no user tables remain — schema returned to the
+         pre-001 baseline.
     """
     cfg = _build_alembic_config(empty_postgres_dsn)
 
@@ -567,9 +571,10 @@ def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     """``upgrade head`` → ``upgrade head`` is a no-op (alembic-version unchanged).
 
     Pins VAL-FORGE-020 across the full chain: re-running ``upgrade
-    head`` against an already-006 database is safe (same alembic
-    contract every migration relies on, but spelled out here so a
-    broken upgrade idempotency edge would surface in CI).
+    head`` against a database already at the chain head
+    (``EXPECTED_CHAIN[-1]``) is safe (same alembic contract every
+    migration relies on, but spelled out here so a broken upgrade
+    idempotency edge would surface in CI).
     """
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
