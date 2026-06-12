@@ -424,6 +424,66 @@ def test_backoff_increases_on_consecutive_failures_and_resets_on_success(
     )
 
 
+def test_mixed_issue_cycle_keeps_failure_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --issue A --issue B where A fails and B succeeds, B's success must
+    NOT reset backoff/failure accounting for the cycle (WR-01). The failure
+    event must name the failing issue and an honest 'partial' result."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    stop = threading.Event()
+    cycles = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        if ref == "BAD-1":
+            raise RuntimeError("simulated failure")
+        # GOOD-2 succeeds; second cycle stops the loop
+        cycles[0] += 1
+        if cycles[0] >= 2:
+            stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.jira_watch_loop import EVENT_FAILURE
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        persist_calls.append({"issue_key": issue_key, "event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", lambda evt, s: evt.is_set())
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(issues=["BAD-1", "GOOD-2"], interval=0),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    # 2 cycles, BAD-1 failed in each → 2 consecutive failing cycles
+    assert status["error_count"] == 2
+    assert status["backoff_seconds"] == 10, "backoff must keep growing while any issue keeps failing"
+    assert status["last_error"] == "RuntimeError"
+
+    failure_events = [c for c in persist_calls if c["event_type"] == EVENT_FAILURE]
+    assert len(failure_events) == 2, "every failing cycle must emit watch.failure"
+    evt = failure_events[0]
+    assert evt["issue_key"] == "BAD-1", "failure event must be attributed to the failing issue"
+    payload = evt["payload"]
+    assert payload["result"] == "partial"  # type: ignore[index]
+    assert payload["failed_issues"] == ["BAD-1"]  # type: ignore[index]
+    assert payload["issue_results"] == {"BAD-1": "error", "GOOD-2": "ok"}  # type: ignore[index]
+
+
 # ---------------------------------------------------------------------------
 # Task 2 – Test 2: _acquire_pid_lock behaviour
 # ---------------------------------------------------------------------------

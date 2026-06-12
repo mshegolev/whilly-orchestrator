@@ -393,7 +393,8 @@ Path: `whilly_logs/watch/jira-watch-status.json` (honoring `WHILLY_LOG_DIR`)
     "cycle_count": int,
     "error_count": int,
     "last_poll_at": str | None,   # ISO-8601 UTC
-    "last_poll_result": str | None,  # "ok" | "error" | "paused" | "blocked"
+    "last_poll_result": str | None,  # "ok" | "error" | "partial" | "paused" | "blocked"
+    "last_error": str | None,     # exception class name of the last poll failure
     "backoff_seconds": int,
     "started_at": str,            # ISO-8601 UTC
     "stopped_at": str | None,     # ISO-8601 UTC
