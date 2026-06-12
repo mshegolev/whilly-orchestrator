@@ -436,7 +436,11 @@ def test_jira_smoke_report_contains_no_token_or_dsn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Written report must not contain the sample token value, JIRA_API_TOKEN literal, or postgres://."""
+    """Written report must not contain the sample token VALUE or a postgres:// DSN.
+
+    Env-var *names* (e.g. ``JIRA_API_TOKEN``) are not secrets and legitimately
+    appear in failure-path hints; only the values are asserted absent.
+    """
     monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
 
     snapshot = _full_snapshot()
@@ -463,12 +467,60 @@ def test_jira_smoke_report_contains_no_token_or_dsn(
     assert len(reports) == 1
     raw = reports[0].read_text(encoding="utf-8")
 
-    # Security assertions: no secrets in the report file
+    # Security assertions: no secret VALUES in the report file
     assert "secret-token-should-not-appear" not in raw, "Sample token value must not appear in report"
-    assert "JIRA_API_TOKEN" not in raw, "Token key literal must not appear in report"
     assert "postgres://" not in raw, "Database DSN must not appear in report"
+    assert "dbpass" not in raw, "DSN password must not appear in report"
 
     # Sanity: redacted host and project key ARE present
     parsed = json.loads(raw)
     assert "sample-jira.example.com" in parsed.get("target_host", "")
     assert parsed["project_key"] == "ABC"
+
+
+def test_jira_smoke_failure_path_never_leaks_token_value_or_dsn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WR-08: failing collector with secret-bearing env → token VALUE and DSN never leak.
+
+    Failure-path hints may name env vars (names are not secrets), but the
+    token value and DSN must never appear in the report file or any output.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    token_value = "jira-secret-value-xyz789"
+    dsn = "postgres://dbuser:dbpass@dbhost:5432/mydb"
+    env = {
+        "JIRA_SERVER_URL": "https://sample-jira.example.com",
+        "JIRA_USERNAME": "testuser@example.com",
+        "JIRA_API_TOKEN": token_value,
+        "WHILLY_DATABASE_URL": dsn,
+    }
+
+    def _raising_collector(ref: str, timeout: int = 15) -> JiraWorkSnapshot:
+        raise RuntimeError("HTTP 401 — unauthorized")
+
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123"],
+        snapshot_collector=_raising_collector,
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=env,
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 1
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert token_value not in combined, "Token value leaked into CLI output on failure path"
+    assert dsn not in combined, "DSN leaked into CLI output on failure path"
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1
+    raw = reports[0].read_text(encoding="utf-8")
+    assert token_value not in raw, "Token value leaked into report on failure path"
+    assert "postgres://" not in raw, "DSN leaked into report on failure path"
+    assert "dbpass" not in raw, "DSN password leaked into report on failure path"
