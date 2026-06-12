@@ -446,13 +446,17 @@ def _run_jira_watch(
 
     try:
         consecutive_failures = 0
+        first_cycle = True
 
         while not stop.is_set():
-            # Interruptible sleep (skip on first cycle when interval==0 or
-            # when stop is already set).
-            backoff = status["backoff_seconds"]
-            if _interruptible_sleep(stop, interval + backoff):
-                break  # stop was set during sleep
+            # Poll immediately on start (WR-04); sleep interval + backoff
+            # BETWEEN cycles only.
+            if first_cycle:
+                first_cycle = False
+            else:
+                backoff = status["backoff_seconds"]
+                if _interruptible_sleep(stop, interval + backoff):
+                    break  # stop was set during sleep
 
             if stop.is_set():
                 break

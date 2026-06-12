@@ -120,7 +120,9 @@ tmux new-session -d -s jira-watch \
 **Interval**
 
 Set the poll interval with `--interval SECONDS` or the `WHILLY_JIRA_WATCH_INTERVAL`
-env var (default: 300 s). The env var takes lower priority than the flag.
+env var (default: 300 s). The env var takes lower priority than the flag. The
+watcher polls immediately on start, then waits the interval (plus any failure
+backoff) between cycles.
 
 **Graceful stop**
 
