@@ -172,3 +172,33 @@ except PermissionError:
 _Reviewed: 2026-06-12_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+---
+
+## Fix Status (2026-06-12, gsd-code-fixer)
+
+Scope: Critical + Warning (all fixed); Info findings fixed where they sat on
+the same lines. Each fix committed atomically with prefix `fix(20):`.
+
+| Finding | Status | Commit | Notes |
+|---------|--------|--------|-------|
+| CR-01 | fixed | `8451792` (closure), `70e46ed` (loop containment) | Closure builds a complete `argparse.Namespace` with explicit defaults for every `_run_argv` field; `_run_dispatch_if_ready` contains dispatch exceptions (watch.failure event + error_count, watcher survives). Real-closure tests assert the worker receives `["--plan", "jira-abc-123"]`; raising-runner test proves the loop survives. |
+| CR-02 | fixed | `49cb18b` | `--readiness-repo-path` accepts a repo directory (probed via `probe_code_readiness`, the Phase-17 evaluation) or a plan JSON file. Gate fails CLOSED: undeterminable readiness (flag omitted/missing path/garbled JSON/probe error) blocks with `watch.block` `verdict=unknown`. Tests: directory (ready + unready), missing path, malformed JSON, no flag. Docs updated. |
+| CR-03 | fixed | `70e46ed` | `watch.dispatch` emitted ONLY on rc==0 (success contract: `dispatch_runner` returns `EXIT_OK`); non-zero rc/exception emits `watch.failure` with honest `{rc, ok, error}` payload; `last_dispatch_rc` recorded in status. |
+| WR-01 | fixed | `6043050` | Per-issue outcomes tracked; any failing issue fails the cycle and applies backoff (a later success cannot zero it); `last_poll_result` is `partial`/`error`; `watch.failure` attributed to the failing issue with `issue_results`/`failed_issues`. |
+| WR-02 | fixed | `cbc8a17` | `O_CREAT\|O_EXCL` creation (one stale-reclaim retry), EPERM → live → refuse, only ESRCH reclaims, write-then-verify re-read after create. |
+| WR-03 | fixed | `2a6fd63` | `_ensure_jira_config` runs in the watch branch before the loop; missing config exits `EXIT_CONFIG_MISSING` (2); `--interactive-config` flags now live; stale plan-03 TODOs removed. |
+| WR-04 | fixed | `32f67d0` | Poll immediately on start; sleep interval+backoff between cycles; misleading comment removed; docs state immediate first poll. |
+| WR-05 | fixed | `e86f6c0` | `watch-status` probes the recorded PID when `state=running`; dead PID reported as `stale (pid N not running)` in human and `--json` output. |
+| WR-06 | fixed | `70e46ed` | Dedup: successful dispatch records the issue's snapshot `combined_hash` in `status.dispatched`; unchanged snapshots are not re-dispatched (hash-less snapshots → once per watcher run). Failed dispatches retry next cycle. |
+| WR-07 | fixed | `8451792` (closure), `70e46ed` (loop) | `parse_jira_key` normalizes refs for plan id/path (browse URLs work, garbage refused); the loop iterates ALL issues for dispatch, passing `issue_ref` explicitly. |
+| IN-01 | fixed | `c37a93f` | Dead noqa'd re-export removed. |
+| IN-02 | fixed | `2a6fd63` | Comment corrected (refusal path writes no status file). |
+| IN-03 | fixed | `6043050` | Poll failures log `exc.__class__.__name__` and record it in `status.last_error`. |
+| IN-04 | fixed | `e86f6c0` | Non-dict JSON → friendly message, rc 0; `watch.dispatch` added to the docs event list. |
+| IN-05 | fixed | `8451792` | Dead code/wrong annotation stripped; `monkeypatch.setattr` used; real-closure tests added. |
+| IN-06 | partially fixed | `6043050` | Paused events use consistent `issues[0]` attribution and carry `cycle_ok`/`issue_results`/`error_count`. Deferred: the paused branch still skips a separate `watch.failure` event for a failing-while-paused cycle (the failure data is now inside the paused payload, so the audit trail no longer loses it; a structural event split was judged out of scope for an Info finding). |
+
+Verification: `tests/unit` fully green (2494 passed, 2 skipped); `ruff check`
+and `ruff format --check` clean on all changed files; docs bash blocks pass
+`bash -n`.
