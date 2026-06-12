@@ -1126,3 +1126,116 @@ def test_allow_unready_run_overrides_readiness_gate(
 
     assert rc == 0
     assert dispatch_calls[0] == 1, "dispatch_runner must be called with --allow-unready-run override"
+
+
+# ---------------------------------------------------------------------------
+# Review CR-02 – readiness gate fails CLOSED
+# ---------------------------------------------------------------------------
+
+
+def _run_watch_dispatch_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    readiness_repo_path: str | None,
+) -> tuple[int, list[dict[str, object]]]:
+    """Run one dispatch-enabled cycle; return (dispatch_calls, persist_calls)."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli import jira_watch_loop
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        persist_calls.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args_dispatch(dispatch=True, readiness_repo_path=readiness_repo_path),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+    assert rc == 0
+    return dispatch_calls[0], persist_calls
+
+
+def _assert_blocked(dispatch_count: int, persist_calls: list[dict[str, object]], expected_verdict: str) -> None:
+    from whilly.cli.jira_watch_loop import EVENT_BLOCK
+
+    assert dispatch_count == 0, "fail-closed gate must NOT dispatch"
+    block_events = [c for c in persist_calls if c["event_type"] == EVENT_BLOCK]
+    assert len(block_events) >= 1, "watch.block event must be emitted"
+    assert block_events[0]["payload"]["verdict"] == expected_verdict  # type: ignore[index]
+
+
+def test_readiness_gate_blocks_on_unready_repo_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repo DIRECTORY (the documented --readiness-repo-path input) is probed
+    with probe_code_readiness; a repo without test evidence blocks dispatch."""
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(repo_dir))
+    _assert_blocked(count, calls, "needs_test_plan")
+
+
+def test_readiness_gate_dispatches_on_ready_repo_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repo directory with test command + unit-test evidence dispatches."""
+    repo_dir = tmp_path / "repo"
+    (repo_dir / "tests").mkdir(parents=True)
+    (repo_dir / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    (repo_dir / "tests" / "test_x.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+
+    count, _calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(repo_dir))
+    assert count == 1, "ready repo directory must dispatch"
+
+
+def test_readiness_gate_blocks_on_missing_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing --readiness-repo-path target blocks dispatch (verdict=unknown)."""
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(tmp_path / "no-such-path"))
+    _assert_blocked(count, calls, "unknown")
+
+
+def test_readiness_gate_blocks_on_malformed_plan_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A garbled plan JSON blocks dispatch instead of failing open."""
+    bad = tmp_path / "plan.json"
+    bad.write_text("{not json", encoding="utf-8")
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(bad))
+    _assert_blocked(count, calls, "unknown")
+
+
+def test_readiness_gate_blocks_when_no_readiness_path_given(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--dispatch without --readiness-repo-path (and without
+    --allow-unready-run) blocks: readiness is undeterminable → fail closed."""
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, None)
+    _assert_blocked(count, calls, "unknown")

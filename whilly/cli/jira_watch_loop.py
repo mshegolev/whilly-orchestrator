@@ -333,11 +333,41 @@ def _read_watch_readiness(plan_path: Path) -> dict[str, Any] | None:
         data = json.loads(plan_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
     jira_work = data.get("jira_work")
     if not isinstance(jira_work, dict):
         return None
     readiness = jira_work.get("readiness")
     return readiness if isinstance(readiness, dict) else None
+
+
+def _evaluate_watch_readiness(readiness_repo_path: str | None) -> dict[str, Any] | None:
+    """Evaluate dispatch readiness from ``--readiness-repo-path``.
+
+    Two accepted inputs (review CR-02):
+
+    - a **repository directory** → probed with ``probe_code_readiness``, the
+      same Phase-17 evaluation that ``whilly jira readiness`` and intake use;
+    - a **plan JSON file** containing a ``jira_work.readiness`` block.
+
+    Returns ``None`` whenever readiness cannot be determined (no path given,
+    path missing, unreadable file, malformed JSON, probe error).  Callers MUST
+    treat ``None`` as NOT ready — the gate fails closed.
+    """
+    if not readiness_repo_path:
+        return None
+    path = Path(readiness_repo_path)
+    if path.is_dir():
+        from whilly.jira_work import probe_code_readiness
+
+        try:
+            return probe_code_readiness(path).to_dict()
+        except Exception:  # noqa: BLE001 — undeterminable readiness must block, not crash
+            return None
+    if path.is_file():
+        return _read_watch_readiness(path)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -668,18 +698,20 @@ def _run_dispatch_if_ready(
 
     Extracted to a helper so the dispatch call site is visually isolated and
     easy to grep-gate.  Called only when ``wants_dispatch`` is True.
+
+    The readiness gate FAILS CLOSED (review CR-02): when readiness cannot be
+    determined (missing/garbled input, directory probe error, no
+    ``--readiness-repo-path`` at all), dispatch is blocked with a
+    ``watch.block`` event carrying ``verdict="unknown"`` — never silently
+    dispatched.  Only ``--allow-unready-run`` overrides the gate.
     """
-    # Readiness gate: resolve plan path from readiness_repo_path if provided
-    plan_path: Path | None = Path(readiness_repo_path) if readiness_repo_path else None
-    readiness: dict[str, Any] | None = None
-    if plan_path is not None and plan_path.exists():
-        readiness = _read_watch_readiness(plan_path)
+    readiness = _evaluate_watch_readiness(readiness_repo_path)
 
     issue_ref = issues[0] if issues else ""
 
-    if readiness is not None and readiness.get("verdict") != "ready_for_testing" and not allow_unready:
-        verdict = readiness.get("verdict")
-        missing = readiness.get("missing_context") or []
+    if not allow_unready and (readiness is None or readiness.get("verdict") != "ready_for_testing"):
+        verdict = readiness.get("verdict") if readiness is not None else "unknown"
+        missing = (readiness.get("missing_context") or []) if readiness is not None else []
         log.info(
             "whilly jira watch: readiness gate failed; verdict=%s missing=%s; skipping dispatch",
             verdict,

@@ -175,6 +175,13 @@ whilly jira watch \
   --readiness-repo-path /path/to/repo
 ```
 
+`--readiness-repo-path` accepts either a local **repository directory** (probed
+with the same readiness evaluation as `whilly jira readiness`) or a **plan JSON
+file** containing a `jira_work.readiness` block. The gate fails closed: when
+readiness cannot be determined (flag omitted, path missing, unreadable or
+malformed input), dispatch is **blocked** with a `watch.block` event
+(`verdict=unknown`) — only `--allow-unready-run` overrides this.
+
 **DB audit events**
 
 When `WHILLY_DATABASE_URL` is set, a best-effort audit event (`watch.cycle`,
