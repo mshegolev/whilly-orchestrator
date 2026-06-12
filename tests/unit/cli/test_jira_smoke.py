@@ -218,6 +218,46 @@ def test_jira_smoke_raising_collector_returns_1_with_actionable_hint_no_tracebac
 
 
 # ---------------------------------------------------------------------------
+# WR-01 regression: unexpected exception types must not escape as tracebacks
+# ---------------------------------------------------------------------------
+
+
+def test_jira_smoke_collector_keyerror_returns_1_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Collector raising KeyError (malformed payload) → exit 1, hint, no traceback."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    def _keyerror_collector(ref: str, timeout: int = 15) -> JiraWorkSnapshot:
+        raise KeyError("classification")
+
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123"],
+        snapshot_collector=_keyerror_collector,
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=_jira_env(),
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 1, f"Expected exit 1 (check failed), got {rc}"
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert "Traceback" not in combined, "Raw traceback must not appear in CLI output"
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1, "Report must still be written on unexpected errors"
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["summary"]["all_passed"] is False
+    auth_check = next(c for c in payload["checks"] if c["name"] == "auth")
+    assert auth_check["passed"] is False
+    assert "KeyError" in auth_check["hint"], f"Hint must name the error class, got: {auth_check['hint']!r}"
+
+
+# ---------------------------------------------------------------------------
 # Test 4: classify check uses snapshot.classification (no extra call)
 # ---------------------------------------------------------------------------
 

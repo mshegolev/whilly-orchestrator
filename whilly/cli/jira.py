@@ -777,8 +777,15 @@ def _run_jira_smoke(
             passed=bool(snapshot.issue_key),
             hint="" if snapshot.issue_key else f"Verify JIRA_SERVER_URL and project key {project_key!r}.",
         )
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
+        # json.JSONDecodeError is a ValueError subclass — covered here.
         hint = f"Check JIRA_SERVER_URL, JIRA_API_TOKEN, and that project key {project_key!r} exists. Error: {exc}"
+        report.add_check("auth", passed=False, hint=hint)
+        report.add_check("issue_fetch", passed=False, hint=hint)
+    except Exception as exc:  # noqa: BLE001 — operator-facing CLI must never print a raw traceback
+        # Malformed Jira payloads can surface as KeyError/TypeError/AttributeError
+        # from snapshot normalization; convert to a failed check + hint (WR-01).
+        hint = f"Unexpected error while fetching {issue_key}: {exc.__class__.__name__}: {exc}"
         report.add_check("auth", passed=False, hint=hint)
         report.add_check("issue_fetch", passed=False, hint=hint)
 
