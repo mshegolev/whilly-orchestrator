@@ -373,7 +373,8 @@ Phase-20 addition. Synchronous foreground watch-loop daemon for `whilly jira wat
 | `_release_pid_lock(pid_path)` | function | Unlinks PID file only if it still holds our PID. |
 | `_persist_watch_event(*, dsn, issue_key, event_type, payload, repo)` | async function | Best-effort DB audit event; warn-not-fail. |
 | `_read_watch_readiness(plan_path)` | function | Reads `jira_work.readiness` from plan JSON (local re-implementation; no import from `whilly.cli.jira`). |
-| `_run_dispatch_if_ready(...)` | function | Readiness gate + dispatch_runner invocation; only called when `wants_dispatch=True`. |
+| `_evaluate_watch_readiness(readiness_repo_path)` | function | Resolves `--readiness-repo-path`: repo directory → `probe_code_readiness`, plan JSON file → `_read_watch_readiness`; returns `None` when undeterminable (callers must fail closed). |
+| `_run_dispatch_if_ready(...)` | function | Fail-closed readiness gate + dispatch_runner invocation; only called when `wants_dispatch=True`. Blocks with `verdict=unknown` when readiness is undeterminable unless `--allow-unready-run`. |
 | `EVENT_CYCLE = "watch.cycle"` | constant | Audit event type for successful poll cycle. |
 | `EVENT_FAILURE = "watch.failure"` | constant | Audit event type for failed poll cycle. |
 | `EVENT_PAUSED = "watch.paused"` | constant | Audit event type when global pause gate fires. |
