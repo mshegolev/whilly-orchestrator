@@ -201,7 +201,11 @@ def test_gitlab_smoke_report_contains_no_secrets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Report JSON must not contain the sample token value, 'GITLAB_TOKEN', or 'postgres://'."""
+    """Report JSON must not contain the sample token VALUE or a postgres:// DSN.
+
+    Env-var *names* (e.g. ``GITLAB_TOKEN``) are not secrets and legitimately
+    appear in failure-path hints; only the values are asserted absent.
+    """
     monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
 
     rc = run_gitlab_command(
@@ -218,8 +222,43 @@ def test_gitlab_smoke_report_contains_no_secrets(
     content = reports[0].read_text(encoding="utf-8")
 
     assert _SAMPLE_TOKEN not in content, "Token value leaked into report"
-    assert "GITLAB_TOKEN" not in content, "'GITLAB_TOKEN' literal in report"
     assert "postgres://" not in content, "'postgres://' DSN in report"
+
+
+def test_gitlab_smoke_failure_path_never_leaks_token_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """WR-08: failing getter with secret-bearing env → token VALUE never in report or output."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    token_value = "glpat-SECRET123"
+    env = {
+        "GITLAB_URL": _GITLAB_URL,
+        "GITLAB_TOKEN": token_value,
+    }
+
+    def _failing_getter(url: str, *, token: str, timeout: int = 15) -> dict[str, Any]:
+        raise RuntimeError("HTTP 401 — unauthorized")
+
+    rc = run_gitlab_command(
+        ["smoke", "--repo-url", _REPO_URL],
+        gitlab_getter=_failing_getter,
+        environ=env,
+    )
+
+    assert rc == 1
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert token_value not in combined, "Token value leaked into CLI output on failure path"
+
+    reports = list((tmp_path / "smoke").glob("gitlab-smoke-*.json"))
+    assert len(reports) == 1
+    content = reports[0].read_text(encoding="utf-8")
+    assert token_value not in content, "Token value leaked into report on failure path"
+    assert "postgres://" not in content
 
 
 # ---------------------------------------------------------------------------
