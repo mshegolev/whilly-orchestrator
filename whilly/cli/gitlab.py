@@ -23,6 +23,7 @@ import argparse
 import json
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -289,13 +290,30 @@ def _run_gitlab_smoke(
     # ------------------------------------------------------------------
     # Check 1: auth (GET /api/v4/user)
     # ------------------------------------------------------------------
+    auth_started = time.monotonic()
     try:
-        gitlab_getter(f"{api_base}/user", token=token, timeout=args.timeout)
-        report.add_check("auth", passed=True)
+        user_data = gitlab_getter(f"{api_base}/user", token=token, timeout=args.timeout)
+        # Validate the response shape — any 200 JSON body (e.g. {} from a
+        # misbehaving proxy) must not pass the auth check (IN-01).
+        auth_ok = isinstance(user_data, dict) and bool(user_data.get("id") or user_data.get("username"))
+        report.add_timed_check(
+            "auth",
+            passed=auth_ok,
+            duration_seconds=time.monotonic() - auth_started,
+            hint=(
+                ""
+                if auth_ok
+                else (
+                    f"/api/v4/user on {_redact_url(url)} returned an unexpected payload "
+                    "(no id/username) — verify GITLAB_URL points at a GitLab API."
+                )
+            ),
+        )
     except Exception as exc:  # noqa: BLE001
-        report.add_check(
+        report.add_timed_check(
             "auth",
             passed=False,
+            duration_seconds=time.monotonic() - auth_started,
             hint=f"Verify GITLAB_TOKEN is valid for {_redact_url(url)}. Detail: {exc}",
         )
 
@@ -303,24 +321,28 @@ def _run_gitlab_smoke(
     # Check 2: project_access (GET /api/v4/projects/{encoded path})
     # ------------------------------------------------------------------
     repo_path_encoded = _resolve_project_path(repo_url)
+    project_started = time.monotonic()
     try:
         data = gitlab_getter(f"{api_base}/projects/{repo_path_encoded}", token=token, timeout=args.timeout)
+        project_elapsed = time.monotonic() - project_started
         if isinstance(data, dict) and data.get("id"):
             project_data = data
-            report.add_check("project_access", passed=True)
+            report.add_timed_check("project_access", passed=True, duration_seconds=project_elapsed)
         else:
-            report.add_check(
+            report.add_timed_check(
                 "project_access",
                 passed=False,
+                duration_seconds=project_elapsed,
                 hint=(
                     f"Project API response missing 'id' — verify the repo path "
                     f"in --repo-url ({urllib.parse.unquote(repo_path_encoded)})."
                 ),
             )
     except Exception as exc:  # noqa: BLE001
-        report.add_check(
+        report.add_timed_check(
             "project_access",
             passed=False,
+            duration_seconds=time.monotonic() - project_started,
             hint=(
                 f"Cannot access project {urllib.parse.unquote(repo_path_encoded)!r} "
                 f"on {_redact_url(url)}. Detail: {exc}"
@@ -329,6 +351,7 @@ def _run_gitlab_smoke(
 
     # ------------------------------------------------------------------
     # Check 3: repo_hint (path_with_namespace / http_url_to_repo match)
+    # Local comparison — no network call, so add_check's 0.0 duration is real.
     # ------------------------------------------------------------------
     try:
         if project_data:

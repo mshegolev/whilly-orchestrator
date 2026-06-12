@@ -262,6 +262,71 @@ def test_gitlab_smoke_failure_path_never_leaks_token_value(
 
 
 # ---------------------------------------------------------------------------
+# WR-09 regression: network-bound checks carry measured durations
+# ---------------------------------------------------------------------------
+
+
+def test_gitlab_smoke_records_measured_durations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """auth/project_access durations reflect the measured getter calls (not fabricated 0.0)."""
+    import time
+
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    base_getter = _make_getter()
+
+    def _slow_getter(url: str, *, token: str, timeout: int = 15) -> dict[str, Any]:
+        time.sleep(0.02)
+        return base_getter(url, token=token, timeout=timeout)
+
+    rc = run_gitlab_command(
+        ["smoke", "--repo-url", _REPO_URL],
+        gitlab_getter=_slow_getter,
+        environ=_minimal_env(),
+    )
+
+    assert rc == 0
+
+    reports = list((tmp_path / "smoke").glob("gitlab-smoke-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    durations = {c["name"]: c["duration_seconds"] for c in payload["checks"]}
+    assert durations["auth"] >= 0.01, f"auth duration must be measured, got {durations['auth']}"
+    assert durations["project_access"] >= 0.01, (
+        f"project_access duration must be measured, got {durations['project_access']}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# IN-01 regression: auth check validates the /user response shape
+# ---------------------------------------------------------------------------
+
+
+def test_gitlab_smoke_auth_fails_on_empty_user_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 200 response with {} from /api/v4/user must not pass the auth check."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    rc = run_gitlab_command(
+        ["smoke", "--repo-url", _REPO_URL],
+        gitlab_getter=_make_getter(user={}),
+        environ=_minimal_env(),
+    )
+
+    assert rc == 1
+
+    reports = list((tmp_path / "smoke").glob("gitlab-smoke-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    auth_check = next(c for c in payload["checks"] if c["name"] == "auth")
+    assert auth_check["passed"] is False
+    assert "id/username" in auth_check["hint"]
+
+
+# ---------------------------------------------------------------------------
 # CR-01 regression: credentialed GITLAB_URL must never leak into report/stdout
 # ---------------------------------------------------------------------------
 

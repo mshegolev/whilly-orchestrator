@@ -101,8 +101,9 @@ class SmokeReport:
         :param passed: ``True`` if the check succeeded.
         :param hint: Optional operator hint for failed checks; may be empty.
         """
-        # duration_seconds is set by the caller via the context manager
-        # pattern or left as 0.0 when called directly.
+        # add_check is for local/instant checks where 0.0 is the real
+        # duration; network-bound checks must use add_timed_check with a
+        # measured duration (WR-09).
         self.checks.append(
             {
                 "name": name,

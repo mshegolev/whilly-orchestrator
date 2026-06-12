@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import webbrowser
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -768,25 +769,32 @@ def _run_jira_smoke(
     report = SmokeReport(kind="jira")
     snapshot: JiraWorkSnapshot | None = None
 
+    fetch_started = time.monotonic()
     try:
         snapshot = snapshot_collector(args.issue, timeout=args.timeout)
-        report.add_check("auth", passed=True)
-        report.add_check(
+        # auth and issue_fetch are both verified by the same collector call,
+        # so they share its measured duration (WR-09).
+        fetch_duration = time.monotonic() - fetch_started
+        report.add_timed_check("auth", passed=True, duration_seconds=fetch_duration)
+        report.add_timed_check(
             "issue_fetch",
             passed=bool(snapshot.issue_key),
+            duration_seconds=fetch_duration,
             hint="" if snapshot.issue_key else f"Verify JIRA_SERVER_URL and project key {project_key!r}.",
         )
     except (OSError, RuntimeError, ValueError) as exc:
         # json.JSONDecodeError is a ValueError subclass — covered here.
+        fetch_duration = time.monotonic() - fetch_started
         hint = f"Check JIRA_SERVER_URL, JIRA_API_TOKEN, and that project key {project_key!r} exists. Error: {exc}"
-        report.add_check("auth", passed=False, hint=hint)
-        report.add_check("issue_fetch", passed=False, hint=hint)
+        report.add_timed_check("auth", passed=False, duration_seconds=fetch_duration, hint=hint)
+        report.add_timed_check("issue_fetch", passed=False, duration_seconds=fetch_duration, hint=hint)
     except Exception as exc:  # noqa: BLE001 — operator-facing CLI must never print a raw traceback
         # Malformed Jira payloads can surface as KeyError/TypeError/AttributeError
         # from snapshot normalization; convert to a failed check + hint (WR-01).
+        fetch_duration = time.monotonic() - fetch_started
         hint = f"Unexpected error while fetching {issue_key}: {exc.__class__.__name__}: {exc}"
-        report.add_check("auth", passed=False, hint=hint)
-        report.add_check("issue_fetch", passed=False, hint=hint)
+        report.add_timed_check("auth", passed=False, duration_seconds=fetch_duration, hint=hint)
+        report.add_timed_check("issue_fetch", passed=False, duration_seconds=fetch_duration, hint=hint)
 
     if snapshot is not None:
         # Each field check asserts something falsifiable: the collector
@@ -794,6 +802,8 @@ def _run_jira_smoke(
         # JiraWorkSnapshot promises. On a quiet issue these collections are
         # legitimately empty, so the hint records what was actually verified
         # ("fetched N ...") instead of fabricating a stronger claim (CR-03).
+        # These are local shape assertions (no network call) — add_check's
+        # 0.0 duration is the real duration.
         comments_ok = isinstance(snapshot.comments, tuple) and all(
             isinstance(comment, dict) for comment in snapshot.comments
         )
