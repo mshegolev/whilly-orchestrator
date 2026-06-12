@@ -333,3 +333,33 @@ rename the keys/docs to `base_url`.
 _Reviewed: 2026-06-12_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+## Fix Status (2026-06-12)
+
+Scope: Critical + Warning (CR-01..CR-03, WR-01..WR-09). Each finding fixed
+in an atomic commit prefixed `fix(19):`. Full unit suite green
+(2446 passed, 2 skipped); ruff check + format clean on all changed files.
+
+| Finding | Status | Commit | Resolution |
+|---------|--------|--------|------------|
+| CR-01 | fixed | f5d116f | URLs redacted at `_gitlab_get` raise sites and at config source (`_resolve_gitlab_config_state` strips userinfo); regression tests for credentialed `GITLAB_URL` + failing getter and direct error-message redaction |
+| CR-02 | fixed | b0c8d38 | gitlab `--persist` removed entirely (parser, dead DSN gate, docs) — `append_jira_work_event` is jira-specific (requires Jira issue key); honest removal over stub |
+| CR-03 | fixed | fcca536 | comments/changelog/remote_links now assert fetch-without-error + normalized shape; report records "fetched N ..."; regression test proves each fails independently on malformed shapes; docs aligned |
+| WR-01 | fixed | de656d9 | broad `except Exception` guard at collector boundary converts KeyError/TypeError/etc. into failed checks + hint; KeyError regression test; redundant JSONDecodeError dropped |
+| WR-02 | fixed | d230ff8 | jira persist DSN read via injected `effective_env`; DI-seam test added |
+| WR-03 | fixed | d230ff8 | persist is best-effort: warn line to stderr, outcome note in report payload (`persist` key, error class only), summary always printed, exit code reflects checks alone |
+| WR-04 | fixed | 0c14968 | hardcoded `gitlab.example.com` removed; glab fallback host derived from resolved `GITLAB_URL`; no host → glab skipped, config gate exits 2 |
+| WR-05 | fixed | 0c14968 | `_extract_host_from_url` uses `urlsplit().hostname` + `git@host:path` fallback; userinfo never pollutes host |
+| WR-06 | fixed | 0c14968 | SSH-style `--repo-url` rejected up front (exit 2, "pass the https:// clone URL" hint) |
+| WR-07 | fixed | cdfa42c | docs `--timeout` default corrected to 15; gitlab `--timeout`/`--json` flags documented |
+| WR-08 | fixed | b799925 | env-var-NAME assertions dropped (names are not secrets); failure-path variants assert token VALUES and DSN (incl. password) never in report or output |
+| WR-09 | fixed | b8c50e3 | network-bound checks measure `time.monotonic()` via `add_timed_check`; jira auth/issue_fetch share the collector-call duration; local checks keep honest 0.0 |
+| IN-01 | fixed | b8c50e3 | folded into WR-09 (same lines): gitlab auth validates `/user` response shape (`id`/`username`) |
+| IN-02 | deferred | — | exit-code 2 overload (usage vs config) — out of fix scope, needs contract decision |
+| IN-03 | deferred | — | report-path output channel inconsistency — out of fix scope |
+| IN-04 | deferred | — | colons in report filename — not on edited lines |
+| IN-05 | deferred | — | empty `target_host` with whilly.toml config — out of fix scope |
+| IN-06 | deferred | — | `host` keys carry full base URL — out of fix scope, needs key rename decision |
+
+_Fixed: 2026-06-12_
+_Fixer: Claude (gsd-code-fixer)_
