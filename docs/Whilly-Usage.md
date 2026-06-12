@@ -665,7 +665,7 @@ empty collections on a quiet issue still pass.
 
 | Flag | Description |
 |------|-------------|
-| `--timeout N` | Per-request timeout in seconds (default 30) |
+| `--timeout N` | Per-request timeout in seconds (default 15) |
 | `--persist` | Append a best-effort DB audit event when `WHILLY_DATABASE_URL` is set (persist problems never change the exit code) |
 | `--json` | Print full report JSON to stdout instead of the human summary |
 
@@ -692,7 +692,15 @@ whilly gitlab smoke --repo-url https://gitlab.example.com/group/project.git
 
 **What it checks:** auth (`/api/v4/user`), project access
 (`/api/v4/projects/{path}`), and repo-hint validation (confirming the
-project's recorded path matches the requested URL).
+project's recorded path matches the requested URL). `--repo-url` must be
+the `https://` clone URL — SSH-style `git@host:path` values are rejected.
+
+**Optional flags**
+
+| Flag | Description |
+|------|-------------|
+| `--timeout N` | Per-request timeout in seconds (default 15) |
+| `--json` | Print full report JSON to stdout instead of the human summary |
 
 ### Exit codes
 
