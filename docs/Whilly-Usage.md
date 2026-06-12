@@ -154,7 +154,10 @@ whilly jira watch-status --json
 
 Status is written to `whilly_logs/watch/jira-watch-status.json`
 (honoring `WHILLY_LOG_DIR`). Fields include `state`, `pid`, `last_poll_at`,
-`cycle_count`, `error_count`, and `backoff_seconds`.
+`cycle_count`, `error_count`, and `backoff_seconds`. When the file claims
+`state=running`, `watch-status` verifies the recorded PID is actually alive;
+after a crash (SIGKILL, OOM, power loss) it reports
+`state=stale (pid N not running)` instead of trusting the file.
 
 **Global pause gate**
 
