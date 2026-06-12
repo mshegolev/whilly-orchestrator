@@ -641,8 +641,12 @@ you have evidence of what was checked and when.
 | Variable | Description |
 |----------|-------------|
 | `JIRA_SERVER_URL` | Full base URL, e.g. `https://company.atlassian.net` |
-| `JIRA_USERNAME` | Basic-auth email address |
+| `JIRA_USERNAME` | Basic-auth email address (Cloud basic auth only) |
 | `JIRA_API_TOKEN` | Jira Cloud API token (or PAT for Server/DC) |
+
+**Jira Server / Data Center:** set `JIRA_AUTH_SCHEME=bearer` (PAT auth, no
+username needed) and `JIRA_API_VERSION=2` — Server/DC instances serve
+`/rest/api/2/` and answer `/rest/api/3/` requests with an HTML login page.
 
 **Command**
 
