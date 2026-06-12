@@ -223,6 +223,75 @@ def test_gitlab_smoke_report_contains_no_secrets(
 
 
 # ---------------------------------------------------------------------------
+# CR-01 regression: credentialed GITLAB_URL must never leak into report/stdout
+# ---------------------------------------------------------------------------
+
+
+def test_gitlab_smoke_credentialed_url_secret_never_leaks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """GITLAB_URL with embedded oauth2:glpat-SECRET@ creds + failing getter → secret nowhere.
+
+    The getter mimics _gitlab_get by embedding the request URL in its error
+    message; the credential must never surface in the report JSON or output.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    secret = "glpat-SECRET123"
+    env = {
+        "GITLAB_URL": f"https://oauth2:{secret}@gitlab.example.com",
+        "GITLAB_TOKEN": secret,
+    }
+
+    def _failing_getter(url: str, *, token: str, timeout: int = 15) -> dict[str, Any]:
+        # urllib-style failure that embeds the full request URL it was given.
+        raise RuntimeError(f"GitLab GET {url!r} failed: HTTP 401 — unauthorized")
+
+    rc = run_gitlab_command(
+        ["smoke", "--repo-url", _REPO_URL],
+        gitlab_getter=_failing_getter,
+        environ=env,
+    )
+
+    assert rc == 1
+
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err
+    assert secret not in combined, "Token value leaked into CLI output"
+
+    reports = list((tmp_path / "smoke").glob("gitlab-smoke-*.json"))
+    assert len(reports) == 1
+    content = reports[0].read_text(encoding="utf-8")
+    assert secret not in content, "Token value leaked into report JSON"
+    assert "oauth2:" not in content, "URL userinfo leaked into report JSON"
+    # The clean hostname is still allowed (and useful) in hints.
+    assert "gitlab.example.com" in content
+
+
+def test_gitlab_get_error_messages_redact_credentialed_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_gitlab_get RuntimeError text must contain the redacted URL, not the credential."""
+    from urllib.error import URLError
+
+    from whilly.cli.gitlab import _gitlab_get
+
+    def _raise(req: Any, timeout: int = 0) -> Any:
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _gitlab_get("https://oauth2:glpat-SECRET123@gitlab.example.com/api/v4/user", token="t")
+
+    message = str(excinfo.value)
+    assert "glpat-SECRET123" not in message, "Credential leaked into error message"
+    assert "oauth2" not in message, "URL userinfo leaked into error message"
+    assert "gitlab.example.com" in message
+
+
+# ---------------------------------------------------------------------------
 # Test 6: GITLAB_TOKEN precedence over GITLAB_API_TOKEN
 # ---------------------------------------------------------------------------
 
