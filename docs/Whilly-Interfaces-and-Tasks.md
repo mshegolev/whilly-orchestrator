@@ -365,7 +365,7 @@ Phase-20 addition. Synchronous foreground watch-loop daemon for `whilly jira wat
 | Symbol | Kind | Description |
 |--------|------|-------------|
 | `_run_jira_watch(args, *, snapshot_collector, environ, stop_event, install_signal_handlers, pause_control, dispatch_runner)` | function | Main watch loop. Resolves interval, acquires PID lock, runs `while not stop.is_set()` with interruptible sleep per-issue collector calls and optional dispatch. Returns 0 on graceful stop, 1 on single-instance refusal. |
-| `_run_watch_status(args, *, environ)` | function | Reads `_status_path()` and prints human-readable status (default) or raw JSON (`args.json`). Returns EXIT_OK in both found and missing-file cases. |
+| `_run_watch_status(args, *, environ)` | function | Reads `_status_path()` and prints human-readable status (default) or JSON (`args.json`). Verifies the recorded PID when `state=running` and reports `stale (pid N not running)` for a dead watcher. Returns EXIT_OK in found, missing-file, and unreadable-file cases. |
 | `_resolve_interval(args_interval, env)` | function | Priority: `--interval` arg > `WHILLY_JIRA_WATCH_INTERVAL` env > 300 s default. |
 | `_interruptible_sleep(stop, seconds)` | function | `threading.Event.wait`; returns True if stop fired. Never uses `time.sleep`. |
 | `_write_status(status, status_path)` | function | Atomic tempfile + `os.replace` status file write (T-20-05 model). |

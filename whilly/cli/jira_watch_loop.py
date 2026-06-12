@@ -662,13 +662,32 @@ def _run_watch_status(args: Any, *, environ: MutableMapping[str, str] | None = N
         )
         return EXIT_OK
 
+    if not isinstance(data, dict):
+        print(
+            "whilly jira watch-status: could not read status file: not a JSON object",
+            file=sys.stderr,
+        )
+        return EXIT_OK
+
+    # Liveness check (review WR-05): a crashed watcher (SIGKILL, OOM, power
+    # loss) never writes its final "stopped" status — verify the recorded PID
+    # instead of trusting the file forever.
+    state = data.get("state", "unknown")
+    pid = data.get("pid", "?")
+    if state == "running":
+        try:
+            os.kill(int(pid), 0)
+        except (ProcessLookupError, ValueError, TypeError):
+            state = f"stale (pid {pid} not running)"
+            data["state"] = state
+        except OSError:
+            pass  # EPERM etc.: the process exists
+
     if getattr(args, "json", False):
         print(json.dumps(data, ensure_ascii=False))
         return EXIT_OK
 
     # Human-readable summary of key fields (T-20-11: no secrets)
-    state = data.get("state", "unknown")
-    pid = data.get("pid", "?")
     issues = data.get("issues", [])
     cycle_count = data.get("cycle_count", 0)
     error_count = data.get("error_count", 0)

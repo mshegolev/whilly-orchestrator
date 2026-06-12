@@ -920,11 +920,14 @@ def test_watch_status_prints_human_readable(
     log_dir = tmp_path / "logs"
     monkeypatch.setenv("WHILLY_LOG_DIR", str(log_dir))
 
+    import os
+
     watch_dir = log_dir / "watch"
     watch_dir.mkdir(parents=True)
+    live_pid = os.getpid()  # a definitely-live PID so state stays "running"
     status = {
         "state": "running",
-        "pid": 12345,
+        "pid": live_pid,
         "cycle_count": 7,
         "error_count": 1,
         "last_poll_at": "2026-06-12T10:00:00Z",
@@ -936,9 +939,62 @@ def test_watch_status_prints_human_readable(
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "running" in out
-    assert "12345" in out
+    assert "state=running" in out
+    assert str(live_pid) in out
     assert "cycle_count" in out or "7" in out
+
+
+def test_watch_status_reports_stale_for_dead_pid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A status file claiming state=running with a dead PID is reported as
+    stale instead of trusted (WR-05) — in both human and --json output."""
+    log_dir = tmp_path / "logs"
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(log_dir))
+
+    watch_dir = log_dir / "watch"
+    watch_dir.mkdir(parents=True)
+    status = {"state": "running", "pid": 99999999, "cycle_count": 7}
+    (watch_dir / "jira-watch-status.json").write_text(json.dumps(status), encoding="utf-8")
+
+    from whilly.cli import jira_watch_loop
+
+    def _dead_kill(pid: int, sig: int) -> None:
+        raise ProcessLookupError("no such process")
+
+    monkeypatch.setattr(jira_watch_loop.os, "kill", _dead_kill)
+
+    rc = run_jira_command(["watch-status"], environ={})
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "state=stale (pid 99999999 not running)" in out
+
+    rc = run_jira_command(["watch-status", "--json"], environ={})
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["state"] == "stale (pid 99999999 not running)"
+
+
+def test_watch_status_handles_non_dict_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A status file holding a JSON array/scalar prints a friendly message
+    instead of an AttributeError traceback (IN-04)."""
+    log_dir = tmp_path / "logs"
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(log_dir))
+
+    watch_dir = log_dir / "watch"
+    watch_dir.mkdir(parents=True)
+    (watch_dir / "jira-watch-status.json").write_text("[1, 2, 3]", encoding="utf-8")
+
+    rc = run_jira_command(["watch-status"], environ={})
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "could not read status file" in err
 
 
 def test_watch_status_json_flag_prints_valid_json(
