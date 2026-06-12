@@ -26,7 +26,7 @@ at Phase 18.
 
 - [x] **Phase 18: Migration Chain Validation** - Alembic chain runs green from empty Postgres in Docker with a repeatable CI entry point (completed 2026-06-11)
 - [x] **Phase 19: Live Authenticated Smoke** - Jira and GitLab smoke runs execute on a real operator machine and produce persisted audit evidence (completed 2026-06-11)
-- [ ] **Phase 20: Jira Watcher Daemon** - Long-running `whilly jira watch` daemon wraps one-shot poll with configurable interval, lifecycle controls, and global-pause/readiness gates
+- [x] **Phase 20: Jira Watcher Daemon** - Long-running `whilly jira watch` daemon wraps one-shot poll with configurable interval, lifecycle controls, and global-pause/readiness gates (completed 2026-06-12)
 
 ## Phase Details
 
@@ -102,7 +102,7 @@ at Phase 18.
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-  - [ ] 20-03-PLAN.md — CLI wiring (watch/watch-status subparsers + dispatch routing) + docs section + docs regression (WATCH-01, WATCH-02, WATCH-03)
+  - [x] 20-03-PLAN.md — CLI wiring (watch/watch-status subparsers + dispatch routing) + docs section + docs regression (WATCH-01, WATCH-02, WATCH-03)
 
 ## Progress Table
 
@@ -110,7 +110,7 @@ at Phase 18.
 |-------|----------------|--------|-----------|
 | 18. Migration Chain Validation | 2/2 | Complete    | 2026-06-11 |
 | 19. Live Authenticated Smoke | 4/4 | Complete    | 2026-06-12 |
-| 20. Jira Watcher Daemon | 2/3 | In Progress|  |
+| 20. Jira Watcher Daemon | 3/3 | Complete    | 2026-06-12 |
 
 ## Deferred Scope
 
