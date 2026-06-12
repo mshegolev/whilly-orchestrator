@@ -83,6 +83,61 @@ def test_jira_smoke_all_checks_pass_returns_zero_and_writes_report(
     assert "PASS" in stdout
     assert "ABC-123" in stdout
 
+    # Field checks must record what was actually verified (no fabricated pass flags).
+    hints = {c["name"]: c["hint"] for c in payload["checks"]}
+    assert hints["comments"] == "fetched 1 comments"
+    assert hints["changelog"] == "fetched 2 changelog entries"
+    assert hints["remote_links"] == "fetched 1 remote links"
+
+
+# ---------------------------------------------------------------------------
+# CR-03 regression: comments/changelog/remote_links checks must be falsifiable
+# ---------------------------------------------------------------------------
+
+
+def test_jira_smoke_field_checks_fail_on_malformed_snapshot_shapes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed field shapes → comments/changelog/remote_links each fail independently."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    snapshot = JiraWorkSnapshot(
+        issue_key="ABC-123",
+        summary="Fix ETL job",
+        description="desc",
+        comments=("not-a-dict",),  # type: ignore[arg-type] — wrong element type
+        changelog_ids=("", "10001"),  # empty id string is invalid
+        links=[{"url": "https://x"}],  # type: ignore[arg-type] — list, not tuple
+        repo_targets=(),
+        context_hashes={},
+        classification={"kind": "bug"},
+    )
+
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123"],
+        snapshot_collector=lambda ref, timeout=15: snapshot,
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=_jira_env(),
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 1, f"Expected exit 1 (field checks failed), got {rc}"
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    results = {c["name"]: c["passed"] for c in payload["checks"]}
+
+    # auth/issue_fetch/classify still pass — the failures are independent.
+    assert results["auth"] is True
+    assert results["issue_fetch"] is True
+    assert results["classify"] is True
+    assert results["comments"] is False
+    assert results["changelog"] is False
+    assert results["remote_links"] is False
+
 
 # ---------------------------------------------------------------------------
 # Test 2: empty environ (no Jira config) → exit 2, collector never called

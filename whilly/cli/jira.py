@@ -783,20 +783,44 @@ def _run_jira_smoke(
         report.add_check("issue_fetch", passed=False, hint=hint)
 
     if snapshot is not None:
+        # Each field check asserts something falsifiable: the collector
+        # fetched the field without error AND it has the normalized shape
+        # JiraWorkSnapshot promises. On a quiet issue these collections are
+        # legitimately empty, so the hint records what was actually verified
+        # ("fetched N ...") instead of fabricating a stronger claim (CR-03).
+        comments_ok = isinstance(snapshot.comments, tuple) and all(
+            isinstance(comment, dict) for comment in snapshot.comments
+        )
         report.add_check(
             "comments",
-            passed=snapshot.comments is not None,
-            hint="" if snapshot.comments is not None else "Comments field missing in snapshot.",
+            passed=comments_ok,
+            hint=(
+                f"fetched {len(snapshot.comments)} comments"
+                if comments_ok
+                else "Comments field has unexpected shape (expected tuple of dicts)."
+            ),
+        )
+        changelog_ok = isinstance(snapshot.changelog_ids, tuple) and all(
+            isinstance(changelog_id, str) and changelog_id for changelog_id in snapshot.changelog_ids
         )
         report.add_check(
             "changelog",
-            passed=len(snapshot.changelog_ids) >= 0,
-            hint="",
+            passed=changelog_ok,
+            hint=(
+                f"fetched {len(snapshot.changelog_ids)} changelog entries"
+                if changelog_ok
+                else "Changelog field has unexpected shape (expected tuple of non-empty id strings)."
+            ),
         )
+        links_ok = isinstance(snapshot.links, tuple) and all(isinstance(link, dict) for link in snapshot.links)
         report.add_check(
             "remote_links",
-            passed=snapshot.links is not None,
-            hint="" if snapshot.links is not None else "Remote links field missing in snapshot.",
+            passed=links_ok,
+            hint=(
+                f"fetched {len(snapshot.links)} remote links"
+                if links_ok
+                else "Remote links field has unexpected shape (expected tuple of dicts)."
+            ),
         )
         classification = snapshot.classification
         classify_ok = bool(classification)
