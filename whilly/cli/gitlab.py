@@ -102,12 +102,14 @@ def _resolve_gitlab_config_state(
     """Return ``(url, token)`` from *env* for the given *host*.
 
     URL: ``GITLAB_URL`` → ``WHILLY_GITLAB_URL`` (trailing slash stripped).
+    Any ``user:pass@`` userinfo embedded in the URL is stripped at the source
+    so credentials can never reach error messages, reports, or stdout (CR-01).
     Token precedence: ``GITLAB_TOKEN`` → ``GITLAB_API_TOKEN`` →
     ``WHILLY_GITLAB_API_TOKEN`` → ``glab config get token`` CLI fallback.
 
     Both values may be empty strings when not configured.
     """
-    url = (env.get("GITLAB_URL") or env.get("WHILLY_GITLAB_URL") or "").strip().rstrip("/")
+    url = _redact_url((env.get("GITLAB_URL") or env.get("WHILLY_GITLAB_URL") or "").strip().rstrip("/"))
 
     token = (env.get("GITLAB_TOKEN") or env.get("GITLAB_API_TOKEN") or env.get("WHILLY_GITLAB_API_TOKEN") or "").strip()
 
@@ -141,8 +143,11 @@ def _gitlab_get(url: str, *, token: str, timeout: int = 15) -> dict[str, Any]:
 
     Converts :class:`~urllib.error.HTTPError` and
     :class:`~urllib.error.URLError` into :class:`RuntimeError` so callers
-    never see a raw urllib traceback.
+    never see a raw urllib traceback. Error messages embed the *redacted*
+    URL only — any ``user:pass@`` userinfo is stripped so credentials can
+    never flow into check hints, reports, or stdout (CR-01).
     """
+    safe_url = _redact_url(url)
     req = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
@@ -157,13 +162,13 @@ def _gitlab_get(url: str, *, token: str, timeout: int = 15) -> dict[str, Any]:
                 content_type = resp.headers.get("content-type", "")
                 hint = "received HTML/SSO page" if "<html" in raw.lower() else "response body is not JSON"
                 raise RuntimeError(
-                    f"GitLab GET {url!r} returned non-JSON response: content-type={content_type!r}, {hint}"
+                    f"GitLab GET {safe_url!r} returned non-JSON response: content-type={content_type!r}, {hint}"
                 ) from exc
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:500] if exc.fp else ""
-        raise RuntimeError(f"GitLab GET {url!r} failed: HTTP {exc.code} — {body}") from exc
+        raise RuntimeError(f"GitLab GET {safe_url!r} failed: HTTP {exc.code} — {body}") from exc
     except URLError as exc:
-        raise RuntimeError(f"GitLab GET {url!r} network error: {exc.reason}") from exc
+        raise RuntimeError(f"GitLab GET {safe_url!r} network error: {exc.reason}") from exc
 
 
 # ---------------------------------------------------------------------------
