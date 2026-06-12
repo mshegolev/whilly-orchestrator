@@ -10,9 +10,9 @@ Requirements for milestone v1.2. Each maps to roadmap phases.
 
 ### Jira Watcher
 
-- [ ] **WATCH-01**: Operator can run a long-running `whilly jira watch` daemon that wraps the
+- [x] **WATCH-01**: Operator can run a long-running `whilly jira watch` daemon that wraps the
   one-shot poll cycle on a configurable interval.
-- [ ] **WATCH-02**: Operator can start, stop, and inspect watcher status; transient Jira/GitLab
+- [x] **WATCH-02**: Operator can start, stop, and inspect watcher status; transient Jira/GitLab
   failures are retried with backoff and recorded as audit events.
 - [ ] **WATCH-03**: Watcher honors global worker pause and code/test readiness gates before
   dispatching any autonomous work.
@@ -61,8 +61,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIVE-01 | Phase 19 | Complete |
 | LIVE-02 | Phase 19 | Complete |
 | LIVE-03 | Phase 19 | Complete |
-| WATCH-01 | Phase 20 | Pending |
-| WATCH-02 | Phase 20 | Pending |
+| WATCH-01 | Phase 20 | Complete |
+| WATCH-02 | Phase 20 | Complete |
 | WATCH-03 | Phase 20 | Pending |
 
 **Coverage:**

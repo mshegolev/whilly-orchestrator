@@ -94,7 +94,7 @@ at Phase 18.
 
 **Wave 1**
 
-  - [ ] 20-01-PLAN.md — Core watch loop: interruptible sleep, interval, status file, PID guard, backoff, audit-event helper (WATCH-01, WATCH-02)
+  - [x] 20-01-PLAN.md — Core watch loop: interruptible sleep, interval, status file, PID guard, backoff, audit-event helper (WATCH-01, WATCH-02)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
