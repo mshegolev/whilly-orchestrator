@@ -437,6 +437,7 @@ def _run_jira_watch(
         "error_count": 0,
         "last_poll_at": None,
         "last_poll_result": None,
+        "last_error": None,
         "backoff_seconds": 0,
         "started_at": started_at,
         "stopped_at": None,
@@ -462,26 +463,42 @@ def _run_jira_watch(
                 break
 
             # --- Execute one cycle (serial per-issue) ---
-            cycle_ok = True
+            # Per-issue outcomes are tracked separately so a later issue's
+            # success cannot erase an earlier issue's failure/backoff within
+            # the same cycle (review WR-01).
+            issue_results: dict[str, str] = {}
+            failed_issues: list[str] = []
             for issue_ref in issues:
                 try:
                     snapshot_collector(issue_ref, timeout=timeout)
-                    consecutive_failures = 0
-                    status["backoff_seconds"] = 0
-                    status["last_poll_result"] = "ok"
-                except Exception:  # noqa: BLE001
-                    cycle_ok = False
-                    consecutive_failures += 1
+                    issue_results[issue_ref] = "ok"
+                except Exception as exc:  # noqa: BLE001
+                    issue_results[issue_ref] = "error"
+                    failed_issues.append(issue_ref)
                     status["error_count"] = status["error_count"] + 1
-                    idx = min(consecutive_failures - 1, len(_BACKOFF_SEQUENCE) - 1)
-                    status["backoff_seconds"] = _BACKOFF_SEQUENCE[idx]
-                    status["last_poll_result"] = "error"
+                    status["last_error"] = exc.__class__.__name__
                     log.warning(
-                        "watch cycle error for %s (consecutive=%d, backoff=%ds)",
+                        "watch cycle error for %s (%s)",
                         issue_ref,
-                        consecutive_failures,
-                        status["backoff_seconds"],
+                        exc.__class__.__name__,
                     )
+
+            cycle_ok = not failed_issues
+            if cycle_ok:
+                consecutive_failures = 0
+                status["backoff_seconds"] = 0
+                status["last_poll_result"] = "ok"
+            else:
+                consecutive_failures += 1
+                idx = min(consecutive_failures - 1, len(_BACKOFF_SEQUENCE) - 1)
+                status["backoff_seconds"] = _BACKOFF_SEQUENCE[idx]
+                status["last_poll_result"] = "error" if len(failed_issues) == len(issues) else "partial"
+                log.warning(
+                    "watch cycle had failures (failed=%s, consecutive=%d, backoff=%ds)",
+                    ",".join(failed_issues),
+                    consecutive_failures,
+                    status["backoff_seconds"],
+                )
 
             status["cycle_count"] = status["cycle_count"] + 1
             status["last_poll_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -505,9 +522,15 @@ def _run_jira_watch(
                         asyncio.run(
                             _persist_watch_event(
                                 dsn=dsn,
-                                issue_key=issue_ref if issues else "",
+                                issue_key=issues[0] if issues else "",
                                 event_type=EVENT_PAUSED,
-                                payload={"reason": reason, "issue_key": issue_ref if issues else ""},
+                                payload={
+                                    "reason": reason,
+                                    "issue_key": issues[0] if issues else "",
+                                    "cycle_ok": cycle_ok,
+                                    "issue_results": issue_results,
+                                    "error_count": status["error_count"],
+                                },
                             )
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -529,12 +552,18 @@ def _run_jira_watch(
                     "issues": issues,
                     "result": status["last_poll_result"],
                     "backoff_seconds": status["backoff_seconds"],
+                    "issue_results": issue_results,
                 }
+                if failed_issues:
+                    cycle_payload["failed_issues"] = failed_issues
+                # watch.failure events are attributed to the (first) failing
+                # issue so the audit trail names the actual offender (WR-01).
+                evt_issue_key = failed_issues[0] if failed_issues else (issues[0] if issues else "")
                 try:
                     asyncio.run(
                         _persist_watch_event(
                             dsn=dsn,
-                            issue_key=issues[0] if issues else "",
+                            issue_key=evt_issue_key,
                             event_type=evt_type,
                             payload=cycle_payload,
                         )

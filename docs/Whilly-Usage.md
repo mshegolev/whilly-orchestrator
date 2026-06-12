@@ -137,7 +137,10 @@ existing PID. It never kills the first instance.
 **Backoff on failures**
 
 Consecutive transient poll errors increase the next sleep by 5 → 10 → 20 → 40 → 60 s
-(capped), then reset to 0 on the next successful cycle.
+(capped), then reset to 0 on the next fully successful cycle. With multiple
+`--issue` flags, a failure for *any* issue counts the whole cycle as failing
+(`last_poll_result` is `partial` when other issues succeeded, `error` when all
+failed), so one healthy issue cannot mask another issue's persistent failures.
 
 **Status inspection**
 
