@@ -566,3 +566,194 @@ def test_persist_watch_event_raises_are_swallowed_by_loop(
     assert call_count[0] == 1, "collector must still be called"
     captured = capsys.readouterr()
     assert "persist failed" in captured.err, "warning must be printed to stderr"
+
+
+# ===========================================================================
+# Plan 02 Task 1 – Pause gate: poll-no-dispatch with watch.paused audit event
+# ===========================================================================
+
+
+def _watch_args_with_pause(
+    issues: list[str] | None = None,
+    interval: int = 0,
+    timeout: int = 15,
+) -> SimpleNamespace:
+    """Build args with dispatch=False (default-off) for pause gate tests."""
+    return SimpleNamespace(
+        issues=issues or ["ABC-123"],
+        interval=interval,
+        timeout=timeout,
+        dispatch=False,
+        readiness_repo_path=None,
+        allow_unready_run=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1 – Test 1: paused → collector still called, dispatch not called
+# ---------------------------------------------------------------------------
+
+
+def test_pause_gate_collector_called_dispatch_not(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When paused: collector (read-only polling) is still called, but the
+    dispatch runner is NOT invoked and last_poll_result == 'paused'.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # Create a tmp pause file with a JSON reason payload
+    pause_file = tmp_path / ".whilly_pause"
+    pause_file.write_text(
+        '{"paused": true, "reason": "maintenance", "timestamp": "2026-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    from whilly.pause_control import PauseControl
+
+    pause_ctrl = PauseControl(pause_file=str(pause_file))
+
+    collector_calls = [0]
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        collector_calls[0] += 1
+        stop.set()  # one cycle only
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_with_pause(),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        pause_control=pause_ctrl,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert collector_calls[0] == 1, "collector must be called (read-only polling continues)"
+    assert dispatch_calls[0] == 0, "dispatch runner must NOT be called when paused"
+
+    # Status must record the paused result
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["last_poll_result"] == "paused"
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1 – Test 2: paused → watch.paused audit event emitted
+# ---------------------------------------------------------------------------
+
+
+def test_pause_gate_emits_watch_paused_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When paused, a watch.paused audit event is appended via the injected
+    _FakeRepo with reason in the payload and no secret leaks.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    pause_file = tmp_path / ".whilly_pause"
+    pause_file.write_text(
+        '{"paused": true, "reason": "deploy-in-progress", "timestamp": "2026-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    from whilly.pause_control import PauseControl
+
+    pause_ctrl = PauseControl(pause_file=str(pause_file))
+
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    repo = _FakeRepo()
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.jira_watch_loop import EVENT_PAUSED
+
+    # Patch _persist_watch_event to use the fake repo
+    orig_persist = jira_watch_loop._persist_watch_event
+
+    async def fake_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        await orig_persist(
+            dsn=dsn,
+            issue_key=issue_key,
+            event_type=event_type,
+            payload=payload,
+            repo=repo if repo is not None else _repo_holder[0],
+        )
+
+    _repo_holder = [repo]
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", fake_persist)
+
+    jira_watch_loop._run_jira_watch(
+        _watch_args_with_pause(),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        pause_control=pause_ctrl,
+    )
+
+    paused_events = [e for e in repo.events if e.get("event_type") == EVENT_PAUSED]
+    assert len(paused_events) >= 1, "watch.paused event must be emitted"
+    evt_payload = paused_events[0]["payload"]
+    assert evt_payload["reason"] == "deploy-in-progress"
+    # Payload must be secret-free (no token or DSN)
+    raw = json.dumps(evt_payload)
+    assert "jira-token" not in raw
+    assert "postgres://" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1 – Test 3: not paused → paused branch not taken
+# ---------------------------------------------------------------------------
+
+
+def test_no_pause_gate_not_taken_when_unpaused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the pause file, last_poll_result must not be 'paused'."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    from whilly.pause_control import PauseControl
+
+    # No pause file exists — use a path that definitely does not exist
+    pause_ctrl = PauseControl(pause_file=str(tmp_path / "no_such_pause_file"))
+
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_with_pause(),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        pause_control=pause_ctrl,
+    )
+
+    assert rc == 0
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["last_poll_result"] != "paused"
