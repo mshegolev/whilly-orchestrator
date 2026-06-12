@@ -8,9 +8,13 @@ on a configurable interval with:
 - Exponential backoff on consecutive transient failures
 - PID-file single-instance guard (refuse-and-hint; never kills other process)
 - Best-effort DB audit-event helper (warn-not-fail)
+- Global pause gate (``PauseControl`` / ``.whilly_pause``): read-only polling
+  continues, dispatch is suppressed, ``watch.paused`` audit event emitted
+- Readiness gate: dispatch blocked with ``watch.block`` event when verdict
+  is not ``ready_for_testing`` (unless ``--allow-unready-run``); default-off
+  dispatch path gated behind explicit ``--dispatch`` flag
 
-CLI wiring (``whilly jira watch`` action + credential gate) lands in plan 02.
-Pause/readiness gates land in plan 03.
+CLI wiring (``whilly jira watch`` action + credential gate) lands in plan 03.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from whilly.jira_watch import (
     collect_jira_work_snapshot,  # noqa: F401  (default for production callers)
 )
 from whilly.llm_ops import _log_dir
+from whilly.pause_control import PauseControl
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +66,9 @@ _INTERVAL_ENV = "WHILLY_JIRA_WATCH_INTERVAL"
 # Audit event types
 EVENT_CYCLE = "watch.cycle"
 EVENT_FAILURE = "watch.failure"
+EVENT_PAUSED = "watch.paused"
+EVENT_BLOCK = "watch.block"
+EVENT_DISPATCH = "watch.dispatch"
 
 _SHUTDOWN_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
@@ -293,6 +301,30 @@ async def _persist_watch_event(
 
 
 # ---------------------------------------------------------------------------
+# Readiness gate helper (re-implemented locally — do NOT import from
+# whilly.cli.jira to avoid circular import; mirrors jira.py lines 1138-1144)
+# ---------------------------------------------------------------------------
+
+
+def _read_watch_readiness(plan_path: Path) -> dict[str, Any] | None:
+    """Read the ``jira_work.readiness`` dict from the plan JSON.
+
+    Returns the readiness dict if present, else ``None``.  Mirrors
+    ``_read_jira_work_readiness`` in ``whilly/cli/jira.py`` without importing
+    it (Pitfall 5: no import from ``whilly.cli.jira``).
+    """
+    try:
+        data = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    jira_work = data.get("jira_work")
+    if not isinstance(jira_work, dict):
+        return None
+    readiness = jira_work.get("readiness")
+    return readiness if isinstance(readiness, dict) else None
+
+
+# ---------------------------------------------------------------------------
 # Main watch loop
 # ---------------------------------------------------------------------------
 
@@ -304,7 +336,9 @@ def _run_jira_watch(
     environ: MutableMapping[str, str] | None = None,
     stop_event: threading.Event | None = None,
     install_signal_handlers: bool = True,
-    # TODO(plan-02): add config_loader, config_reader, prompt, secret_prompt,
+    pause_control: PauseControl | None = None,
+    dispatch_runner: Callable[..., int] | None = None,
+    # TODO(plan-03): add config_loader, config_reader, prompt, secret_prompt,
     #   browser_opener, stdin_isatty for credential gate wiring.
 ) -> int:
     """Run the Jira watch loop.
@@ -314,7 +348,8 @@ def _run_jira_watch(
     args:
         Parsed CLI arguments (or ``argparse.Namespace`` / ``SimpleNamespace``).
         Expected attributes: ``issues`` (list[str]), ``interval`` (int|None),
-        ``timeout`` (int).
+        ``timeout`` (int), ``dispatch`` (bool, default False),
+        ``readiness_repo_path`` (str|None), ``allow_unready_run`` (bool).
     snapshot_collector:
         Callable matching ``(issue_ref, *, timeout) -> JiraWorkSnapshot``.
         Injected for tests; production callers pass
@@ -326,6 +361,14 @@ def _run_jira_watch(
         When ``None`` a fresh ``threading.Event`` is created.
     install_signal_handlers:
         Set to ``False`` in unit tests to prevent SIGTERM/SIGINT registration.
+    pause_control:
+        ``PauseControl`` instance for the global pause gate.  Defaults to
+        ``PauseControl()`` reading ``.whilly_pause`` in the current directory.
+    dispatch_runner:
+        Injectable callable for the Phase-17-gated dispatch hook.  Only
+        invoked when ``--dispatch`` is set, unpaused, and readiness satisfied.
+        ``None`` means no dispatch is wired (production wiring arrives in
+        plan 03).
 
     Returns
     -------
@@ -335,11 +378,12 @@ def _run_jira_watch(
     """
     effective_env: MutableMapping[str, str] = environ if environ is not None else os.environ
     stop = stop_event if stop_event is not None else threading.Event()
+    effective_pause_ctrl = pause_control if pause_control is not None else PauseControl()
 
     if install_signal_handlers:
         _install_watch_signal_handlers(stop)
 
-    # TODO(plan-02): credential gate (_ensure_jira_config) wired here once
+    # TODO(plan-03): credential gate (_ensure_jira_config) wired here once
     #   the watch subparser is registered in build_jira_parser().
 
     # Resolve interval before acquiring the PID lock so the status file can
@@ -347,6 +391,12 @@ def _run_jira_watch(
     interval = _resolve_interval(getattr(args, "interval", None), effective_env)
     issues: list[str] = list(getattr(args, "issues", []) or [])
     timeout: int = int(getattr(args, "timeout", 15))
+
+    # Read dispatch-gate args via getattr so the function is robust when args
+    # namespace omits these attributes (plan 03 wires the full subparser).
+    wants_dispatch: bool = bool(getattr(args, "dispatch", False))
+    allow_unready: bool = bool(getattr(args, "allow_unready_run", False))
+    readiness_repo_path: str | None = getattr(args, "readiness_repo_path", None)
 
     # --- PID-file single-instance guard (T-20-02) ---
     pid_path = _pid_path()
@@ -416,9 +466,42 @@ def _run_jira_watch(
 
             status["cycle_count"] = status["cycle_count"] + 1
             status["last_poll_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+            # --- Pause gate (T-20-06/T-20-07): check AFTER collect, BEFORE dispatch ---
+            # Read-only polling (collect) already happened above; only dispatch
+            # is suppressed while paused (CONTEXT.md locked decision).
+            if effective_pause_ctrl.is_paused():
+                pause_info = effective_pause_ctrl.get_pause_info() or {}
+                reason = pause_info.get("reason", "unknown")
+                log.info(
+                    "whilly jira watch: global pause active (%s); skipping dispatch",
+                    reason,
+                )
+                status["last_poll_result"] = "paused"
+                _write_status(status, status_file)
+                # Best-effort audit event (T-20-07: secret-free payload)
+                dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
+                if dsn:
+                    try:
+                        asyncio.run(
+                            _persist_watch_event(
+                                dsn=dsn,
+                                issue_key=issue_ref if issues else "",
+                                event_type=EVENT_PAUSED,
+                                payload={"reason": reason, "issue_key": issue_ref if issues else ""},
+                            )
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        print(
+                            f"whilly jira watch: persist failed ({exc.__class__.__name__}) — "
+                            "best-effort, check WHILLY_DATABASE_URL connectivity.",
+                            file=sys.stderr,
+                        )
+                continue  # read-only polling continues next cycle; no dispatch
+
             _write_status(status, status_file)
 
-            # --- Best-effort DB audit event (T-20-03: payload secret-free) ---
+            # --- Best-effort DB audit event for regular cycle (T-20-03: payload secret-free) ---
             dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
             if dsn:
                 evt_type = EVENT_CYCLE if cycle_ok else EVENT_FAILURE
@@ -444,6 +527,21 @@ def _run_jira_watch(
                         file=sys.stderr,
                     )
 
+            # --- Readiness gate + default-off dispatch (T-20-06) ---
+            # Dispatch is structurally unreachable unless --dispatch is set:
+            # the entire branch is inside `if wants_dispatch`.
+            if wants_dispatch:
+                _run_dispatch_if_ready(
+                    args=args,
+                    issues=issues,
+                    status=status,
+                    status_file=status_file,
+                    effective_env=effective_env,
+                    allow_unready=allow_unready,
+                    readiness_repo_path=readiness_repo_path,
+                    dispatch_runner=dispatch_runner,
+                )
+
     finally:
         # Graceful exit — write final status and release PID lock.
         status["state"] = "stopped"
@@ -452,3 +550,84 @@ def _run_jira_watch(
         _release_pid_lock(pid_path)
 
     return EXIT_OK
+
+
+def _run_dispatch_if_ready(
+    *,
+    args: Any,
+    issues: list[str],
+    status: dict[str, Any],
+    status_file: Path,
+    effective_env: MutableMapping[str, str],
+    allow_unready: bool,
+    readiness_repo_path: str | None,
+    dispatch_runner: Callable[..., int] | None,
+) -> None:
+    """Check readiness gate and invoke dispatch_runner if clear (T-20-06).
+
+    Extracted to a helper so the dispatch call site is visually isolated and
+    easy to grep-gate.  Called only when ``wants_dispatch`` is True.
+    """
+    # Readiness gate: resolve plan path from readiness_repo_path if provided
+    plan_path: Path | None = Path(readiness_repo_path) if readiness_repo_path else None
+    readiness: dict[str, Any] | None = None
+    if plan_path is not None and plan_path.exists():
+        readiness = _read_watch_readiness(plan_path)
+
+    issue_ref = issues[0] if issues else ""
+
+    if readiness is not None and readiness.get("verdict") != "ready_for_testing" and not allow_unready:
+        verdict = readiness.get("verdict")
+        missing = readiness.get("missing_context") or []
+        log.info(
+            "whilly jira watch: readiness gate failed; verdict=%s missing=%s; skipping dispatch",
+            verdict,
+            ",".join(str(m) for m in missing),
+        )
+        status["last_poll_result"] = "blocked"
+        _write_status(status, status_file)
+        # Best-effort watch.block audit event (T-20-07: secret-free payload)
+        dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
+        if dsn:
+            try:
+                asyncio.run(
+                    _persist_watch_event(
+                        dsn=dsn,
+                        issue_key=issue_ref,
+                        event_type=EVENT_BLOCK,
+                        payload={
+                            "verdict": verdict,
+                            "missing_context": missing,
+                            "issue_key": issue_ref,
+                        },
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"whilly jira watch: persist failed ({exc.__class__.__name__}) — "
+                    "best-effort, check WHILLY_DATABASE_URL connectivity.",
+                    file=sys.stderr,
+                )
+        return
+
+    # Readiness satisfied (or no plan path / allow_unready) — invoke runner
+    if dispatch_runner is not None:
+        dispatch_runner(args)
+        # Best-effort watch.dispatch audit event
+        dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
+        if dsn:
+            try:
+                asyncio.run(
+                    _persist_watch_event(
+                        dsn=dsn,
+                        issue_key=issue_ref,
+                        event_type=EVENT_DISPATCH,
+                        payload={"issue_key": issue_ref},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"whilly jira watch: persist failed ({exc.__class__.__name__}) — "
+                    "best-effort, check WHILLY_DATABASE_URL connectivity.",
+                    file=sys.stderr,
+                )
