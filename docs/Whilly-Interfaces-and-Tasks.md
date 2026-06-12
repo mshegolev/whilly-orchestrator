@@ -364,12 +364,12 @@ Phase-20 addition. Synchronous foreground watch-loop daemon for `whilly jira wat
 
 | Symbol | Kind | Description |
 |--------|------|-------------|
-| `_run_jira_watch(args, *, snapshot_collector, environ, stop_event, install_signal_handlers, pause_control, dispatch_runner)` | function | Main watch loop. Resolves interval, acquires PID lock, runs `while not stop.is_set()` with interruptible sleep per-issue collector calls and optional dispatch. Returns 0 on graceful stop, 1 on single-instance refusal. |
+| `_run_jira_watch(args, *, snapshot_collector, environ, stop_event, install_signal_handlers, pause_control, dispatch_runner)` | function | Main watch loop. Resolves interval, acquires PID lock, polls immediately on start, then sleeps interval+backoff between cycles. Per-issue outcomes are tracked separately (any failing issue fails the cycle and applies backoff). Optional dispatch iterates all issues, calls `dispatch_runner(args, issue_ref)`, contains its exceptions, and dedups per snapshot `combined_hash`. Returns 0 on graceful stop, 1 on single-instance refusal. The credential gate runs in the CLI layer before this loop. |
 | `_run_watch_status(args, *, environ)` | function | Reads `_status_path()` and prints human-readable status (default) or JSON (`args.json`). Verifies the recorded PID when `state=running` and reports `stale (pid N not running)` for a dead watcher. Returns EXIT_OK in found, missing-file, and unreadable-file cases. |
 | `_resolve_interval(args_interval, env)` | function | Priority: `--interval` arg > `WHILLY_JIRA_WATCH_INTERVAL` env > 300 s default. |
 | `_interruptible_sleep(stop, seconds)` | function | `threading.Event.wait`; returns True if stop fired. Never uses `time.sleep`. |
 | `_write_status(status, status_path)` | function | Atomic tempfile + `os.replace` status file write (T-20-05 model). |
-| `_acquire_pid_lock(pid_path)` | function | `os.kill(pid, 0)` liveness probe; returns True if acquired, False if live instance found. |
+| `_acquire_pid_lock(pid_path)` | function | `O_CREAT\|O_EXCL` creation + `os.kill(pid, 0)` liveness probe with write-then-verify; EPERM counts as a live instance (refuse), only ESRCH reclaims a stale lock. Returns True if acquired, False if a live instance holds the lock. |
 | `_release_pid_lock(pid_path)` | function | Unlinks PID file only if it still holds our PID. |
 | `_persist_watch_event(*, dsn, issue_key, event_type, payload, repo)` | async function | Best-effort DB audit event; warn-not-fail. |
 | `_read_watch_readiness(plan_path)` | function | Reads `jira_work.readiness` from plan JSON (local re-implementation; no import from `whilly.cli.jira`). |
