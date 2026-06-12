@@ -14,7 +14,7 @@ Requirements for milestone v1.2. Each maps to roadmap phases.
   one-shot poll cycle on a configurable interval.
 - [x] **WATCH-02**: Operator can start, stop, and inspect watcher status; transient Jira/GitLab
   failures are retried with backoff and recorded as audit events.
-- [ ] **WATCH-03**: Watcher honors global worker pause and code/test readiness gates before
+- [x] **WATCH-03**: Watcher honors global worker pause and code/test readiness gates before
   dispatching any autonomous work.
 
 ### Live Smoke
@@ -63,7 +63,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LIVE-03 | Phase 19 | Complete |
 | WATCH-01 | Phase 20 | Complete |
 | WATCH-02 | Phase 20 | Complete |
-| WATCH-03 | Phase 20 | Pending |
+| WATCH-03 | Phase 20 | Complete |
 
 **Coverage:**
 - v1.2 requirements: 8 total

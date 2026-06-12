@@ -98,7 +98,7 @@ at Phase 18.
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-  - [ ] 20-02-PLAN.md — Gates inside the loop: global-pause poll-no-dispatch + readiness gate + --dispatch default-off (WATCH-03)
+  - [x] 20-02-PLAN.md — Gates inside the loop: global-pause poll-no-dispatch + readiness gate + --dispatch default-off (WATCH-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -110,7 +110,7 @@ at Phase 18.
 |-------|----------------|--------|-----------|
 | 18. Migration Chain Validation | 2/2 | Complete    | 2026-06-11 |
 | 19. Live Authenticated Smoke | 4/4 | Complete    | 2026-06-12 |
-| 20. Jira Watcher Daemon | 0/3 | Not started | - |
+| 20. Jira Watcher Daemon | 2/3 | In Progress|  |
 
 ## Deferred Scope
 

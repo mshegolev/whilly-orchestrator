@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
 status: executing
-last_updated: "2026-06-12T08:25:00Z"
-last_activity: 2026-06-12 -- Phase 20 Plan 01 complete (jira_watch_loop core)
+last_updated: "2026-06-12T09:18:00Z"
+last_activity: 2026-06-12 -- Phase 20 Plan 02 complete (pause gate, readiness gate, dispatch seam)
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 67
 ---
 
 # Project State
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 20
-Plan: 01 complete; Plan 02 next
+Plan: 02 complete; Plan 03 next
 Status: Executing
-Last activity: 2026-06-12 -- Phase 20 Plan 01 complete (jira_watch_loop core)
+Last activity: 2026-06-12 -- Phase 20 Plan 02 complete (pause gate, readiness gate, dispatch seam)
 
 ## Active Roadmap
 
@@ -38,7 +38,7 @@ See: `.planning/ROADMAP.md`
 |-------|------|--------------|--------|
 | 18 | Migration Chain Validation | MIG-01, MIG-02 | Not started |
 | 19 | Live Authenticated Smoke | LIVE-01, LIVE-02, LIVE-03 | Not started |
-| 20 | Jira Watcher Daemon | WATCH-01, WATCH-02, WATCH-03 | In progress (Plan 01 done) |
+| 20 | Jira Watcher Daemon | WATCH-01, WATCH-02, WATCH-03 | In progress (Plans 01-02 done) |
 
 ## Active Scope
 
@@ -149,6 +149,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | 19 | 03 | 23 min | 3 | 3 |
 | Phase 19 P04 | 24 | 2 tasks | 2 files |
 | 20 | 01 | 24 min | 2 | 2 |
+| 20 | 02 | 28 min | 2 | 2 |
 
 ## Previous Milestones
 
@@ -193,3 +194,7 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase 20-01]: EXIT_VALIDATION_ERROR (1) reused as single-instance refusal code to avoid a new exit constant
 - [Phase 20-01]: Backoff applied to NEXT cycle sleep (interval + backoff_seconds), not the current cycle (Pitfall 6)
 - [Phase 20-01]: _acquire_pid_lock treats EPERM as stale — conservative choice, overwrite and proceed
+- [Phase 20-02]: _read_watch_readiness re-implemented locally in jira_watch_loop.py to avoid circular import from whilly.cli.jira
+- [Phase 20-02]: _run_dispatch_if_ready extracted as a named helper so the dispatch call site is isolated and grep-auditable
+- [Phase 20-02]: dispatch_runner=None means no dispatch wired yet; plan 03 wires the Phase-17-gated path
+- [Phase 20-02]: Pause gate fires after collect and before dispatch — read-only polling continues while paused (CONTEXT.md locked)
