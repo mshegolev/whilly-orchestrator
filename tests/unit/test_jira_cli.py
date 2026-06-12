@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
 import pytest
 
-from whilly.cli.jira import JIRA_CLOUD_API_TOKEN_URL, run_jira_command
+from whilly.cli.jira import JIRA_CLOUD_API_TOKEN_URL, build_jira_parser, run_jira_command
 from whilly.jira_watch import JiraWorkSnapshot
 
 
@@ -645,3 +646,197 @@ def test_jira_intake_plan_action_stops_when_strict_apply_fails(tmp_path: Path) -
 
     assert rc == 8
     assert plan_calls == [["apply", str(out), "--strict"]]
+
+
+# ---------------------------------------------------------------------------
+# watch + watch-status subparser and dispatch tests
+# ---------------------------------------------------------------------------
+
+
+def test_watch_subparser_has_required_flags() -> None:
+    """watch subparser must carry all required flags including --interactive-config."""
+    parser = build_jira_parser()
+    # Find the watch subparser by parsing a watch invocation
+    args = parser.parse_args(
+        [
+            "watch",
+            "--issue",
+            "ABC-123",
+            "--interval",
+            "60",
+            "--timeout",
+            "30",
+            "--dispatch",
+            "--readiness-repo-path",
+            "/tmp/repo",
+            "--allow-unready-run",
+            "--interactive-config",
+        ]
+    )
+    assert args.issues == ["ABC-123"]
+    assert args.interval == 60
+    assert args.timeout == 30
+    assert args.dispatch is True
+    assert args.readiness_repo_path == "/tmp/repo"
+    assert args.allow_unready_run is True
+    assert args.interactive_config is True
+
+    # --no-interactive-config also present
+    args2 = parser.parse_args(["watch", "--issue", "X-1", "--no-interactive-config"])
+    assert args2.no_interactive_config is True
+
+
+def test_watch_dispatch_invokes_run_jira_watch(tmp_path: pytest.MonkeyPatch) -> None:
+    """run_jira_command watch routes to _run_jira_watch via lazy import."""
+    # A snapshot_collector that immediately stops the loop after one call
+    collected: list[str] = []
+
+    def _stopping_collector(issue_ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        collected.append(issue_ref)
+        return JiraWorkSnapshot(
+            issue_key=issue_ref,
+            summary="s",
+            description="d",
+            comments=(),
+            changelog_ids=(),
+            links=(),
+            repo_targets=(),
+            context_hashes={},
+            classification={},
+            comment_commands=(),
+            last_seen_comment_id=None,
+        )
+
+    # Use interval=0 so the loop does at least one cycle quickly.
+    # We pass a pre-set stop_event via monkeypatching is not available here;
+    # instead inject a snapshot_collector that just records calls and the loop
+    # will exit via the stop_event which we pass through snapshot_collector:
+    # The key assertion is that rc==0 and _run_jira_watch was reached.
+    # We use a threading.Event pre-set so the loop exits after 0 cycles
+    # (no actual work), exercising the dispatch path.
+    stop = threading.Event()
+    stop.set()  # pre-set → loop exits immediately
+
+    # Monkeypatch _run_jira_watch to capture call
+    from whilly.cli import jira_watch_loop
+
+    original = jira_watch_loop._run_jira_watch
+    watch_calls: list[object] = []
+
+    def _spy(args: object, **kwargs: object) -> int:
+        watch_calls.append(args)
+        return 0
+
+    jira_watch_loop._run_jira_watch = _spy  # type: ignore[assignment]
+    try:
+        rc = run_jira_command(
+            ["watch", "--issue", "ABC-123", "--interval", "0"],
+            snapshot_collector=_stopping_collector,
+            environ=_jira_env(),
+            config_loader=lambda: None,
+            config_reader=lambda: {},
+            stdin_isatty=lambda: False,
+        )
+    finally:
+        jira_watch_loop._run_jira_watch = original  # type: ignore[assignment]
+
+    assert rc == 0
+    assert len(watch_calls) == 1
+
+
+def test_watch_dispatch_default_off(tmp_path: Path) -> None:
+    """Without --dispatch, the dispatch_runner injected into _run_jira_watch is None."""
+    from whilly.cli import jira_watch_loop
+
+    original = jira_watch_loop._run_jira_watch
+    captured_kwargs: list[dict[str, object]] = []
+
+    def _capture(args: object, **kwargs: object) -> int:
+        captured_kwargs.append(kwargs)
+        return 0
+
+    jira_watch_loop._run_jira_watch = _capture  # type: ignore[assignment]
+    try:
+        run_jira_command(
+            ["watch", "--issue", "ABC-123"],
+            snapshot_collector=lambda ref, timeout=15: None,  # type: ignore[return-value]
+            environ=_jira_env(),
+            config_loader=lambda: None,
+            config_reader=lambda: {},
+            stdin_isatty=lambda: False,
+        )
+    finally:
+        jira_watch_loop._run_jira_watch = original  # type: ignore[assignment]
+
+    assert captured_kwargs, "spy was not called"
+    kw = captured_kwargs[0]
+    # Without --dispatch the production dispatch_runner must be None
+    assert kw.get("dispatch_runner") is None
+
+
+def test_watch_status_missing_file_returns_ok(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """watch-status with no status file prints a friendly message and exits 0."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path / "logs"))
+
+    rc = run_jira_command(["watch-status"], environ={})
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no watcher status found" in err
+
+
+def test_watch_status_prints_human_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """watch-status prints key fields from the status file in human-readable form."""
+    log_dir = tmp_path / "logs"
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(log_dir))
+
+    watch_dir = log_dir / "watch"
+    watch_dir.mkdir(parents=True)
+    status = {
+        "state": "running",
+        "pid": 12345,
+        "cycle_count": 7,
+        "error_count": 1,
+        "last_poll_at": "2026-06-12T10:00:00Z",
+        "backoff_seconds": 0,
+    }
+    (watch_dir / "jira-watch-status.json").write_text(json.dumps(status), encoding="utf-8")
+
+    rc = run_jira_command(["watch-status"], environ={})
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "running" in out
+    assert "12345" in out
+    assert "cycle_count" in out or "7" in out
+
+
+def test_watch_status_json_flag_prints_valid_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """watch-status --json prints the status as valid JSON."""
+    log_dir = tmp_path / "logs"
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(log_dir))
+
+    watch_dir = log_dir / "watch"
+    watch_dir.mkdir(parents=True)
+    status = {"state": "stopped", "cycle_count": 3}
+    (watch_dir / "jira-watch-status.json").write_text(json.dumps(status), encoding="utf-8")
+
+    rc = run_jira_command(["watch-status", "--json"], environ={})
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    assert parsed["state"] == "stopped"
+    assert parsed["cycle_count"] == 3
