@@ -100,6 +100,90 @@ GitLab/GitHub repo hints. With `--persist` it writes the snapshot into the
 Postgres `jira_work_sessions` / `jira_work_events` history tables. A long-running
 watcher can wrap this command in a scheduler or loop.
 
+## Jira watcher daemon
+
+`whilly jira watch` runs as a foreground daemon that wraps the validated one-shot
+poll cycle on a configurable interval. Background it via tmux or systemd.
+
+**Quick start**
+
+```bash
+export JIRA_SERVER_URL=https://company.atlassian.net
+export JIRA_USERNAME=you@example.com
+export JIRA_API_TOKEN=$JIRA_API_TOKEN_VALUE
+
+# Run in a named tmux window (stays running after you detach)
+tmux new-session -d -s jira-watch \
+  "whilly jira watch --issue ABC-123 --interval 300"
+```
+
+**Interval**
+
+Set the poll interval with `--interval SECONDS` or the `WHILLY_JIRA_WATCH_INTERVAL`
+env var (default: 300 s). The env var takes lower priority than the flag.
+
+**Graceful stop**
+
+Send SIGINT (Ctrl-C) or SIGTERM — the watcher finishes the current cycle, writes a
+final status file, and exits 0. No partial writes or corrupt state.
+
+**Single-instance guard**
+
+A second `whilly jira watch` invocation refuses to start and prints a hint with the
+existing PID. It never kills the first instance.
+
+**Backoff on failures**
+
+Consecutive transient poll errors increase the next sleep by 5 → 10 → 20 → 40 → 60 s
+(capped), then reset to 0 on the next successful cycle.
+
+**Status inspection**
+
+```bash
+# Human-readable summary
+whilly jira watch-status
+
+# Structured JSON
+whilly jira watch-status --json
+```
+
+Status is written to `whilly_logs/watch/jira-watch-status.json`
+(honoring `WHILLY_LOG_DIR`). Fields include `state`, `pid`, `last_poll_at`,
+`cycle_count`, `error_count`, and `backoff_seconds`.
+
+**Global pause gate**
+
+While `.whilly_pause` is present, the watcher keeps polling (read-only) but
+dispatches nothing. The `watch.paused` audit event is recorded on each paused cycle.
+
+**Dispatch (off by default)**
+
+`--dispatch` is OFF by default. Enabling it routes ready issues through the gated
+`jira run` path (Phase-17 readiness gate: `ready_for_testing` required unless
+`--allow-unready-run`). Example:
+
+```bash
+whilly jira watch \
+  --issue ABC-123 \
+  --interval 300 \
+  --dispatch \
+  --readiness-repo-path /path/to/repo
+```
+
+**DB audit events**
+
+When `WHILLY_DATABASE_URL` is set, a best-effort audit event (`watch.cycle`,
+`watch.failure`, `watch.paused`, `watch.block`) is appended to the
+`jira_work_events` table after each poll cycle. The watcher continues even when the
+database is unavailable — it logs a warning and moves on.
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Graceful stop (SIGTERM/SIGINT) |
+| `1` | Another watcher is already running (single-instance guard) |
+
 ## Lifecycle sync
 
 Two integrations drive cards/tickets automatically as whilly task statuses change. Enable one or both in `whilly.toml`.
