@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
-status: verifying
-last_updated: "2026-06-11T23:35:01.426Z"
+status: ready_to_plan
+last_updated: 2026-06-12T05:14:42.333Z
 last_activity: 2026-06-11
 progress:
   total_phases: 3
@@ -11,6 +11,7 @@ progress:
   total_plans: 6
   completed_plans: 6
   percent: 67
+stopped_at: Phase 19 complete (4/4) — ready to discuss Phase 20
 ---
 
 # Project State
@@ -21,14 +22,14 @@ See: `.planning/PROJECT.md` (updated 2026-06-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Phase 19 — Live Authenticated Smoke
+**Current focus:** Phase 20 — jira watcher daemon
 
 ## Current Position
 
-Phase: 19 (Live Authenticated Smoke) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-06-11
+Phase: 20
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-12
 
 ## Active Roadmap
 
