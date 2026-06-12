@@ -27,6 +27,18 @@ auth, gated password change, flag-gated OIDC header trust, flag-gated WebAuthn s
 a security-review loop that closed the task-id path-traversal sink class (ADR-001 §P1.x, PRs
 #303–#318). It is functionally complete: 27 done, 2 skipped as non-issues.
 
+v1.2 "Adoption & live-ops" shipped on 2026-06-12 (phases 18–20, 9 plans, 8/8 requirements,
+audit passed). The shipped v1.2 scope includes:
+
+- Full Alembic chain validation (001→028) from empty Docker Postgres with honest evidence flags,
+  a `make migrate-chain` entry point, and a green `migration-chain` CI job.
+- `whilly jira smoke` and a new `whilly gitlab` CLI group with `smoke` — read-only authenticated
+  checks with redacted persisted reports, validated live against jira.example.com and
+  gitlab.example.com (including leak-free failure paths).
+- `whilly jira watch` daemon: configurable-interval polling, graceful stop, status file +
+  `watch-status`, PID guard, exponential backoff with audit events, fail-closed pause/readiness
+  gates, and default-off `--dispatch` through the Phase-17-gated path — validated live.
+
 The shipped v1.0 scope includes:
 
 - WUI/TUI operator pause parity and a shared review-decision command path.
@@ -52,24 +64,10 @@ The shipped v1.1 scope includes:
 - Jira-driven work intake can classify incoming issues, persist task history, reread Jira/GitLab
   links, and gate autonomous execution on code/test readiness.
 
-## Current Milestone: v1.2 Adoption & live-ops
+## Current Milestone
 
-**Goal:** Take Whilly from "functionally complete on the dev machine" to "operable against real
-Jira/GitLab work on an operator machine" by closing the deferred live-validation and ops backlog.
-
-**Target features:**
-- Long-running Jira watcher/daemon wrapping the one-shot `whilly jira poll` so intake is
-  continuous instead of manual.
-- Live authenticated Jira/GitLab smoke validation on a real operator machine (v1.1 deferred
-  validation).
-- Full Docker-backed Alembic migration chain run beyond the focused static migration coverage.
-
-**Progress:** Phase 18 complete — full Alembic chain (001→028) validated live in Docker with honest evidence flags, `make migrate-chain` entry point, and a `migration-chain` CI job (first live CI run pending push). Phase 19 complete — `whilly jira smoke` and `whilly gitlab smoke` shipped and validated LIVE against jira.example.com (6/6) and gitlab.example.com (3/3) with redacted persisted reports and verified no-token-leak failure paths. Phase 20 complete — `whilly jira watch` daemon (graceful stop, status file, PID guard, backoff, fail-closed pause/readiness gates, default-off dispatch) validated live: 2 cycles against real Jira, clean SIGTERM stop.
-
-**Key context:** The out-of-band `post-auth-hardening` plan is functionally complete (27 done,
-2 skipped as non-issues) — its auth stack (sessions, flag-gated OIDC header trust, flag-gated
-WebAuthn second factor) and the ADR-001 path-sink fixes are prerequisites this milestone builds
-on. A1a/A1b are excluded: the defect never reproduced.
+No active milestone. v1.2 shipped 2026-06-12. Start the next product slice with
+`/gsd-new-milestone`.
 
 ## Requirements
 
@@ -103,6 +101,15 @@ on. A1a/A1b are excluded: the defect never reproduced.
   operator UI contract.
 - [x] Add Jira work classification, comment-driven approval, GitLab link refresh, and code/test
   readiness gates before autonomous Jira polling.
+
+### Validated in v1.2
+
+- [x] Full Alembic migration chain runs green and repeatably from empty Docker Postgres, with a
+  scripted/CI entry point (MIG-01, MIG-02) - validated live locally and in CI.
+- [x] Operators can run authenticated Jira and GitLab smoke checks with persisted, redacted
+  evidence reports (LIVE-01..03) - validated live on a real operator machine.
+- [x] Operators can run a long-lived `whilly jira watch` daemon with lifecycle controls, backoff
+  audit events, and pause/readiness gating before any dispatch (WATCH-01..03) - validated live.
 
 ### Out of Scope
 
@@ -152,6 +159,11 @@ on. A1a/A1b are excluded: the defect never reproduced.
 | Defer semantic memory from current scope | Deterministic events, task history, PR evidence, and verification logs remain authoritative | Good |
 | Treat hotfix as urgency, not a primary Jira work kind | Hotfix can apply to bugs, tasks, or DevOps changes and should add safety gates instead of changing the whole taxonomy | Good |
 | Gate autonomous Jira work on code/test readiness | Linked repos, GitLab refs, unit tests, and verification commands must be known before workers mutate code | Good |
+| Keep smoke commands strictly read-only against external systems | Safe to run against production Jira/GitLab; write checks would risk side effects | Good |
+| Evidence/report flags must derive from real outcomes, never literals | The fabricated-evidence bug class appeared in all three v1.2 phases; falsification tests now pin honesty | Good |
+| Watch daemon fails closed on readiness and survives dispatch failures | Unknown readiness blocks dispatch; dispatch exceptions become audit events, not crashes | Good |
+| Watch stays a thin foreground loop, independent of SchedulerWorker | Operator backgrounds it (tmux/systemd); avoids coupling to JQL-rule intake machinery | Good |
+| Jira Server/DC needs JIRA_AUTH_SCHEME=bearer + JIRA_API_VERSION=2 | Live smoke against jira.example.com exposed the Cloud-vs-DC API split; documented in usage docs | Good |
 
 ## Evolution
 
@@ -171,4 +183,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-11 after starting milestone v1.2*
+*Last updated: 2026-06-12 after archiving v1.2*
