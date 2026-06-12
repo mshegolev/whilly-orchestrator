@@ -130,7 +130,11 @@ def test_interval_recorded_in_status_file(
 ) -> None:
     """The status file records the resolved interval_seconds."""
     monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
-    monkeypatch.setenv("WHILLY_JIRA_WATCH_INTERVAL", "42")
+
+    # Include the interval env var in the injected environ dict so that
+    # _resolve_interval sees it via effective_env (the injected mapping takes
+    # precedence over os.environ when passed explicitly).
+    env = {**_jira_env(), "WHILLY_JIRA_WATCH_INTERVAL": "42"}
 
     stop = threading.Event()
     stop.set()  # exit before first cycle
@@ -140,7 +144,7 @@ def test_interval_recorded_in_status_file(
     rc = _run_jira_watch(
         _watch_args(interval=None, timeout=15),
         snapshot_collector=lambda ref, *, timeout=15: _fake_snapshot(ref),
-        environ=_jira_env(),
+        environ=env,
         stop_event=stop,
         install_signal_handlers=False,
     )
