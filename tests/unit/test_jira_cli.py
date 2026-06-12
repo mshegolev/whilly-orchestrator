@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
@@ -686,92 +685,187 @@ def test_watch_subparser_has_required_flags() -> None:
     assert args2.no_interactive_config is True
 
 
-def test_watch_dispatch_invokes_run_jira_watch(tmp_path: pytest.MonkeyPatch) -> None:
+def test_watch_dispatch_invokes_run_jira_watch(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_jira_command watch routes to _run_jira_watch via lazy import."""
-    # A snapshot_collector that immediately stops the loop after one call
-    collected: list[str] = []
-
-    def _stopping_collector(issue_ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
-        collected.append(issue_ref)
-        return JiraWorkSnapshot(
-            issue_key=issue_ref,
-            summary="s",
-            description="d",
-            comments=(),
-            changelog_ids=(),
-            links=(),
-            repo_targets=(),
-            context_hashes={},
-            classification={},
-            comment_commands=(),
-            last_seen_comment_id=None,
-        )
-
-    # Use interval=0 so the loop does at least one cycle quickly.
-    # We pass a pre-set stop_event via monkeypatching is not available here;
-    # instead inject a snapshot_collector that just records calls and the loop
-    # will exit via the stop_event which we pass through snapshot_collector:
-    # The key assertion is that rc==0 and _run_jira_watch was reached.
-    # We use a threading.Event pre-set so the loop exits after 0 cycles
-    # (no actual work), exercising the dispatch path.
-    stop = threading.Event()
-    stop.set()  # pre-set → loop exits immediately
-
-    # Monkeypatch _run_jira_watch to capture call
     from whilly.cli import jira_watch_loop
 
-    original = jira_watch_loop._run_jira_watch
     watch_calls: list[object] = []
 
     def _spy(args: object, **kwargs: object) -> int:
         watch_calls.append(args)
         return 0
 
-    jira_watch_loop._run_jira_watch = _spy  # type: ignore[assignment]
-    try:
-        rc = run_jira_command(
-            ["watch", "--issue", "ABC-123", "--interval", "0"],
-            snapshot_collector=_stopping_collector,
-            environ=_jira_env(),
-            config_loader=lambda: None,
-            config_reader=lambda: {},
-            stdin_isatty=lambda: False,
-        )
-    finally:
-        jira_watch_loop._run_jira_watch = original  # type: ignore[assignment]
+    monkeypatch.setattr(jira_watch_loop, "_run_jira_watch", _spy)
+
+    rc = run_jira_command(
+        ["watch", "--issue", "ABC-123", "--interval", "0"],
+        environ=_jira_env(),
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        stdin_isatty=lambda: False,
+    )
 
     assert rc == 0
     assert len(watch_calls) == 1
 
 
-def test_watch_dispatch_default_off(tmp_path: Path) -> None:
+def test_watch_dispatch_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """Without --dispatch, the dispatch_runner injected into _run_jira_watch is None."""
     from whilly.cli import jira_watch_loop
 
-    original = jira_watch_loop._run_jira_watch
     captured_kwargs: list[dict[str, object]] = []
 
     def _capture(args: object, **kwargs: object) -> int:
         captured_kwargs.append(kwargs)
         return 0
 
-    jira_watch_loop._run_jira_watch = _capture  # type: ignore[assignment]
-    try:
-        run_jira_command(
-            ["watch", "--issue", "ABC-123"],
-            snapshot_collector=lambda ref, timeout=15: None,  # type: ignore[return-value]
-            environ=_jira_env(),
-            config_loader=lambda: None,
-            config_reader=lambda: {},
-            stdin_isatty=lambda: False,
-        )
-    finally:
-        jira_watch_loop._run_jira_watch = original  # type: ignore[assignment]
+    monkeypatch.setattr(jira_watch_loop, "_run_jira_watch", _capture)
+
+    run_jira_command(
+        ["watch", "--issue", "ABC-123"],
+        environ=_jira_env(),
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        stdin_isatty=lambda: False,
+    )
 
     assert captured_kwargs, "spy was not called"
     kw = captured_kwargs[0]
     # Without --dispatch the production dispatch_runner must be None
     assert kw.get("dispatch_runner") is None
+
+
+def _capture_production_dispatch_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    *,
+    plan_runner_calls: list[list[str]],
+):
+    """Run `whilly jira watch --dispatch ...` with only _run_jira_watch spied,
+    so the REAL production dispatch closure is constructed, and return it."""
+    from whilly.cli import jira_watch_loop
+
+    captured: list[dict[str, object]] = []
+
+    def _spy(args: object, **kwargs: object) -> int:
+        captured.append({"args": args, **kwargs})
+        return 0
+
+    monkeypatch.setattr(jira_watch_loop, "_run_jira_watch", _spy)
+
+    rc = run_jira_command(
+        argv,
+        environ=_jira_env(),
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        stdin_isatty=lambda: False,
+        plan_runner=lambda cmd: plan_runner_calls.append(list(cmd)) or 0,
+    )
+    assert rc == 0
+    assert captured, "_run_jira_watch was not reached"
+    runner = captured[0].get("dispatch_runner")
+    assert callable(runner), "--dispatch must wire a production dispatch_runner"
+    return captured[0]["args"], runner
+
+
+def test_production_dispatch_closure_builds_complete_run_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The REAL dispatch closure must build a complete `jira run` argument set
+    from the watch namespace — no AttributeError on the missing pass-through
+    flags (CR-01) — and hand _run_plan_worker a valid argv."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path / "logs"))
+
+    from whilly.cli import jira as jira_module
+
+    worker_argv: list[list[str]] = []
+    monkeypatch.setattr(jira_module, "_run_plan_worker", lambda argv: worker_argv.append(list(argv)) or 0)
+
+    plan_runner_calls: list[list[str]] = []
+    watch_args, runner = _capture_production_dispatch_runner(
+        monkeypatch,
+        ["watch", "--issue", "ABC-123", "--interval", "0", "--dispatch", "--allow-unready-run"],
+        plan_runner_calls=plan_runner_calls,
+    )
+
+    rc = runner(watch_args, "ABC-123")
+
+    assert rc == 0
+    assert plan_runner_calls == [["apply", str(Path("out") / "jira-ABC-123.json"), "--strict"]]
+    assert worker_argv == [["--plan", "jira-abc-123"]], "watch dispatch must produce a complete run argv"
+
+
+def test_production_dispatch_closure_normalizes_browse_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A browse-URL --issue value is normalized via parse_jira_key for plan id
+    and plan path (WR-07); garbage refs are refused, not crashed on."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path / "logs"))
+
+    from whilly.cli import jira as jira_module
+
+    worker_argv: list[list[str]] = []
+    monkeypatch.setattr(jira_module, "_run_plan_worker", lambda argv: worker_argv.append(list(argv)) or 0)
+
+    plan_runner_calls: list[list[str]] = []
+    url = "https://jira.example/browse/ABC-123"
+    watch_args, runner = _capture_production_dispatch_runner(
+        monkeypatch,
+        ["watch", "--issue", url, "--interval", "0", "--dispatch", "--allow-unready-run"],
+        plan_runner_calls=plan_runner_calls,
+    )
+
+    rc = runner(watch_args, url)
+    assert rc == 0
+    assert plan_runner_calls == [["apply", str(Path("out") / "jira-ABC-123.json"), "--strict"]]
+    assert worker_argv == [["--plan", "jira-abc-123"]]
+
+    # Unparseable ref → refused with rc 1, no worker run
+    rc_bad = runner(watch_args, "not a jira ref")
+    assert rc_bad == 1
+    assert len(worker_argv) == 1, "no worker run for an unparseable issue ref"
+
+
+def test_production_dispatch_closure_refuses_unready_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The closure's plan-level readiness gate refuses a plan that declares
+    itself unready, and fails closed on a garbled plan JSON."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path / "logs"))
+
+    from whilly.cli import jira as jira_module
+
+    worker_argv: list[list[str]] = []
+    monkeypatch.setattr(jira_module, "_run_plan_worker", lambda argv: worker_argv.append(list(argv)) or 0)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "jira-ABC-123.json").write_text(
+        json.dumps({"jira_work": {"readiness": {"verdict": "needs_test_plan", "missing_context": ["unit_tests"]}}}),
+        encoding="utf-8",
+    )
+
+    plan_runner_calls: list[list[str]] = []
+    watch_args, runner = _capture_production_dispatch_runner(
+        monkeypatch,
+        ["watch", "--issue", "ABC-123", "--interval", "0", "--dispatch"],
+        plan_runner_calls=plan_runner_calls,
+    )
+
+    assert runner(watch_args, "ABC-123") == 1
+    assert plan_runner_calls == [], "unready plan must not reach apply --strict"
+    assert worker_argv == []
+
+    # Garbled plan JSON → fail closed, not crash
+    (out_dir / "jira-ABC-123.json").write_text("{not json", encoding="utf-8")
+    assert runner(watch_args, "ABC-123") == 1
+    assert worker_argv == []
 
 
 def test_watch_missing_config_exits_config_missing(

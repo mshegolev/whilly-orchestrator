@@ -541,27 +541,16 @@ def run_jira_command(
         if args.dispatch:
             _effective_plan_runner = plan_runner or _run_plan_command
 
-            def dispatch_runner(dispatch_args: argparse.Namespace) -> int:  # type: ignore[misc]
-                import getpass
-                import webbrowser
-
-                _effective_env = environ if environ is not None else os.environ
-                _effective_config_loader = config_loader if config_loader is not None else _load_config
-                _effective_config_reader = config_reader if config_reader is not None else _read_jira_config_section
-                _effective_prompt = prompt or input
-                _effective_secret_prompt = secret_prompt or getpass.getpass
-                _effective_browser_opener = browser_opener or webbrowser.open
-                _effective_stdin_isatty = stdin_isatty or sys.stdin.isatty
+            def dispatch_runner(dispatch_args: argparse.Namespace, issue_ref: str = "") -> int:  # type: ignore[misc]
                 try:
-                    _effective_config_loader()
                     config_rc = _ensure_jira_config(
                         dispatch_args,
-                        config_reader=_effective_config_reader,
-                        env=_effective_env,
-                        prompt=_effective_prompt,
-                        secret_prompt=_effective_secret_prompt,
-                        browser_opener=_effective_browser_opener,
-                        stdin_isatty=_effective_stdin_isatty,
+                        config_reader=effective_config_reader,
+                        env=effective_env,
+                        prompt=effective_prompt,
+                        secret_prompt=effective_secret_prompt,
+                        browser_opener=effective_browser_opener,
+                        stdin_isatty=effective_stdin_isatty,
                         command_label="whilly jira watch --dispatch",
                     )
                     if config_rc != EXIT_OK:
@@ -572,33 +561,64 @@ def run_jira_command(
                         file=sys.stderr,
                     )
                     return EXIT_VALIDATION_ERROR
-                # Resolve issue key from args.issues (first issue for dispatch)
-                issues = list(getattr(dispatch_args, "issues", []) or [])
-                issue_ref = issues[0] if issues else ""
+                # The watch loop passes the issue to dispatch explicitly;
+                # fall back to issues[0] for direct callers.
+                if not issue_ref:
+                    issues = list(getattr(dispatch_args, "issues", []) or [])
+                    issue_ref = issues[0] if issues else ""
                 if not issue_ref:
                     print(
                         "whilly jira watch --dispatch: no issue to dispatch",
                         file=sys.stderr,
                     )
                     return EXIT_VALIDATION_ERROR
-                # Build a minimal plan path for the readiness gate
-                plan_id = f"jira-{issue_ref.lower()}"
-                plan_path = Path("out") / f"jira-{issue_ref}.json"
-                allow_unready = bool(getattr(dispatch_args, "allow_unready_run", False))
-                readiness = _read_jira_work_readiness(plan_path) if plan_path.exists() else None
-                if readiness and readiness.get("verdict") != "ready_for_testing" and not allow_unready:
-                    print(
-                        f"whilly jira watch --dispatch: readiness gate failed; "
-                        f"verdict={readiness.get('verdict')} "
-                        f"missing={','.join(readiness.get('missing_context') or [])}. "
-                        "Use --allow-unready-run to override.",
-                        file=sys.stderr,
-                    )
+                # Normalize key/browse-URL refs the same way `jira import`
+                # does, so plan id and plan path are consistent (WR-07).
+                try:
+                    key = parse_jira_key(issue_ref)
+                except ValueError as exc:
+                    print(f"whilly jira watch --dispatch: {exc}", file=sys.stderr)
                     return EXIT_VALIDATION_ERROR
+                plan_id = f"jira-{key.lower()}"
+                plan_path = Path("out") / f"jira-{key}.json"
+                # Secondary readiness gate against the plan the worker will
+                # run: a plan that DECLARES itself unready refuses dispatch;
+                # an unreadable/garbled plan also refuses (fail closed). The
+                # primary --readiness-repo-path gate already ran in the loop.
+                allow_unready = bool(getattr(dispatch_args, "allow_unready_run", False))
+                if not allow_unready and plan_path.exists():
+                    try:
+                        readiness = _read_jira_work_readiness(plan_path)
+                    except (OSError, ValueError, json.JSONDecodeError) as exc:
+                        print(
+                            f"whilly jira watch --dispatch: could not read plan readiness from "
+                            f"{plan_path}: {exc.__class__.__name__}",
+                            file=sys.stderr,
+                        )
+                        return EXIT_VALIDATION_ERROR
+                    if readiness is not None and readiness.get("verdict") != "ready_for_testing":
+                        print(
+                            f"whilly jira watch --dispatch: readiness gate failed; "
+                            f"verdict={readiness.get('verdict')} "
+                            f"missing={','.join(readiness.get('missing_context') or [])}. "
+                            "Use --allow-unready-run to override.",
+                            file=sys.stderr,
+                        )
+                        return EXIT_VALIDATION_ERROR
                 preflight_rc = _effective_plan_runner(["apply", str(plan_path), "--strict"])
                 if preflight_rc != EXIT_OK:
                     return preflight_rc
-                return _run_plan_worker(_run_argv(plan_id, dispatch_args))
+                # The watch namespace carries none of the `jira run`
+                # pass-through flags, so build a COMPLETE namespace with
+                # explicit defaults for everything _run_argv reads (CR-01).
+                run_namespace = argparse.Namespace(
+                    max_iterations=getattr(dispatch_args, "max_iterations", None),
+                    worker_id=getattr(dispatch_args, "worker_id", None),
+                    verify_commands=list(getattr(dispatch_args, "verify_commands", []) or []),
+                    optional_verify_commands=list(getattr(dispatch_args, "optional_verify_commands", []) or []),
+                    verify_timeout=getattr(dispatch_args, "verify_timeout", None),
+                )
+                return _run_plan_worker(_run_argv(plan_id, run_namespace))
 
         return _run_jira_watch(
             args,
