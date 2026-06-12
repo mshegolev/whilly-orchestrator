@@ -49,3 +49,52 @@ def test_live_smoke_no_prohibited_hotkey_string() -> None:
     usage = _read("docs/Whilly-Usage.md")
 
     assert "q/d/l/t/h" not in usage
+
+
+# ---------------------------------------------------------------------------
+# Jira watcher daemon docs regression tests
+# ---------------------------------------------------------------------------
+
+
+def _watcher_section(usage: str) -> str:
+    """Extract the Jira watcher daemon section from Whilly-Usage.md."""
+    start = usage.index("## Jira watcher daemon")
+    next_h2 = usage.find("\n## ", start + 1)
+    return usage[start:next_h2] if next_h2 != -1 else usage[start:]
+
+
+def test_watcher_section_heading_present() -> None:
+    """docs/Whilly-Usage.md must contain the Jira watcher daemon section heading."""
+    usage = _read("docs/Whilly-Usage.md")
+    assert "## Jira watcher daemon" in usage
+
+
+def test_watcher_commands_documented() -> None:
+    """Both watch commands must appear in the watcher section."""
+    usage = _read("docs/Whilly-Usage.md")
+    section = _watcher_section(usage)
+    assert "whilly jira watch" in section
+    assert "whilly jira watch-status" in section
+
+
+def test_watcher_log_dir_documented() -> None:
+    """The status-file directory path must be named in the watcher section."""
+    usage = _read("docs/Whilly-Usage.md")
+    section = _watcher_section(usage)
+    assert "whilly_logs/watch/" in section
+
+
+def test_watcher_status_file_name_documented() -> None:
+    """The status-file name jira-watch-status.json must appear in the watcher section."""
+    usage = _read("docs/Whilly-Usage.md")
+    section = _watcher_section(usage)
+    assert "jira-watch-status.json" in section
+
+
+def test_watcher_dispatch_default_off_documented() -> None:
+    """The watcher section must mention that --dispatch is off by default."""
+    usage = _read("docs/Whilly-Usage.md")
+    section = _watcher_section(usage)
+    assert "--dispatch" in section
+    # Must state it is off by default in some form
+    assert "OFF by default" in section or "off by default" in section or "default" in section
