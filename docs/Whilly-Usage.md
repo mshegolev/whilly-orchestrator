@@ -656,7 +656,10 @@ whilly jira smoke --issue PROJECT-123
 
 **What it checks:** auth (whoami), issue fetch, comments, changelog, remote
 links, and classify. All six checks run even when an earlier one fails, so
-you get a full picture on each invocation.
+you get a full picture on each invocation. The comments/changelog/remote-links
+checks verify the data was fetched without error and has the expected shape;
+the report records what was actually verified (e.g. `fetched 2 comments`) —
+empty collections on a quiet issue still pass.
 
 **Optional flags**
 
