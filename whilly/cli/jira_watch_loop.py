@@ -201,43 +201,58 @@ def _acquire_pid_lock(pid_path: Path) -> bool:
     Returns ``True`` if the lock was acquired (no live instance found);
     ``False`` if a live instance already holds the lock.
 
-    Algorithm (20-RESEARCH.md Pattern 2):
-    - If the file does not exist → write our PID, return True.
-    - If the file exists → read the stored PID.
-      - ``os.kill(pid, 0)`` succeeds → live process exists → return False
-        (refuse-and-hint; NEVER send a terminating signal, T-20-02).
-      - ``os.kill`` raises ``OSError`` or the PID is unparseable → stale
-        file → overwrite and return True.
+    Algorithm (20-RESEARCH.md Pattern 2, hardened per review WR-02):
+    - Creation uses ``os.open(..., O_CREAT | O_EXCL)`` so two concurrent
+      watchers cannot both pass a check-then-write race: exactly one
+      ``O_EXCL`` create succeeds.
+    - When the file already exists, probe the stored PID with
+      ``os.kill(pid, 0)`` (NEVER send a terminating signal, T-20-02):
+      - probe succeeds → live process → refuse.
+      - ``ProcessLookupError`` (ESRCH) → stale → reclaim (one retry).
+      - ``PermissionError`` (EPERM) → the process IS alive (owned by
+        another user) → refuse. Fail closed on any other ``OSError``.
+      - unparseable PID file → stale → reclaim.
+    - After creating, re-read the file and verify it still holds our PID
+      (write-then-verify shrinks the residual stale-reclaim TOCTOU window).
     """
-    if pid_path.exists():
-        try:
-            stored_pid = int(pid_path.read_text(encoding="utf-8").strip())
-            os.kill(stored_pid, 0)
-            # Signal 0 succeeded → process is alive → refuse
-            return False
-        except (OSError, ValueError):
-            # OSError: process gone (ESRCH) or no permission (EPERM → alive but
-            # not ours, treat as stale for our purposes — conservative choice).
-            # ValueError: corrupt PID file — overwrite.
-            pass
-
-    # Write our PID atomically (T-20-05)
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     my_pid = os.getpid()
-    fd, tmp_path = tempfile.mkstemp(dir=str(pid_path.parent), suffix=".tmp", prefix=".jira-watch-pid-")
-    closed = False
-    try:
-        os.write(fd, str(my_pid).encode("utf-8"))
-        os.close(fd)
-        closed = True
-        os.replace(tmp_path, pid_path)
-    except BaseException:
-        if not closed:
+
+    for _attempt in range(2):
+        try:
+            fd = os.open(pid_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            try:
+                stored_pid = int(pid_path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                stored_pid = None  # corrupt/unreadable → stale
+            if stored_pid is not None:
+                try:
+                    os.kill(stored_pid, 0)
+                    return False  # signal 0 succeeded → process is alive → refuse
+                except ProcessLookupError:
+                    pass  # ESRCH: process gone → stale → reclaim
+                except PermissionError:
+                    return False  # EPERM: alive but not ours → refuse (fail closed)
+                except OSError:
+                    return False  # unknown probe failure → fail closed
+            # Stale lock → remove and retry the O_EXCL create exactly once.
+            try:
+                pid_path.unlink(missing_ok=True)
+            except OSError:
+                return False
+            continue
+        try:
+            os.write(fd, str(my_pid).encode("utf-8"))
+        finally:
             os.close(fd)
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
-    return True
+        # Write-then-verify: confirm we still own the lock.
+        try:
+            return int(pid_path.read_text(encoding="utf-8").strip()) == my_pid
+        except (OSError, ValueError):
+            return False
+
+    return False  # lost the reclaim race twice → another watcher won
 
 
 def _release_pid_lock(pid_path: Path) -> None:

@@ -428,6 +428,36 @@ def test_acquire_pid_lock(tmp_path: Path) -> None:
     assert result is True, "should acquire when PID file holds a dead PID"
 
 
+def test_acquire_pid_lock_eperm_means_live(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EPERM from os.kill(pid, 0) means the process IS alive (another user's
+    process) — the lock must be refused, not treated as stale (WR-02)."""
+    from whilly.cli import jira_watch_loop
+
+    pid_file = tmp_path / "jira-watch.pid"
+    pid_file.write_text("4242", encoding="utf-8")
+
+    def _eperm_kill(pid: int, sig: int) -> None:
+        raise PermissionError("Operation not permitted")
+
+    monkeypatch.setattr(jira_watch_loop.os, "kill", _eperm_kill)
+
+    assert jira_watch_loop._acquire_pid_lock(pid_file) is False
+    # The other watcher's lock must remain untouched
+    assert pid_file.read_text(encoding="utf-8") == "4242"
+
+
+def test_acquire_pid_lock_verifies_written_pid(tmp_path: Path) -> None:
+    """After acquiring, the lock file must hold our PID (write-then-verify)."""
+    from whilly.cli.jira_watch_loop import _acquire_pid_lock
+
+    pid_file = tmp_path / "jira-watch.pid"
+    assert _acquire_pid_lock(pid_file) is True
+    assert int(pid_file.read_text(encoding="utf-8").strip()) == os.getpid()
+
+
 # ---------------------------------------------------------------------------
 # Task 2 – Test 3: live PID file causes loop to refuse (no collector calls)
 # ---------------------------------------------------------------------------
