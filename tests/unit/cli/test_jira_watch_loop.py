@@ -7,6 +7,7 @@ handlers disabled (install_signal_handlers=False).
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -290,3 +291,278 @@ def test_no_signal_handlers_when_disabled(
     # Handlers must be unchanged
     assert signal.getsignal(signal.SIGTERM) == original_sigterm
     assert signal.getsignal(signal.SIGINT) == original_sigint
+
+
+# ===========================================================================
+# Task 2 – Backoff, PID guard, DB audit event helper
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 1: consecutive failures drive backoff through 5/10/20/40/60
+# ---------------------------------------------------------------------------
+
+
+def test_backoff_increases_on_consecutive_failures_and_resets_on_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consecutive RuntimeError raises increment backoff through
+    5,10,20,40,60 (capped at 60); one success resets backoff to 0.
+
+    Uses interval=0 and captures the backoff_seconds visible in the status
+    file after each cycle by reading the file between calls.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # We'll run the loop in a controlled way: each fake_collector call
+    # either raises or succeeds depending on a list of outcomes.
+    outcomes = [
+        "fail",
+        "fail",
+        "fail",
+        "fail",
+        "fail",
+        "fail",  # 6th failure: backoff still capped at 60
+        "ok",  # success: resets backoff
+    ]
+    call_index = [0]
+    stop = threading.Event()
+
+    backoff_snapshots: list[int] = []
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        idx = call_index[0]
+        call_index[0] += 1
+        outcome = outcomes[idx] if idx < len(outcomes) else "ok"
+        # After last call, set stop so the loop exits
+        if call_index[0] >= len(outcomes):
+            stop.set()
+        if outcome == "fail":
+            raise RuntimeError(f"simulated failure {idx + 1}")
+        return _fake_snapshot(ref)
+
+    # Patch _interruptible_sleep to capture backoff and not actually sleep
+    from whilly.cli import jira_watch_loop
+
+    def patched_sleep(stop_evt: threading.Event, seconds: float) -> bool:
+        # Record the backoff (seconds - interval; interval == 0 here)
+        backoff_snapshots.append(int(seconds))
+        return stop_evt.is_set()
+
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", patched_sleep)
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    # Read final status
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    # After success the backoff should be 0
+    assert status["backoff_seconds"] == 0, "backoff must reset to 0 after success"
+    # error_count must equal the number of failures (6)
+    assert status["error_count"] == 6, f"expected 6 errors, got {status['error_count']}"
+
+    # The backoff_snapshots list captured the sleep(interval + backoff)
+    # argument on each cycle (interval=0, so sleep == backoff).
+    # Backoff is applied to the UPCOMING gap after a failure, so:
+    #   Before cycle 1 (no prior failure): sleep(0)
+    #   Before cycle 2 (after 1 fail):     sleep(5)
+    #   Before cycle 3 (after 2 fails):    sleep(10)
+    #   Before cycle 4 (after 3 fails):    sleep(20)
+    #   Before cycle 5 (after 4 fails):    sleep(40)
+    #   Before cycle 6 (after 5 fails):    sleep(60)
+    #   Before cycle 7 (after 6 fails):    sleep(60)  — still capped
+    #   (cycle 7 is success, sets stop — loop exits without another sleep)
+    expected_backoffs = [0, 5, 10, 20, 40, 60, 60]
+    assert backoff_snapshots == expected_backoffs, (
+        f"backoff sequence mismatch: {backoff_snapshots} != {expected_backoffs}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 2: _acquire_pid_lock behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_pid_lock(tmp_path: Path) -> None:
+    """_acquire_pid_lock returns True (no existing file), False (live PID),
+    True (stale/garbage PID)."""
+    from whilly.cli.jira_watch_loop import _acquire_pid_lock
+
+    pid_file = tmp_path / "watch" / "jira-watch.pid"
+
+    # 1. No file → returns True, writes our PID
+    result = _acquire_pid_lock(pid_file)
+    assert result is True, "should acquire when no file exists"
+    assert pid_file.exists(), "pid file must be created"
+    stored = int(pid_file.read_text(encoding="utf-8").strip())
+    assert stored == os.getpid()
+
+    # Clean up for next check
+    pid_file.unlink()
+
+    # 2. File holds a live PID (our own PID is definitely live) → returns False
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    result = _acquire_pid_lock(pid_file)
+    assert result is False, "should refuse when PID file holds a live process"
+
+    # 3. File holds a dead/garbage PID → returns True (stale → overwrite)
+    pid_file.write_text("99999999", encoding="utf-8")  # very likely not alive
+    # If by chance 99999999 is alive on this system, use a bad string instead
+    try:
+        os.kill(99999999, 0)
+        # PID IS alive — fall back to garbage string to trigger ValueError path
+        pid_file.write_text("not-a-pid", encoding="utf-8")
+    except OSError:
+        pass  # good: 99999999 is dead, stale path will be taken
+
+    result = _acquire_pid_lock(pid_file)
+    assert result is True, "should acquire when PID file holds a dead PID"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 3: live PID file causes loop to refuse (no collector calls)
+# ---------------------------------------------------------------------------
+
+
+def test_live_pid_file_refuses_second_watcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When a live PID file exists, _run_jira_watch exits with
+    EXIT_VALIDATION_ERROR (1) without calling the collector.
+    It MUST NOT send a real signal to the stored PID.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # Write a live PID file (our own PID is alive)
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = watch_dir / "jira-watch.pid"
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+
+    call_count = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        call_count[0] += 1
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=threading.Event(),
+        install_signal_handlers=False,
+    )
+
+    assert rc == 1, "must return EXIT_VALIDATION_ERROR (1)"
+    assert call_count[0] == 0, "collector must not be called when another watcher is live"
+
+    captured = capsys.readouterr()
+    assert "already running" in captured.err, "hint about other watcher must be printed to stderr"
+    assert str(os.getpid()) in captured.err, "hint must include the existing pid"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 4: _persist_watch_event calls append_jira_work_event on
+#           the injected repo; a raising persist is swallowed (warn-not-fail)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRepo:
+    """Minimal fake repo for DB audit tests."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def append_jira_work_event(self, **kwargs: object) -> int:
+        self.events.append(kwargs)
+        return 1
+
+
+class _RaisingRepo:
+    """Fake repo that always raises on append."""
+
+    async def append_jira_work_event(self, **kwargs: object) -> int:
+        raise RuntimeError("simulated DB error")
+
+
+def test_persist_watch_event_calls_repo(tmp_path: Path) -> None:
+    """_persist_watch_event calls append_jira_work_event on the injected repo
+    with the expected issue_key and event_type.
+    """
+    import asyncio as _asyncio
+
+    from whilly.cli.jira_watch_loop import _persist_watch_event
+
+    repo = _FakeRepo()
+    _asyncio.run(
+        _persist_watch_event(
+            dsn="",  # unused when repo is injected
+            issue_key="ABC-123",
+            event_type="watch.cycle",
+            payload={"cycle_count": 1, "result": "ok"},
+            repo=repo,
+        )
+    )
+
+    assert len(repo.events) == 1
+    evt = repo.events[0]
+    assert evt["issue_key"] == "ABC-123"
+    assert evt["event_type"] == "watch.cycle"
+    assert evt["payload"]["cycle_count"] == 1  # type: ignore[index]
+
+
+def test_persist_watch_event_raises_are_swallowed_by_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When _persist_watch_event raises, the watch loop continues (warn-not-fail).
+
+    We simulate this by running the loop with a DSN and a patched
+    _persist_watch_event that always raises, and verify the loop still completes
+    normally.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    stop = threading.Event()
+    call_count = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        call_count[0] += 1
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli import jira_watch_loop
+
+    async def raising_persist(**kwargs: object) -> None:
+        raise RuntimeError("simulated DB error")
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", raising_persist)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0, "loop must not fail when persist raises"
+    assert call_count[0] == 1, "collector must still be called"
+    captured = capsys.readouterr()
+    assert "persist failed" in captured.err, "warning must be printed to stderr"
