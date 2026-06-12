@@ -43,8 +43,6 @@ from whilly.cli.smoke import (
 # Constants
 # ---------------------------------------------------------------------------
 
-_REMOTE_HOST_RE = re.compile(r"(?:https?://|git@)([^/:]+)", re.IGNORECASE)
-
 # Type alias for the injectable HTTP getter.
 GitLabGetter = Callable[..., dict[str, Any]]
 
@@ -108,7 +106,15 @@ def _resolve_gitlab_config_state(
 
     token = (env.get("GITLAB_TOKEN") or env.get("GITLAB_API_TOKEN") or env.get("WHILLY_GITLAB_API_TOKEN") or "").strip()
 
-    if not token:
+    if not host:
+        # Fall back to the host of the resolved GITLAB_URL — never a
+        # hardcoded deployment-specific hostname (WR-04).
+        try:
+            host = urllib.parse.urlsplit(url).hostname or ""
+        except ValueError:
+            host = ""
+
+    if not token and host:
         # glab CLI fallback — mirrors whilly/sinks/gitlab_mr.py:_resolve_gitlab_token
         try:
             import subprocess  # noqa: PLC0415 — lazy import; only called when env is absent
@@ -172,8 +178,19 @@ def _gitlab_get(url: str, *, token: str, timeout: int = 15) -> dict[str, Any]:
 
 
 def _extract_host_from_url(repo_url: str) -> str:
-    """Return the hostname extracted from *repo_url*, or an empty string."""
-    m = _REMOTE_HOST_RE.search(repo_url)
+    """Return the hostname extracted from *repo_url*, or an empty string.
+
+    Uses the stdlib URL parser so userinfo (``user:pass@host``) never
+    pollutes the extracted host (WR-05); falls back to the
+    ``git@host:path`` SSH clone form.
+    """
+    try:
+        host = urllib.parse.urlsplit(repo_url).hostname
+    except ValueError:
+        host = None
+    if host:
+        return host
+    m = re.match(r"git@([^:/]+)", repo_url)
     return m.group(1) if m else ""
 
 
@@ -237,7 +254,18 @@ def _run_gitlab_smoke(
 
     Returns an exit code: 0 all pass, 1 a check failed, 2 config missing.
     """
-    host = _extract_host_from_url(args.repo_url) or "gitlab.services.mts.ru"
+    repo_url = str(args.repo_url or "").strip()
+    if not repo_url.lower().startswith(("http://", "https://")):
+        # SSH clone forms parse inconsistently downstream (_resolve_project_path
+        # would encode the whole string) — reject them up front (WR-06).
+        print(
+            f"whilly gitlab smoke: --repo-url must be an http(s):// repository URL (got {_redact_url(repo_url)!r}).\n"
+            "  SSH-style git@host:path URLs are not supported — pass the https:// clone URL instead.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_MISSING
+
+    host = _extract_host_from_url(repo_url)
     url, token = _resolve_gitlab_config_state(env, host)
 
     if not url or not token:
@@ -274,7 +302,7 @@ def _run_gitlab_smoke(
     # ------------------------------------------------------------------
     # Check 2: project_access (GET /api/v4/projects/{encoded path})
     # ------------------------------------------------------------------
-    repo_path_encoded = _resolve_project_path(args.repo_url)
+    repo_path_encoded = _resolve_project_path(repo_url)
     try:
         data = gitlab_getter(f"{api_base}/projects/{repo_path_encoded}", token=token, timeout=args.timeout)
         if isinstance(data, dict) and data.get("id"):
