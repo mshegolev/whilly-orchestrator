@@ -757,3 +757,244 @@ def test_no_pause_gate_not_taken_when_unpaused(
     status_path = tmp_path / "watch" / "jira-watch-status.json"
     status = json.loads(status_path.read_text(encoding="utf-8"))
     assert status["last_poll_result"] != "paused"
+
+
+# ===========================================================================
+# Plan 02 Task 2 – Readiness gate + --dispatch default-off path
+# ===========================================================================
+
+
+def _make_plan_json(tmp_path: Path, verdict: str, missing: list[str] | None = None) -> Path:
+    """Write a minimal plan JSON with the given readiness verdict."""
+    plan = {
+        "jira_work": {
+            "readiness": {
+                "verdict": verdict,
+                "missing_context": missing or [],
+            }
+        }
+    }
+    p = tmp_path / "plan.json"
+    p.write_text(json.dumps(plan), encoding="utf-8")
+    return p
+
+
+def _watch_args_dispatch(
+    issues: list[str] | None = None,
+    interval: int = 0,
+    timeout: int = 15,
+    dispatch: bool = False,
+    readiness_repo_path: str | None = None,
+    allow_unready_run: bool = False,
+) -> SimpleNamespace:
+    """Build args namespace for dispatch/readiness gate tests."""
+    return SimpleNamespace(
+        issues=issues or ["ABC-123"],
+        interval=interval,
+        timeout=timeout,
+        dispatch=dispatch,
+        readiness_repo_path=readiness_repo_path,
+        allow_unready_run=allow_unready_run,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 1: dispatch default-off (no --dispatch → runner never called)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_default_off_runner_never_called(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without --dispatch, dispatch_runner must never be called even when
+    unpaused and readiness is ready_for_testing.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "ready_for_testing")
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_dispatch(dispatch=False, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 0, "dispatch_runner must NOT be called without --dispatch"
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 2: unready verdict → dispatch blocked, watch.block event
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_gate_blocks_dispatch_with_block_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --dispatch and unready verdict, dispatch_runner is NOT called,
+    last_poll_result == 'blocked', and a watch.block event is emitted.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "missing_context", ["no_repo", "no_tests"])
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.jira_watch_loop import EVENT_BLOCK
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(
+        *,
+        dsn: str,
+        issue_key: str,
+        event_type: str,
+        payload: dict,
+        repo: object = None,
+    ) -> None:
+        persist_calls.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args_dispatch(dispatch=True, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 0, "dispatch_runner must NOT be called when verdict is not ready"
+
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["last_poll_result"] == "blocked", "status must record 'blocked'"
+
+    block_events = [c for c in persist_calls if c["event_type"] == EVENT_BLOCK]
+    assert len(block_events) >= 1, "watch.block event must be emitted"
+    payload = block_events[0]["payload"]
+    assert payload["verdict"] == "missing_context"
+    # Secret-free check
+    raw = json.dumps(payload)
+    assert "jira-token" not in raw
+    assert "postgres://" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 3: ready verdict → dispatch_runner called once
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_gate_passes_calls_dispatch_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --dispatch and verdict == ready_for_testing, dispatch_runner is
+    called exactly once per cycle.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "ready_for_testing")
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_dispatch(dispatch=True, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 1, "dispatch_runner must be called exactly once when ready"
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 4: --allow-unready-run overrides readiness gate
+# ---------------------------------------------------------------------------
+
+
+def test_allow_unready_run_overrides_readiness_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --dispatch and --allow-unready-run, dispatch_runner is called even
+    when verdict != ready_for_testing (mirrors _run_intake semantics).
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "missing_context", ["no_repo"])
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_dispatch(
+            dispatch=True,
+            readiness_repo_path=str(plan_path),
+            allow_unready_run=True,
+        ),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 1, "dispatch_runner must be called with --allow-unready-run override"
