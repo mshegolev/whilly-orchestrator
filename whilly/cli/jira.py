@@ -31,7 +31,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 from whilly.cli.smoke import (
-    EXIT_CHECK_FAILED as _SMOKE_EXIT_CHECK_FAILED,
     EXIT_CONFIG_MISSING,
     SmokeReport,
     _redact_url,
@@ -850,19 +849,29 @@ def _run_jira_smoke(
     payload["project_key"] = project_key
     payload["issue_key"] = issue_key
 
-    report_path = write_smoke_report(_smoke_report_dir(), "jira", payload)
-
-    # --- Optional DB persist (same gate as _run_poll) ---
+    # --- Optional DB persist (best-effort: never alters the check exit code, WR-03) ---
     if args.persist:
-        dsn = os.environ.get("WHILLY_DATABASE_URL", "").strip()
+        dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
         if not dsn:
-            print("whilly jira smoke: WHILLY_DATABASE_URL is required for --persist.", file=sys.stderr)
-            return EXIT_CONFIG_MISSING
-        try:
-            asyncio.run(_persist_smoke_event(dsn=dsn, payload=payload))
-        except Exception as exc:  # noqa: BLE001
-            print(f"whilly jira smoke: persist failed: {exc}", file=sys.stderr)
-            return _SMOKE_EXIT_CHECK_FAILED
+            print(
+                "whilly jira smoke: --persist skipped — WHILLY_DATABASE_URL is not set (best-effort).",
+                file=sys.stderr,
+            )
+            payload["persist"] = {"attempted": False, "note": "skipped: WHILLY_DATABASE_URL is not set"}
+        else:
+            try:
+                asyncio.run(_persist_smoke_event(dsn=dsn, payload=payload))
+                payload["persist"] = {"attempted": True, "ok": True}
+            except Exception as exc:  # noqa: BLE001 — best-effort persist must not mask check results
+                # Only the error class is recorded — the message may echo the DSN.
+                print(
+                    f"whilly jira smoke: persist failed ({exc.__class__.__name__}) — "
+                    "best-effort, check WHILLY_DATABASE_URL connectivity.",
+                    file=sys.stderr,
+                )
+                payload["persist"] = {"attempted": True, "ok": False, "error": exc.__class__.__name__}
+
+    report_path = write_smoke_report(_smoke_report_dir(), "jira", payload)
 
     # --- Output ---
     if args.json:

@@ -317,6 +317,117 @@ def test_jira_smoke_classify_uses_snapshot_classification_field(
 
 
 # ---------------------------------------------------------------------------
+# WR-02/WR-03 regressions: --persist reads injected env and is best-effort
+# ---------------------------------------------------------------------------
+
+
+def test_jira_smoke_persist_reads_dsn_from_injected_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--persist resolves WHILLY_DATABASE_URL through the injected environ mapping."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("WHILLY_DATABASE_URL", raising=False)
+
+    persisted_dsns: list[str] = []
+
+    async def _fake_persist(*, dsn: str, payload: dict) -> None:
+        persisted_dsns.append(dsn)
+
+    monkeypatch.setattr("whilly.cli.jira._persist_smoke_event", _fake_persist)
+
+    env = _jira_env() | {"WHILLY_DATABASE_URL": "postgres://dbuser:dbpass@dbhost:5432/mydb"}
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123", "--persist"],
+        snapshot_collector=lambda ref, timeout=15: _full_snapshot(),
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=env,
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 0
+    assert persisted_dsns == ["postgres://dbuser:dbpass@dbhost:5432/mydb"], (
+        "DSN must come from the injected environ, not os.environ"
+    )
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1
+    raw = reports[0].read_text(encoding="utf-8")
+    assert "postgres://" not in raw, "DSN must never appear in the report"
+    payload = json.loads(raw)
+    assert payload["persist"] == {"attempted": True, "ok": True}
+
+
+def test_jira_smoke_persist_failure_does_not_change_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Persist failure with all checks green → exit 0, warn line, note in report, no DSN leak."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    async def _boom_persist(*, dsn: str, payload: dict) -> None:
+        raise RuntimeError("pool connect failed: postgres://dbuser:dbpass@dbhost:5432/mydb")
+
+    monkeypatch.setattr("whilly.cli.jira._persist_smoke_event", _boom_persist)
+
+    env = _jira_env() | {"WHILLY_DATABASE_URL": "postgres://dbuser:dbpass@dbhost:5432/mydb"}
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123", "--persist"],
+        snapshot_collector=lambda ref, timeout=15: _full_snapshot(),
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=env,
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 0, f"Best-effort persist failure must not mask green checks, got rc={rc}"
+
+    captured = capsys.readouterr()
+    assert "persist failed" in captured.err
+    assert "postgres://" not in captured.err + captured.out, "DSN must never appear in output"
+    # Summary must still be printed.
+    assert "PASS" in captured.out
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1
+    raw = reports[0].read_text(encoding="utf-8")
+    assert "postgres://" not in raw
+    payload = json.loads(raw)
+    assert payload["persist"] == {"attempted": True, "ok": False, "error": "RuntimeError"}
+
+
+def test_jira_smoke_persist_without_dsn_warns_and_keeps_check_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--persist without WHILLY_DATABASE_URL → skip with a warning, exit by check results."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("WHILLY_DATABASE_URL", raising=False)
+
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123", "--persist"],
+        snapshot_collector=lambda ref, timeout=15: _full_snapshot(),
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=_jira_env(),
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 0, f"Missing DSN must not fail a green smoke run, got rc={rc}"
+    captured = capsys.readouterr()
+    assert "WHILLY_DATABASE_URL" in captured.err
+    assert "PASS" in captured.out
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert payload["persist"]["attempted"] is False
+
+
+# ---------------------------------------------------------------------------
 # Test 5: report contains no sample token, no postgres DSN
 # ---------------------------------------------------------------------------
 
