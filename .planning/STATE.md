@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
 status: executing
-last_updated: "2026-06-12T09:18:00Z"
-last_activity: 2026-06-12 -- Phase 20 Plan 02 complete (pause gate, readiness gate, dispatch seam)
+last_updated: "2026-06-12T10:40:00Z"
+last_activity: 2026-06-12 -- Phase 20 Plan 03 complete (CLI wiring, docs, module contract)
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 9
-  completed_plans: 8
-  percent: 67
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 20
-Plan: 02 complete; Plan 03 next
-Status: Executing
-Last activity: 2026-06-12 -- Phase 20 Plan 02 complete (pause gate, readiness gate, dispatch seam)
+Plan: 03 complete; Phase 20 all plans done
+Status: Complete
+Last activity: 2026-06-12 -- Phase 20 Plan 03 complete (CLI wiring, docs, module contract)
 
 ## Active Roadmap
 
@@ -38,7 +38,7 @@ See: `.planning/ROADMAP.md`
 |-------|------|--------------|--------|
 | 18 | Migration Chain Validation | MIG-01, MIG-02 | Not started |
 | 19 | Live Authenticated Smoke | LIVE-01, LIVE-02, LIVE-03 | Not started |
-| 20 | Jira Watcher Daemon | WATCH-01, WATCH-02, WATCH-03 | In progress (Plans 01-02 done) |
+| 20 | Jira Watcher Daemon | WATCH-01, WATCH-02, WATCH-03 | Complete (Plans 01-03 done) |
 
 ## Active Scope
 
@@ -150,6 +150,7 @@ ADR-001 path-sink fixes are prerequisites this milestone builds on.
 | Phase 19 P04 | 24 | 2 tasks | 2 files |
 | 20 | 01 | 24 min | 2 | 2 |
 | 20 | 02 | 28 min | 2 | 2 |
+| 20 | 03 | 22 min | 2 | 6 |
 
 ## Previous Milestones
 
@@ -198,3 +199,6 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase 20-02]: _run_dispatch_if_ready extracted as a named helper so the dispatch call site is isolated and grep-auditable
 - [Phase 20-02]: dispatch_runner=None means no dispatch wired yet; plan 03 wires the Phase-17-gated path
 - [Phase 20-02]: Pause gate fires after collect and before dispatch — read-only polling continues while paused (CONTEXT.md locked)
+- [Phase 20-03]: dispatch_runner=None without --dispatch; production closure wires Phase-17 readiness gate only when --dispatch set (T-20-10)
+- [Phase 20-03]: _run_watch_status lives in jira_watch_loop.py to keep no-circular-import invariant; jira.py imports it lazily
+- [Phase 20-03]: watch-status returns EXIT_OK for missing status file — status absence is not an error
