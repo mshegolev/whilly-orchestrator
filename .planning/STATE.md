@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
-status: executing
-last_updated: "2026-06-12T10:40:00Z"
+status: milestone_complete
+last_updated: 2026-06-12T11:47:09.605Z
 last_activity: 2026-06-12 -- Phase 20 Plan 03 complete (CLI wiring, docs, module contract)
 progress:
   total_phases: 3
@@ -11,6 +11,7 @@ progress:
   total_plans: 9
   completed_plans: 9
   percent: 100
+stopped_at: Milestone complete (Phase 20 was final phase)
 ---
 
 # Project State
@@ -21,14 +22,14 @@ See: `.planning/PROJECT.md` (updated 2026-06-11)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Phase 20 — jira watcher daemon
+**Current focus:** Milestone complete
 
 ## Current Position
 
 Phase: 20
-Plan: 03 complete; Phase 20 all plans done
-Status: Complete
-Last activity: 2026-06-12 -- Phase 20 Plan 03 complete (CLI wiring, docs, module contract)
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-06-12
 
 ## Active Roadmap
 
