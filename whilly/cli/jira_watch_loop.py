@@ -552,6 +552,59 @@ def _run_jira_watch(
     return EXIT_OK
 
 
+def _run_watch_status(args: Any, *, environ: MutableMapping[str, str] | None = None) -> int:
+    """Print the current watcher status from the status JSON file.
+
+    Reads ``_status_path()`` and prints either a human-readable summary
+    (default) or the raw JSON (when ``args.json`` is True).
+
+    Returns ``EXIT_OK`` in both the "found" and "not found" cases — a missing
+    status file is not an error (the watcher may simply not have been started).
+    """
+    status_file = _status_path()
+    if not status_file.exists():
+        print(
+            f"whilly jira watch-status: no watcher status found at {status_file}",
+            file=sys.stderr,
+        )
+        return EXIT_OK
+
+    try:
+        data = json.loads(status_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"whilly jira watch-status: could not read status file: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_OK
+
+    if getattr(args, "json", False):
+        print(json.dumps(data, ensure_ascii=False))
+        return EXIT_OK
+
+    # Human-readable summary of key fields (T-20-11: no secrets)
+    state = data.get("state", "unknown")
+    pid = data.get("pid", "?")
+    issues = data.get("issues", [])
+    cycle_count = data.get("cycle_count", 0)
+    error_count = data.get("error_count", 0)
+    last_poll_at = data.get("last_poll_at") or "never"
+    backoff = data.get("backoff_seconds", 0)
+    started_at = data.get("started_at") or "?"
+    stopped_at = data.get("stopped_at")
+
+    print(f"whilly jira watch-status: state={state} pid={pid}")
+    print(f"  issues:        {', '.join(issues) if issues else 'none'}")
+    print(f"  started_at:    {started_at}")
+    if stopped_at:
+        print(f"  stopped_at:    {stopped_at}")
+    print(f"  last_poll_at:  {last_poll_at}")
+    print(f"  cycle_count:   {cycle_count}")
+    print(f"  error_count:   {error_count}")
+    print(f"  backoff_seconds: {backoff}")
+    return EXIT_OK
+
+
 def _run_dispatch_if_ready(
     *,
     args: Any,
