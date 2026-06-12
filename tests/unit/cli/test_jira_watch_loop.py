@@ -99,6 +99,44 @@ def test_watch_loop_calls_collector_per_cycle(
     assert rc == 0
 
 
+def test_first_poll_is_immediate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first poll happens immediately on start — no interval-long sleep
+    before the first collect (WR-04)."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    stop = threading.Event()
+    sleep_calls: list[float] = []
+    collector_calls = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        collector_calls[0] += 1
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli import jira_watch_loop
+
+    def spy_sleep(stop_evt: threading.Event, seconds: float) -> bool:
+        sleep_calls.append(seconds)
+        return stop_evt.is_set()
+
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", spy_sleep)
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(interval=300),  # a long interval must NOT delay cycle 1
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    assert collector_calls[0] == 1, "collector must run on the first cycle"
+    assert sleep_calls == [], "no sleep may happen before the first poll"
+
+
 # ---------------------------------------------------------------------------
 # Task 1 – Test 2: interval resolution (--interval > env > 300 default)
 # ---------------------------------------------------------------------------
@@ -370,9 +408,9 @@ def test_backoff_increases_on_consecutive_failures_and_resets_on_success(
     assert status["error_count"] == 6, f"expected 6 errors, got {status['error_count']}"
 
     # The backoff_snapshots list captured the sleep(interval + backoff)
-    # argument on each cycle (interval=0, so sleep == backoff).
-    # Backoff is applied to the UPCOMING gap after a failure, so:
-    #   Before cycle 1 (no prior failure): sleep(0)
+    # argument between cycles (interval=0, so sleep == backoff).
+    # The first cycle polls immediately (no sleep); backoff is applied to
+    # the UPCOMING gap after a failure, so:
     #   Before cycle 2 (after 1 fail):     sleep(5)
     #   Before cycle 3 (after 2 fails):    sleep(10)
     #   Before cycle 4 (after 3 fails):    sleep(20)
@@ -380,7 +418,7 @@ def test_backoff_increases_on_consecutive_failures_and_resets_on_success(
     #   Before cycle 6 (after 5 fails):    sleep(60)
     #   Before cycle 7 (after 6 fails):    sleep(60)  — still capped
     #   (cycle 7 is success, sets stop — loop exits without another sleep)
-    expected_backoffs = [0, 5, 10, 20, 40, 60, 60]
+    expected_backoffs = [5, 10, 20, 40, 60, 60]
     assert backoff_snapshots == expected_backoffs, (
         f"backoff sequence mismatch: {backoff_snapshots} != {expected_backoffs}"
     )
