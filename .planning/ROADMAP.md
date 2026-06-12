@@ -90,7 +90,19 @@ at Phase 18.
   4. When global worker pause is active, the watcher does not dispatch any autonomous work until pause is lifted
   5. When code/test readiness gates are not satisfied, the watcher records the block reason as an audit event and waits rather than dispatching
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+**Wave 1**
+
+  - [ ] 20-01-PLAN.md — Core watch loop: interruptible sleep, interval, status file, PID guard, backoff, audit-event helper (WATCH-01, WATCH-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+  - [ ] 20-02-PLAN.md — Gates inside the loop: global-pause poll-no-dispatch + readiness gate + --dispatch default-off (WATCH-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+  - [ ] 20-03-PLAN.md — CLI wiring (watch/watch-status subparsers + dispatch routing) + docs section + docs regression (WATCH-01, WATCH-02, WATCH-03)
 
 ## Progress Table
 
@@ -98,13 +110,16 @@ at Phase 18.
 |-------|----------------|--------|-----------|
 | 18. Migration Chain Validation | 2/2 | Complete    | 2026-06-11 |
 | 19. Live Authenticated Smoke | 4/4 | Complete    | 2026-06-12 |
-| 20. Jira Watcher Daemon | 0/? | Not started | - |
+| 20. Jira Watcher Daemon | 0/3 | Not started | - |
 
 ## Deferred Scope
 
 - Browser and assistive-technology QA for the full WUI operator workflow (OPQA-01, future milestone).
 - New operator modules beyond the pulled logs/admin/PRD artifacts.
 - Replacement of the current Jinja/HTMX WUI or Rich TUI architecture.
+- Merging watch with SchedulerWorker JQL-rule intake into one daemon framework.
+- systemd unit / launchd plist packaging for the watcher.
+- WUI surface for watcher status.
 
 ---
 *Roadmap created: 2026-06-11 for milestone v1.2*
