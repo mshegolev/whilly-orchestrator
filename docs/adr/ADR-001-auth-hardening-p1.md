@@ -426,6 +426,69 @@ and `POST /me/password`. Verified by the now-passing
 
 ---
 
+## P1.13 — Agent-exec path-sink flattening (prompt-injection / agent-exec review)
+
+**Severity: Medium (write sink) / Low (read sink) — both latent.** This addendum
+covers the agent-exec review and closes the *class* of "agent-controlled identifier
+interpolated into a filesystem path / tmux target" across the codebase, not just
+the first instances found.
+
+**Context — the validator is deliberately permissive.**
+[`whilly.core.task_id.validate_task_id`](../../whilly/core/task_id.py) accepts
+`^[A-Za-z0-9._:/-]+$` (rejecting only `..` and shell metacharacters) because a
+task id legitimately carries hierarchy (`epic.subepic/leaf`) and namespaces
+(`a:b`). The `/` and `:` it admits are safe as *identifiers* but unsafe the
+moment an id reaches a *filename* or a *tmux `session:window` target*: a leading
+`/` makes `log_dir / f"{id}.log"` resolve to an **absolute** path (pathlib
+discards the base on an absolute RHS), an embedded `/` references a non-existent
+subdir, and `:` confuses tmux's target syntax. The codebase therefore must
+flatten ids at every path/tmux sink via
+[`safe_task_id_filename`](../../whilly/core/task_id.py) (mirrored by
+[`llm_ops._safe_part`](../../whilly/llm_ops.py) and the worktree slugifier).
+
+**Finding A — write sinks (Medium), fixed in PR [#318](https://github.com/mshegolev/whilly-orchestrator/pull/318).**
+[`tmux_runner`](../../whilly/tmux_runner.py) and
+[`verifier`](../../whilly/verifier.py) interpolated the **raw** id into write
+paths (`{id}.log`, `{id}_prompt.txt`, `{id}_verify.log`) and the tmux session
+name. A leading-slash id was an arbitrary-location `*.log`/`*_prompt.txt` write
+primitive; even a legitimate hierarchical id crashed the writer. Fixed with the
+shared `safe_task_id_filename` helper; no-op for every real id (all 208 across
+the plan files are slash-free), so behaviour is unchanged.
+
+**Finding B — the symmetric read sink (Low), fixed this session.**
+[`dashboard.py::_resolve_task_log_path`](../../whilly/dashboard.py) still built
+its fallback candidates from the **raw** id (`f"{task_id}.log"`), so after
+Finding A the *writer* flattened but the *reader* did not: a `/`- or `:`-bearing
+id wrote `epic.subepic_leaf.log` while the dashboard looked for
+`epic.subepic/leaf.log` → the operator could never view that task's log; and a
+leading-slash id made the reader resolve an absolute path (the read-side twin of
+the Finding A write escape). Fixed by flattening with the same
+`safe_task_id_filename` so reader == writer. Verified by
+`tests/test_whilly_dashboard.py::test_resolve_task_log_path_flattens_hierarchical_id_to_match_writer`
+and `…_leading_slash_id_cannot_escape_log_dir`. (The precise active-agent
+registration branch, which uses the absolute path recorded at spawn time, is
+unaffected.)
+
+**Class swept — clean elsewhere.** The remaining sinks were audited and already
+flatten: [`workspaces.prepare_git_workspace`](../../whilly/workspaces.py)
+(`_safe_path_part` on repo/plan/task slugs for both path and branch),
+[`worktree_runner`](../../whilly/worktree_runner.py) (slug from `plan_slug`,
+`re.sub(r"[^a-z0-9]+", "-")`), [`prd_wizard`](../../whilly/prd_wizard.py) (slug
+filtered to `isalnum() or in "-_"`), and `llm_ops` artifact dirs (`_safe_part`).
+The wider prompt-injection surface was already covered: external text (Jira /
+GitHub issues / PRD gen) is guard-wrapped via `whilly.security.prompt_sanitizer`
+across 12 sites, `tmux_runner` passes the prompt via a file + `"$(cat …)"`
+substitution (task content never enters the shell source), and there is no
+`shell=True` anywhere.
+
+**Residual note (not a finding).** [`history.load_session`](../../whilly/history.py)
+globs `f"{session_id}*.json"` against a caller-supplied string; today that string
+is an internally-generated timestamp (`%Y-%m-%d_%H-%M-%S`), not an
+externally-reachable value, so it is a defense-in-depth opportunity rather than a
+live exposure.
+
+---
+
 ## References
 
 - PRD: [`docs/PRD-post-auth-hardening.md`](../PRD-post-auth-hardening.md)

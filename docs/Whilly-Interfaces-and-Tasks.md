@@ -353,3 +353,63 @@ Batch 6: [R2-025, R2-027]
 Batch 7: [R2-026, R2-028]
 Batch 8: [R2-029]
 ```
+
+---
+
+## 7. Module contract: `whilly/cli/jira_watch_loop.py`
+
+Phase-20 addition. Synchronous foreground watch-loop daemon for `whilly jira watch`.
+
+### Exported symbols
+
+| Symbol | Kind | Description |
+|--------|------|-------------|
+| `_run_jira_watch(args, *, snapshot_collector, environ, stop_event, install_signal_handlers, pause_control, dispatch_runner)` | function | Main watch loop. Resolves interval, acquires PID lock, polls immediately on start, then sleeps interval+backoff between cycles. Per-issue outcomes are tracked separately (any failing issue fails the cycle and applies backoff). Optional dispatch iterates all issues, calls `dispatch_runner(args, issue_ref)`, contains its exceptions, and dedups per snapshot `combined_hash`. Returns 0 on graceful stop, 1 on single-instance refusal. The credential gate runs in the CLI layer before this loop. |
+| `_run_watch_status(args, *, environ)` | function | Reads `_status_path()` and prints human-readable status (default) or JSON (`args.json`). Verifies the recorded PID when `state=running` and reports `stale (pid N not running)` for a dead watcher. Returns EXIT_OK in found, missing-file, and unreadable-file cases. |
+| `_resolve_interval(args_interval, env)` | function | Priority: `--interval` arg > `WHILLY_JIRA_WATCH_INTERVAL` env > 300 s default. |
+| `_interruptible_sleep(stop, seconds)` | function | `threading.Event.wait`; returns True if stop fired. Never uses `time.sleep`. |
+| `_write_status(status, status_path)` | function | Atomic tempfile + `os.replace` status file write (T-20-05 model). |
+| `_acquire_pid_lock(pid_path)` | function | `O_CREAT\|O_EXCL` creation + `os.kill(pid, 0)` liveness probe with write-then-verify; EPERM counts as a live instance (refuse), only ESRCH reclaims a stale lock. Returns True if acquired, False if a live instance holds the lock. |
+| `_release_pid_lock(pid_path)` | function | Unlinks PID file only if it still holds our PID. |
+| `_persist_watch_event(*, dsn, issue_key, event_type, payload, repo)` | async function | Best-effort DB audit event; warn-not-fail. |
+| `_read_watch_readiness(plan_path)` | function | Reads `jira_work.readiness` from plan JSON (local re-implementation; no import from `whilly.cli.jira`). |
+| `_evaluate_watch_readiness(readiness_repo_path)` | function | Resolves `--readiness-repo-path`: repo directory → `probe_code_readiness`, plan JSON file → `_read_watch_readiness`; returns `None` when undeterminable (callers must fail closed). |
+| `_run_dispatch_if_ready(...)` | function | Fail-closed readiness gate + dispatch_runner invocation; only called when `wants_dispatch=True`. Blocks with `verdict=unknown` when readiness is undeterminable unless `--allow-unready-run`. |
+| `EVENT_CYCLE = "watch.cycle"` | constant | Audit event type for successful poll cycle. |
+| `EVENT_FAILURE = "watch.failure"` | constant | Audit event type for failed poll cycle. |
+| `EVENT_PAUSED = "watch.paused"` | constant | Audit event type when global pause gate fires. |
+| `EVENT_BLOCK = "watch.block"` | constant | Audit event type when readiness gate blocks dispatch. |
+| `EVENT_DISPATCH = "watch.dispatch"` | constant | Audit event type when a dispatch SUCCEEDED (rc == 0). Failed dispatch attempts emit `EVENT_FAILURE` with the real rc instead. |
+
+### Status file schema
+
+Path: `whilly_logs/watch/jira-watch-status.json` (honoring `WHILLY_LOG_DIR`)
+
+```python
+{
+    "state": "running" | "stopped",
+    "pid": int,
+    "issues": list[str],
+    "interval_seconds": int,
+    "cycle_count": int,
+    "error_count": int,
+    "last_poll_at": str | None,   # ISO-8601 UTC
+    "last_poll_result": str | None,  # "ok" | "error" | "partial" | "paused" | "blocked"
+    "last_error": str | None,     # exception class name of the last poll failure
+    "backoff_seconds": int,
+    "last_dispatch_rc": int | None,  # exit code of the most recent dispatch attempt
+    "dispatched": dict[str, str],    # issue key → combined_hash of last successful dispatch
+    "started_at": str,            # ISO-8601 UTC
+    "stopped_at": str | None,     # ISO-8601 UTC
+}
+```
+
+Secret-free: no token, no DSN value, no credentials (T-20-03 / T-20-11).
+
+### Key constraints
+
+- No `from whilly.cli.jira` import — circular-import clean (Pitfall 5).
+- `dispatch_runner` call site appears exactly once, inside `_run_dispatch_if_ready`,
+  which is only called when `wants_dispatch=True` (T-20-06 / T-20-10).
+- `_run_watch_status` uses `EXIT_OK` for both found and not-found paths — missing
+  status file is not an error.

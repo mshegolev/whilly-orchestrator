@@ -1,11 +1,14 @@
-"""End-to-end alembic chain test (TASK-108a + M3 fix-feature).
+"""End-to-end alembic chain test (TASK-108a + M3 fix-feature + Phase 18).
 
-Pins the assertion that ``alembic upgrade head`` applies migrations
-``001 → 002 → 003 → 004 → 005 → 006 → 007`` in order on a fresh
-Postgres and ``alembic downgrade base`` reverts every step cleanly.
-Mirrors the per-migration tests but exercises the whole linear
-chain in one go so a single broken edge between revisions surfaces
-here even when each per-migration test passes in isolation.
+Pins the assertion that ``alembic upgrade head`` applies the full
+migration chain in :data:`EXPECTED_CHAIN` (currently 001 through
+``028_webauthn_user_handles``) in order on a fresh Postgres and
+``alembic downgrade base`` reverts every step cleanly. Mirrors the
+per-migration tests but exercises the whole linear chain in one go so
+a single broken edge between revisions surfaces here even when each
+per-migration test passes in isolation. ``EXPECTED_CHAIN`` is the
+single source of truth — docstrings deliberately avoid hardcoding
+revision names so they cannot drift the way the pre-Phase-18 prose did.
 
 Note that ``information_schema`` is the source of truth for column
 shape; ``alembic_version`` is the source of truth for the recorded
@@ -17,8 +20,11 @@ migration).
 from __future__ import annotations
 
 import asyncio
+import datetime
+import json
 import os
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -36,6 +42,45 @@ from tests.conftest import (
 from whilly.adapters.db import MIGRATIONS_DIR
 
 pytestmark = DOCKER_REQUIRED
+
+# Repo root (tests/integration/ → two levels up). The evidence file is
+# anchored here so it lands in the same place regardless of the
+# directory pytest was launched from — the CI artifact upload step
+# expects it at the repo root.
+REPO_ROOT: Path = Path(__file__).resolve().parents[2]
+EVIDENCE_PATH: Path = REPO_ROOT / "migration-chain-evidence.json"
+
+
+# Per-test outcome accumulator for the machine-readable evidence file
+# (MIG-01 / MIG-02). Each test flips its own flag to True only after its
+# assertions pass; the session-scoped ``_write_evidence`` fixture below
+# emits the file with ``.get(..., False)`` defaults so a skipped or
+# failed test produces honest ``false`` flags instead of fabricated
+# ``true`` constants.
+_RESULTS: dict[str, bool] = {}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _write_evidence() -> Iterator[None]:
+    """Write migration-chain evidence after all tests in this module ran.
+
+    Flags reflect actual outcomes recorded in :data:`_RESULTS` — a flag
+    is ``true`` only if the corresponding test ran to completion. No DSN
+    / connection string is included (it carries the ephemeral container
+    password). Under xdist each worker writes its own view; the
+    dedicated ``make migrate-chain`` gate is single-process, where this
+    is exact.
+    """
+    yield
+    evidence = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "head_revision": EXPECTED_CHAIN[-1],
+        "migration_count": len(EXPECTED_CHAIN),
+        "upgrade_ok": _RESULTS.get("upgrade_ok", False),
+        "downgrade_ok": _RESULTS.get("downgrade_ok", False),
+        "idempotent_ok": _RESULTS.get("idempotent_ok", False),
+    }
+    EVIDENCE_PATH.write_text(json.dumps(evidence, indent=2))
 
 
 # Ordered chain of migrations the suite expects on disk. If a future
@@ -58,15 +103,36 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "014_control_state",
     "015_plan_verification_commands",
     "016_jira_work_sessions",
+    "017_scheduler_rules_and_cycles",
+    "018_sessions_and_magic_links",
+    "019a_plans_archived_at",  # 'a' suffix is intentional — not a typo
+    "020_users",
+    "021_users_must_change_password",
+    "022_users_failed_login_counters",
+    "023_worker_tags",
+    "024_user_totp_secrets",
+    "025_auth_audit",
+    "026_webauthn_credentials",
+    "027_webauthn_challenges",
+    "028_webauthn_user_handles",
 )
 
 
 def test_expected_chain_files_exist_on_disk() -> None:
-    """Every expected migration file ships at the canonical path."""
+    """On-disk migrations match :data:`EXPECTED_CHAIN` exactly (set equality).
+
+    Subset checking is not enough: a newly added migration that is not
+    listed here would otherwise pass silently, and the only assertion
+    that would catch it lives in the Docker-gated tests that auto-skip
+    on machines without Docker — exactly how the chain went stale at
+    016. This test always runs and fails loudly on any drift.
+    """
     versions_dir = MIGRATIONS_DIR / "versions"
-    for revision in EXPECTED_CHAIN:
-        path = versions_dir / f"{revision}.py"
-        assert path.is_file(), f"Missing migration file at {path}"
+    on_disk = {p.stem for p in versions_dir.glob("*.py") if p.stem != "__init__"}
+    assert on_disk == set(EXPECTED_CHAIN), (
+        f"Chain drift — extra on disk: {sorted(on_disk - set(EXPECTED_CHAIN))}, "
+        f"missing on disk: {sorted(set(EXPECTED_CHAIN) - on_disk)}"
+    )
 
 
 @pytest.fixture
@@ -128,14 +194,15 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     Steps:
       1. Empty Postgres (no whilly tables).
       2. Apply ``upgrade head`` — every migration in :data:`EXPECTED_CHAIN`
-         lands; alembic_version reports ``006_plan_github_ref``.
-      3. Verify the migration-006 deltas exist (column +
-         partial UNIQUE index).
+         lands; alembic_version reports the chain head
+         (``EXPECTED_CHAIN[-1]``).
+      3. Verify per-migration structural deltas exist (tables, columns,
+         indexes, triggers added along the chain).
       4. Apply ``downgrade base`` — every migration's downgrade runs
          in reverse order; alembic_version table is left empty (no
          applied revisions).
-      5. Verify the whilly tables and the migration-006 column are
-         gone — schema returned to the pre-001 baseline.
+      5. Verify no user tables remain — schema returned to the
+         pre-001 baseline.
     """
     cfg = _build_alembic_config(empty_postgres_dsn)
 
@@ -143,7 +210,7 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (chain)")
 
     head_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert head_version == "016_jira_work_sessions"
+    assert head_version == EXPECTED_CHAIN[-1]
 
     # ── Step 3: 006- 007- and 008-specific deltas exist ─────────────
     column_count = asyncio.run(
@@ -373,6 +440,101 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     }
     assert jira_work_tables == {"jira_work_sessions", "jira_work_events"}
 
+    # 017: ``scheduler_rules`` and ``scheduler_poll_cycles`` tables exist.
+    scheduler_tables = {
+        row["table_name"]
+        for row in asyncio.run(
+            _fetchall(
+                empty_postgres_dsn,
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN ('scheduler_rules', 'scheduler_poll_cycles')
+                """,
+            )
+        )
+    }
+    assert scheduler_tables == {"scheduler_rules", "scheduler_poll_cycles"}, (
+        f"Migration 017 tables missing: {sorted({'scheduler_rules', 'scheduler_poll_cycles'} - scheduler_tables)}"
+    )
+
+    # 019a: ``plans.archived_at`` and ``plans.last_event_at`` columns exist.
+    archived_at_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'plans'
+              AND column_name IN ('archived_at', 'last_event_at')
+            """,
+        )
+    )
+    assert int(archived_at_count) == 2  # 019a added both columns
+
+    # 018 / 020 / 024 / 025 / 026–028: auth + security tables exist.
+    expected_auth_tables = {
+        "sessions",
+        "magic_links",
+        "users",
+        "user_totp_secrets",
+        "auth_audit",
+        "webauthn_credentials",
+        "webauthn_challenges",
+        "webauthn_user_handles",
+    }
+    auth_tables = {
+        row["table_name"]
+        for row in asyncio.run(
+            _fetchall(
+                empty_postgres_dsn,
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name IN (
+                    'sessions', 'magic_links', 'users', 'user_totp_secrets',
+                    'auth_audit', 'webauthn_credentials', 'webauthn_challenges',
+                    'webauthn_user_handles'
+                  )
+                """,
+            )
+        )
+    }
+    assert auth_tables == expected_auth_tables, (
+        f"Auth tables missing after upgrade head: {sorted(expected_auth_tables - auth_tables)}"
+    )
+
+    # 021 / 022: users gained the password-policy + lockout columns.
+    users_policy_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE table_name = 'users'
+              AND column_name IN (
+                'must_change_password', 'updated_at',
+                'failed_attempts', 'locked_until'
+              )
+            """,
+        )
+    )
+    assert int(users_policy_column_count) == 4, "Migration 021/022 users columns missing"
+
+    # 023: ``workers.tags`` and ``tasks.required_tags`` array columns exist.
+    tags_column_count = asyncio.run(
+        _fetchval(
+            empty_postgres_dsn,
+            """
+            SELECT count(*)::int FROM information_schema.columns
+            WHERE (table_name = 'workers' AND column_name = 'tags')
+               OR (table_name = 'tasks' AND column_name = 'required_tags')
+            """,
+        )
+    )
+    assert int(tags_column_count) == 2, "Migration 023 tag columns missing"
+
+    # Upgrade-side assertions all passed — record the real outcome.
+    _RESULTS["upgrade_ok"] = True
+
     # ── Step 4: downgrade base ────────────────────────────────────────
     _retry_colima_flake(lambda: command.downgrade(cfg, "base"), op="downgrade base (chain)")
 
@@ -382,7 +544,11 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
     assert base_version is None
 
     # ── Step 5: schema returned to pre-001 baseline ──────────────────
-    post_downgrade_tables = {
+    # No hand-curated table list: after ``downgrade base`` *no* user
+    # table may remain (only alembic's own bookkeeping table). This is
+    # self-maintaining — a future migration whose downgrade leaves a
+    # table behind fails here without anyone updating a list.
+    post_downgrade_tables = sorted(
         row["table_name"]
         for row in asyncio.run(
             _fetchall(
@@ -390,37 +556,36 @@ def test_full_chain_upgrade_then_full_downgrade(empty_postgres_dsn: str) -> None
                 """
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema = 'public'
-                  AND table_name IN (
-                    'workers',
-                    'plans',
-                    'tasks',
-                    'events',
-                    'bootstrap_tokens',
-                    'funnel_url',
-                    'control_state',
-                    'jira_work_sessions',
-                    'jira_work_events'
-                  )
+                  AND table_name <> 'alembic_version'
                 """,
             )
         )
-    }
-    assert post_downgrade_tables == set()
+    )
+    assert post_downgrade_tables == [], f"Tables left behind after downgrade base: {post_downgrade_tables}"
+
+    # Downgrade round-trip passed — record the real outcome.
+    _RESULTS["downgrade_ok"] = True
 
 
 def test_full_chain_then_re_upgrade_idempotent(empty_postgres_dsn: str) -> None:
     """``upgrade head`` → ``upgrade head`` is a no-op (alembic-version unchanged).
 
     Pins VAL-FORGE-020 across the full chain: re-running ``upgrade
-    head`` against an already-006 database is safe (same alembic
-    contract every migration relies on, but spelled out here so a
-    broken upgrade idempotency edge would surface in CI).
+    head`` against a database already at the chain head
+    (``EXPECTED_CHAIN[-1]``) is safe (same alembic contract every
+    migration relies on, but spelled out here so a broken upgrade
+    idempotency edge would surface in CI).
     """
     cfg = _build_alembic_config(empty_postgres_dsn)
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (1)")
     first_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert first_version == "016_jira_work_sessions"
+    assert first_version == EXPECTED_CHAIN[-1]
 
     _retry_colima_flake(lambda: command.upgrade(cfg, "head"), op="upgrade head (2)")
     second_version = asyncio.run(_fetchval(empty_postgres_dsn, "SELECT version_num FROM alembic_version"))
-    assert second_version == "016_jira_work_sessions"
+    assert second_version == EXPECTED_CHAIN[-1]
+
+    # Idempotency assertions passed — record the real outcome. The
+    # evidence file itself is written by the ``_write_evidence``
+    # session fixture from actual per-test outcomes.
+    _RESULTS["idempotent_ok"] = True

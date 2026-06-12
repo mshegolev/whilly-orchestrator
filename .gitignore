@@ -42,6 +42,7 @@ whilly_logs/
 .whilly_workspaces/
 .whilly_worktrees/
 .whilly_state.json
+migration-chain-evidence.json
 whilly_events.jsonl
 progress.txt
 .planning/reports/

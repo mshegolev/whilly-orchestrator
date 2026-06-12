@@ -12,35 +12,12 @@ next milestone state.
 |-----------|--------|---------|----------|
 | v1.0 | Shipped | 2026-05-08 | `.planning/milestones/v1.0-ROADMAP.md`, `.planning/milestones/v1.0-REQUIREMENTS.md`, `.planning/milestones/v1.0-MILESTONE-AUDIT.md` |
 | v1.1 UI parity completion | Shipped | 2026-05-11 | `.planning/milestones/v1.1-ROADMAP.md`, `.planning/milestones/v1.1-REQUIREMENTS.md`, `.planning/milestones/v1.1-MILESTONE-AUDIT.md`, `.planning/milestones/v1.1-RETROSPECTIVE.md` |
+| v1.2 Adoption & live-ops | Shipped | 2026-06-12 | `.planning/milestones/v1.2-ROADMAP.md`, `.planning/milestones/v1.2-REQUIREMENTS.md`, `.planning/milestones/v1.2-MILESTONE-AUDIT.md` |
 
 ## Current Milestone
 
-No active milestone.
+No active milestone. v1.2 shipped 2026-06-12 (phases 18-20, evidence archived in
+`.planning/milestones/`). Start the next product slice with `/gsd-new-milestone`.
 
-## Completed Milestone Summary
-
-v1.1 closed the post-v1.0 WUI/TUI interface gap, added explicit version update controls, added a
-GitHub feedback reporter, and introduced Jira-driven intake with classification, history refresh,
-repo hints, and code/test readiness gates.
-
-Completed phases:
-- Phase 13: Canonical UI parity contract.
-- Phase 13.1: Version update checks and manual/automatic update modes.
-- Phase 13.2: GitHub feedback issue reporter.
-- Phase 14: WUI method and fragment wiring.
-- Phase 15: TUI capability parity.
-- Phase 16: UI parity verification and docs.
-- Phase 17: Jira work classification and code readiness routing.
-
-## Deferred Scope
-
-- Browser and assistive-technology QA for the full WUI operator workflow.
-- Live authenticated Jira/GitLab smoke on a real operator machine.
-- Full Docker-backed Alembic chain run outside the focused static migration coverage.
-- Long-running Jira watcher/daemon wrapper around the current one-shot `whilly jira poll`.
-- New operator modules beyond the pulled logs/admin/PRD artifacts.
-- Replacement of the current Jinja/HTMX WUI or Rich TUI architecture.
-
-## Next Step
-
-Start the next milestone with `$gsd-new-milestone`.
+---
+*Roadmap updated: 2026-06-12 after archiving v1.2*

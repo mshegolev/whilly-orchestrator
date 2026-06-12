@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import webbrowser
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
@@ -30,6 +31,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from whilly.cli.smoke import (
+    EXIT_CONFIG_MISSING,
+    SmokeReport,
+    _redact_url,
+    _smoke_report_dir,
+    write_smoke_report,
+)
 from whilly.jira_work import build_jira_work_metadata, classify_jira_work, probe_code_readiness
 from whilly.jira_watch import JiraWorkSnapshot, collect_jira_work_snapshot, persist_jira_work_snapshot
 from whilly.sources.jira import fetch_single_jira_issue, parse_jira_key
@@ -285,6 +293,29 @@ def build_jira_parser() -> argparse.ArgumentParser:
     p_poll.add_argument("--plan-id", default="", help="Optional Whilly plan id to store with --persist.")
     p_poll.add_argument("--persist", action="store_true", help="Persist the refreshed snapshot to Postgres.")
     p_poll.add_argument("--json", action="store_true", help="Print the full snapshot as JSON.")
+    p_smoke = sub.add_parser(
+        "smoke",
+        help=(
+            "Run read-only Jira smoke checks (auth, issue fetch, comments, changelog, "
+            "remote links, classify) and write a redacted report."
+        ),
+    )
+    p_smoke.add_argument("--issue", required=True, help="Jira key or browse URL, e.g. ABC-123.")
+    p_smoke.add_argument("--timeout", type=int, default=15, help="Per Jira HTTP request timeout in seconds.")
+    p_smoke.add_argument(
+        "--persist", action="store_true", help="Persist smoke event to Postgres (requires WHILLY_DATABASE_URL)."
+    )
+    p_smoke.add_argument("--json", action="store_true", help="Print the full report payload as JSON.")
+    p_smoke.add_argument(
+        "--interactive-config",
+        action="store_true",
+        help="Prompt for missing Jira settings before running smoke checks.",
+    )
+    p_smoke.add_argument(
+        "--no-interactive-config",
+        action="store_true",
+        help="Never prompt for missing Jira settings; print setup instructions instead.",
+    )
     p_tui = sub.add_parser(
         "tui",
         help="Interactive TUI intake for a single Jira issue.",
@@ -326,6 +357,64 @@ def build_jira_parser() -> argparse.ArgumentParser:
         "--no-interactive-config",
         action="store_true",
         help="Never prompt for missing Jira settings; print setup instructions instead.",
+    )
+    p_watch = sub.add_parser(
+        "watch",
+        help=("Run a continuous Jira intake daemon wrapping the one-shot poll cycle on a configurable interval."),
+    )
+    p_watch.add_argument(
+        "--issue",
+        dest="issues",
+        action="append",
+        required=True,
+        help="Jira key or browse URL; repeatable.",
+    )
+    p_watch.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        help=("Poll interval in seconds (default: WHILLY_JIRA_WATCH_INTERVAL env var, or 300 s if not set)."),
+    )
+    p_watch.add_argument(
+        "--timeout",
+        type=int,
+        default=15,
+        help="Per Jira HTTP request timeout in seconds (default: 15).",
+    )
+    p_watch.add_argument(
+        "--dispatch",
+        action="store_true",
+        default=False,
+        help=("Enable autonomous dispatch of ready issues through the gated jira run path; OFF by default."),
+    )
+    p_watch.add_argument(
+        "--readiness-repo-path",
+        default=None,
+        help="Local repository path to inspect for code/test readiness before dispatch.",
+    )
+    p_watch.add_argument(
+        "--allow-unready-run",
+        action="store_true",
+        help="Override readiness gate and dispatch even when verdict is not ready_for_testing.",
+    )
+    p_watch.add_argument(
+        "--interactive-config",
+        action="store_true",
+        help="Prompt for missing Jira settings before starting the watcher.",
+    )
+    p_watch.add_argument(
+        "--no-interactive-config",
+        action="store_true",
+        help="Never prompt for missing Jira settings; print setup instructions instead.",
+    )
+    p_watch_status = sub.add_parser(
+        "watch-status",
+        help="Print the current Jira watcher status (running/stopped, last poll, error count).",
+    )
+    p_watch_status.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the watcher status as structured JSON instead of the human-readable summary.",
     )
     return parser
 
@@ -387,6 +476,18 @@ def run_jira_command(
         return _run_readiness(args)
     if args.action == "poll":
         return _run_poll(args, snapshot_collector=snapshot_collector or collect_jira_work_snapshot)
+    if args.action == "smoke":
+        return _run_jira_smoke(
+            args,
+            snapshot_collector=snapshot_collector or collect_jira_work_snapshot,
+            config_loader=config_loader,
+            config_reader=config_reader,
+            environ=environ,
+            prompt=prompt,
+            secret_prompt=secret_prompt,
+            browser_opener=browser_opener,
+            stdin_isatty=stdin_isatty,
+        )
     if args.action == "tui":
         from whilly.cli.jira_tui import run_jira_tui_command
 
@@ -401,6 +502,135 @@ def run_jira_command(
             environ=environ,
             stdin_isatty=stdin_isatty,
         )
+    if args.action == "watch":
+        from whilly.cli.jira_watch_loop import _run_jira_watch
+
+        effective_env = environ if environ is not None else os.environ
+
+        # Credential gate BEFORE entering the daemon loop (WR-03): a watcher
+        # with missing Jira config would otherwise loop forever at max backoff
+        # with no actionable diagnostic. Missing config exits fast with the
+        # standard guidance (EXIT_CONFIG_MISSING, matching `jira smoke`).
+        effective_config_loader = config_loader if config_loader is not None else _load_config
+        effective_config_reader = config_reader if config_reader is not None else _read_jira_config_section
+        effective_prompt = prompt or input
+        effective_secret_prompt = secret_prompt or getpass.getpass
+        effective_browser_opener = browser_opener or webbrowser.open
+        effective_stdin_isatty = stdin_isatty or sys.stdin.isatty
+        try:
+            effective_config_loader()
+            watch_config_rc = _ensure_jira_config(
+                args,
+                config_reader=effective_config_reader,
+                env=effective_env,
+                prompt=effective_prompt,
+                secret_prompt=effective_secret_prompt,
+                browser_opener=effective_browser_opener,
+                stdin_isatty=effective_stdin_isatty,
+                command_label="whilly jira watch",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"whilly jira watch: config error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_MISSING
+        if watch_config_rc != EXIT_OK:
+            return EXIT_CONFIG_MISSING
+
+        # Wire the production dispatch runner only when --dispatch is set.
+        # Routes through the existing Phase-17-gated run path (jira run semantics).
+        dispatch_runner = None
+        if args.dispatch:
+            _effective_plan_runner = plan_runner or _run_plan_command
+
+            def dispatch_runner(dispatch_args: argparse.Namespace, issue_ref: str = "") -> int:  # type: ignore[misc]
+                try:
+                    config_rc = _ensure_jira_config(
+                        dispatch_args,
+                        config_reader=effective_config_reader,
+                        env=effective_env,
+                        prompt=effective_prompt,
+                        secret_prompt=effective_secret_prompt,
+                        browser_opener=effective_browser_opener,
+                        stdin_isatty=effective_stdin_isatty,
+                        command_label="whilly jira watch --dispatch",
+                    )
+                    if config_rc != EXIT_OK:
+                        return config_rc
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        f"whilly jira watch --dispatch: config error: {exc}",
+                        file=sys.stderr,
+                    )
+                    return EXIT_VALIDATION_ERROR
+                # The watch loop passes the issue to dispatch explicitly;
+                # fall back to issues[0] for direct callers.
+                if not issue_ref:
+                    issues = list(getattr(dispatch_args, "issues", []) or [])
+                    issue_ref = issues[0] if issues else ""
+                if not issue_ref:
+                    print(
+                        "whilly jira watch --dispatch: no issue to dispatch",
+                        file=sys.stderr,
+                    )
+                    return EXIT_VALIDATION_ERROR
+                # Normalize key/browse-URL refs the same way `jira import`
+                # does, so plan id and plan path are consistent (WR-07).
+                try:
+                    key = parse_jira_key(issue_ref)
+                except ValueError as exc:
+                    print(f"whilly jira watch --dispatch: {exc}", file=sys.stderr)
+                    return EXIT_VALIDATION_ERROR
+                plan_id = f"jira-{key.lower()}"
+                plan_path = Path("out") / f"jira-{key}.json"
+                # Secondary readiness gate against the plan the worker will
+                # run: a plan that DECLARES itself unready refuses dispatch;
+                # an unreadable/garbled plan also refuses (fail closed). The
+                # primary --readiness-repo-path gate already ran in the loop.
+                allow_unready = bool(getattr(dispatch_args, "allow_unready_run", False))
+                if not allow_unready and plan_path.exists():
+                    try:
+                        readiness = _read_jira_work_readiness(plan_path)
+                    except (OSError, ValueError, json.JSONDecodeError) as exc:
+                        print(
+                            f"whilly jira watch --dispatch: could not read plan readiness from "
+                            f"{plan_path}: {exc.__class__.__name__}",
+                            file=sys.stderr,
+                        )
+                        return EXIT_VALIDATION_ERROR
+                    if readiness is not None and readiness.get("verdict") != "ready_for_testing":
+                        print(
+                            f"whilly jira watch --dispatch: readiness gate failed; "
+                            f"verdict={readiness.get('verdict')} "
+                            f"missing={','.join(readiness.get('missing_context') or [])}. "
+                            "Use --allow-unready-run to override.",
+                            file=sys.stderr,
+                        )
+                        return EXIT_VALIDATION_ERROR
+                preflight_rc = _effective_plan_runner(["apply", str(plan_path), "--strict"])
+                if preflight_rc != EXIT_OK:
+                    return preflight_rc
+                # The watch namespace carries none of the `jira run`
+                # pass-through flags, so build a COMPLETE namespace with
+                # explicit defaults for everything _run_argv reads (CR-01).
+                run_namespace = argparse.Namespace(
+                    max_iterations=getattr(dispatch_args, "max_iterations", None),
+                    worker_id=getattr(dispatch_args, "worker_id", None),
+                    verify_commands=list(getattr(dispatch_args, "verify_commands", []) or []),
+                    optional_verify_commands=list(getattr(dispatch_args, "optional_verify_commands", []) or []),
+                    verify_timeout=getattr(dispatch_args, "verify_timeout", None),
+                )
+                return _run_plan_worker(_run_argv(plan_id, run_namespace))
+
+        return _run_jira_watch(
+            args,
+            snapshot_collector=snapshot_collector or collect_jira_work_snapshot,
+            environ=effective_env,
+            install_signal_handlers=True,
+            dispatch_runner=dispatch_runner,
+        )
+    if args.action == "watch-status":
+        from whilly.cli.jira_watch_loop import _run_watch_status
+
+        return _run_watch_status(args, environ=environ)
     parser.error(f"unknown action {args.action!r}")  # pragma: no cover
     return EXIT_VALIDATION_ERROR
 
@@ -667,6 +897,212 @@ def _run_poll(args: argparse.Namespace, *, snapshot_collector: SnapshotCollector
             f"last_comment={snapshot.last_seen_comment_id or 'none'}"
         )
     return EXIT_OK
+
+
+def _run_jira_smoke(
+    args: argparse.Namespace,
+    *,
+    snapshot_collector: SnapshotCollector,
+    config_loader: ConfigLoader | None,
+    config_reader: ConfigReader | None,
+    environ: MutableMapping[str, str] | None,
+    prompt: Prompt | None,
+    secret_prompt: Prompt | None,
+    browser_opener: BrowserOpener | None,
+    stdin_isatty: IsATTY | None,
+) -> int:
+    """Execute read-only Jira smoke checks and write a redacted report.
+
+    Exit codes: 0 = all checks passed, 1 = one or more checks failed,
+    2 = configuration missing (credential gate returned non-zero).
+    """
+    # --- V5 input validation: reject malformed keys before any network or config call ---
+    try:
+        issue_key = parse_jira_key(args.issue)
+    except ValueError as exc:
+        print(f"whilly jira smoke: {exc}", file=sys.stderr)
+        print(
+            "whilly jira smoke: pass a valid Jira key (e.g. ABC-123) or issue browse URL.",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG_MISSING
+
+    project_key = issue_key.rsplit("-", 1)[0]
+
+    # --- Credential gate: must complete before snapshot_collector is called ---
+    effective_config_loader = config_loader if config_loader is not None else _load_config
+    effective_config_reader = config_reader if config_reader is not None else _read_jira_config_section
+    effective_env: MutableMapping[str, str] = environ if environ is not None else os.environ
+    effective_config_loader()
+    config_rc = _ensure_jira_config(
+        args,
+        config_reader=effective_config_reader,
+        env=effective_env,
+        prompt=prompt or input,
+        secret_prompt=secret_prompt or getpass.getpass,
+        browser_opener=browser_opener or webbrowser.open,
+        stdin_isatty=stdin_isatty or sys.stdin.isatty,
+        command_label="whilly jira smoke",
+    )
+    if config_rc != EXIT_OK:
+        # Map EXIT_VALIDATION_ERROR → EXIT_CONFIG_MISSING for the smoke command.
+        return EXIT_CONFIG_MISSING
+
+    # Derive the redacted target host for the report payload (never the full URL with auth).
+    server_url = effective_env.get("JIRA_SERVER_URL") or effective_env.get("WHILLY_JIRA_SERVER_URL") or ""
+    target_host = _redact_url(server_url)
+
+    # --- Accumulate per-check results ---
+    report = SmokeReport(kind="jira")
+    snapshot: JiraWorkSnapshot | None = None
+
+    fetch_started = time.monotonic()
+    try:
+        snapshot = snapshot_collector(args.issue, timeout=args.timeout)
+        # auth and issue_fetch are both verified by the same collector call,
+        # so they share its measured duration (WR-09).
+        fetch_duration = time.monotonic() - fetch_started
+        report.add_timed_check("auth", passed=True, duration_seconds=fetch_duration)
+        report.add_timed_check(
+            "issue_fetch",
+            passed=bool(snapshot.issue_key),
+            duration_seconds=fetch_duration,
+            hint="" if snapshot.issue_key else f"Verify JIRA_SERVER_URL and project key {project_key!r}.",
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        # json.JSONDecodeError is a ValueError subclass — covered here.
+        fetch_duration = time.monotonic() - fetch_started
+        hint = f"Check JIRA_SERVER_URL, JIRA_API_TOKEN, and that project key {project_key!r} exists. Error: {exc}"
+        report.add_timed_check("auth", passed=False, duration_seconds=fetch_duration, hint=hint)
+        report.add_timed_check("issue_fetch", passed=False, duration_seconds=fetch_duration, hint=hint)
+    except Exception as exc:  # noqa: BLE001 — operator-facing CLI must never print a raw traceback
+        # Malformed Jira payloads can surface as KeyError/TypeError/AttributeError
+        # from snapshot normalization; convert to a failed check + hint (WR-01).
+        fetch_duration = time.monotonic() - fetch_started
+        hint = f"Unexpected error while fetching {issue_key}: {exc.__class__.__name__}: {exc}"
+        report.add_timed_check("auth", passed=False, duration_seconds=fetch_duration, hint=hint)
+        report.add_timed_check("issue_fetch", passed=False, duration_seconds=fetch_duration, hint=hint)
+
+    if snapshot is not None:
+        # Each field check asserts something falsifiable: the collector
+        # fetched the field without error AND it has the normalized shape
+        # JiraWorkSnapshot promises. On a quiet issue these collections are
+        # legitimately empty, so the hint records what was actually verified
+        # ("fetched N ...") instead of fabricating a stronger claim (CR-03).
+        # These are local shape assertions (no network call) — add_check's
+        # 0.0 duration is the real duration.
+        comments_ok = isinstance(snapshot.comments, tuple) and all(
+            isinstance(comment, dict) for comment in snapshot.comments
+        )
+        report.add_check(
+            "comments",
+            passed=comments_ok,
+            hint=(
+                f"fetched {len(snapshot.comments)} comments"
+                if comments_ok
+                else "Comments field has unexpected shape (expected tuple of dicts)."
+            ),
+        )
+        changelog_ok = isinstance(snapshot.changelog_ids, tuple) and all(
+            isinstance(changelog_id, str) and changelog_id for changelog_id in snapshot.changelog_ids
+        )
+        report.add_check(
+            "changelog",
+            passed=changelog_ok,
+            hint=(
+                f"fetched {len(snapshot.changelog_ids)} changelog entries"
+                if changelog_ok
+                else "Changelog field has unexpected shape (expected tuple of non-empty id strings)."
+            ),
+        )
+        links_ok = isinstance(snapshot.links, tuple) and all(isinstance(link, dict) for link in snapshot.links)
+        report.add_check(
+            "remote_links",
+            passed=links_ok,
+            hint=(
+                f"fetched {len(snapshot.links)} remote links"
+                if links_ok
+                else "Remote links field has unexpected shape (expected tuple of dicts)."
+            ),
+        )
+        classification = snapshot.classification
+        classify_ok = bool(classification)
+        report.add_check(
+            "classify",
+            passed=classify_ok,
+            hint="" if classify_ok else f"classify_jira_work returned empty result for {issue_key!r}.",
+        )
+    else:
+        # Snapshot failed — mark field-derived checks as failed with actionable hints.
+        field_hint = f"Verify JIRA_SERVER_URL, JIRA_API_TOKEN, and project key {project_key!r}."
+        report.add_check("comments", passed=False, hint=field_hint)
+        report.add_check("changelog", passed=False, hint=field_hint)
+        report.add_check("remote_links", passed=False, hint=field_hint)
+        report.add_check("classify", passed=False, hint=field_hint)
+
+    # --- Compose and write the redacted report ---
+    payload = report.to_payload()
+    payload["target_host"] = target_host
+    payload["project_key"] = project_key
+    payload["issue_key"] = issue_key
+
+    # --- Optional DB persist (best-effort: never alters the check exit code, WR-03) ---
+    if args.persist:
+        dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
+        if not dsn:
+            print(
+                "whilly jira smoke: --persist skipped — WHILLY_DATABASE_URL is not set (best-effort).",
+                file=sys.stderr,
+            )
+            payload["persist"] = {"attempted": False, "note": "skipped: WHILLY_DATABASE_URL is not set"}
+        else:
+            try:
+                asyncio.run(_persist_smoke_event(dsn=dsn, payload=payload))
+                payload["persist"] = {"attempted": True, "ok": True}
+            except Exception as exc:  # noqa: BLE001 — best-effort persist must not mask check results
+                # Only the error class is recorded — the message may echo the DSN.
+                print(
+                    f"whilly jira smoke: persist failed ({exc.__class__.__name__}) — "
+                    "best-effort, check WHILLY_DATABASE_URL connectivity.",
+                    file=sys.stderr,
+                )
+                payload["persist"] = {"attempted": True, "ok": False, "error": exc.__class__.__name__}
+
+    report_path = write_smoke_report(_smoke_report_dir(), "jira", payload)
+
+    # --- Output ---
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        summary = payload["summary"]
+        status = "PASS" if summary["all_passed"] else "FAIL"
+        print(f"whilly jira smoke: {status} issue={issue_key} passed={summary['passed']}/{summary['total']}")
+        for check in payload["checks"]:
+            check_status = "pass" if check["passed"] else "FAIL"
+            line = f"  [{check_status}] {check['name']}"
+            if not check["passed"] and check.get("hint"):
+                line += f" — {check['hint']}"
+            print(line)
+        print(f"  report={report_path}")
+
+    return EXIT_OK if report.all_passed else EXIT_VALIDATION_ERROR
+
+
+async def _persist_smoke_event(*, dsn: str, payload: dict[str, Any]) -> None:
+    """Append a smoke event to Postgres (best-effort; not a hard requirement)."""
+    from whilly.adapters.db import close_pool, create_pool
+    from whilly.adapters.db.repository import TaskRepository
+
+    pool = await create_pool(dsn)
+    try:
+        repo = TaskRepository(pool)
+        await repo.append_jira_work_event(
+            issue_key=payload.get("issue_key", ""),
+            event_type="smoke",
+            payload=payload,
+        )
+    finally:
+        await close_pool(pool)
 
 
 async def _persist_poll_snapshot(*, dsn: str, snapshot: JiraWorkSnapshot, plan_id: str) -> None:
