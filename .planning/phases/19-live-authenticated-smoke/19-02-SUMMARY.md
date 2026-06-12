@@ -119,8 +119,10 @@ None — all six checks are wired to real snapshot fields. The `_persist_smoke_e
 
 - `whilly/cli/jira.py` defines `_run_jira_smoke`: FOUND
 - `tests/unit/cli/test_jira_smoke.py` exists: FOUND
+- `.planning/phases/19-live-authenticated-smoke/19-02-SUMMARY.md` exists: FOUND
 - Commit `5e6d662` exists: FOUND
 - Commit `7cdfb8c` exists: FOUND
+- Commit `62dc858` (metadata) exists: FOUND
 - `pytest tests/unit/cli/test_jira_smoke.py`: 5 passed
 - `pytest tests/unit -q`: 2413 passed, 2 skipped
 - `ruff check whilly/cli/jira.py tests/unit/cli/test_jira_smoke.py`: clean
