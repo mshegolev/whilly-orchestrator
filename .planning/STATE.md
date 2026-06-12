@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: Adoption & live-ops
-status: milestone_complete
-last_updated: 2026-06-12T11:47:09.605Z
-last_activity: 2026-06-12 -- Phase 20 Plan 03 complete (CLI wiring, docs, module contract)
+status: Awaiting next milestone
+last_updated: "2026-06-12T12:54:54.658Z"
+last_activity: 2026-06-12 — Milestone v1.2 completed and archived
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 9
   completed_plans: 9
   percent: 100
-stopped_at: Milestone complete (Phase 20 was final phase)
 ---
 
 # Project State
@@ -26,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 20
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-12
+Phase: Milestone v1.2 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-12 — Milestone v1.2 completed and archived
 
 ## Active Roadmap
 
@@ -203,3 +202,7 @@ Plan Phase 18 with `/gsd-plan-phase 18`.
 - [Phase 20-03]: dispatch_runner=None without --dispatch; production closure wires Phase-17 readiness gate only when --dispatch set (T-20-10)
 - [Phase 20-03]: _run_watch_status lives in jira_watch_loop.py to keep no-circular-import invariant; jira.py imports it lazily
 - [Phase 20-03]: watch-status returns EXIT_OK for missing status file — status absence is not an error
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
