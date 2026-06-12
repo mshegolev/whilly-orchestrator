@@ -711,9 +711,10 @@ whilly_logs/smoke/gitlab-smoke-{timestamp}.json  # GitLab
 Reports contain per-check pass/fail results, durations, and a redacted target
 (hostname only — no tokens, DSNs, or full URLs with credentials).
 
-**DB audit events (`--persist`):** A best-effort audit event is appended to
-the database only when `WHILLY_DATABASE_URL` is set. The report file is
-always written regardless of database availability.
+**DB audit events (`whilly jira smoke --persist`):** A best-effort audit
+event is appended to the database only when `WHILLY_DATABASE_URL` is set.
+The report file is always written regardless of database availability.
+`whilly gitlab smoke` does not support `--persist`.
 
 ## Troubleshooting
 

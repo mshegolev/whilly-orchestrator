@@ -78,11 +78,6 @@ def build_gitlab_parser() -> argparse.ArgumentParser:
         help="Per-request HTTP timeout in seconds. Default: 15.",
     )
     p_smoke.add_argument(
-        "--persist",
-        action="store_true",
-        help="Persist smoke event to Postgres (requires WHILLY_DATABASE_URL).",
-    )
-    p_smoke.add_argument(
         "--json",
         action="store_true",
         help="Print the full report payload as JSON.",
@@ -344,20 +339,6 @@ def _run_gitlab_smoke(
     }
 
     report_path = write_smoke_report(_smoke_report_dir(), "gitlab", payload)
-
-    # ------------------------------------------------------------------
-    # Optional: --persist gate
-    # ------------------------------------------------------------------
-    if args.persist:
-        import os  # noqa: PLC0415
-
-        dsn = os.environ.get("WHILLY_DATABASE_URL", "").strip()
-        if not dsn:
-            print(
-                "whilly gitlab smoke: WHILLY_DATABASE_URL is required for --persist.",
-                file=sys.stderr,
-            )
-            return EXIT_CONFIG_MISSING
 
     # ------------------------------------------------------------------
     # Print human-readable summary (or full JSON)
