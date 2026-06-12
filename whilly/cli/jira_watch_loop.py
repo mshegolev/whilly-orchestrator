@@ -469,6 +469,8 @@ def _run_jira_watch(
         "last_poll_result": None,
         "last_error": None,
         "backoff_seconds": 0,
+        "last_dispatch_rc": None,
+        "dispatched": {},
         "started_at": started_at,
         "stopped_at": None,
     }
@@ -498,10 +500,13 @@ def _run_jira_watch(
             # the same cycle (review WR-01).
             issue_results: dict[str, str] = {}
             failed_issues: list[str] = []
+            snapshot_hashes: dict[str, str] = {}
             for issue_ref in issues:
                 try:
-                    snapshot_collector(issue_ref, timeout=timeout)
+                    snapshot = snapshot_collector(issue_ref, timeout=timeout)
                     issue_results[issue_ref] = "ok"
+                    hashes = getattr(snapshot, "context_hashes", None) or {}
+                    snapshot_hashes[issue_ref] = str(hashes.get("combined_hash", "") or "")
                 except Exception as exc:  # noqa: BLE001
                     issue_results[issue_ref] = "error"
                     failed_issues.append(issue_ref)
@@ -618,6 +623,7 @@ def _run_jira_watch(
                     allow_unready=allow_unready,
                     readiness_repo_path=readiness_repo_path,
                     dispatch_runner=dispatch_runner,
+                    snapshot_hashes=snapshot_hashes,
                 )
 
     finally:
@@ -693,6 +699,7 @@ def _run_dispatch_if_ready(
     allow_unready: bool,
     readiness_repo_path: str | None,
     dispatch_runner: Callable[..., int] | None,
+    snapshot_hashes: dict[str, str] | None = None,
 ) -> None:
     """Check readiness gate and invoke dispatch_runner if clear (T-20-06).
 
@@ -743,19 +750,62 @@ def _run_dispatch_if_ready(
                 )
         return
 
-    # Readiness satisfied (or no plan path / allow_unready) — invoke runner
-    if dispatch_runner is not None:
-        dispatch_runner(args)
-        # Best-effort watch.dispatch audit event
-        dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
+    # Readiness satisfied (or allow_unready) — invoke runner per issue.
+    #
+    # Honest dispatch contract (review CR-03): success means rc == EXIT_OK.
+    # EVENT_DISPATCH is emitted ONLY for rc == 0; any non-zero rc or raised
+    # exception emits EVENT_FAILURE with the real rc — the audit trail never
+    # claims a dispatch that did not happen. A dispatch failure must never
+    # kill the watcher (review CR-01): exceptions are contained here.
+    #
+    # Dedup (review WR-06): after a successful dispatch the issue's snapshot
+    # combined_hash is recorded in status["dispatched"]; the issue is NOT
+    # re-dispatched until that hash changes (new comments/changelog). When no
+    # hash is available the issue is dispatched at most once per watcher run.
+    # Failed dispatches are not recorded and are retried next cycle.
+    if dispatch_runner is None:
+        return
+    dispatched: dict[str, str] = status.setdefault("dispatched", {})
+    dsn = effective_env.get("WHILLY_DATABASE_URL", "").strip()
+    for issue_ref in issues:
+        current_hash = (snapshot_hashes or {}).get(issue_ref, "")
+        if issue_ref in dispatched and dispatched[issue_ref] == current_hash:
+            continue  # already dispatched this snapshot
+        dispatch_error: str | None = None
+        try:
+            dispatch_rc = int(dispatch_runner(args, issue_ref))
+        except Exception as exc:  # noqa: BLE001 — dispatch must never kill the watcher
+            dispatch_rc = EXIT_VALIDATION_ERROR
+            dispatch_error = exc.__class__.__name__
+            log.warning(
+                "dispatch failed for %s (%s); watcher continues",
+                issue_ref,
+                dispatch_error,
+            )
+        dispatch_ok = dispatch_rc == EXIT_OK
+        status["last_dispatch_rc"] = dispatch_rc
+        if dispatch_ok:
+            dispatched[issue_ref] = current_hash
+        else:
+            status["error_count"] = status["error_count"] + 1
+            if dispatch_error is not None:
+                status["last_error"] = dispatch_error
+        _write_status(status, status_file)
         if dsn:
+            payload: dict[str, Any] = {
+                "issue_key": issue_ref,
+                "rc": dispatch_rc,
+                "ok": dispatch_ok,
+            }
+            if dispatch_error is not None:
+                payload["error"] = dispatch_error
             try:
                 asyncio.run(
                     _persist_watch_event(
                         dsn=dsn,
                         issue_key=issue_ref,
-                        event_type=EVENT_DISPATCH,
-                        payload={"issue_key": issue_ref},
+                        event_type=EVENT_DISPATCH if dispatch_ok else EVENT_FAILURE,
+                        payload=payload,
                     )
                 )
             except Exception as exc:  # noqa: BLE001

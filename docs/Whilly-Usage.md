@@ -182,12 +182,20 @@ readiness cannot be determined (flag omitted, path missing, unreadable or
 malformed input), dispatch is **blocked** with a `watch.block` event
 (`verdict=unknown`) — only `--allow-unready-run` overrides this.
 
+Each issue is dispatched at most once per snapshot: after a successful
+dispatch (exit code 0), the watcher re-dispatches an issue only when its
+combined context hash changes (new comments/changelog). Failed dispatches are
+retried on the next cycle and recorded as `watch.failure` with the real exit
+code — never as `watch.dispatch`.
+
 **DB audit events**
 
 When `WHILLY_DATABASE_URL` is set, a best-effort audit event (`watch.cycle`,
-`watch.failure`, `watch.paused`, `watch.block`) is appended to the
-`jira_work_events` table after each poll cycle. The watcher continues even when the
-database is unavailable — it logs a warning and moves on.
+`watch.failure`, `watch.paused`, `watch.block`, `watch.dispatch`) is appended to
+the `jira_work_events` table after each poll cycle. `watch.dispatch` is emitted
+only when a dispatch actually succeeded (exit code 0); failed dispatches are
+recorded as `watch.failure` with the real exit code. The watcher continues even
+when the database is unavailable — it logs a warning and moves on.
 
 **Exit codes**
 

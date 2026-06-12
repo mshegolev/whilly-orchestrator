@@ -379,7 +379,7 @@ Phase-20 addition. Synchronous foreground watch-loop daemon for `whilly jira wat
 | `EVENT_FAILURE = "watch.failure"` | constant | Audit event type for failed poll cycle. |
 | `EVENT_PAUSED = "watch.paused"` | constant | Audit event type when global pause gate fires. |
 | `EVENT_BLOCK = "watch.block"` | constant | Audit event type when readiness gate blocks dispatch. |
-| `EVENT_DISPATCH = "watch.dispatch"` | constant | Audit event type when dispatch_runner is invoked. |
+| `EVENT_DISPATCH = "watch.dispatch"` | constant | Audit event type when a dispatch SUCCEEDED (rc == 0). Failed dispatch attempts emit `EVENT_FAILURE` with the real rc instead. |
 
 ### Status file schema
 
@@ -397,6 +397,8 @@ Path: `whilly_logs/watch/jira-watch-status.json` (honoring `WHILLY_LOG_DIR`)
     "last_poll_result": str | None,  # "ok" | "error" | "partial" | "paused" | "blocked"
     "last_error": str | None,     # exception class name of the last poll failure
     "backoff_seconds": int,
+    "last_dispatch_rc": int | None,  # exit code of the most recent dispatch attempt
+    "dispatched": dict[str, str],    # issue key → combined_hash of last successful dispatch
     "started_at": str,            # ISO-8601 UTC
     "stopped_at": str | None,     # ISO-8601 UTC
 }
