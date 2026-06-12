@@ -666,7 +666,7 @@ empty collections on a quiet issue still pass.
 | Flag | Description |
 |------|-------------|
 | `--timeout N` | Per-request timeout in seconds (default 30) |
-| `--persist` | Append a DB audit event (requires `WHILLY_DATABASE_URL`) |
+| `--persist` | Append a best-effort DB audit event when `WHILLY_DATABASE_URL` is set (persist problems never change the exit code) |
 | `--json` | Print full report JSON to stdout instead of the human summary |
 
 ### GitLab smoke
