@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from whilly.cli.gitlab import _resolve_gitlab_config_state, run_gitlab_command
+from whilly.cli.gitlab import _extract_host_from_url, _resolve_gitlab_config_state, run_gitlab_command
 
 # ---------------------------------------------------------------------------
 # Sample constants
@@ -307,6 +307,99 @@ def test_resolve_gitlab_config_state_prefers_gitlab_token(tmp_path: Path) -> Non
     url, token = _resolve_gitlab_config_state(env, "gitlab.example.com")
     assert url == _GITLAB_URL
     assert token == "token-from-GITLAB_TOKEN"
+
+
+# ---------------------------------------------------------------------------
+# WR-05 regression: _extract_host_from_url handles userinfo and SSH forms
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("repo_url", "expected_host"),
+    [
+        ("https://gitlab.example.com/group/repo", "gitlab.example.com"),
+        ("https://user:pass@gitlab.example.com/group/repo", "gitlab.example.com"),
+        ("https://user@gitlab.example.com/group/repo", "gitlab.example.com"),
+        ("https://gitlab.example.com:8443/group/repo", "gitlab.example.com"),
+        ("git@gitlab.example.com:group/repo.git", "gitlab.example.com"),
+        ("not a url", ""),
+    ],
+)
+def test_extract_host_from_url_handles_userinfo_and_ssh(repo_url: str, expected_host: str) -> None:
+    """Userinfo must never pollute the extracted host; SSH clone form still works."""
+    assert _extract_host_from_url(repo_url) == expected_host
+
+
+# ---------------------------------------------------------------------------
+# WR-06 regression: SSH-style --repo-url rejected up front
+# ---------------------------------------------------------------------------
+
+
+def test_gitlab_smoke_rejects_ssh_repo_url_early(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """git@host:path --repo-url → exit 2 with a clear hint, getter never called."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    def _should_not_be_called(url: str, **_kwargs: Any) -> dict[str, Any]:
+        pytest.fail(f"gitlab_getter was called with {url!r} — SSH URLs must be rejected up front")
+
+    rc = run_gitlab_command(
+        ["smoke", "--repo-url", "git@gitlab.example.com:group/repo.git"],
+        gitlab_getter=_should_not_be_called,
+        environ=_minimal_env(),
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "http" in err
+    assert "git@" in err or "SSH" in err
+
+
+# ---------------------------------------------------------------------------
+# WR-04 regression: glab fallback host comes from GITLAB_URL, never hardcoded
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_gitlab_config_state_glab_fallback_uses_gitlab_url_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty extracted host → glab lookup targets the GITLAB_URL host."""
+    calls: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = "glab-token\n"
+
+    def _fake_run(cmd: list[str], **_kwargs: Any) -> _Result:
+        calls.append(list(cmd))
+        return _Result()
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+
+    url, token = _resolve_gitlab_config_state({"GITLAB_URL": _GITLAB_URL}, "")
+
+    assert url == _GITLAB_URL
+    assert token == "glab-token"
+    assert calls == [["glab", "config", "get", "token", "-h", "gitlab.example.com"]]
+
+
+def test_resolve_gitlab_config_state_skips_glab_without_any_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No extracted host and no GITLAB_URL → glab is never invoked."""
+
+    def _fail_run(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("glab must not be invoked when no host can be derived")
+
+    monkeypatch.setattr("subprocess.run", _fail_run)
+
+    url, token = _resolve_gitlab_config_state({}, "")
+
+    assert url == ""
+    assert token == ""
 
 
 # ---------------------------------------------------------------------------
