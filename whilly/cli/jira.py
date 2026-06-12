@@ -507,6 +507,34 @@ def run_jira_command(
 
         effective_env = environ if environ is not None else os.environ
 
+        # Credential gate BEFORE entering the daemon loop (WR-03): a watcher
+        # with missing Jira config would otherwise loop forever at max backoff
+        # with no actionable diagnostic. Missing config exits fast with the
+        # standard guidance (EXIT_CONFIG_MISSING, matching `jira smoke`).
+        effective_config_loader = config_loader if config_loader is not None else _load_config
+        effective_config_reader = config_reader if config_reader is not None else _read_jira_config_section
+        effective_prompt = prompt or input
+        effective_secret_prompt = secret_prompt or getpass.getpass
+        effective_browser_opener = browser_opener or webbrowser.open
+        effective_stdin_isatty = stdin_isatty or sys.stdin.isatty
+        try:
+            effective_config_loader()
+            watch_config_rc = _ensure_jira_config(
+                args,
+                config_reader=effective_config_reader,
+                env=effective_env,
+                prompt=effective_prompt,
+                secret_prompt=effective_secret_prompt,
+                browser_opener=effective_browser_opener,
+                stdin_isatty=effective_stdin_isatty,
+                command_label="whilly jira watch",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"whilly jira watch: config error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_MISSING
+        if watch_config_rc != EXIT_OK:
+            return EXIT_CONFIG_MISSING
+
         # Wire the production dispatch runner only when --dispatch is set.
         # Routes through the existing Phase-17-gated run path (jira run semantics).
         dispatch_runner = None

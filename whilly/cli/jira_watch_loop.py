@@ -14,7 +14,8 @@ on a configurable interval with:
   is not ``ready_for_testing`` (unless ``--allow-unready-run``); default-off
   dispatch path gated behind explicit ``--dispatch`` flag
 
-CLI wiring (``whilly jira watch`` action + credential gate) lands in plan 03.
+CLI wiring (``whilly jira watch`` action) lives in ``whilly/cli/jira.py``; the
+credential gate (``_ensure_jira_config``) runs there BEFORE this loop starts.
 """
 
 from __future__ import annotations
@@ -338,8 +339,6 @@ def _run_jira_watch(
     install_signal_handlers: bool = True,
     pause_control: PauseControl | None = None,
     dispatch_runner: Callable[..., int] | None = None,
-    # TODO(plan-03): add config_loader, config_reader, prompt, secret_prompt,
-    #   browser_opener, stdin_isatty for credential gate wiring.
 ) -> int:
     """Run the Jira watch loop.
 
@@ -367,8 +366,8 @@ def _run_jira_watch(
     dispatch_runner:
         Injectable callable for the Phase-17-gated dispatch hook.  Only
         invoked when ``--dispatch`` is set, unpaused, and readiness satisfied.
-        ``None`` means no dispatch is wired (production wiring arrives in
-        plan 03).
+        ``None`` means no dispatch is wired (the production closure is built
+        in ``whilly/cli/jira.py`` only when ``--dispatch`` is passed).
 
     Returns
     -------
@@ -383,11 +382,12 @@ def _run_jira_watch(
     if install_signal_handlers:
         _install_watch_signal_handlers(stop)
 
-    # TODO(plan-03): credential gate (_ensure_jira_config) wired here once
-    #   the watch subparser is registered in build_jira_parser().
+    # The credential gate (_ensure_jira_config) runs in the CLI layer
+    # (whilly/cli/jira.py watch branch) before this loop is entered.
 
-    # Resolve interval before acquiring the PID lock so the status file can
-    # record it even when we refuse due to a live instance.
+    # Resolve interval and issue list up front. (The refusal path below
+    # intentionally writes NO status file — it must not clobber the live
+    # watcher's status.)
     interval = _resolve_interval(getattr(args, "interval", None), effective_env)
     issues: list[str] = list(getattr(args, "issues", []) or [])
     timeout: int = int(getattr(args, "timeout", 15))

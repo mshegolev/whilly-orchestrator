@@ -774,6 +774,34 @@ def test_watch_dispatch_default_off(tmp_path: Path) -> None:
     assert kw.get("dispatch_runner") is None
 
 
+def test_watch_missing_config_exits_config_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """watch with missing Jira config exits EXIT_CONFIG_MISSING (2) before
+    the loop starts; the loop itself must never be entered (WR-03)."""
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.smoke import EXIT_CONFIG_MISSING
+
+    def _never(*args: object, **kwargs: object) -> int:
+        raise AssertionError("_run_jira_watch must not run with missing config")
+
+    monkeypatch.setattr(jira_watch_loop, "_run_jira_watch", _never)
+
+    rc = run_jira_command(
+        ["watch", "--issue", "ABC-123", "--no-interactive-config"],
+        environ={},  # no Jira settings at all
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == EXIT_CONFIG_MISSING
+    err = capsys.readouterr().err
+    assert "Jira config is incomplete" in err
+
+
 def test_watch_status_missing_file_returns_ok(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
