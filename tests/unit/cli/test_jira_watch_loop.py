@@ -6,6 +6,7 @@ handlers disabled (install_signal_handlers=False).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import threading
@@ -1239,3 +1240,163 @@ def test_readiness_gate_blocks_when_no_readiness_path_given(
     --allow-unready-run) blocks: readiness is undeterminable → fail closed."""
     count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, None)
     _assert_blocked(count, calls, "unknown")
+
+
+# ---------------------------------------------------------------------------
+# Review CR-01/CR-03/WR-06 – dispatch containment, honest events, dedup
+# ---------------------------------------------------------------------------
+
+
+def _run_dispatch_cycles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    dispatch_runner: object,
+    cycles: int = 1,
+    issues: list[str] | None = None,
+    hash_per_cycle: list[str] | None = None,
+) -> tuple[int, list[dict[str, object]], dict[str, object]]:
+    """Run N dispatch-enabled cycles with a ready plan; return
+    (rc, persist_calls, final_status)."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    plan_path = _make_plan_json(tmp_path, "ready_for_testing")
+
+    stop = threading.Event()
+    cycle_no = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        snap = _fake_snapshot(ref)
+        if hash_per_cycle is not None:
+            idx = min(cycle_no[0], len(hash_per_cycle) - 1)
+            snap = dataclasses.replace(snap, context_hashes={"combined_hash": hash_per_cycle[idx]})
+        return snap
+
+    from whilly.cli import jira_watch_loop
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        persist_calls.append({"issue_key": issue_key, "event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+
+    def counting_sleep(stop_evt: threading.Event, seconds: float) -> bool:
+        cycle_no[0] += 1
+        if cycle_no[0] >= cycles:
+            stop_evt.set()
+        return stop_evt.is_set()
+
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", counting_sleep)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args_dispatch(issues=issues, dispatch=True, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=dispatch_runner,
+    )
+    status = json.loads((tmp_path / "watch" / "jira-watch-status.json").read_text(encoding="utf-8"))
+    return rc, persist_calls, status
+
+
+def test_raising_dispatch_runner_does_not_kill_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dispatch_runner that raises must not crash the watcher (CR-01): the
+    loop continues, error_count increments, and a watch.failure event with
+    the exception class is recorded — no watch.dispatch is fabricated."""
+    from whilly.cli.jira_watch_loop import EVENT_DISPATCH, EVENT_FAILURE
+
+    dispatch_calls = [0]
+
+    def raising_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        raise AttributeError("'Namespace' object has no attribute 'max_iterations'")
+
+    rc, persist_calls, status = _run_dispatch_cycles(tmp_path, monkeypatch, dispatch_runner=raising_runner, cycles=2)
+
+    assert rc == 0, "watcher must survive a raising dispatch_runner"
+    assert dispatch_calls[0] == 2, "dispatch must be retried after a failure"
+    assert status["error_count"] >= 2
+    assert status["last_dispatch_rc"] == 1
+    assert status["last_error"] == "AttributeError"
+    dispatch_events = [c for c in persist_calls if c["event_type"] == EVENT_DISPATCH]
+    assert dispatch_events == [], "no watch.dispatch may be fabricated for a failed dispatch"
+    failures = [c for c in persist_calls if c["event_type"] == EVENT_FAILURE]
+    assert any(c["payload"].get("error") == "AttributeError" for c in failures)  # type: ignore[union-attr]
+
+
+def test_dispatch_event_only_on_success_rc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-zero dispatch rc emits watch.failure with the honest rc; rc==0
+    emits watch.dispatch with ok=true (CR-03)."""
+    from whilly.cli.jira_watch_loop import EVENT_DISPATCH, EVENT_FAILURE
+
+    rcs = iter([3, 0])
+
+    def runner(*args: object, **kwargs: object) -> int:
+        return next(rcs)
+
+    rc, persist_calls, status = _run_dispatch_cycles(tmp_path, monkeypatch, dispatch_runner=runner, cycles=2)
+
+    assert rc == 0
+    failures = [c for c in persist_calls if c["event_type"] == EVENT_FAILURE]
+    dispatches = [c for c in persist_calls if c["event_type"] == EVENT_DISPATCH]
+    assert any(c["payload"] == {"issue_key": "ABC-123", "rc": 3, "ok": False} for c in failures)
+    assert [c["payload"] for c in dispatches] == [{"issue_key": "ABC-123", "rc": 0, "ok": True}]
+    assert status["last_dispatch_rc"] == 0
+    assert status["dispatched"] == {"ABC-123": "hash"}
+
+
+def test_successful_dispatch_not_repeated_until_snapshot_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a successful dispatch, the same issue is not re-dispatched on the
+    next cycle with an unchanged snapshot hash; a changed hash re-dispatches
+    (WR-06 dedup)."""
+    dispatch_calls: list[str] = []
+
+    def runner(args: object, issue_ref: str = "", **kwargs: object) -> int:
+        dispatch_calls.append(issue_ref)
+        return 0
+
+    rc, _calls, status = _run_dispatch_cycles(
+        tmp_path,
+        monkeypatch,
+        dispatch_runner=runner,
+        cycles=3,
+        hash_per_cycle=["h1", "h1", "h2"],  # cycle 2 unchanged, cycle 3 changed
+    )
+
+    assert rc == 0
+    assert dispatch_calls == ["ABC-123", "ABC-123"], "dispatch once per distinct snapshot hash"
+    assert status["dispatched"] == {"ABC-123": "h2"}
+
+
+def test_dispatch_iterates_all_issues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every --issue is considered for dispatch, not just issues[0] (WR-07)."""
+    dispatch_calls: list[str] = []
+
+    def runner(args: object, issue_ref: str = "", **kwargs: object) -> int:
+        dispatch_calls.append(issue_ref)
+        return 0
+
+    rc, _calls, _status = _run_dispatch_cycles(
+        tmp_path,
+        monkeypatch,
+        dispatch_runner=runner,
+        cycles=1,
+        issues=["ABC-123", "XYZ-9"],
+    )
+
+    assert rc == 0
+    assert dispatch_calls == ["ABC-123", "XYZ-9"]
