@@ -183,6 +183,12 @@ database is unavailable — it logs a warning and moves on.
 |------|---------|
 | `0` | Graceful stop (SIGTERM/SIGINT) |
 | `1` | Another watcher is already running (single-instance guard) |
+| `2` | Jira config missing/incomplete (checked before the loop starts) |
+
+The credential gate runs once before the loop is entered. With incomplete Jira
+config the watcher exits immediately with code `2` and the standard setup
+guidance — it never starts looping with credentials it cannot use. Use
+`--interactive-config` from a terminal to be prompted for the missing values.
 
 ## Lifecycle sync
 
