@@ -33,10 +33,7 @@ from collections.abc import Callable, MutableMapping
 from pathlib import Path
 from typing import Any
 
-from whilly.jira_watch import (
-    JiraWorkSnapshot,
-    collect_jira_work_snapshot,  # noqa: F401  (default for production callers)
-)
+from whilly.jira_watch import JiraWorkSnapshot
 from whilly.llm_ops import _log_dir
 from whilly.pause_control import PauseControl
 
