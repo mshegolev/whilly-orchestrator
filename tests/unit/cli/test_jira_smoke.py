@@ -317,6 +317,45 @@ def test_jira_smoke_classify_uses_snapshot_classification_field(
 
 
 # ---------------------------------------------------------------------------
+# WR-09 regression: network-bound checks carry measured durations
+# ---------------------------------------------------------------------------
+
+
+def test_jira_smoke_records_measured_collector_duration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """auth/issue_fetch durations reflect the measured collector call (not fabricated 0.0)."""
+    import time
+
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    def _slow_collector(ref: str, timeout: int = 15) -> JiraWorkSnapshot:
+        time.sleep(0.02)
+        return _full_snapshot()
+
+    rc = run_jira_command(
+        ["smoke", "--issue", "ABC-123"],
+        snapshot_collector=_slow_collector,
+        config_loader=lambda: None,
+        config_reader=lambda: {},
+        environ=_jira_env(),
+        stdin_isatty=lambda: False,
+    )
+
+    assert rc == 0
+
+    reports = list((tmp_path / "smoke").glob("jira-smoke-*.json"))
+    assert len(reports) == 1
+    payload = json.loads(reports[0].read_text(encoding="utf-8"))
+    durations = {c["name"]: c["duration_seconds"] for c in payload["checks"]}
+    assert durations["auth"] >= 0.01, f"auth duration must be measured, got {durations['auth']}"
+    assert durations["issue_fetch"] >= 0.01, f"issue_fetch duration must be measured, got {durations['issue_fetch']}"
+    for name, value in durations.items():
+        assert isinstance(value, (int, float)) and value >= 0, f"{name} duration must be a non-negative number"
+
+
+# ---------------------------------------------------------------------------
 # WR-02/WR-03 regressions: --persist reads injected env and is best-effort
 # ---------------------------------------------------------------------------
 
