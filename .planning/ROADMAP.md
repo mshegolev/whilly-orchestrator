@@ -56,7 +56,11 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
   4. `openspec/project.md` (or config context) carries Whilly's stack, conventions, and domain glossary
   5. One capability is written end-to-end as a reference exemplar and passes `openspec validate --strict`
 
-**Plans**: TBD (defined during /gsd-plan-phase 21)
+**Plans**: 4 plans across 3 waves
+- [ ] 21-01-PLAN.md — Authoring conventions (BASE-03) + project context (BASE-04) — format/context gates [wave 1]
+- [ ] 21-02-PLAN.md — Capability taxonomy index + 32 capability stub directories (BASE-01) [wave 2]
+- [ ] 21-03-PLAN.md — task-model-fsm reference exemplar spec passing `openspec validate --strict` (SC-5) [wave 3]
+- [ ] 21-04-PLAN.md — module→capability coverage matrix, zero silent gaps (BASE-02) [wave 3]
 
 ### Phase 22: Orchestration Cluster
 
@@ -163,4 +167,4 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 **Plans**: TBD (defined during /gsd-plan-phase 28)
 
 ---
-*Roadmap updated: 2026-06-13 — milestone v1.3 OpenSpec Project Baseline defined (phases 21–28)*
+*Roadmap updated: 2026-06-13 — Phase 21 planned (4 plans, 3 waves)*
