@@ -1,8 +1,8 @@
 ---
 phase: 21
 slug: spec-baseline-taxonomy
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-13
 ---
@@ -78,11 +78,14 @@ performed by the OpenSpec tool itself (`openspec validate --strict`) plus file/g
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an automated `openspec validate` or file/grep smoke verify, or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 5s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have an automated `openspec validate` or file/grep smoke verify, or a Wave 0 dependency
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 5s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-13
+
+> Note: `wave_0_complete` stays `false` until execution actually creates the Wave-0 artifacts; it is
+> a runtime flag flipped by `/gsd-execute-phase`, not a planning sign-off blocker.

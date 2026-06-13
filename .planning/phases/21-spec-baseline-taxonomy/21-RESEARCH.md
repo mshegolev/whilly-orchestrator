@@ -890,27 +890,28 @@ controls needed for this documentation phase.
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **"242" vs "244" module count**
-   - What we know: `find whilly/ -name "*.py" | grep -v __pycache__ | wc -l` = 244
-   - What's unclear: REQUIREMENTS.md says "242" — which 2 files were excluded?
-   - Recommendation: Phase 21 plan tasks should count programmatically and use the
-     actual count; update REQUIREMENTS.md if needed. Zero silent gaps is the goal.
+1. **"242" vs "244" module count** — RESOLVED 2026-06-13
+   - At research time `find whilly/ -name "*.py" | grep -v __pycache__ | wc -l` = 244; the live count
+     is now **275** (codebase grew; includes `__init__.py`, `__main__.py`, and ~30 generated Alembic
+     migration version files).
+   - RESOLUTION: the **live `find` count at execution time is authoritative**. The matrix gate must
+     compute it live and NOT hard-code 242. "242" in REQUIREMENTS.md was a pre-growth, non-`__init__`
+     count; it appears in the matrix header only as a historical reconciliation note, never as the
+     target row count. Zero silent gaps remains the goal.
 
-2. **`openspec/project.md` vs `openspec/config.yaml context:`**
-   - What we know: Both locations are supported; `config.yaml context:` is inline
-   - What's unclear: Does OpenSpec AI tooling read `project.md` automatically or
-     only `config.yaml context:`?
-   - Recommendation: Populate both. Use `project.md` for the full document; add
-     a 3-line summary in `config.yaml context:` pointing at `project.md`.
+2. **`openspec/project.md` vs `openspec/config.yaml context:`** — RESOLVED 2026-06-13
+   - RESOLUTION: populate **both** — full document in `openspec/project.md`, a 3-line pointer summary
+     in `config.yaml context:`. (Plan 21-01 already does this.)
 
-3. **Confluence adapter ownership**
-   - `whilly/adapters/confluence/` has 2 modules but no corresponding integration
-     in the v1.3 capability taxonomy
-   - Recommendation: Map to `github-integration` (documentation publishing) or
-     create a note in the matrix; do NOT create a new capability for it without
-     raising with the operator first.
+3. **Confluence adapter ownership** — RESOLVED 2026-06-13
+   - `whilly/adapters/confluence/` (2 modules) is outbound publishing of release docs to Confluence.
+   - RESOLUTION: map to **`notifications`** (the outbound-external-dispatch capability) — a better fit
+     than `github-integration`. Planner decision; operator may reassign post-baseline via an `opsx`
+     delta. It MUST carry a real slug in the matrix — never `UNMAPPED`.
+   - Sibling batch decision: all `whilly/adapters/db/migrations/versions/*.py` map to
+     `state-persistence` in a single sweep, not 30+ individual judgments.
 
 ---
 
