@@ -16,8 +16,28 @@ next milestone state.
 
 ## Current Milestone
 
-No active milestone. v1.2 shipped 2026-06-12 (phases 18-20, evidence archived in
-`.planning/milestones/`). Start the next product slice with `/gsd-new-milestone`.
+**v1.3 — OpenSpec Project Baseline** (started 2026-06-13)
+
+Capture Whilly's current guaranteed behavior as ~30 normative, testable OpenSpec capability specs
+with full module coverage. Spec-capture only — no `whilly/` behavior changes. After this baseline,
+behavior changes flow through `opsx` proposals (forward delta-only); GSD keeps owning execution.
+
+Requirements: `.planning/REQUIREMENTS.md` (41 requirements, 8 categories).
+
+| Phase | Name | Requirements | Capabilities | Status |
+|-------|------|--------------|--------------|--------|
+| 21 | Spec Baseline & Taxonomy | BASE-01..04 | (scaffold) taxonomy, coverage matrix, conventions, project.md | Not started |
+| 22 | Orchestration Cluster | ORCH-01..07 | orchestration-loop, task-model-fsm, plan-json-contract, batch-planning, agent-dispatch, worktree-isolation, result-collection | Not started |
+| 23 | PRD Pipeline & Decision | PRD-01..05 | prd-generation, prd-wizard, task-generation, decomposition, decision-gate | Not started |
+| 24 | Integrations Cluster | INT-01..06 | jira-integration, gitlab-integration, github-integration, jira-watcher-daemon, notifications, mcp-integration | Not started |
+| 25 | Operator Surface Cluster | OPS-01..05 | dashboard-tui, web-status-ui, reporting, cli-surface, operator-views-logs | Not started |
+| 26 | Platform Cluster | PLAT-01..05 | configuration, auth-security, scheduling, state-persistence, self-update-doctor | Not started |
+| 27 | Safety & Quality Cluster | SAFE-01..04 | budget-resource-guards, recovery-self-healing, quality-compliance-audit, verification-gates | Not started |
+| 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | (audit) coverage matrix 100%, `openspec validate --strict`, spec→main sync, contributor docs | Not started |
+
+**Sequencing note:** Phase 21 must land first (taxonomy + conventions gate the spec format for all
+later phases). Phases 22–27 are independent once 21 is done and can be reordered or parallelized.
+Phase 28 closes the milestone (depends on all capability phases).
 
 ---
-*Roadmap updated: 2026-06-12 after archiving v1.2*
+*Roadmap updated: 2026-06-13 — milestone v1.3 OpenSpec Project Baseline defined (phases 21–28)*

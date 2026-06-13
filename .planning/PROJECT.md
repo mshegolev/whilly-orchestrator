@@ -66,8 +66,13 @@ The shipped v1.1 scope includes:
 
 ## Current Milestone
 
-No active milestone. v1.2 shipped 2026-06-12. Start the next product slice with
-`/gsd-new-milestone`.
+**v1.3 — OpenSpec Project Baseline** (active, started 2026-06-13).
+
+Capture Whilly's current guaranteed behavior as ~30 normative, testable OpenSpec capability specs
+under `openspec/specs/`, with a `module → capability` matrix proving all 242 `whilly/` modules are
+covered. Spec-capture only — no `whilly/` behavior changes this milestone. After the baseline,
+behavior changes flow through `opsx` proposals (forward delta-only); GSD keeps owning execution.
+Requirements in `.planning/REQUIREMENTS.md` (41 reqs); phases 21–28 in `.planning/ROADMAP.md`.
 
 ## Requirements
 
