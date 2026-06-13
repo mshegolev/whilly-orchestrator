@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: v1.3 not yet started (planning complete)
-Plan: —
-Status: Awaiting `/gsd-plan-phase 21`
-Last activity: 2026-06-13 — Milestone v1.3 OpenSpec Project Baseline defined and approved
+Phase: 21 — Spec Baseline & Taxonomy (Planned)
+Plan: 4 plans / 3 waves, plan-checker PASSED (0 blockers, 0 warnings, iteration 2)
+Status: Awaiting `/gsd-execute-phase 21`
+Last activity: 2026-06-13 — Phase 21 planned + verified (research, validation, 4 plans)
 
 ## Active Roadmap
 
@@ -36,7 +36,7 @@ See: `.planning/ROADMAP.md`
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 21 | Spec Baseline & Taxonomy | BASE-01..04 | Not started |
+| 21 | Spec Baseline & Taxonomy | BASE-01..04 | Planned (4 plans, checker PASSED) |
 | 22 | Orchestration Cluster | ORCH-01..07 | Not started |
 | 23 | PRD Pipeline & Decision | PRD-01..05 | Not started |
 | 24 | Integrations Cluster | INT-01..06 | Not started |
