@@ -94,7 +94,10 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
   4. Each spec has ≥1 scenario and all pass `openspec validate --strict`
   5. Covered modules checked off in the coverage matrix
 
-**Plans**: TBD (defined during /gsd-plan-phase 23)
+**Plans**: 3 plans (wave 1, all parallel — disjoint spec files)
+- [ ] 23-01-PLAN.md — prd-generation (PRD-01) + task-generation (PRD-03) specs
+- [ ] 23-02-PLAN.md — prd-wizard (PRD-02) + decomposition (PRD-04) specs
+- [ ] 23-03-PLAN.md — decision-gate (PRD-05) spec
 
 ### Phase 24: Integrations Cluster
 
