@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 24 — Integrations Cluster (In progress)
-Plan: 24-02 complete (INT-03 github-integration subsystem spec). 24-01 complete (INT-01, INT-04). Remaining: INT-02, INT-05, INT-06.
-Status: 24-02 executed — github-integration spec'd at subsystem-contract altitude across 7 sub-surfaces (auth resolution, read-only reads, idempotent issue→plan merge, deterministic conversion + idempotent forge intake, mutating boundary, board-workflow Protocol, CI poll adapter), reverse-spec'd from real v4 code, stating gh auth chain + read-only-vs-mutating boundary; passes `openspec validate --strict` (0 errors, 0 warnings). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 24 plan 24-02 complete (commit 979ec1d). Next: continue Phase 24 (INT-02 gitlab-integration, INT-05 notifications, INT-06 mcp-integration).
+Plan: 24-03 complete (INT-02, INT-05, INT-06). 24-02 complete (INT-03). 24-01 complete (INT-01, INT-04). All six Phase 24 integration specs done.
+Status: 24-03 executed — three independent normative specs reverse-spec'd from real v4 code: gitlab-integration (token precedence GITLAB_TOKEN/GITLAB_API_TOKEN/WHILLY_GITLAB_API_TOKEN/glab fallback, read-only Bearer-GET smoke vs mutating open_mr_for_task boundary, credential redaction, no_diff/failure_mode contracts), notifications (Slack factory gating SLACK_ENABLED+ACCESS_TOKEN+CHANNEL else NullNotifier, SMTP host gate + whilly_events.jsonl fallback, confluence Basic/Bearer auth, voice no-op, best-effort dispatch never blocks the loop), mcp-integration (tool/profile registry register/get/list + JSON round-trip + api_key_env credential naming, registration/discovery boundary not a mutating caller). All three pass `openspec validate <slug> --strict` (0 errors, 0 warnings). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 24 plan 24-03 complete (commits c3cbd95, daaa128, 6591e55). Phase 24 integrations cluster fully specced; next: Phase 25 (operator surface, OPS-01..05).
 
 ## Active Roadmap
 
