@@ -71,7 +71,7 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 - [x] **INT-01**: `jira-integration` — Jira read/work-snapshot behavior and auth expectations are
   specified.
 - [ ] **INT-02**: `gitlab-integration` — GitLab CLI surface behavior is specified.
-- [ ] **INT-03**: `github-integration` — GitHub PR/projects/converter behavior is specified.
+- [x] **INT-03**: `github-integration` — GitHub PR/projects/converter behavior is specified.
 - [x] **INT-04**: `jira-watcher-daemon` — the watch loop daemon (phase 20) behavior and guarantees
   are specified.
 - [ ] **INT-05**: `notifications` — Slack/sink notification dispatch is specified.
@@ -138,7 +138,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | PRD-02, PRD-04 | Phase 23 | Done (prd-wizard + decomposition specs, both pass openspec validate --strict) |
 | PRD-05 | Phase 23 | Complete |
 | INT-01, INT-04 | Phase 24 | Done (jira-integration + jira-watcher-daemon specs, both pass openspec validate --strict) |
-| INT-02, INT-03, INT-05, INT-06 | Phase 24 | Pending |
+| INT-03 | Phase 24 | Done (github-integration subsystem spec, passes openspec validate --strict) |
+| INT-02, INT-05, INT-06 | Phase 24 | Pending |
 | OPS-01..05 | Phase 25 | Pending |
 | PLAT-01..05 | Phase 26 | Pending |
 | SAFE-01..04 | Phase 27 | Pending |

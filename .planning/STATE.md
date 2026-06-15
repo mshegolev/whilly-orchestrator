@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 24 — Integrations Cluster (In progress)
-Plan: 24-01 complete (INT-01 jira-integration + INT-04 jira-watcher-daemon specs). Remaining: INT-02, INT-03, INT-05, INT-06.
-Status: 24-01 executed — both specs reverse-spec'd from real v4 code, each stating auth expectations + read-only-vs-mutating boundary; both pass `openspec validate --strict` (0 errors, 0 warnings). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 24 plan 24-01 complete (commits 87e4f18, ad06dd0). Next: continue Phase 24 (INT-02 gitlab-integration, INT-03 github-integration, INT-05 notifications, INT-06 mcp-integration).
+Plan: 24-02 complete (INT-03 github-integration subsystem spec). 24-01 complete (INT-01, INT-04). Remaining: INT-02, INT-05, INT-06.
+Status: 24-02 executed — github-integration spec'd at subsystem-contract altitude across 7 sub-surfaces (auth resolution, read-only reads, idempotent issue→plan merge, deterministic conversion + idempotent forge intake, mutating boundary, board-workflow Protocol, CI poll adapter), reverse-spec'd from real v4 code, stating gh auth chain + read-only-vs-mutating boundary; passes `openspec validate --strict` (0 errors, 0 warnings). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 24 plan 24-02 complete (commit 979ec1d). Next: continue Phase 24 (INT-02 gitlab-integration, INT-05 notifications, INT-06 mcp-integration).
 
 ## Active Roadmap
 
