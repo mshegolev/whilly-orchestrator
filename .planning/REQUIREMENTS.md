@@ -63,7 +63,7 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 - [x] **PRD-04**: `decomposition` — mid-run splitting of oversized tasks every `DECOMPOSE_EVERY`
   is specified. (Done 23-02: openspec/specs/decomposition/spec.md, validates --strict;
   spec states the legacy/unwired v4 worker-claim status truthfully.)
-- [ ] **PRD-05**: `decision-gate` — the Decision Gate + TRIZ contradiction analysis refusal/accept
+- [x] **PRD-05**: `decision-gate` — the Decision Gate + TRIZ contradiction analysis refusal/accept
   criteria are specified.
 
 ### Integrations cluster (Phase 24)
@@ -136,7 +136,7 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | ORCH-01..07 | Phase 22 | Done (7 specs authored, all pass openspec validate --strict) |
 | PRD-01, PRD-03 | Phase 23 | Done (prd-generation + task-generation specs, both pass openspec validate --strict) |
 | PRD-02, PRD-04 | Phase 23 | Done (prd-wizard + decomposition specs, both pass openspec validate --strict) |
-| PRD-05 | Phase 23 | Pending |
+| PRD-05 | Phase 23 | Complete |
 | INT-01..06 | Phase 24 | Pending |
 | OPS-01..05 | Phase 25 | Pending |
 | PLAT-01..05 | Phase 26 | Pending |
