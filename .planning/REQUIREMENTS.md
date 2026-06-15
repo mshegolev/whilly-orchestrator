@@ -89,9 +89,16 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 - [x] **OPS-03**: `reporting` — per-iteration JSON + end-of-run Markdown reporting is specified.
   (Done 25-01: openspec/specs/reporting/spec.md, validates --strict; spec records the
   legacy/unwired v4 worker-claim status of Reporter/generate_summary truthfully.)
-- [ ] **OPS-04**: `cli-surface` — CLI flags, headless JSON output, and exit codes
-  (`0/1/2/3`) are specified.
-- [ ] **OPS-05**: `operator-views-logs` — operator views and log viewer behavior are specified.
+- [x] **OPS-04**: `cli-surface` — CLI flags, headless behavior, and the real v4
+  exit-code contract (EXIT_OK=0, EXIT_VALIDATION_ERROR=1, EXIT_ENVIRONMENT_ERROR=2,
+  WORKSPACE_FAILED_EXIT_CODE=-4) are specified. (Done 25-03:
+  openspec/specs/cli-surface/spec.md, validates --strict; pins real EXIT_* constants
+  not legacy 0/1/2/3 lore; no-args prints HELP, unknown command returns 2; v3 flag
+  shim + WHILLY_HEADLESS handling captured.)
+- [x] **OPS-05**: `operator-views-logs` — operator views and log viewer behavior are specified.
+  (Done 25-03: openspec/specs/operator-views-logs/spec.md, validates --strict;
+  whilly logs list/show/tail + cleanup, operator-views taxonomy + hotkeys + route
+  prefixes + artifact inventory, and the operator TUI hotkey state machine.)
 
 ### Platform cluster (Phase 26)
 
@@ -149,7 +156,7 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | INT-02, INT-05, INT-06 | Phase 24 | Done (gitlab-integration + notifications + mcp-integration specs, all pass openspec validate --strict) |
 | OPS-01, OPS-03 | Phase 25 | Done (dashboard-tui + reporting specs, both pass openspec validate --strict) |
 | OPS-02 | Phase 25 | Done (web-status-ui subsystem spec, passes openspec validate --strict) |
-| OPS-04, OPS-05 | Phase 25 | Pending |
+| OPS-04, OPS-05 | Phase 25 | Done (cli-surface + operator-views-logs specs, both pass openspec validate --strict) |
 | PLAT-01..05 | Phase 26 | Pending |
 | SAFE-01..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |

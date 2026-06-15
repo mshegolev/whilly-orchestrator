@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Phase 25 in progress — plans 25-01 + 25-02 complete (OPS-01, OPS-03, OPS-02)
-last_updated: "2026-06-15T23:16:37.000Z"
-last_activity: 2026-06-16 — Phase 25 plan 25-02 executed (web-status-ui spec, strict-valid)
+status: Phase 25 complete — plans 25-01/25-02/25-03 done (OPS-01..05 specced)
+last_updated: "2026-06-16T00:00:00.000Z"
+last_activity: 2026-06-16 — Phase 25 plan 25-03 executed (cli-surface + operator-views-logs, strict-valid)
 progress:
   total_phases: 8
   completed_phases: 4
@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 25 — Operator Surface Cluster (in progress)
-Plan: 25-01 + 25-02 complete (OPS-01 `dashboard-tui`, OPS-03 `reporting`, OPS-02 `web-status-ui`). Remaining: OPS-04 `cli-surface`, OPS-05 `operator-views-logs`.
-Status: 21/21 specs pass `openspec validate --strict`. 25-02 reverse-spec'd the FastAPI control plane + worker HTTP transport + SSE + localhost web status — including the transport bootstrap/per-worker-bearer auth split, the optimistic-lock terminal RPCs, and the read-only vs mutating boundary — referencing auth-security for the full session/OIDC/WebAuthn model. Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 25 plan 25-02 executed (web-status-ui). Next: plan/execute remaining OPS specs (OPS-04, OPS-05).
+Phase: 25 — Operator Surface Cluster (complete)
+Plan: 25-01 + 25-02 + 25-03 complete — all five OPS specs written (OPS-01 `dashboard-tui`, OPS-02 `web-status-ui`, OPS-03 `reporting`, OPS-04 `cli-surface`, OPS-05 `operator-views-logs`).
+Status: 23/23 specs pass `openspec validate --strict`. 25-03 reverse-spec'd the `whilly` CLI surface — pinning the REAL v4 exit-code contract (EXIT_OK=0, EXIT_VALIDATION_ERROR=1, EXIT_ENVIRONMENT_ERROR=2, WORKSPACE_FAILED_EXIT_CODE=-4) over the legacy 0/1/2/3 lore, the no-args-prints-HELP behavior, unknown-command→2, and the v3 legacy flag shim incl. WHILLY_HEADLESS — plus the operator log viewer (list/show/tail + cleanup), the operator-views taxonomy (surfaces/tables/actions/hotkeys/route-prefixes/artifacts), and the operator TUI hotkey state machine. Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 25 plan 25-03 executed (cli-surface + operator-views-logs). Phase 25 complete; next: plan/execute Phase 26 (Platform cluster).
 
 ## Active Roadmap
 
