@@ -56,11 +56,13 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 - [x] **PRD-01**: `prd-generation` — non-interactive PRD synthesis is specified.
   (Done 23-01: openspec/specs/prd-generation/spec.md, validates --strict.)
-- [ ] **PRD-02**: `prd-wizard` — interactive PRD authoring via Claude CLI is specified.
+- [x] **PRD-02**: `prd-wizard` — interactive PRD authoring via Claude CLI is specified.
+  (Done 23-02: openspec/specs/prd-wizard/spec.md, validates --strict.)
 - [x] **PRD-03**: `task-generation` — PRD → `tasks.json` generation contract is specified.
   (Done 23-01: openspec/specs/task-generation/spec.md, validates --strict.)
-- [ ] **PRD-04**: `decomposition` — mid-run splitting of oversized tasks every `DECOMPOSE_EVERY`
-  is specified.
+- [x] **PRD-04**: `decomposition` — mid-run splitting of oversized tasks every `DECOMPOSE_EVERY`
+  is specified. (Done 23-02: openspec/specs/decomposition/spec.md, validates --strict;
+  spec states the legacy/unwired v4 worker-claim status truthfully.)
 - [ ] **PRD-05**: `decision-gate` — the Decision Gate + TRIZ contradiction analysis refusal/accept
   criteria are specified.
 
@@ -133,7 +135,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | BASE-01..04 | Phase 21 | Done (taxonomy, AUTHORING, project.md, coverage matrix; exemplar) |
 | ORCH-01..07 | Phase 22 | Done (7 specs authored, all pass openspec validate --strict) |
 | PRD-01, PRD-03 | Phase 23 | Done (prd-generation + task-generation specs, both pass openspec validate --strict) |
-| PRD-02, PRD-04, PRD-05 | Phase 23 | Pending |
+| PRD-02, PRD-04 | Phase 23 | Done (prd-wizard + decomposition specs, both pass openspec validate --strict) |
+| PRD-05 | Phase 23 | Pending |
 | INT-01..06 | Phase 24 | Pending |
 | OPS-01..05 | Phase 25 | Pending |
 | PLAT-01..05 | Phase 26 | Pending |

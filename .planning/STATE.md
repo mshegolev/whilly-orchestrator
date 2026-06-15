@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Phase 23 in progress — plan 23-01 complete (PRD-01 + PRD-03)
+status: Phase 23 in progress — plans 23-01 + 23-02 complete (PRD-01, PRD-02, PRD-03, PRD-04)
 last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 23 plan 23-01 executed (prd-generation + task-generation specs, both strict-valid)
+last_activity: 2026-06-16 — Phase 23 plan 23-02 executed (prd-wizard + decomposition specs, both strict-valid)
 progress:
   total_phases: 8
   completed_phases: 2
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 23 — PRD Pipeline & Decision (In Progress)
-Plan: 23-01 complete (PRD-01 prd-generation + PRD-03 task-generation); PRD-02/04/05 remaining
-Status: 23-01 authored 2 specs from real v4.7.0 code — prd-generation (generate_prd + classifier subsystem) and task-generation (run_init_command + generate_tasks_dict + _build_tasks_payload). Both pass `openspec validate --strict` (0 errors/warnings). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — 23-01 executed. Next: remaining Phase 23 plans for PRD-02 (prd-wizard), PRD-04 (decomposition), PRD-05 (decision-gate).
+Plan: 23-01 + 23-02 complete (PRD-01, PRD-02, PRD-03, PRD-04); PRD-05 remaining
+Status: 23-02 authored 2 specs from real v4.7.0 code — prd-wizard (PrdWizard background thread + is_running guard, WizardResult, run_prd_wizard, merge_tasks_into_plan) and decomposition (needs_decompose heuristic, build_decompose_prompt, run_decompose cache, with a normative requirement stating decomposer is legacy/unwired in the v4 worker-claim run path). Both pass `openspec validate --strict` (0 errors/warnings). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — 23-02 executed. Next: Phase 23 plan for PRD-05 (decision-gate).
 
 ## Active Roadmap
 
@@ -38,7 +38,7 @@ See: `.planning/ROADMAP.md`
 |-------|------|--------------|--------|
 | 21 | Spec Baseline & Taxonomy | BASE-01..04 | ✅ Complete |
 | 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
-| 23 | PRD Pipeline & Decision | PRD-01..05 | 🔄 In progress (23-01: PRD-01, PRD-03 done) |
+| 23 | PRD Pipeline & Decision | PRD-01..05 | 🔄 In progress (23-01: PRD-01, PRD-03; 23-02: PRD-02, PRD-04 done) |
 | 24 | Integrations Cluster | INT-01..06 | Not started |
 | 25 | Operator Surface Cluster | OPS-01..05 | Not started |
 | 26 | Platform Cluster | PLAT-01..05 | Not started |

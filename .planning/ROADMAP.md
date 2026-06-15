@@ -96,7 +96,7 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 
 **Plans**: 3 plans (wave 1, all parallel — disjoint spec files)
 - [ ] 23-01-PLAN.md — prd-generation (PRD-01) + task-generation (PRD-03) specs
-- [ ] 23-02-PLAN.md — prd-wizard (PRD-02) + decomposition (PRD-04) specs
+- [x] 23-02-PLAN.md — prd-wizard (PRD-02) + decomposition (PRD-04) specs
 - [ ] 23-03-PLAN.md — decision-gate (PRD-05) spec
 
 ### Phase 24: Integrations Cluster
