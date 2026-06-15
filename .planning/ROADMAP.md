@@ -130,7 +130,10 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
   4. Each spec has ≥1 scenario and all pass `openspec validate --strict`
   5. Covered modules checked off in the coverage matrix
 
-**Plans**: TBD (defined during /gsd-plan-phase 25)
+**Plans**: 3 plans (1 wave, all parallel)
+- [ ] 25-01-PLAN.md — dashboard-tui (OPS-01) + reporting (OPS-03) specs
+- [ ] 25-02-PLAN.md — web-status-ui (OPS-02) spec — FastAPI control plane + transport RPC + SSE
+- [ ] 25-03-PLAN.md — cli-surface (OPS-04) + operator-views-logs (OPS-05) specs
 
 ### Phase 26: Platform Cluster
 
