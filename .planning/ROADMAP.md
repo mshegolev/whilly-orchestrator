@@ -32,8 +32,8 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 
 ## Phases
 
-- [ ] **Phase 21: Spec Baseline & Taxonomy** - Capability taxonomy, authoring conventions, coverage-matrix scaffold, and one reference spec — gates the spec format for every later phase
-- [ ] **Phase 22: Orchestration Cluster** - The seven load-bearing orchestration contracts captured as normative specs (the core loop's guarantees)
+- [x] **Phase 21: Spec Baseline & Taxonomy** - Capability taxonomy, authoring conventions, coverage-matrix scaffold, and one reference spec — gates the spec format for every later phase
+- [x] **Phase 22: Orchestration Cluster** - The seven load-bearing orchestration contracts captured as normative specs (the core loop's guarantees)
 - [ ] **Phase 23: PRD Pipeline & Decision** - PRD generation/wizard, task generation, decomposition, and the Decision Gate specified
 - [ ] **Phase 24: Integrations Cluster** - Jira, GitLab, GitHub, watcher daemon, notifications, and MCP integration surfaces specified
 - [ ] **Phase 25: Operator Surface Cluster** - TUI dashboard, web status/API, reporting, CLI exit-code contract, and operator views/logs specified

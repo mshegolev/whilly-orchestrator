@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Awaiting `/gsd-execute-phase 21`
-last_updated: "2026-06-15T16:04:14.870Z"
-last_activity: 2026-06-13 — Phase 21 planned + verified (research, validation, 4 plans)
+status: Phase 22 complete — ready for `/gsd-plan-phase 23`
+last_updated: "2026-06-16T00:00:00.000Z"
+last_activity: 2026-06-16 — Phase 22 executed + verified (7 orchestration specs); CLAUDE.md rewritten v3→v4
 progress:
   total_phases: 8
-  completed_phases: 0
+  completed_phases: 2
   total_plans: 8
-  completed_plans: 4
-  percent: 0
+  completed_plans: 8
+  percent: 25
 ---
 
 # Project State
@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 22 — Orchestration Cluster (Executing)
-Plan: 22-01..04 complete (ORCH-01, ORCH-03, ORCH-04, ORCH-05, ORCH-06, ORCH-07); ORCH-02 done in Phase 21 — all 7 ORCH specs authored
-Status: 22-04 executed — `openspec validate batch-planning --strict` and `openspec validate worktree-isolation --strict` both pass (0/0)
-Last activity: 2026-06-16 — Executed 22-04: authored openspec/specs/{batch-planning,worktree-isolation}/spec.md
+Phase: 22 — Orchestration Cluster (Complete)
+Plan: 22-01..04 complete; all 7 ORCH specs authored (ORCH-02 = Phase 21 exemplar)
+Status: 22-VERIFICATION.md = passed (7/7 must-haves). All 7 orchestration specs pass `openspec validate --strict` (7 passed, 0 failed). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 22 verified + closed. Also rewrote CLAUDE.md from stale v3 → real v4.7.0 (drift caught by plan-checker). Next: `/gsd-plan-phase 23` (PRD Pipeline & Decision).
 
 ## Active Roadmap
 
@@ -36,8 +36,8 @@ See: `.planning/ROADMAP.md`
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 21 | Spec Baseline & Taxonomy | BASE-01..04 | Planned (4 plans, checker PASSED) |
-| 22 | Orchestration Cluster | ORCH-01..07 | Not started |
+| 21 | Spec Baseline & Taxonomy | BASE-01..04 | ✅ Complete |
+| 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
 | 23 | PRD Pipeline & Decision | PRD-01..05 | Not started |
 | 24 | Integrations Cluster | INT-01..06 | Not started |
 | 25 | Operator Surface Cluster | OPS-01..05 | Not started |

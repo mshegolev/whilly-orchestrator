@@ -33,8 +33,9 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 - [x] **ORCH-01**: `orchestration-loop` — the v4 worker-claim iteration model (composition root
   → claim → start → dispatch → route → idle/terminate) is specified normatively with scenarios.
   (Done 22-01: openspec/specs/orchestration-loop/spec.md, validates --strict.)
-- [ ] **ORCH-02**: `task-model-fsm` — task status state machine (`pending → in_progress →
+- [x] **ORCH-02**: `task-model-fsm` — task status state machine (`pending → in_progress →
   done | failed | skipped`) and legal transitions are specified.
+  (Done 21-03: openspec/specs/task-model-fsm/spec.md reference exemplar, validates --strict.)
 - [x] **ORCH-03**: `plan-json-contract` — required task fields and plan envelope
   (`project`, `prd_file`, `tasks[]`) and round-trip tolerance are specified.
   (Done 22-02: openspec/specs/plan-json-contract/spec.md, validates --strict.)
@@ -127,8 +128,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BASE-01..04 | Phase 21 | Pending |
-| ORCH-01..07 | Phase 22 | Pending |
+| BASE-01..04 | Phase 21 | Done (taxonomy, AUTHORING, project.md, coverage matrix; exemplar) |
+| ORCH-01..07 | Phase 22 | Done (7 specs authored, all pass openspec validate --strict) |
 | PRD-01..05 | Phase 23 | Pending |
 | INT-01..06 | Phase 24 | Pending |
 | OPS-01..05 | Phase 25 | Pending |
