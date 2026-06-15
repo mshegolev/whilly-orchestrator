@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Planning
-last_updated: "2026-06-13"
-last_activity: 2026-06-13 — Milestone v1.3 defined (phases 21–28), requirements + roadmap drafted and approved
+status: Awaiting `/gsd-execute-phase 21`
+last_updated: "2026-06-15T16:04:14.870Z"
+last_activity: 2026-06-13 — Phase 21 planned + verified (research, validation, 4 plans)
 progress:
   total_phases: 8
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 8
+  completed_plans: 4
   percent: 0
 ---
 
@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 21 — Spec Baseline & Taxonomy (Planned)
-Plan: 4 plans / 3 waves, plan-checker PASSED (0 blockers, 0 warnings, iteration 2)
-Status: Awaiting `/gsd-execute-phase 21`
-Last activity: 2026-06-13 — Phase 21 planned + verified (research, validation, 4 plans)
+Phase: 22 — Orchestration Cluster (Executing)
+Plan: 22-01 complete (ORCH-01 — orchestration-loop spec); ORCH-03..07 remain
+Status: 22-01 executed — `openspec validate orchestration-loop --strict` passes (0/0)
+Last activity: 2026-06-15 — Executed 22-01: authored openspec/specs/orchestration-loop/spec.md
 
 ## Active Roadmap
 
@@ -65,10 +65,13 @@ coverage matrix proving all 242 modules are mapped. NOT one spec file per module
 
 - v1.3 (2026-06-13): Rejected literal per-module specs (242 files) — chose subsystem capabilities +
   coverage matrix to keep specs normative and maintainable while still proving full coverage.
+
 - v1.3 (2026-06-13): Phase 21 (taxonomy + conventions) gates all later phases — the spec format must
   be fixed once, before 30 specs are written against it.
+
 - v1.3 (2026-06-13): Phases 22–27 are independent once 21 lands and may be reordered/parallelized;
   Phase 28 (coverage audit + validate + sync) closes the milestone.
+
 - v1.3 (2026-06-13): Auth/security carried context — ADR-001 path-sink fixes and the flag-gated
   OIDC/WebAuthn stack are existing behavior to be specified (PLAT-02), not changed.
 
@@ -78,6 +81,7 @@ coverage matrix proving all 242 modules are mapped. NOT one spec file per module
 
 - Phases 18-20 shipped for milestone v1.2 (migration validation, live smoke, watcher daemon),
   archived 2026-06-12.
+
 - Phases 21-28 defined for milestone v1.3: OpenSpec normative baseline across the whole project.
 
 ## Previous Milestones

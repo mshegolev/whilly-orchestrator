@@ -30,8 +30,9 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 ### Orchestration cluster (Phase 22)
 
-- [ ] **ORCH-01**: `orchestration-loop` — the `run_plan` iteration model (load → ready → batch →
-  dispatch → collect → guard → persist) is specified normatively with scenarios.
+- [x] **ORCH-01**: `orchestration-loop` — the v4 worker-claim iteration model (composition root
+  → claim → start → dispatch → route → idle/terminate) is specified normatively with scenarios.
+  (Done 22-01: openspec/specs/orchestration-loop/spec.md, validates --strict.)
 - [ ] **ORCH-02**: `task-model-fsm` — task status state machine (`pending → in_progress →
   done | failed | skipped`) and legal transitions are specified.
 - [ ] **ORCH-03**: `plan-json-contract` — required task fields and plan envelope
