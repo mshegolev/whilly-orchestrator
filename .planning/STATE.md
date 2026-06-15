@@ -7,10 +7,10 @@ last_updated: "2026-06-16T00:00:00.000Z"
 last_activity: 2026-06-16 — Phase 23 plan 23-03 executed (decision-gate spec, strict-valid)
 progress:
   total_phases: 8
-  completed_phases: 3
-  total_plans: 11
-  completed_plans: 11
-  percent: 37
+  completed_phases: 4
+  total_plans: 14
+  completed_plans: 14
+  percent: 50
 ---
 
 # Project State
@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 24 — Integrations Cluster (In progress)
-Plan: 24-03 complete (INT-02, INT-05, INT-06). 24-02 complete (INT-03). 24-01 complete (INT-01, INT-04). All six Phase 24 integration specs done.
-Status: 24-03 executed — three independent normative specs reverse-spec'd from real v4 code: gitlab-integration (token precedence GITLAB_TOKEN/GITLAB_API_TOKEN/WHILLY_GITLAB_API_TOKEN/glab fallback, read-only Bearer-GET smoke vs mutating open_mr_for_task boundary, credential redaction, no_diff/failure_mode contracts), notifications (Slack factory gating SLACK_ENABLED+ACCESS_TOKEN+CHANNEL else NullNotifier, SMTP host gate + whilly_events.jsonl fallback, confluence Basic/Bearer auth, voice no-op, best-effort dispatch never blocks the loop), mcp-integration (tool/profile registry register/get/list + JSON round-trip + api_key_env credential naming, registration/discovery boundary not a mutating caller). All three pass `openspec validate <slug> --strict` (0 errors, 0 warnings). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 24 plan 24-03 complete (commits c3cbd95, daaa128, 6591e55). Phase 24 integrations cluster fully specced; next: Phase 25 (operator surface, OPS-01..05).
+Phase: 24 — Integrations Cluster (Complete)
+Plan: 24-01..03 complete; all 6 INT specs authored (jira-integration, gitlab-integration, github-integration, jira-watcher-daemon, notifications, mcp-integration)
+Status: 24-VERIFICATION.md = passed (6/6 must-haves; adversarial grounding confirmed incl. gitlab spec'd observed --force vs docstring --force-with-lease). 18/18 specs pass `openspec validate --strict`. Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 24 verified + closed (4/8 phases, 50%). Next: `/gsd-plan-phase 25` (Operator Surface Cluster, OPS-01..05).
 
 ## Active Roadmap
 
@@ -39,7 +39,7 @@ See: `.planning/ROADMAP.md`
 | 21 | Spec Baseline & Taxonomy | BASE-01..04 | ✅ Complete |
 | 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
 | 23 | PRD Pipeline & Decision | PRD-01..05 | ✅ Complete (verified) |
-| 24 | Integrations Cluster | INT-01..06 | In progress (INT-01, INT-04 done) |
+| 24 | Integrations Cluster | INT-01..06 | ✅ Complete (verified) |
 | 25 | Operator Surface Cluster | OPS-01..05 | Not started |
 | 26 | Platform Cluster | PLAT-01..05 | Not started |
 | 27 | Safety & Quality Cluster | SAFE-01..04 | Not started |
