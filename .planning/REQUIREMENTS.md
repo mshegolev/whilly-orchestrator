@@ -35,16 +35,18 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
   (Done 22-01: openspec/specs/orchestration-loop/spec.md, validates --strict.)
 - [ ] **ORCH-02**: `task-model-fsm` — task status state machine (`pending → in_progress →
   done | failed | skipped`) and legal transitions are specified.
-- [ ] **ORCH-03**: `plan-json-contract` — required task fields and plan envelope
+- [x] **ORCH-03**: `plan-json-contract` — required task fields and plan envelope
   (`project`, `prd_file`, `tasks[]`) and round-trip tolerance are specified.
+  (Done 22-02: openspec/specs/plan-json-contract/spec.md, validates --strict.)
 - [ ] **ORCH-04**: `batch-planning` — non-overlapping `key_files` batching and first-batch dispatch
   re-evaluation rule are specified.
 - [ ] **ORCH-05**: `agent-dispatch` — tmux vs subprocess runner selection and per-task isolation
   preconditions are specified.
 - [ ] **ORCH-06**: `worktree-isolation` — plan workspace and per-task worktree lifecycle
   (create → cherry-pick on done → cleanup) is specified.
-- [ ] **ORCH-07**: `result-collection` — `AgentResult` parsing and the `<promise>COMPLETE</promise>`
+- [x] **ORCH-07**: `result-collection` — `AgentResult` parsing and the `<promise>COMPLETE</promise>`
   completion signal are specified.
+  (Done 22-02: openspec/specs/result-collection/spec.md, validates --strict.)
 
 ### PRD pipeline & decision (Phase 23)
 
