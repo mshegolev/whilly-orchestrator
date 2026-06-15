@@ -75,7 +75,11 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
   4. Each spec has ≥1 testable `#### Scenario:` and all 7 pass `openspec validate --strict`
   5. Every module these capabilities cover is checked off in the coverage matrix
 
-**Plans**: TBD (defined during /gsd-plan-phase 22)
+**Plans**: 4 plans, all wave 1 (specs are independent, documentation-only — disjoint files → fully parallel). ORCH-02 (task-model-fsm) already done in Phase 21 — not re-planned.
+- [ ] 22-01-PLAN.md — orchestration-loop spec (ORCH-01) [wave 1]
+- [ ] 22-02-PLAN.md — plan-json-contract (ORCH-03) + result-collection (ORCH-07) specs [wave 1]
+- [ ] 22-03-PLAN.md — agent-dispatch spec (ORCH-05) [wave 1]
+- [ ] 22-04-PLAN.md — batch-planning (ORCH-04) + worktree-isolation (ORCH-06) specs [wave 1]
 
 ### Phase 23: PRD Pipeline & Decision
 
@@ -167,4 +171,4 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 **Plans**: TBD (defined during /gsd-plan-phase 28)
 
 ---
-*Roadmap updated: 2026-06-13 — Phase 21 planned (4 plans, 3 waves)*
+*Roadmap updated: 2026-06-15 — Phase 22 planned (4 plans, 1 wave; ORCH-02 already done in Phase 21)*
