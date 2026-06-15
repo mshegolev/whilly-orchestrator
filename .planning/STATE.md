@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 23 — PRD Pipeline & Decision (Complete)
-Plan: 23-01..03 complete; all 5 PRD specs authored (prd-generation, prd-wizard, task-generation, decomposition, decision-gate)
-Status: 23-VERIFICATION.md = passed (5/5 must-haves; adversarial grounding confirmed — decomposition legacy/unwired verified by grep, decision-gate pins the deterministic core/triz.analyze_plan_triz). 12/12 specs pass `openspec validate --strict`. Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 23 verified + closed. Next: `/gsd-plan-phase 24` (Integrations Cluster, INT-01..06).
+Phase: 24 — Integrations Cluster (In progress)
+Plan: 24-01 complete (INT-01 jira-integration + INT-04 jira-watcher-daemon specs). Remaining: INT-02, INT-03, INT-05, INT-06.
+Status: 24-01 executed — both specs reverse-spec'd from real v4 code, each stating auth expectations + read-only-vs-mutating boundary; both pass `openspec validate --strict` (0 errors, 0 warnings). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 24 plan 24-01 complete (commits 87e4f18, ad06dd0). Next: continue Phase 24 (INT-02 gitlab-integration, INT-03 github-integration, INT-05 notifications, INT-06 mcp-integration).
 
 ## Active Roadmap
 
@@ -39,7 +39,7 @@ See: `.planning/ROADMAP.md`
 | 21 | Spec Baseline & Taxonomy | BASE-01..04 | ✅ Complete |
 | 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
 | 23 | PRD Pipeline & Decision | PRD-01..05 | ✅ Complete (verified) |
-| 24 | Integrations Cluster | INT-01..06 | Not started |
+| 24 | Integrations Cluster | INT-01..06 | In progress (INT-01, INT-04 done) |
 | 25 | Operator Surface Cluster | OPS-01..05 | Not started |
 | 26 | Platform Cluster | PLAT-01..05 | Not started |
 | 27 | Safety & Quality Cluster | SAFE-01..04 | Not started |
