@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 22 — Orchestration Cluster (Executing)
-Plan: 22-01 + 22-02 complete (ORCH-01, ORCH-03, ORCH-07); ORCH-04..06 remain (ORCH-02 done in Phase 21)
-Status: 22-02 executed — `openspec validate plan-json-contract --strict` and `result-collection --strict` pass (0/0)
-Last activity: 2026-06-15 — Executed 22-02: authored openspec/specs/plan-json-contract/spec.md + result-collection/spec.md
+Plan: 22-01 + 22-02 + 22-03 complete (ORCH-01, ORCH-03, ORCH-05, ORCH-07); ORCH-04, ORCH-06 remain (ORCH-02 done in Phase 21)
+Status: 22-03 executed — `openspec validate agent-dispatch --strict` passes (0/0)
+Last activity: 2026-06-15 — Executed 22-03: authored openspec/specs/agent-dispatch/spec.md
 
 ## Active Roadmap
 
