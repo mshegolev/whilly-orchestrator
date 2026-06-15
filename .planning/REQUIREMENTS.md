@@ -79,9 +79,12 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 ### Operator surface cluster (Phase 25)
 
-- [ ] **OPS-01**: `dashboard-tui` — Rich Live dashboard states and hotkeys are specified.
+- [x] **OPS-01**: `dashboard-tui` — Rich Live dashboard states and hotkeys are specified.
+  (Done 25-01: openspec/specs/dashboard-tui/spec.md, validates --strict.)
 - [ ] **OPS-02**: `web-status-ui` — web status/API surface behavior is specified.
-- [ ] **OPS-03**: `reporting` — per-iteration JSON + end-of-run Markdown reporting is specified.
+- [x] **OPS-03**: `reporting` — per-iteration JSON + end-of-run Markdown reporting is specified.
+  (Done 25-01: openspec/specs/reporting/spec.md, validates --strict; spec records the
+  legacy/unwired v4 worker-claim status of Reporter/generate_summary truthfully.)
 - [ ] **OPS-04**: `cli-surface` — CLI flags, headless JSON output, and exit codes
   (`0/1/2/3`) are specified.
 - [ ] **OPS-05**: `operator-views-logs` — operator views and log viewer behavior are specified.
@@ -140,7 +143,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | INT-01, INT-04 | Phase 24 | Done (jira-integration + jira-watcher-daemon specs, both pass openspec validate --strict) |
 | INT-03 | Phase 24 | Done (github-integration subsystem spec, passes openspec validate --strict) |
 | INT-02, INT-05, INT-06 | Phase 24 | Done (gitlab-integration + notifications + mcp-integration specs, all pass openspec validate --strict) |
-| OPS-01..05 | Phase 25 | Pending |
+| OPS-01, OPS-03 | Phase 25 | Done (dashboard-tui + reporting specs, both pass openspec validate --strict) |
+| OPS-02, OPS-04, OPS-05 | Phase 25 | Pending |
 | PLAT-01..05 | Phase 26 | Pending |
 | SAFE-01..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |

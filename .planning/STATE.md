@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Phase 23 in progress — plans 23-01 + 23-02 + 23-03 complete (PRD-01..05)
+status: Phase 25 in progress — plan 25-01 complete (OPS-01 + OPS-03)
 last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 23 plan 23-03 executed (decision-gate spec, strict-valid)
+last_activity: 2026-06-16 — Phase 25 plan 25-01 executed (dashboard-tui + reporting specs, both strict-valid)
 progress:
   total_phases: 8
   completed_phases: 4
-  total_plans: 14
-  completed_plans: 14
+  total_plans: 15
+  completed_plans: 15
   percent: 50
 ---
 
@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 24 — Integrations Cluster (Complete)
-Plan: 24-01..03 complete; all 6 INT specs authored (jira-integration, gitlab-integration, github-integration, jira-watcher-daemon, notifications, mcp-integration)
-Status: 24-VERIFICATION.md = passed (6/6 must-haves; adversarial grounding confirmed incl. gitlab spec'd observed --force vs docstring --force-with-lease). 18/18 specs pass `openspec validate --strict`. Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 24 verified + closed (4/8 phases, 50%). Next: `/gsd-plan-phase 25` (Operator Surface Cluster, OPS-01..05).
+Phase: 25 — Operator Surface Cluster (in progress)
+Plan: 25-01 complete (OPS-01 `dashboard-tui` + OPS-03 `reporting`). Remaining: OPS-02 `web-status-ui`, OPS-04 `cli-surface`, OPS-05 `operator-views-logs`.
+Status: 20/20 specs pass `openspec validate --strict`. 25-01 reverse-spec'd the Rich Live TUI + web SSE dashboard and the JSON/Markdown reporting layer (with truthful legacy/unwired v4 status for Reporter/generate_summary). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 25 plan 25-01 executed (dashboard-tui + reporting). Next: plan/execute remaining OPS specs (OPS-02, OPS-04, OPS-05).
 
 ## Active Roadmap
 
@@ -40,7 +40,7 @@ See: `.planning/ROADMAP.md`
 | 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
 | 23 | PRD Pipeline & Decision | PRD-01..05 | ✅ Complete (verified) |
 | 24 | Integrations Cluster | INT-01..06 | ✅ Complete (verified) |
-| 25 | Operator Surface Cluster | OPS-01..05 | Not started |
+| 25 | Operator Surface Cluster | OPS-01..05 | 🔄 In progress (OPS-01, OPS-03 done) |
 | 26 | Platform Cluster | PLAT-01..05 | Not started |
 | 27 | Safety & Quality Cluster | SAFE-01..04 | Not started |
 | 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | Not started |
