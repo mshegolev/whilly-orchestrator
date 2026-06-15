@@ -38,13 +38,15 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 - [x] **ORCH-03**: `plan-json-contract` — required task fields and plan envelope
   (`project`, `prd_file`, `tasks[]`) and round-trip tolerance are specified.
   (Done 22-02: openspec/specs/plan-json-contract/spec.md, validates --strict.)
-- [ ] **ORCH-04**: `batch-planning` — non-overlapping `key_files` batching and first-batch dispatch
+- [x] **ORCH-04**: `batch-planning` — non-overlapping `key_files` batching and first-batch dispatch
   re-evaluation rule are specified.
+  (Done 22-04: openspec/specs/batch-planning/spec.md, validates --strict.)
 - [x] **ORCH-05**: `agent-dispatch` — tmux vs subprocess runner selection and per-task isolation
   preconditions are specified.
   (Done 22-03: openspec/specs/agent-dispatch/spec.md, validates --strict.)
-- [ ] **ORCH-06**: `worktree-isolation` — plan workspace and per-task worktree lifecycle
+- [x] **ORCH-06**: `worktree-isolation` — plan workspace and per-task worktree lifecycle
   (create → cherry-pick on done → cleanup) is specified.
+  (Done 22-04: openspec/specs/worktree-isolation/spec.md, validates --strict.)
 - [x] **ORCH-07**: `result-collection` — `AgentResult` parsing and the `<promise>COMPLETE</promise>`
   completion signal are specified.
   (Done 22-02: openspec/specs/result-collection/spec.md, validates --strict.)

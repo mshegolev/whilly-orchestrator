@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 22 — Orchestration Cluster (Executing)
-Plan: 22-01 + 22-02 + 22-03 complete (ORCH-01, ORCH-03, ORCH-05, ORCH-07); ORCH-04, ORCH-06 remain (ORCH-02 done in Phase 21)
-Status: 22-03 executed — `openspec validate agent-dispatch --strict` passes (0/0)
-Last activity: 2026-06-15 — Executed 22-03: authored openspec/specs/agent-dispatch/spec.md
+Plan: 22-01..04 complete (ORCH-01, ORCH-03, ORCH-04, ORCH-05, ORCH-06, ORCH-07); ORCH-02 done in Phase 21 — all 7 ORCH specs authored
+Status: 22-04 executed — `openspec validate batch-planning --strict` and `openspec validate worktree-isolation --strict` both pass (0/0)
+Last activity: 2026-06-16 — Executed 22-04: authored openspec/specs/{batch-planning,worktree-isolation}/spec.md
 
 ## Active Roadmap
 
