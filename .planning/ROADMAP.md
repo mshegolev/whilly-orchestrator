@@ -112,7 +112,10 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
   4. Each spec has ≥1 scenario and all pass `openspec validate --strict`
   5. Covered modules checked off in the coverage matrix
 
-**Plans**: TBD (defined during /gsd-plan-phase 24)
+**Plans**: 3 plans (1 wave)
+- [ ] 24-01-PLAN.md — jira-integration (INT-01) + jira-watcher-daemon (INT-04) specs
+- [ ] 24-02-PLAN.md — github-integration (INT-03) subsystem-altitude spec
+- [ ] 24-03-PLAN.md — gitlab-integration (INT-02) + notifications (INT-05) + mcp-integration (INT-06) specs
 
 ### Phase 25: Operator Surface Cluster
 
