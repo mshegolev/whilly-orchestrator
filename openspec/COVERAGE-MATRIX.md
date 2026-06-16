@@ -315,3 +315,40 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/workflow/sync.py | github-integration | workflow engine |
 | whilly/workspaces.py | worktree-isolation | plan workspace lifecycle |
 | whilly/worktree_runner.py | worktree-isolation | per-task worktree lifecycle |
+
+---
+
+## COV-01 Audit (2026-06-16)
+
+Phase 28 closeout re-audit of this matrix against the live `whilly/` tree, run with the
+canonical commands (results captured live, not hardcoded):
+
+| Assertion | Command | Result | Status |
+|-----------|---------|--------|--------|
+| Live module count == body rows | `find whilly/ -name "*.py" -not -path "*/__pycache__/*" \| wc -l` vs `grep -cE '^\| whilly/' COVERAGE-MATRIX.md` | live **275** == rows **275** | ✅ PASS |
+| Zero UNMAPPED | `grep -cE '^\| whilly/.*\| *UNMAPPED'` | **0** | ✅ PASS |
+| Zero double-mapped module paths | each module path appears in exactly one data row | **0 duplicates** | ✅ PASS |
+| Capability column ⊆ 32 TAXONOMY slugs | matrix capabilities vs `TAXONOMY.md` 32 slugs | **0 stray slugs** | ✅ PASS |
+| All 32 capabilities ≥1 module | every TAXONOMY slug used by ≥1 row | **32/32 covered** | ✅ PASS |
+
+Additional exact-set checks (beyond the five assertions): the set of matrix module paths
+is **bijective** with the live `find` output — 0 live files missing a row, 0 matrix rows
+pointing at a non-existent file.
+
+**Reconciliation performed:** none — no drift from the recorded count of 275; rows left
+unchanged. The historical `242` figure in the Reconciliation Note remains prose-only
+(pre-growth, excluded package `__init__.py` files) and is not a gate.
+
+**Verdict:** Coverage matrix is at **100% (275/275)** with zero gaps and zero
+double-mapping — COV-01 satisfied.
+
+## VAL-01 Validation (2026-06-16)
+
+`openspec validate --all --strict` (openspec on PATH at
+`~/.reflex/.nvm/versions/node/v20.19.6/bin/openspec`):
+
+```
+Totals: 32 passed, 0 failed (32 items)
+```
+
+All 32 capability specs are strict-valid — VAL-01 satisfied.
