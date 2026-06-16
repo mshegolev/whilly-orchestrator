@@ -352,3 +352,58 @@ Totals: 32 passed, 0 failed (32 items)
 ```
 
 All 32 capability specs are strict-valid — VAL-01 satisfied.
+
+## VAL-02 Review (2026-06-16)
+
+Consolidated normative-accuracy review of all 32 capability specs. Basis: the six cluster
+`*-VERIFICATION.md` reports (phases 22–27) already adversarially code-grounded each
+capability against the real v4.7.0 source; this note consolidates their verdicts, then
+adds two mechanical sweeps over the live `openspec/specs/`.
+
+### Cluster VERIFICATION verdict summary (all PASSED)
+
+| Cluster (phase) | Slugs covered | VERIFICATION verdict |
+|-----------------|---------------|----------------------|
+| Orchestration (22) | orchestration-loop, task-model-fsm, plan-json-contract, batch-planning, agent-dispatch, worktree-isolation, result-collection (7) | passed — 7/7 must-haves; grounded in v4 worker-claim loop, no v3 `run_plan`/`_original_cwd`/no-op-flag pins |
+| PRD Pipeline (23) | prd-generation, prd-wizard, task-generation, decomposition, decision-gate (5) | passed — 9/9 truths; decomposition truthfully marked legacy/unwired; decision-gate pins deterministic `core/triz.analyze_plan_triz` |
+| Integrations (24) | jira-integration, gitlab-integration, github-integration, jira-watcher-daemon, notifications, mcp-integration (6) | passed — 6/6 must-haves; each states auth + read-only/mutating boundary; gitlab specs real `git push --force` (not docstring prose) |
+| Operator Surface (25) | dashboard-tui, web-status-ui, reporting, cli-surface, operator-views-logs (5) | passed — 5/5 must-haves; reporting marked legacy/unwired; cli-surface pins real EXIT_* (rejects v3 "0/1/2/3 budget/timeout" lore) |
+| Platform (26) | configuration, auth-security, scheduling, state-persistence, self-update-doctor (5) | passed — 6/6 truths; state-persistence makes Postgres primary + StateStore legacy/no-op; auth-security pins ADR-001 `validate_task_id` sink |
+| Safety & Quality (27) | budget-resource-guards, recovery-self-healing, quality-compliance-audit, verification-gates (4) | passed — 11/11 truths; SAFE-01/02/04 mark v3 budget lore, recovery, and `verify_task` as legacy/unwired; live gates pinned to wired paths |
+| **Total** | **32 slugs** | **6/6 clusters passed — all 32 specs accounted for** |
+
+### Mechanical normative sweep (SHALL/MUST body + ≥1 Scenario)
+
+Live sweep over `openspec/specs/*/spec.md`: each spec must contain `SHALL` or `MUST`
+requirement bodies AND at least one `#### Scenario:` line.
+
+```
+specs_with_normative_body_and_scenario = 32/32   (0 descriptive-only)
+```
+
+No spec is descriptive-only — every one carries normative requirement bodies and at least
+one concrete scenario.
+
+### Legacy-as-current sweep (no spec pins removed/legacy behavior as live)
+
+Targeted re-read of the six known-truthful legacy specs to confirm none silently flipped
+to asserting legacy behavior as current:
+
+| Spec | Legacy status as written | Pins legacy-as-current? |
+|------|--------------------------|-------------------------|
+| `decomposition` | "Legacy unwired status in the v4 run path"; functions unreferenced by the active run loop | No — marked legacy |
+| `reporting` | "Legacy v4 wiring status" — `Reporter`/`generate_summary` not wired into the worker-claim loop | No — marked legacy |
+| `recovery-self-healing` | "BOTH are legacy/unwired: zero callers in the v4 path"; does NOT assert progress-file recovery as live | No — marked legacy |
+| `verification-gates` | `verifier.py::verify_task` "is legacy and is NOT wired"; MUST NOT rely on it | No — marked legacy |
+| `state-persistence` | "Legacy JSON StateStore is not the v4 persistence contract"; no-op superseded by the Postgres layer | No — marked legacy |
+| `budget-resource-guards` | Spec rejects "legacy v3 lore" (kill-tmux→exit-2) rather than asserting it | No — marked legacy |
+
+No spec pins removed/legacy behavior as live; the truthfully-legacy specs still read as
+legacy/unwired/no-op.
+
+### Verdict
+
+All 32 capability specs are normatively accurate: SHALL/MUST bodies + ≥1 `#### Scenario:`
+each (32/32), grounded in real v4 code via the six passed cluster VERIFICATION reports,
+with zero descriptive-only specs and zero specs pinning legacy-as-current. No spec.md
+required a fix — no capability spec was modified by this review. VAL-02 satisfied.
