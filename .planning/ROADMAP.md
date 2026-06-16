@@ -13,13 +13,13 @@ next milestone state.
 | v1.0 | Shipped | 2026-05-08 | `.planning/milestones/v1.0-ROADMAP.md`, `.planning/milestones/v1.0-REQUIREMENTS.md`, `.planning/milestones/v1.0-MILESTONE-AUDIT.md` |
 | v1.1 UI parity completion | Shipped | 2026-05-11 | `.planning/milestones/v1.1-ROADMAP.md`, `.planning/milestones/v1.1-REQUIREMENTS.md`, `.planning/milestones/v1.1-MILESTONE-AUDIT.md`, `.planning/milestones/v1.1-RETROSPECTIVE.md` |
 | v1.2 Adoption & live-ops | Shipped | 2026-06-12 | `.planning/milestones/v1.2-ROADMAP.md`, `.planning/milestones/v1.2-REQUIREMENTS.md`, `.planning/milestones/v1.2-MILESTONE-AUDIT.md` |
-| v1.3 OpenSpec Project Baseline | Active | — | This file |
+| v1.3 OpenSpec Project Baseline | Shipped | 2026-06-16 | This file — 32 capability specs, 275/275 coverage matrix, all `openspec validate --strict` green |
 
 ## Current Milestone: v1.3 OpenSpec Project Baseline
 
 **Goal:** Capture Whilly's current *guaranteed* behavior as ~30 normative, testable OpenSpec
 capability specs under `openspec/specs/`, with a `module → capability` coverage matrix proving all
-242 `whilly/` modules are accounted for. Spec-capture only — no `whilly/` behavior changes. After the
+275 `whilly/` modules are accounted for. Spec-capture only — no `whilly/` behavior changes. After the
 baseline, behavior changes flow through `opsx` proposals (forward delta-only); GSD keeps owning
 execution.
 
@@ -39,7 +39,7 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 - [x] **Phase 25: Operator Surface Cluster** - TUI dashboard, web status/API, reporting, CLI exit-code contract, and operator views/logs specified
 - [x] **Phase 26: Platform Cluster** - Config env-var contract, auth/security, scheduling, state persistence, and self-update/doctor specified
 - [x] **Phase 27: Safety & Quality Cluster** - Budget/resource guards, recovery/self-healing, quality/compliance/audit, and verification gates specified
-- [ ] **Phase 28: Forward Process, Coverage & Validation** - Coverage matrix proven 100%, all specs validated, forward delta-only process documented — closes the milestone
+- [x] **Phase 28: Forward Process, Coverage & Validation** - Coverage matrix proven 100%, all specs validated, forward delta-only process documented — closes the milestone
 
 ## Phase Details
 
@@ -51,7 +51,7 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 **Success Criteria** (what must be TRUE):
 
   1. `openspec/specs/` carries a documented taxonomy of ~30 capabilities, each with a slug and one-line purpose
-  2. A `module → capability` coverage matrix lists all 242 `whilly/` modules, each mapped to exactly one capability (gaps explicitly marked, none silent)
+  2. A `module → capability` coverage matrix lists all 275 `whilly/` modules, each mapped to exactly one capability (gaps explicitly marked, none silent)
   3. An authoring-conventions doc defines MUST/SHALL normative language and the requirement + `#### Scenario:` format that `openspec validate --strict` accepts
   4. `openspec/project.md` (or config context) carries Whilly's stack, conventions, and domain glossary
   5. One capability is written end-to-end as a reference exemplar and passes `openspec validate --strict`
@@ -180,7 +180,7 @@ Plans:
 **Requirements**: FWD-01, FWD-02, COV-01, VAL-01, VAL-02
 **Success Criteria** (what must be TRUE):
 
-  1. Coverage matrix audited at 100% — every one of the 242 modules mapped to a capability, zero gaps
+  1. Coverage matrix audited at 100% — every one of the 275 modules mapped to a capability, zero gaps
   2. `openspec validate --strict` passes across all capability specs
   3. `CLAUDE.md` and `AGENTS.md` require an `opsx` spec delta for any behavior change and point at `openspec/specs/`
   4. The forward delta-only workflow (propose → apply → archive) is documented

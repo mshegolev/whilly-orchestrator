@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Phase 27 complete (verified) — all 32 specs written; ready for `/gsd-plan-phase 28` (milestone closeout)
+status: ✅ Milestone v1.3 SHIPPED — all 8 phases (21-28) complete, 32 specs, 275/275 coverage, 32/0 strict
 last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 27 verified + closed (4 safety/quality specs; ALL 32 specs pass openspec validate --all --strict)
+last_activity: 2026-06-16 — Phase 28 verified + closed; milestone v1.3 OpenSpec Project Baseline complete
 progress:
   total_phases: 8
-  completed_phases: 7
-  total_plans: 24
-  completed_plans: 24
-  percent: 87
+  completed_phases: 8
+  total_plans: 26
+  completed_plans: 26
+  percent: 100
 ---
 
 # Project State
@@ -43,7 +43,7 @@ See: `.planning/ROADMAP.md`
 | 25 | Operator Surface Cluster | OPS-01..05 | ✅ Complete (verified) |
 | 26 | Platform Cluster | PLAT-01..05 | ✅ Complete (verified) |
 | 27 | Safety & Quality Cluster | SAFE-01..04 | ✅ Complete (verified) |
-| 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | Not started |
+| 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | ✅ Complete (verified) |
 
 ## Active Scope
 
