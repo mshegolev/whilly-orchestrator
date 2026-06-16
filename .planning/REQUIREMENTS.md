@@ -117,7 +117,13 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
   optimistic-locked TaskRepository on `version`, events audit, Alembic migrations 001–028) is
   specified as primary; the v3 `StateStore` / `.whilly_state.json` resume path is marked
   legacy/no-op. Passes openspec validate state-persistence --strict.
-- [ ] **PLAT-05**: `self-update-doctor` — update, doctor, repair, rollback behaviors are specified.
+- [x] **PLAT-05**: `self-update-doctor` — update, doctor, repair, rollback behaviors are
+  specified. Reverse-spec'd from real v4 code (update.py/cli/update.py, doctor.py,
+  repair/*, rollback/*); 10 requirements covering non-mutating update check, explicit
+  install, fail-closed auto policy, read-only doctor, ghost/stale plan classification,
+  bounded repair decide/escalate, repair task + audit events, rollback point creation,
+  refusal-first preflight, and confirmed/dry-run restore. Passes openspec validate
+  self-update-doctor --strict.
 
 ### Safety & quality cluster (Phase 27)
 
@@ -169,7 +175,7 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | PLAT-02 | Phase 26 | Done (auth-security spec authored, passes openspec validate --strict) |
 | PLAT-03 | Phase 26 | Done (scheduling spec authored, passes openspec validate --strict) |
 | PLAT-04 | Phase 26 | Done (state-persistence spec authored — Postgres layer primary, StateStore legacy/no-op; passes openspec validate --strict) |
-| PLAT-05 | Phase 26 | Pending |
+| PLAT-05 | Phase 26 | Done (self-update-doctor spec authored — update/doctor/repair/rollback; passes openspec validate --strict) |
 | SAFE-01..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
 

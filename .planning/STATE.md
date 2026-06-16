@@ -4,7 +4,7 @@ milestone: v1.3
 milestone_name: OpenSpec Project Baseline
 status: Phase 25 complete (verified) — ready for `/gsd-plan-phase 26`
 last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 26 plan 26-04 executed (state-persistence / PLAT-04; openspec strict-valid)
+last_activity: 2026-06-16 — Phase 26 plan 26-05 executed (self-update-doctor / PLAT-05; openspec strict-valid). All 5 platform specs done.
 progress:
   total_phases: 8
   completed_phases: 5
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 26 — Platform Cluster (in progress)
-Plan: 26-04 complete — PLAT-04 `state-persistence` spec written. Remaining: PLAT-05 `self-update-doctor`.
-Status: 26-04 reverse-spec'd the REAL v4 persistence layer into openspec/specs/state-persistence/spec.md (passes openspec validate --strict). 8 requirements with the Postgres layer as PRIMARY: asyncpg pool lifecycle + DSN coercion (postgresql+asyncpg→postgresql) + env sizing + fail-fast SELECT 1 health check (pool.py); atomic claim_task via SELECT ... FOR UPDATE SKIP LOCKED; optimistic-locked complete/fail filtered by version with VersionConflictError on lost update; events audit written in the same transaction as every transition incl. the visibility-timeout RELEASE sweep; worker registration (token-hash only) + heartbeat liveness; Alembic chain 001–028 as schema source of truth. Wiring verified before speccing: StateStore has ZERO instantiations — `.whilly_state.json`/`WHILLY_STATE_FILE` marked legacy/no-op (NOT pinned as live); PauseControl (`.whilly_pause`) confirmed LIVE in cli/jira_watch_loop and specced as a local file-based control signal distinct from Postgres. Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 26 plan 26-04 executed (state-persistence / PLAT-04). Next: plan/execute PLAT-05 self-update-doctor.
+Plan: 26-05 complete — PLAT-05 `self-update-doctor` spec written. All 5 Phase-26 platform specs (PLAT-01..05) now authored. Remaining for Phase 26: phase verification/wrap.
+Status: 26-05 reverse-spec'd the REAL v4 self-maintenance surface into openspec/specs/self-update-doctor/spec.md (passes openspec validate --strict, 0 errors/0 warnings). 10 requirements across 4 subsystems: (update) non-mutating PyPI version check fails-closed to error result, explicit `install` with auto/pip/pipx selection + dry-run, WHILLY_UPDATE_MODE auto policy fails closed to off; (doctor) strictly read-only diagnostics — orphan plans, stale state file, leftover workspaces/worktrees, leftover whilly- tmux sessions, never deletes — plus ghost/stale/invalid_name plan classification (all-resolved or all-pending-with-closed-GH-issues ⇒ ghost; partial closures ⇒ stale); (repair) deterministic decide_repair request-or-escalate against RepairBudget (disabled / budget_exhausted), repair task built with no dependency on the failed original + typed audit events requested/completed/escalated; (rollback) annotated whilly/rollback/ tag creation, refusal-first preflight (dirty-worktree / detached-HEAD / protected-target blockers, missing-backup warning), and confirmed git reset --hard restore gated by the exact `restore <sha12> to <branch>` phrase with a no-reset dry-run. Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 26 plan 26-05 executed (self-update-doctor / PLAT-05). Next: Phase 26 verification / wrap-up.
 
 ## Active Roadmap
 
