@@ -5,6 +5,12 @@ This document is the canonical authoring guide for capability specs in
 the rules below exactly. The validator `openspec validate <slug> --strict`
 is the arbiter — authors MUST run it before merging any spec.
 
+> **Before writing a delta:** read `openspec/FORWARD-PROCESS.md`. After the v1.3
+> baseline, the 32 capability specs are frozen; any behavior change flows through
+> an `opsx` proposal (propose → apply → archive) whose delta spec is authored per
+> the rules in this document. This guide is the HOW for the delta body;
+> `FORWARD-PROCESS.md` is the WHEN/WHY.
+
 ---
 
 ## Spec File Location

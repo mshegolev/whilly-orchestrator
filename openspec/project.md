@@ -152,7 +152,7 @@ Schema validation by `cli.validate_schema` checks only the first 3 tasks.
 | **Decision Gate** | The pre-execution filter that applies TRIZ contradiction analysis to refuse nonsense or contradictory tasks before any agent is dispatched |
 | **TRIZ** | Inventive principles framework used by the Decision Gate to identify contradictions in task definitions |
 | **StateStore** | Persists iteration count, cumulative cost, per-task status, and live tmux session names for `--resume` recovery |
-| **opsx** | The `openspec` change proposal workflow — propose → apply → archive — used for forward-delta spec updates |
+| **opsx** | The `openspec` change proposal workflow — propose → apply → archive — used for forward-delta spec updates (see `openspec/FORWARD-PROCESS.md`) |
 | **delta spec** | A spec fragment under `openspec/changes/<name>/specs/<capability>/spec.md` that describes additions, modifications, or removals relative to a baseline capability spec |
 | **coverage matrix** | The `openspec/COVERAGE-MATRIX.md` table mapping every `whilly/` Python module to exactly one capability slug; zero silent gaps required |
 
