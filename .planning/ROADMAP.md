@@ -186,7 +186,9 @@ Plans:
   4. The forward delta-only workflow (propose → apply → archive) is documented
   5. Every capability spec has been reviewed for normative accuracy against the code it describes (no descriptive-only specs)
 
-**Plans**: TBD (defined during /gsd-plan-phase 28)
+**Plans**: 2 plans, 1 wave
+- [ ] 28-01-PLAN.md — FWD docs: write openspec/FORWARD-PROCESS.md (FWD-01) + strengthen CLAUDE.md/AGENTS.md to require an opsx spec delta (FWD-02)
+- [ ] 28-02-PLAN.md — Audit & validation: COV-01 matrix audit (275/275) + VAL-01 strict validate (32/0) + VAL-02 normative-accuracy review
 
 ---
-*Roadmap updated: 2026-06-15 — Phase 22 planned (4 plans, 1 wave; ORCH-02 already done in Phase 21)*
+*Roadmap updated: 2026-06-16 — Phase 28 planned (2 plans, 1 wave; milestone v1.3 closeout)*
