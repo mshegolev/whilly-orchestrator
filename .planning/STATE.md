@@ -1,162 +1,111 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: UI parity completion
-status: completed
-last_updated: "2026-05-21T10:42:33Z"
-last_activity: 2026-05-21
+milestone: v1.3
+milestone_name: OpenSpec Project Baseline
+status: ✅ Milestone v1.3 SHIPPED — all 8 phases (21-28) complete, 32 specs, 275/275 coverage, 32/0 strict
+last_updated: "2026-06-16T00:00:00.000Z"
+last_activity: 2026-06-16 — Phase 28 verified + closed; milestone v1.3 OpenSpec Project Baseline complete
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 12
-  completed_plans: 12
+  total_phases: 8
+  completed_phases: 8
+  total_plans: 26
+  completed_plans: 26
   percent: 100
-active_out_of_band:
-  plan: post-auth-hardening
-  plan_file: .planning/post-auth-hardening-tasks.json
-  prd_file: docs/PRD-post-auth-hardening.md
-  latest_handoff: .planning/SESSION-HANDOFF-2026-05-21.md
-  status_counts:
-    done: 27
-    skipped: 2
-    human_loop: 0
-    pending: 0
-    total: 29
 ---
 
 # Project State
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-05-11)
+See: `.planning/PROJECT.md` (updated 2026-06-13)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** Out-of-band follow-up plan `post-auth-hardening` is active (no formal v1.2
-milestone declared yet). See [`SESSION-HANDOFF-2026-05-18.md`](SESSION-HANDOFF-2026-05-18.md)
-for the latest handoff. Promote to a v1.2 milestone with `$gsd-new-milestone` when the scope
-firms up.
+**Current focus:** v1.3 — capture Whilly's behavior as normative OpenSpec capability specs.
 
 ## Current Position
 
-Current Milestone: v1.1 (archived) — no v1.2 declared yet
-Phase: Out-of-band follow-up (`post-auth-hardening`) — functionally complete
-Plan: `.planning/post-auth-hardening-tasks.json`
-Status: 27 done, 2 skipped (A1a, A1b), 0 pending (of 29 total)
-Last Activity: 2026-05-21
-Last Activity Description: Closed the 2026-05-19 handoff leftovers. Shipped PRs #303
-(root-caused the "3 flakes" to a local `.env`→`os.environ` leak; fixed via unit-conftest env
-restore + isolated the m1 baseline test), #304 (Jekyll-safe `docs/` mirror in
-`m1_baseline_fixtures.py`), #305 (E15/E17 security-design doc), #306 (E17 OIDC header-trust,
-flag-gated default OFF, under explicit security review — decisions in ADR-001 §P1.6). E17
-flipped skipped→done. E15 (WebAuthn passkeys) then implemented in a follow-up session: flag-gated
-(`WHILLY_WEBAUTHN_ENABLED`, default OFF), second-factor-only, sharing the E14b pending-cookie state
-machine via the new `whilly/api/second_factor.py` coordinator; `webauthn 2.7.1` installed via
-`pip --trusted-host` (corporate MITM cert). Wrote [`SESSION-HANDOFF-2026-05-21.md`](SESSION-HANDOFF-2026-05-21.md).
+Phase: 28 — Forward Process, Coverage & Validation (closeout gates complete)
+Plan: 28-02 complete — COV-01 coverage matrix audited at 100% (live `find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l` = 275 == 275 body rows, 0 UNMAPPED, 0 double-mapped, capability column is exactly the 32 TAXONOMY slugs and all 32 each map ≥1 module; bijective path set vs live find; no drift so rows unchanged); VAL-01 `openspec validate --all --strict` → 32 passed / 0 failed; VAL-02 consolidated normative-accuracy review (32/32 specs SHALL/MUST + ≥1 #### Scenario:, six cluster VERIFICATION reports phases 22-27 all passed and mapped to slugs, legacy-as-current sweep confirmed decomposition/reporting/recovery-self-healing/verification-gates/state-persistence/budget-resource-guards still mark legacy/unwired/no-op). All three recorded as dated notes in openspec/COVERAGE-MATRIX.md. Documentation-only; zero whilly/ changes; no capability spec needed a fix. Prior: 28-01 (FWD-01 + FWD-02).
+Status: 27-02 reverse-spec'd two subsystem-altitude specs from real v4 code, both passing openspec validate --strict (0 errors/0 warnings). quality-compliance-audit (SAFE-03): per-language QualityGate Protocol (detect/run → GateResult, never raises on lint/test failure or missing binary/timeout) + multi-language detect_gates/run_all aggregation (gate_kind="multi", no-gates = passed True), deterministic target-doc ComplianceReport via `whilly compliance report` (PASS/PARTIAL/FAIL/UNKNOWN, present-but-unwired = PARTIAL), append-only JsonlEventSink.record (one JSON obj/line, OSError swallowed best-effort mirror of Postgres events), and qa-release collect/plan/scaffold-tests (refuses to clobber non-generated tests without --force). verification-gates (SAFE-04): LIVE pipeline run_verification_commands → VerificationRunOutcome (required_failed gates DONE, warning-only does not), started/result events with secret redaction, env allowlist + non-hanging timeout/blocked, human-review checkpoint gate (requires_human_review/build_human_review_checkpoint/is_human_review_approved + required/approved/rejected/changes_requested events), CI verification run_ci_verification; legacy verifier.verify_task commit-revert path marked unwired (confirmed: no worker-path callers). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 28 plan 28-02 executed (COV-01 audit + VAL-01 validate + VAL-02 normative review; all recorded in COVERAGE-MATRIX.md). v1.3 milestone closeout gates satisfied (FWD-01, FWD-02, COV-01, VAL-01, VAL-02 all done).
 
-Progress (v1.1 milestone): [##########] 100%
-Progress (post-auth-hardening, by count): 27 done + 2 skipped = 29/29 resolved (100%)
+## Active Roadmap
+
+See: `.planning/ROADMAP.md`
+
+| Phase | Name | Requirements | Status |
+|-------|------|--------------|--------|
+| 21 | Spec Baseline & Taxonomy | BASE-01..04 | ✅ Complete |
+| 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
+| 23 | PRD Pipeline & Decision | PRD-01..05 | ✅ Complete (verified) |
+| 24 | Integrations Cluster | INT-01..06 | ✅ Complete (verified) |
+| 25 | Operator Surface Cluster | OPS-01..05 | ✅ Complete (verified) |
+| 26 | Platform Cluster | PLAT-01..05 | ✅ Complete (verified) |
+| 27 | Safety & Quality Cluster | SAFE-01..04 | ✅ Complete (verified) |
+| 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | ✅ Complete (verified) |
 
 ## Active Scope
 
-**Out-of-band:** [`post-auth-hardening`](post-auth-hardening-tasks.json) plan, scoped by
-[`docs/PRD-post-auth-hardening.md`](../docs/PRD-post-auth-hardening.md). Now functionally
-complete (27 done, 2 skipped). Latest handoff lives at
-[`SESSION-HANDOFF-2026-05-21.md`](SESSION-HANDOFF-2026-05-21.md). Handoff files are
-date-stamped so the history accumulates rather than being overwritten — start the next
-session by reading the most recent one. No remaining deferred work from this plan: **E15
-(WebAuthn)** is now implemented (flag-gated, default OFF); only A1a/A1b stay skipped (see the
-design doc at [`E15-E17-auth-security-design.md`](E15-E17-auth-security-design.md)).
+**Milestone type:** spec capture, not feature build. No `whilly/` behavior changes this milestone.
 
-**Archived v1.1 evidence:**
+**Tooling baseline:** OpenSpec 1.4.1 initialized 2026-06-13 (schema `spec-driven`, Claude tool wired,
+5 `/opsx:*` commands). `openspec/specs/` and `openspec/changes/` are empty — this milestone fills
+`specs/`.
 
-- `.planning/milestones/v1.1-ROADMAP.md`
-- `.planning/milestones/v1.1-REQUIREMENTS.md`
-- `.planning/milestones/v1.1-MILESTONE-AUDIT.md`
-- `.planning/milestones/v1.1-RETROSPECTIVE.md`
+**Granularity decision:** capability = subsystem (~30 capabilities) + a `module → capability`
+coverage matrix proving all 242 modules are mapped. NOT one spec file per module.
+
+**Posture decision:** specs are normative & testable (MUST/SHALL + `#### Scenario:` blocks that pass
+`openspec validate --strict`), not descriptive snapshots.
+
+**Role decision:** forward delta-only after baseline. OpenSpec = living WHAT; GSD = HOW/execution.
 
 ## Recent Decisions
 
-- Phase 13 Plan 01 kept UI-01 metadata in `whilly/operator_views.py` to extend the existing pure
-  operator contract pattern.
-- TUI surface key handling now derives from `operator_surface_hotkeys()` instead of a duplicate
-  literal map.
-- Active WUI dashboard JavaScript receives surface order, hotkey copy, and route prefixes through
-  dashboard context.
-- Phase 13 Plan 02 classifies templates and static JavaScript only; CSS, fonts, and images remain
-  outside the UI-02 artifact scope.
-- `_logs.html` remains routeable but noncanonical with Phase 14 follow-up, while `_admin.html` and
-  `_prd.html` remain inactive quarantined artifacts.
-- `whilly/api/static/whilly-hotkeys.js` is now active after replacing stale `1-7` selectors and
-  `/admin/workers/*` routes with the canonical five-surface API contract.
-- Phase 13.1 was inserted after Phase 13 because update checks/manual update/automatic update
-  policy are product lifecycle controls that should be available before continuing lower-priority
-  WUI/TUI parity work.
-- Phase 13.1 keeps automatic updates explicit: default mode is off, and no unrelated command
-  silently upgrades Whilly.
-- Update tests mock PyPI and subprocess boundaries so verification does not mutate the local
-  environment.
-- Phase 13.2 keeps feedback explicit and single-channel: GitHub Issues via `gh`, no email/GitLab,
-  and no automatic crash reporting.
-- Phase 17 treats `hotfix` as urgency over `feature`, `bug`, `task`, or `devops` instead of a fifth
-  work kind, because urgent production fixes can exist in more than one work category.
-- Phase 17 makes code readiness a gate: missing repo context, inaccessible GitLab links, or missing
-  unit-test strategy should ask the operator before workers run.
-- Phase 14 keeps `_logs.html` routeable but noncanonical with backend coverage, and keeps
-  `_admin.html`/`_prd.html` quarantined because their routes are not active supported WUI routes.
-- Phase 15 keeps TUI scoped to active WUI navigation only; logs/admin/PRD are explicit exclusions
-  until a future phase wires them as canonical capabilities.
-- Phase 16 updates operator docs to the current shared TUI/WUI hotkeys and pins the fragment
-  boundary with docs regression tests.
-- Phase 17 stores Jira routing metadata in `jira_work` plan JSON and Postgres session/event tables,
-  keeping classification, context hashes, and readiness verdicts available for later watch flows.
-- Phase 17 adds one-shot `whilly jira poll` for rereading Jira issue fields, comments, changelog,
-  linked issues, remote links, and repo hints; long-running watch can wrap that command.
-- Phase 17 keeps autonomous Jira `run` gated only when the operator provides a local
-  `--readiness-repo-path`; the override is explicit through `--allow-unready-run`.
+- v1.3 (2026-06-13): Rejected literal per-module specs (242 files) — chose subsystem capabilities +
+  coverage matrix to keep specs normative and maintainable while still proving full coverage.
+
+- v1.3 (2026-06-13): Phase 21 (taxonomy + conventions) gates all later phases — the spec format must
+  be fixed once, before 30 specs are written against it.
+
+- v1.3 (2026-06-13): Phases 22–27 are independent once 21 lands and may be reordered/parallelized;
+  Phase 28 (coverage audit + validate + sync) closes the milestone.
+
+- v1.3 (2026-06-13): Auth/security carried context — ADR-001 path-sink fixes and the flag-gated
+  OIDC/WebAuthn stack are existing behavior to be specified (PLAT-02), not changed.
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
-- Phase 13.1 inserted after Phase 13: Version update checks and manual/automatic update modes
-  (URGENT).
-- Phase 13.2 inserted after Phase 13.1: GitHub feedback issue reporter (URGENT).
-- Phase 17 added after Phase 16: Jira work classification and code readiness routing.
+- Phases 18-20 shipped for milestone v1.2 (migration validation, live smoke, watcher daemon),
+  archived 2026-06-12.
 
-## Performance Metrics
-
-| Phase | Plan | Duration | Tasks | Files |
-|-------|------|----------|-------|-------|
-| 13 | 01 | 9 min | 3 | 7 |
-| 13 | 02 | 8 min | 3 | 4 |
-| 13.1 | 01 | focused | 3 | 6 |
-| 13.2 | 01 | focused | 3 | 6 |
-| 14 | 01 | focused | 2 | 2 |
-| 15 | 01 | focused | 2 | 1 |
-| 16 | 01 | focused | 2 | 4 |
-| 17 | 01-05 | focused | 5 | 12 |
+- Phases 21-28 defined for milestone v1.3: OpenSpec normative baseline across the whole project.
 
 ## Previous Milestones
 
 - v1.0 shipped and archived on 2026-05-08.
 - v1.1 shipped and archived on 2026-05-11.
+- v1.2 shipped and archived on 2026-06-12.
 
 Archives:
-- `.planning/milestones/v1.0-ROADMAP.md`
-- `.planning/milestones/v1.0-REQUIREMENTS.md`
-- `.planning/milestones/v1.0-MILESTONE-AUDIT.md`
-- `.planning/milestones/v1.1-ROADMAP.md`
-- `.planning/milestones/v1.1-REQUIREMENTS.md`
-- `.planning/milestones/v1.1-MILESTONE-AUDIT.md`
-- `.planning/milestones/v1.1-RETROSPECTIVE.md`
+
+- `.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`, `v1.0-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.1-ROADMAP.md`, `v1.1-REQUIREMENTS.md`, `v1.1-MILESTONE-AUDIT.md`, `v1.1-RETROSPECTIVE.md`
+- `.planning/milestones/v1.2-ROADMAP.md`, `v1.2-REQUIREMENTS.md`, `v1.2-MILESTONE-AUDIT.md`
 
 ## Deferred Items
 
-- Browser/screen-reader QA for the complete WUI operator workflow.
-- New operator modules beyond the pulled logs/admin/PRD artifacts.
-- Replacement of the current Jinja/HTMX dashboard or Rich TUI architecture.
+- Browser/screen-reader QA for the complete WUI operator workflow (OPQA-01).
+- Behavior changes surfaced while speccing → capture as `opsx` proposals / future milestone, not
+  this one.
 
 ## Next Step
 
-Start the next milestone with `$gsd-new-milestone`.
+Plan Phase 21 with `/gsd-plan-phase 21`.
+
+## Operator Next Steps
+
+- Plan the first phase: `/gsd-plan-phase 21` (Spec Baseline & Taxonomy).

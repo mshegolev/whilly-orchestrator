@@ -1,0 +1,1402 @@
+"""Unit tests for ``whilly/cli/jira_watch_loop.py`` — loop core (Task 1).
+
+Tests are deterministic: no real wall-clock sleeps, collector injected, signal
+handlers disabled (install_signal_handlers=False).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from whilly.jira_watch import JiraWorkSnapshot
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _jira_env() -> dict[str, str]:
+    return {
+        "JIRA_SERVER_URL": "https://company.atlassian.net",
+        "JIRA_USERNAME": "dev@example.com",
+        "JIRA_API_TOKEN": "jira-token",
+    }
+
+
+def _fake_snapshot(issue_key: str = "ABC-123") -> JiraWorkSnapshot:
+    return JiraWorkSnapshot(
+        issue_key=issue_key,
+        summary="Fix ETL job",
+        description="desc",
+        comments=({"id": "20001", "body": "first comment"},),
+        changelog_ids=("10001",),
+        links=(),
+        repo_targets=(),
+        context_hashes={"combined_hash": "hash"},
+        classification={"kind": "bug", "urgency": "normal"},
+        comment_commands=(),
+        last_seen_comment_id="20001",
+    )
+
+
+def _watch_args(
+    issues: list[str] | None = None,
+    interval: int = 0,
+    timeout: int = 15,
+) -> SimpleNamespace:
+    """Build a minimal args namespace for _run_jira_watch."""
+    return SimpleNamespace(
+        issues=issues or ["ABC-123"],
+        interval=interval,
+        timeout=timeout,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 1 – Test 1: loop calls collector exactly N times
+# ---------------------------------------------------------------------------
+
+
+def test_watch_loop_calls_collector_per_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Loop calls the injected snapshot_collector once per cycle.
+
+    The collector sets stop_event on the 2nd call, so the loop must exit
+    after exactly 2 collector invocations.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    call_count = 0
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        nonlocal call_count
+        call_count += 1
+        if call_count >= 2:
+            stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert call_count == 2
+    assert rc == 0
+
+
+def test_first_poll_is_immediate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first poll happens immediately on start — no interval-long sleep
+    before the first collect (WR-04)."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    stop = threading.Event()
+    sleep_calls: list[float] = []
+    collector_calls = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        collector_calls[0] += 1
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli import jira_watch_loop
+
+    def spy_sleep(stop_evt: threading.Event, seconds: float) -> bool:
+        sleep_calls.append(seconds)
+        return stop_evt.is_set()
+
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", spy_sleep)
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(interval=300),  # a long interval must NOT delay cycle 1
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    assert collector_calls[0] == 1, "collector must run on the first cycle"
+    assert sleep_calls == [], "no sleep may happen before the first poll"
+
+
+# ---------------------------------------------------------------------------
+# Task 1 – Test 2: interval resolution (--interval > env > 300 default)
+# ---------------------------------------------------------------------------
+
+
+def test_interval_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interval resolves: explicit arg > WHILLY_JIRA_WATCH_INTERVAL env > 300."""
+    from whilly.cli.jira_watch_loop import _resolve_interval
+
+    # Explicit arg wins over env
+    env = {"WHILLY_JIRA_WATCH_INTERVAL": "120"}
+    assert _resolve_interval(60, env) == 60
+
+    # Env wins over default
+    assert _resolve_interval(None, env) == 120
+
+    # Default when neither set
+    assert _resolve_interval(None, {}) == 300
+
+    # Bad env value falls back to default
+    assert _resolve_interval(None, {"WHILLY_JIRA_WATCH_INTERVAL": "notanint"}) == 300
+
+
+def test_interval_recorded_in_status_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The status file records the resolved interval_seconds."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # Include the interval env var in the injected environ dict so that
+    # _resolve_interval sees it via effective_env (the injected mapping takes
+    # precedence over os.environ when passed explicitly).
+    env = {**_jira_env(), "WHILLY_JIRA_WATCH_INTERVAL": "42"}
+
+    stop = threading.Event()
+    stop.set()  # exit before first cycle
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args(interval=None, timeout=15),
+        snapshot_collector=lambda ref, *, timeout=15: _fake_snapshot(ref),
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    assert status_path.exists()
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    # env-resolved interval must be honoured (42s)
+    assert status["interval_seconds"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Task 1 – Test 3: pre-set stop_event exits before first cycle with rc 0
+# ---------------------------------------------------------------------------
+
+
+def test_pre_set_stop_event_exits_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop_event that is already set causes the loop to exit immediately
+    without calling the collector; final status has state='stopped'."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    call_count = 0
+    stop = threading.Event()
+    stop.set()  # pre-set
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        nonlocal call_count
+        call_count += 1
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    assert call_count == 0
+
+    # Status file must say state=stopped
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    assert status_path.exists(), "status file must be written"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["state"] == "stopped"
+
+
+# ---------------------------------------------------------------------------
+# Task 1 – Test 4: status file written under WHILLY_LOG_DIR/watch/ and is
+#           valid JSON with only non-secret fields
+# ---------------------------------------------------------------------------
+
+
+def test_status_file_location_and_no_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Status file written to WHILLY_LOG_DIR/watch/jira-watch-status.json;
+    valid JSON; no JIRA_API_TOKEN, no WHILLY_DATABASE_URL value in the data.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    env = {
+        **_jira_env(),
+        "WHILLY_DATABASE_URL": "postgres://user:pass@host/db",
+    }
+
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    watch_dir = tmp_path / "watch"
+    assert watch_dir.is_dir(), "watch/ dir must be created"
+
+    status_path = watch_dir / "jira-watch-status.json"
+    assert status_path.exists(), "status file must exist"
+
+    raw = status_path.read_text(encoding="utf-8")
+    # Must be valid JSON
+    status = json.loads(raw)
+
+    # Non-secret fields must be present
+    assert "state" in status
+    assert "pid" in status
+    assert "cycle_count" in status
+
+    # Secret fields must NOT appear as values in the JSON
+    assert "jira-token" not in raw
+    assert "postgres://user:pass@host/db" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Task 1 – Test 5: install_signal_handlers=False installs no signal handlers
+# ---------------------------------------------------------------------------
+
+
+def test_no_signal_handlers_when_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """install_signal_handlers=False must not register any SIGTERM/SIGINT handler."""
+    import signal
+
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # Record handlers before
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+    original_sigint = signal.getsignal(signal.SIGINT)
+
+    stop = threading.Event()
+    stop.set()
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    _run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=lambda ref, *, timeout=15: _fake_snapshot(ref),
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,  # key
+    )
+
+    # Handlers must be unchanged
+    assert signal.getsignal(signal.SIGTERM) == original_sigterm
+    assert signal.getsignal(signal.SIGINT) == original_sigint
+
+
+# ===========================================================================
+# Task 2 – Backoff, PID guard, DB audit event helper
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 1: consecutive failures drive backoff through 5/10/20/40/60
+# ---------------------------------------------------------------------------
+
+
+def test_backoff_increases_on_consecutive_failures_and_resets_on_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consecutive RuntimeError raises increment backoff through
+    5,10,20,40,60 (capped at 60); one success resets backoff to 0.
+
+    Uses interval=0 and captures the backoff_seconds visible in the status
+    file after each cycle by reading the file between calls.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # We'll run the loop in a controlled way: each fake_collector call
+    # either raises or succeeds depending on a list of outcomes.
+    outcomes = [
+        "fail",
+        "fail",
+        "fail",
+        "fail",
+        "fail",
+        "fail",  # 6th failure: backoff still capped at 60
+        "ok",  # success: resets backoff
+    ]
+    call_index = [0]
+    stop = threading.Event()
+
+    backoff_snapshots: list[int] = []
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        idx = call_index[0]
+        call_index[0] += 1
+        outcome = outcomes[idx] if idx < len(outcomes) else "ok"
+        # After last call, set stop so the loop exits
+        if call_index[0] >= len(outcomes):
+            stop.set()
+        if outcome == "fail":
+            raise RuntimeError(f"simulated failure {idx + 1}")
+        return _fake_snapshot(ref)
+
+    # Patch _interruptible_sleep to capture backoff and not actually sleep
+    from whilly.cli import jira_watch_loop
+
+    def patched_sleep(stop_evt: threading.Event, seconds: float) -> bool:
+        # Record the backoff (seconds - interval; interval == 0 here)
+        backoff_snapshots.append(int(seconds))
+        return stop_evt.is_set()
+
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", patched_sleep)
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    # Read final status
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    # After success the backoff should be 0
+    assert status["backoff_seconds"] == 0, "backoff must reset to 0 after success"
+    # error_count must equal the number of failures (6)
+    assert status["error_count"] == 6, f"expected 6 errors, got {status['error_count']}"
+
+    # The backoff_snapshots list captured the sleep(interval + backoff)
+    # argument between cycles (interval=0, so sleep == backoff).
+    # The first cycle polls immediately (no sleep); backoff is applied to
+    # the UPCOMING gap after a failure, so:
+    #   Before cycle 2 (after 1 fail):     sleep(5)
+    #   Before cycle 3 (after 2 fails):    sleep(10)
+    #   Before cycle 4 (after 3 fails):    sleep(20)
+    #   Before cycle 5 (after 4 fails):    sleep(40)
+    #   Before cycle 6 (after 5 fails):    sleep(60)
+    #   Before cycle 7 (after 6 fails):    sleep(60)  — still capped
+    #   (cycle 7 is success, sets stop — loop exits without another sleep)
+    expected_backoffs = [5, 10, 20, 40, 60, 60]
+    assert backoff_snapshots == expected_backoffs, (
+        f"backoff sequence mismatch: {backoff_snapshots} != {expected_backoffs}"
+    )
+
+
+def test_mixed_issue_cycle_keeps_failure_accounting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --issue A --issue B where A fails and B succeeds, B's success must
+    NOT reset backoff/failure accounting for the cycle (WR-01). The failure
+    event must name the failing issue and an honest 'partial' result."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    stop = threading.Event()
+    cycles = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        if ref == "BAD-1":
+            raise RuntimeError("simulated failure")
+        # GOOD-2 succeeds; second cycle stops the loop
+        cycles[0] += 1
+        if cycles[0] >= 2:
+            stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.jira_watch_loop import EVENT_FAILURE
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        persist_calls.append({"issue_key": issue_key, "event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", lambda evt, s: evt.is_set())
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(issues=["BAD-1", "GOOD-2"], interval=0),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    # 2 cycles, BAD-1 failed in each → 2 consecutive failing cycles
+    assert status["error_count"] == 2
+    assert status["backoff_seconds"] == 10, "backoff must keep growing while any issue keeps failing"
+    assert status["last_error"] == "RuntimeError"
+
+    failure_events = [c for c in persist_calls if c["event_type"] == EVENT_FAILURE]
+    assert len(failure_events) == 2, "every failing cycle must emit watch.failure"
+    evt = failure_events[0]
+    assert evt["issue_key"] == "BAD-1", "failure event must be attributed to the failing issue"
+    payload = evt["payload"]
+    assert payload["result"] == "partial"  # type: ignore[index]
+    assert payload["failed_issues"] == ["BAD-1"]  # type: ignore[index]
+    assert payload["issue_results"] == {"BAD-1": "error", "GOOD-2": "ok"}  # type: ignore[index]
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 2: _acquire_pid_lock behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_pid_lock(tmp_path: Path) -> None:
+    """_acquire_pid_lock returns True (no existing file), False (live PID),
+    True (stale/garbage PID)."""
+    from whilly.cli.jira_watch_loop import _acquire_pid_lock
+
+    pid_file = tmp_path / "watch" / "jira-watch.pid"
+
+    # 1. No file → returns True, writes our PID
+    result = _acquire_pid_lock(pid_file)
+    assert result is True, "should acquire when no file exists"
+    assert pid_file.exists(), "pid file must be created"
+    stored = int(pid_file.read_text(encoding="utf-8").strip())
+    assert stored == os.getpid()
+
+    # Clean up for next check
+    pid_file.unlink()
+
+    # 2. File holds a live PID (our own PID is definitely live) → returns False
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+    result = _acquire_pid_lock(pid_file)
+    assert result is False, "should refuse when PID file holds a live process"
+
+    # 3. File holds a dead/garbage PID → returns True (stale → overwrite)
+    pid_file.write_text("99999999", encoding="utf-8")  # very likely not alive
+    # If by chance 99999999 is alive on this system, use a bad string instead
+    try:
+        os.kill(99999999, 0)
+        # PID IS alive — fall back to garbage string to trigger ValueError path
+        pid_file.write_text("not-a-pid", encoding="utf-8")
+    except OSError:
+        pass  # good: 99999999 is dead, stale path will be taken
+
+    result = _acquire_pid_lock(pid_file)
+    assert result is True, "should acquire when PID file holds a dead PID"
+
+
+def test_acquire_pid_lock_eperm_means_live(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EPERM from os.kill(pid, 0) means the process IS alive (another user's
+    process) — the lock must be refused, not treated as stale (WR-02)."""
+    from whilly.cli import jira_watch_loop
+
+    pid_file = tmp_path / "jira-watch.pid"
+    pid_file.write_text("4242", encoding="utf-8")
+
+    def _eperm_kill(pid: int, sig: int) -> None:
+        raise PermissionError("Operation not permitted")
+
+    monkeypatch.setattr(jira_watch_loop.os, "kill", _eperm_kill)
+
+    assert jira_watch_loop._acquire_pid_lock(pid_file) is False
+    # The other watcher's lock must remain untouched
+    assert pid_file.read_text(encoding="utf-8") == "4242"
+
+
+def test_acquire_pid_lock_verifies_written_pid(tmp_path: Path) -> None:
+    """After acquiring, the lock file must hold our PID (write-then-verify)."""
+    from whilly.cli.jira_watch_loop import _acquire_pid_lock
+
+    pid_file = tmp_path / "jira-watch.pid"
+    assert _acquire_pid_lock(pid_file) is True
+    assert int(pid_file.read_text(encoding="utf-8").strip()) == os.getpid()
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 3: live PID file causes loop to refuse (no collector calls)
+# ---------------------------------------------------------------------------
+
+
+def test_live_pid_file_refuses_second_watcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When a live PID file exists, _run_jira_watch exits with
+    EXIT_VALIDATION_ERROR (1) without calling the collector.
+    It MUST NOT send a real signal to the stored PID.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # Write a live PID file (our own PID is alive)
+    watch_dir = tmp_path / "watch"
+    watch_dir.mkdir(parents=True, exist_ok=True)
+    pid_file = watch_dir / "jira-watch.pid"
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+
+    call_count = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        call_count[0] += 1
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=threading.Event(),
+        install_signal_handlers=False,
+    )
+
+    assert rc == 1, "must return EXIT_VALIDATION_ERROR (1)"
+    assert call_count[0] == 0, "collector must not be called when another watcher is live"
+
+    captured = capsys.readouterr()
+    assert "already running" in captured.err, "hint about other watcher must be printed to stderr"
+    assert str(os.getpid()) in captured.err, "hint must include the existing pid"
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – Test 4: _persist_watch_event calls append_jira_work_event on
+#           the injected repo; a raising persist is swallowed (warn-not-fail)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRepo:
+    """Minimal fake repo for DB audit tests."""
+
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def append_jira_work_event(self, **kwargs: object) -> int:
+        self.events.append(kwargs)
+        return 1
+
+
+class _RaisingRepo:
+    """Fake repo that always raises on append."""
+
+    async def append_jira_work_event(self, **kwargs: object) -> int:
+        raise RuntimeError("simulated DB error")
+
+
+def test_persist_watch_event_calls_repo(tmp_path: Path) -> None:
+    """_persist_watch_event calls append_jira_work_event on the injected repo
+    with the expected issue_key and event_type.
+    """
+    import asyncio as _asyncio
+
+    from whilly.cli.jira_watch_loop import _persist_watch_event
+
+    repo = _FakeRepo()
+    _asyncio.run(
+        _persist_watch_event(
+            dsn="",  # unused when repo is injected
+            issue_key="ABC-123",
+            event_type="watch.cycle",
+            payload={"cycle_count": 1, "result": "ok"},
+            repo=repo,
+        )
+    )
+
+    assert len(repo.events) == 1
+    evt = repo.events[0]
+    assert evt["issue_key"] == "ABC-123"
+    assert evt["event_type"] == "watch.cycle"
+    assert evt["payload"]["cycle_count"] == 1  # type: ignore[index]
+
+
+def test_persist_watch_event_raises_are_swallowed_by_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When _persist_watch_event raises, the watch loop continues (warn-not-fail).
+
+    We simulate this by running the loop with a DSN and a patched
+    _persist_watch_event that always raises, and verify the loop still completes
+    normally.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    stop = threading.Event()
+    call_count = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        call_count[0] += 1
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli import jira_watch_loop
+
+    async def raising_persist(**kwargs: object) -> None:
+        raise RuntimeError("simulated DB error")
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", raising_persist)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args(interval=0),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+    )
+
+    assert rc == 0, "loop must not fail when persist raises"
+    assert call_count[0] == 1, "collector must still be called"
+    captured = capsys.readouterr()
+    assert "persist failed" in captured.err, "warning must be printed to stderr"
+
+
+# ===========================================================================
+# Plan 02 Task 1 – Pause gate: poll-no-dispatch with watch.paused audit event
+# ===========================================================================
+
+
+def _watch_args_with_pause(
+    issues: list[str] | None = None,
+    interval: int = 0,
+    timeout: int = 15,
+) -> SimpleNamespace:
+    """Build args with dispatch=False (default-off) for pause gate tests."""
+    return SimpleNamespace(
+        issues=issues or ["ABC-123"],
+        interval=interval,
+        timeout=timeout,
+        dispatch=False,
+        readiness_repo_path=None,
+        allow_unready_run=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1 – Test 1: paused → collector still called, dispatch not called
+# ---------------------------------------------------------------------------
+
+
+def test_pause_gate_collector_called_dispatch_not(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When paused: collector (read-only polling) is still called, but the
+    dispatch runner is NOT invoked and last_poll_result == 'paused'.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    # Create a tmp pause file with a JSON reason payload
+    pause_file = tmp_path / ".whilly_pause"
+    pause_file.write_text(
+        '{"paused": true, "reason": "maintenance", "timestamp": "2026-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    from whilly.pause_control import PauseControl
+
+    pause_ctrl = PauseControl(pause_file=str(pause_file))
+
+    collector_calls = [0]
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        collector_calls[0] += 1
+        stop.set()  # one cycle only
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_with_pause(),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        pause_control=pause_ctrl,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert collector_calls[0] == 1, "collector must be called (read-only polling continues)"
+    assert dispatch_calls[0] == 0, "dispatch runner must NOT be called when paused"
+
+    # Status must record the paused result
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["last_poll_result"] == "paused"
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1 – Test 2: paused → watch.paused audit event emitted
+# ---------------------------------------------------------------------------
+
+
+def test_pause_gate_emits_watch_paused_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When paused, a watch.paused audit event is appended via the injected
+    _FakeRepo with reason in the payload and no secret leaks.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    pause_file = tmp_path / ".whilly_pause"
+    pause_file.write_text(
+        '{"paused": true, "reason": "deploy-in-progress", "timestamp": "2026-01-01T00:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    from whilly.pause_control import PauseControl
+
+    pause_ctrl = PauseControl(pause_file=str(pause_file))
+
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    repo = _FakeRepo()
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.jira_watch_loop import EVENT_PAUSED
+
+    # Patch _persist_watch_event to use the fake repo
+    orig_persist = jira_watch_loop._persist_watch_event
+
+    async def fake_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        await orig_persist(
+            dsn=dsn,
+            issue_key=issue_key,
+            event_type=event_type,
+            payload=payload,
+            repo=repo if repo is not None else _repo_holder[0],
+        )
+
+    _repo_holder = [repo]
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", fake_persist)
+
+    jira_watch_loop._run_jira_watch(
+        _watch_args_with_pause(),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        pause_control=pause_ctrl,
+    )
+
+    paused_events = [e for e in repo.events if e.get("event_type") == EVENT_PAUSED]
+    assert len(paused_events) >= 1, "watch.paused event must be emitted"
+    evt_payload = paused_events[0]["payload"]
+    assert evt_payload["reason"] == "deploy-in-progress"
+    # Payload must be secret-free (no token or DSN)
+    raw = json.dumps(evt_payload)
+    assert "jira-token" not in raw
+    assert "postgres://" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1 – Test 3: not paused → paused branch not taken
+# ---------------------------------------------------------------------------
+
+
+def test_no_pause_gate_not_taken_when_unpaused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the pause file, last_poll_result must not be 'paused'."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    from whilly.pause_control import PauseControl
+
+    # No pause file exists — use a path that definitely does not exist
+    pause_ctrl = PauseControl(pause_file=str(tmp_path / "no_such_pause_file"))
+
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_with_pause(),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        pause_control=pause_ctrl,
+    )
+
+    assert rc == 0
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["last_poll_result"] != "paused"
+
+
+# ===========================================================================
+# Plan 02 Task 2 – Readiness gate + --dispatch default-off path
+# ===========================================================================
+
+
+def _make_plan_json(tmp_path: Path, verdict: str, missing: list[str] | None = None) -> Path:
+    """Write a minimal plan JSON with the given readiness verdict."""
+    plan = {
+        "jira_work": {
+            "readiness": {
+                "verdict": verdict,
+                "missing_context": missing or [],
+            }
+        }
+    }
+    p = tmp_path / "plan.json"
+    p.write_text(json.dumps(plan), encoding="utf-8")
+    return p
+
+
+def _watch_args_dispatch(
+    issues: list[str] | None = None,
+    interval: int = 0,
+    timeout: int = 15,
+    dispatch: bool = False,
+    readiness_repo_path: str | None = None,
+    allow_unready_run: bool = False,
+) -> SimpleNamespace:
+    """Build args namespace for dispatch/readiness gate tests."""
+    return SimpleNamespace(
+        issues=issues or ["ABC-123"],
+        interval=interval,
+        timeout=timeout,
+        dispatch=dispatch,
+        readiness_repo_path=readiness_repo_path,
+        allow_unready_run=allow_unready_run,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 1: dispatch default-off (no --dispatch → runner never called)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_default_off_runner_never_called(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without --dispatch, dispatch_runner must never be called even when
+    unpaused and readiness is ready_for_testing.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "ready_for_testing")
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_dispatch(dispatch=False, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 0, "dispatch_runner must NOT be called without --dispatch"
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 2: unready verdict → dispatch blocked, watch.block event
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_gate_blocks_dispatch_with_block_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --dispatch and unready verdict, dispatch_runner is NOT called,
+    last_poll_result == 'blocked', and a watch.block event is emitted.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "missing_context", ["no_repo", "no_tests"])
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli import jira_watch_loop
+    from whilly.cli.jira_watch_loop import EVENT_BLOCK
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(
+        *,
+        dsn: str,
+        issue_key: str,
+        event_type: str,
+        payload: dict,
+        repo: object = None,
+    ) -> None:
+        persist_calls.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args_dispatch(dispatch=True, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 0, "dispatch_runner must NOT be called when verdict is not ready"
+
+    status_path = tmp_path / "watch" / "jira-watch-status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["last_poll_result"] == "blocked", "status must record 'blocked'"
+
+    block_events = [c for c in persist_calls if c["event_type"] == EVENT_BLOCK]
+    assert len(block_events) >= 1, "watch.block event must be emitted"
+    payload = block_events[0]["payload"]
+    assert payload["verdict"] == "missing_context"
+    # Secret-free check
+    raw = json.dumps(payload)
+    assert "jira-token" not in raw
+    assert "postgres://" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 3: ready verdict → dispatch_runner called once
+# ---------------------------------------------------------------------------
+
+
+def test_readiness_gate_passes_calls_dispatch_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --dispatch and verdict == ready_for_testing, dispatch_runner is
+    called exactly once per cycle.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "ready_for_testing")
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_dispatch(dispatch=True, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 1, "dispatch_runner must be called exactly once when ready"
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2 – Test 4: --allow-unready-run overrides readiness gate
+# ---------------------------------------------------------------------------
+
+
+def test_allow_unready_run_overrides_readiness_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With --dispatch and --allow-unready-run, dispatch_runner is called even
+    when verdict != ready_for_testing (mirrors _run_intake semantics).
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    plan_path = _make_plan_json(tmp_path, "missing_context", ["no_repo"])
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli.jira_watch_loop import _run_jira_watch
+
+    rc = _run_jira_watch(
+        _watch_args_dispatch(
+            dispatch=True,
+            readiness_repo_path=str(plan_path),
+            allow_unready_run=True,
+        ),
+        snapshot_collector=fake_collector,
+        environ=_jira_env(),
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+
+    assert rc == 0
+    assert dispatch_calls[0] == 1, "dispatch_runner must be called with --allow-unready-run override"
+
+
+# ---------------------------------------------------------------------------
+# Review CR-02 – readiness gate fails CLOSED
+# ---------------------------------------------------------------------------
+
+
+def _run_watch_dispatch_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    readiness_repo_path: str | None,
+) -> tuple[int, list[dict[str, object]]]:
+    """Run one dispatch-enabled cycle; return (dispatch_calls, persist_calls)."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+
+    dispatch_calls = [0]
+    stop = threading.Event()
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        stop.set()
+        return _fake_snapshot(ref)
+
+    def fake_dispatch_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        return 0
+
+    from whilly.cli import jira_watch_loop
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        persist_calls.append({"event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args_dispatch(dispatch=True, readiness_repo_path=readiness_repo_path),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=fake_dispatch_runner,
+    )
+    assert rc == 0
+    return dispatch_calls[0], persist_calls
+
+
+def _assert_blocked(dispatch_count: int, persist_calls: list[dict[str, object]], expected_verdict: str) -> None:
+    from whilly.cli.jira_watch_loop import EVENT_BLOCK
+
+    assert dispatch_count == 0, "fail-closed gate must NOT dispatch"
+    block_events = [c for c in persist_calls if c["event_type"] == EVENT_BLOCK]
+    assert len(block_events) >= 1, "watch.block event must be emitted"
+    assert block_events[0]["payload"]["verdict"] == expected_verdict  # type: ignore[index]
+
+
+def test_readiness_gate_blocks_on_unready_repo_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repo DIRECTORY (the documented --readiness-repo-path input) is probed
+    with probe_code_readiness; a repo without test evidence blocks dispatch."""
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(repo_dir))
+    _assert_blocked(count, calls, "needs_test_plan")
+
+
+def test_readiness_gate_dispatches_on_ready_repo_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repo directory with test command + unit-test evidence dispatches."""
+    repo_dir = tmp_path / "repo"
+    (repo_dir / "tests").mkdir(parents=True)
+    (repo_dir / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    (repo_dir / "tests" / "test_x.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+
+    count, _calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(repo_dir))
+    assert count == 1, "ready repo directory must dispatch"
+
+
+def test_readiness_gate_blocks_on_missing_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing --readiness-repo-path target blocks dispatch (verdict=unknown)."""
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(tmp_path / "no-such-path"))
+    _assert_blocked(count, calls, "unknown")
+
+
+def test_readiness_gate_blocks_on_malformed_plan_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A garbled plan JSON blocks dispatch instead of failing open."""
+    bad = tmp_path / "plan.json"
+    bad.write_text("{not json", encoding="utf-8")
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, str(bad))
+    _assert_blocked(count, calls, "unknown")
+
+
+def test_readiness_gate_blocks_when_no_readiness_path_given(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--dispatch without --readiness-repo-path (and without
+    --allow-unready-run) blocks: readiness is undeterminable → fail closed."""
+    count, calls = _run_watch_dispatch_once(tmp_path, monkeypatch, None)
+    _assert_blocked(count, calls, "unknown")
+
+
+# ---------------------------------------------------------------------------
+# Review CR-01/CR-03/WR-06 – dispatch containment, honest events, dedup
+# ---------------------------------------------------------------------------
+
+
+def _run_dispatch_cycles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    dispatch_runner: object,
+    cycles: int = 1,
+    issues: list[str] | None = None,
+    hash_per_cycle: list[str] | None = None,
+) -> tuple[int, list[dict[str, object]], dict[str, object]]:
+    """Run N dispatch-enabled cycles with a ready plan; return
+    (rc, persist_calls, final_status)."""
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    plan_path = _make_plan_json(tmp_path, "ready_for_testing")
+
+    stop = threading.Event()
+    cycle_no = [0]
+
+    def fake_collector(ref: str, *, timeout: int = 15) -> JiraWorkSnapshot:
+        snap = _fake_snapshot(ref)
+        if hash_per_cycle is not None:
+            idx = min(cycle_no[0], len(hash_per_cycle) - 1)
+            snap = dataclasses.replace(snap, context_hashes={"combined_hash": hash_per_cycle[idx]})
+        return snap
+
+    from whilly.cli import jira_watch_loop
+
+    persist_calls: list[dict[str, object]] = []
+
+    async def spy_persist(*, dsn: str, issue_key: str, event_type: str, payload: dict, repo: object = None) -> None:
+        persist_calls.append({"issue_key": issue_key, "event_type": event_type, "payload": payload})
+
+    monkeypatch.setattr(jira_watch_loop, "_persist_watch_event", spy_persist)
+
+    def counting_sleep(stop_evt: threading.Event, seconds: float) -> bool:
+        cycle_no[0] += 1
+        if cycle_no[0] >= cycles:
+            stop_evt.set()
+        return stop_evt.is_set()
+
+    monkeypatch.setattr(jira_watch_loop, "_interruptible_sleep", counting_sleep)
+
+    env = {**_jira_env(), "WHILLY_DATABASE_URL": "postgres://fake/db"}
+    rc = jira_watch_loop._run_jira_watch(
+        _watch_args_dispatch(issues=issues, dispatch=True, readiness_repo_path=str(plan_path)),
+        snapshot_collector=fake_collector,
+        environ=env,
+        stop_event=stop,
+        install_signal_handlers=False,
+        dispatch_runner=dispatch_runner,
+    )
+    status = json.loads((tmp_path / "watch" / "jira-watch-status.json").read_text(encoding="utf-8"))
+    return rc, persist_calls, status
+
+
+def test_raising_dispatch_runner_does_not_kill_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dispatch_runner that raises must not crash the watcher (CR-01): the
+    loop continues, error_count increments, and a watch.failure event with
+    the exception class is recorded — no watch.dispatch is fabricated."""
+    from whilly.cli.jira_watch_loop import EVENT_DISPATCH, EVENT_FAILURE
+
+    dispatch_calls = [0]
+
+    def raising_runner(*args: object, **kwargs: object) -> int:
+        dispatch_calls[0] += 1
+        raise AttributeError("'Namespace' object has no attribute 'max_iterations'")
+
+    rc, persist_calls, status = _run_dispatch_cycles(tmp_path, monkeypatch, dispatch_runner=raising_runner, cycles=2)
+
+    assert rc == 0, "watcher must survive a raising dispatch_runner"
+    assert dispatch_calls[0] == 2, "dispatch must be retried after a failure"
+    assert status["error_count"] >= 2
+    assert status["last_dispatch_rc"] == 1
+    assert status["last_error"] == "AttributeError"
+    dispatch_events = [c for c in persist_calls if c["event_type"] == EVENT_DISPATCH]
+    assert dispatch_events == [], "no watch.dispatch may be fabricated for a failed dispatch"
+    failures = [c for c in persist_calls if c["event_type"] == EVENT_FAILURE]
+    assert any(c["payload"].get("error") == "AttributeError" for c in failures)  # type: ignore[union-attr]
+
+
+def test_dispatch_event_only_on_success_rc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-zero dispatch rc emits watch.failure with the honest rc; rc==0
+    emits watch.dispatch with ok=true (CR-03)."""
+    from whilly.cli.jira_watch_loop import EVENT_DISPATCH, EVENT_FAILURE
+
+    rcs = iter([3, 0])
+
+    def runner(*args: object, **kwargs: object) -> int:
+        return next(rcs)
+
+    rc, persist_calls, status = _run_dispatch_cycles(tmp_path, monkeypatch, dispatch_runner=runner, cycles=2)
+
+    assert rc == 0
+    failures = [c for c in persist_calls if c["event_type"] == EVENT_FAILURE]
+    dispatches = [c for c in persist_calls if c["event_type"] == EVENT_DISPATCH]
+    assert any(c["payload"] == {"issue_key": "ABC-123", "rc": 3, "ok": False} for c in failures)
+    assert [c["payload"] for c in dispatches] == [{"issue_key": "ABC-123", "rc": 0, "ok": True}]
+    assert status["last_dispatch_rc"] == 0
+    assert status["dispatched"] == {"ABC-123": "hash"}
+
+
+def test_successful_dispatch_not_repeated_until_snapshot_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a successful dispatch, the same issue is not re-dispatched on the
+    next cycle with an unchanged snapshot hash; a changed hash re-dispatches
+    (WR-06 dedup)."""
+    dispatch_calls: list[str] = []
+
+    def runner(args: object, issue_ref: str = "", **kwargs: object) -> int:
+        dispatch_calls.append(issue_ref)
+        return 0
+
+    rc, _calls, status = _run_dispatch_cycles(
+        tmp_path,
+        monkeypatch,
+        dispatch_runner=runner,
+        cycles=3,
+        hash_per_cycle=["h1", "h1", "h2"],  # cycle 2 unchanged, cycle 3 changed
+    )
+
+    assert rc == 0
+    assert dispatch_calls == ["ABC-123", "ABC-123"], "dispatch once per distinct snapshot hash"
+    assert status["dispatched"] == {"ABC-123": "h2"}
+
+
+def test_dispatch_iterates_all_issues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every --issue is considered for dispatch, not just issues[0] (WR-07)."""
+    dispatch_calls: list[str] = []
+
+    def runner(args: object, issue_ref: str = "", **kwargs: object) -> int:
+        dispatch_calls.append(issue_ref)
+        return 0
+
+    rc, _calls, _status = _run_dispatch_cycles(
+        tmp_path,
+        monkeypatch,
+        dispatch_runner=runner,
+        cycles=1,
+        issues=["ABC-123", "XYZ-9"],
+    )
+
+    assert rc == 0
+    assert dispatch_calls == ["ABC-123", "XYZ-9"]

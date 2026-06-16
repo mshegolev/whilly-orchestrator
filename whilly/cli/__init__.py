@@ -13,6 +13,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly logs ...``      → :mod:`whilly.log_viewer`
 * ``whilly forge ...``     → :mod:`whilly.forge`
 * ``whilly jira ...``      → :mod:`whilly.cli.jira`
+* ``whilly gitlab ...``    → :mod:`whilly.cli.gitlab`
 * ``whilly qa-release ...`` → :mod:`whilly.cli.qa_release`
 * ``whilly project-config ...`` → :mod:`whilly.cli.project_config`
 * ``whilly github-projects ...`` → :mod:`whilly.cli.github_projects`
@@ -127,6 +128,7 @@ Commands:
   logs        Show per-task prompts, LLM events, and raw model output.
   forge       GitHub Issue → Whilly plan pipeline (`forge intake`).
   jira        Import Jira issues into Whilly plans.
+  gitlab      Smoke-test live GitLab integration (auth, repo-hint).
   qa-release  Collect Jira release verification context and linked artifacts.
   project-config Validate domain configs and generate adaptive plans.
   github-projects Sync GitHub Projects v2 items and statuses.
@@ -446,6 +448,10 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.jira import run_jira_command
 
         return run_jira_command(rest)
+    if cmd == "gitlab":
+        from whilly.cli.gitlab import run_gitlab_command
+
+        return run_gitlab_command(rest)
     if cmd == "qa-release":
         from whilly.cli.qa_release import run_qa_release_command
 

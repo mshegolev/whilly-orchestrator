@@ -30,6 +30,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.text import Text
 
+from whilly.core.task_id import safe_task_id_filename
 from whilly.reporter import CostTotals, fmt_duration, fmt_tokens
 from whilly.task_manager import PRIORITY_ORDER, TaskManager
 
@@ -437,24 +438,31 @@ class Dashboard:
                 p = Path(ag["log_file"])
                 if p.exists():
                     return p
-        # 2) Standard locations to search (newest match wins)
+        # 2) Standard locations to search (newest match wins).
+        # The log filename MUST be flattened the same way the writer flattens it:
+        # tmux_runner writes ``log_dir / f"{safe_task_id_filename(task_id)}.log"`` (#318),
+        # so a hierarchical id like ``epic.subepic/leaf`` lands in ``epic.subepic_leaf.log``.
+        # Reading the *raw* id here would (a) miss that file for any ``/``- or ``:``-bearing
+        # id, and (b) let a leading-slash id resolve to an absolute path outside whilly_logs
+        # (the read-side twin of the #318 write escape). Flatten so reader == writer.
+        log_name = f"{safe_task_id_filename(task_id)}.log"
         candidates: list[Path] = []
         env_log_dir = os.environ.get("WHILLY_LOG_DIR")
         if env_log_dir:
-            candidates.append(Path(env_log_dir).expanduser().resolve() / f"{task_id}.log")
-        candidates.append(Path("whilly_logs").resolve() / f"{task_id}.log")
+            candidates.append(Path(env_log_dir).expanduser().resolve() / log_name)
+        candidates.append(Path("whilly_logs").resolve() / log_name)
         # Workspace-aware: if cwd is a workspace, also check parent .whilly_workspaces siblings
         cwd = Path.cwd()
         if ".whilly_workspaces" in cwd.parts:
-            candidates.append(cwd / "whilly_logs" / f"{task_id}.log")
+            candidates.append(cwd / "whilly_logs" / log_name)
         # Original repo (one level up from workspace)
-        candidates.append(Path.cwd().parent / "whilly_logs" / f"{task_id}.log")
+        candidates.append(Path.cwd().parent / "whilly_logs" / log_name)
         existing = [c for c in candidates if c.exists()]
         if existing:
             # newest by mtime
             return max(existing, key=lambda p: p.stat().st_mtime)
         # No file found yet — return the most likely path so user sees where we looked
-        return candidates[0] if candidates else Path(f"whilly_logs/{task_id}.log")
+        return candidates[0] if candidates else Path("whilly_logs") / log_name
 
     def _refresh_log_overlay(self) -> None:
         """Re-read current log file and rebuild overlay text. Called each render tick."""

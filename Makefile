@@ -5,7 +5,7 @@ PYTHON ?= python3
 PIPX ?= pipx
 PKG := whilly-orchestrator
 
-.PHONY: help install install-dev uninstall lint format test version
+.PHONY: help install install-dev uninstall lint format test migrate-chain version
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -58,6 +58,11 @@ WHILLY_PYTEST_PARALLEL ?= 4
 
 test: ## Run pytest (parallelism capped via WHILLY_PYTEST_PARALLEL, default 4)
 	$(PYTHON) -m pytest -q -n auto --maxprocesses=$(WHILLY_PYTEST_PARALLEL)
+
+migrate-chain: ## Run full Alembic migration chain validation (requires Docker)
+	$(PYTHON) -m pytest -q -s \
+	    tests/integration/test_alembic_full_chain.py \
+	    -v --tb=short
 
 version: ## Show source version vs installed CLI version (diagnoses install drift)
 	@echo "Source (whilly/__init__.py): $$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' whilly/__init__.py | head -1)"

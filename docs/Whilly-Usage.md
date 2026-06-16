@@ -100,6 +100,119 @@ GitLab/GitHub repo hints. With `--persist` it writes the snapshot into the
 Postgres `jira_work_sessions` / `jira_work_events` history tables. A long-running
 watcher can wrap this command in a scheduler or loop.
 
+## Jira watcher daemon
+
+`whilly jira watch` runs as a foreground daemon that wraps the validated one-shot
+poll cycle on a configurable interval. Background it via tmux or systemd.
+
+**Quick start**
+
+```bash
+export JIRA_SERVER_URL=https://company.atlassian.net
+export JIRA_USERNAME=you@example.com
+export JIRA_API_TOKEN=$JIRA_API_TOKEN_VALUE
+
+# Run in a named tmux window (stays running after you detach)
+tmux new-session -d -s jira-watch \
+  "whilly jira watch --issue ABC-123 --interval 300"
+```
+
+**Interval**
+
+Set the poll interval with `--interval SECONDS` or the `WHILLY_JIRA_WATCH_INTERVAL`
+env var (default: 300 s). The env var takes lower priority than the flag. The
+watcher polls immediately on start, then waits the interval (plus any failure
+backoff) between cycles.
+
+**Graceful stop**
+
+Send SIGINT (Ctrl-C) or SIGTERM — the watcher finishes the current cycle, writes a
+final status file, and exits 0. No partial writes or corrupt state.
+
+**Single-instance guard**
+
+A second `whilly jira watch` invocation refuses to start and prints a hint with the
+existing PID. It never kills the first instance.
+
+**Backoff on failures**
+
+Consecutive transient poll errors increase the next sleep by 5 → 10 → 20 → 40 → 60 s
+(capped), then reset to 0 on the next fully successful cycle. With multiple
+`--issue` flags, a failure for *any* issue counts the whole cycle as failing
+(`last_poll_result` is `partial` when other issues succeeded, `error` when all
+failed), so one healthy issue cannot mask another issue's persistent failures.
+
+**Status inspection**
+
+```bash
+# Human-readable summary
+whilly jira watch-status
+
+# Structured JSON
+whilly jira watch-status --json
+```
+
+Status is written to `whilly_logs/watch/jira-watch-status.json`
+(honoring `WHILLY_LOG_DIR`). Fields include `state`, `pid`, `last_poll_at`,
+`cycle_count`, `error_count`, and `backoff_seconds`. When the file claims
+`state=running`, `watch-status` verifies the recorded PID is actually alive;
+after a crash (SIGKILL, OOM, power loss) it reports
+`state=stale (pid N not running)` instead of trusting the file.
+
+**Global pause gate**
+
+While `.whilly_pause` is present, the watcher keeps polling (read-only) but
+dispatches nothing. The `watch.paused` audit event is recorded on each paused cycle.
+
+**Dispatch (off by default)**
+
+`--dispatch` is OFF by default. Enabling it routes ready issues through the gated
+`jira run` path (Phase-17 readiness gate: `ready_for_testing` required unless
+`--allow-unready-run`). Example:
+
+```bash
+whilly jira watch \
+  --issue ABC-123 \
+  --interval 300 \
+  --dispatch \
+  --readiness-repo-path /path/to/repo
+```
+
+`--readiness-repo-path` accepts either a local **repository directory** (probed
+with the same readiness evaluation as `whilly jira readiness`) or a **plan JSON
+file** containing a `jira_work.readiness` block. The gate fails closed: when
+readiness cannot be determined (flag omitted, path missing, unreadable or
+malformed input), dispatch is **blocked** with a `watch.block` event
+(`verdict=unknown`) — only `--allow-unready-run` overrides this.
+
+Each issue is dispatched at most once per snapshot: after a successful
+dispatch (exit code 0), the watcher re-dispatches an issue only when its
+combined context hash changes (new comments/changelog). Failed dispatches are
+retried on the next cycle and recorded as `watch.failure` with the real exit
+code — never as `watch.dispatch`.
+
+**DB audit events**
+
+When `WHILLY_DATABASE_URL` is set, a best-effort audit event (`watch.cycle`,
+`watch.failure`, `watch.paused`, `watch.block`, `watch.dispatch`) is appended to
+the `jira_work_events` table after each poll cycle. `watch.dispatch` is emitted
+only when a dispatch actually succeeded (exit code 0); failed dispatches are
+recorded as `watch.failure` with the real exit code. The watcher continues even
+when the database is unavailable — it logs a warning and moves on.
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Graceful stop (SIGTERM/SIGINT) |
+| `1` | Another watcher is already running (single-instance guard) |
+| `2` | Jira config missing/incomplete (checked before the loop starts) |
+
+The credential gate runs once before the loop is entered. With incomplete Jira
+config the watcher exits immediately with code `2` and the standard setup
+guidance — it never starts looping with credentials it cannot use. Use
+`--interactive-config` from a terminal to be prompted for the missing values.
+
 ## Lifecycle sync
 
 Two integrations drive cards/tickets automatically as whilly task statuses change. Enable one or both in `whilly.toml`.
@@ -623,6 +736,113 @@ tmux attach -t whilly-TASK-001
 # Kill a session
 tmux kill-session -t whilly-TASK-001
 ```
+
+## Live smoke
+
+Live smoke commands run a series of **read-only** integration checks against
+real credentials and live infrastructure. They are safe to run against
+production systems — no comments are posted, no transitions are made, no
+writes occur.
+
+Each run exits with a structured summary and writes a redacted JSON report so
+you have evidence of what was checked and when.
+
+### Jira smoke
+
+**Required env vars**
+
+| Variable | Description |
+|----------|-------------|
+| `JIRA_SERVER_URL` | Full base URL, e.g. `https://company.atlassian.net` |
+| `JIRA_USERNAME` | Basic-auth email address (Cloud basic auth only) |
+| `JIRA_API_TOKEN` | Jira Cloud API token (or PAT for Server/DC) |
+
+**Jira Server / Data Center:** set `JIRA_AUTH_SCHEME=bearer` (PAT auth, no
+username needed) and `JIRA_API_VERSION=2` — Server/DC instances serve
+`/rest/api/2/` and answer `/rest/api/3/` requests with an HTML login page.
+
+**Command**
+
+```bash
+export JIRA_SERVER_URL=https://company.atlassian.net
+export JIRA_USERNAME=you@example.com
+export JIRA_API_TOKEN=$JIRA_API_TOKEN_VALUE
+
+whilly jira smoke --issue PROJECT-123
+```
+
+**What it checks:** auth (whoami), issue fetch, comments, changelog, remote
+links, and classify. All six checks run even when an earlier one fails, so
+you get a full picture on each invocation. The comments/changelog/remote-links
+checks verify the data was fetched without error and has the expected shape;
+the report records what was actually verified (e.g. `fetched 2 comments`) —
+empty collections on a quiet issue still pass.
+
+**Optional flags**
+
+| Flag | Description |
+|------|-------------|
+| `--timeout N` | Per-request timeout in seconds (default 15) |
+| `--persist` | Append a best-effort DB audit event when `WHILLY_DATABASE_URL` is set (persist problems never change the exit code) |
+| `--json` | Print full report JSON to stdout instead of the human summary |
+
+### GitLab smoke
+
+**Required env vars**
+
+| Variable | Description |
+|----------|-------------|
+| `GITLAB_URL` | GitLab base URL, e.g. `https://gitlab.example.com` |
+| `GITLAB_TOKEN` | Personal access token with `read_api` scope (highest priority) |
+
+Token resolution order: `GITLAB_TOKEN` → `GITLAB_API_TOKEN` →
+`WHILLY_GITLAB_API_TOKEN` → `glab config get token` CLI fallback.
+
+**Command**
+
+```bash
+export GITLAB_URL=https://gitlab.example.com
+export GITLAB_TOKEN=$GITLAB_TOKEN_VALUE
+
+whilly gitlab smoke --repo-url https://gitlab.example.com/group/project.git
+```
+
+**What it checks:** auth (`/api/v4/user`), project access
+(`/api/v4/projects/{path}`), and repo-hint validation (confirming the
+project's recorded path matches the requested URL). `--repo-url` must be
+the `https://` clone URL — SSH-style `git@host:path` values are rejected.
+
+**Optional flags**
+
+| Flag | Description |
+|------|-------------|
+| `--timeout N` | Per-request timeout in seconds (default 15) |
+| `--json` | Print full report JSON to stdout instead of the human summary |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks passed |
+| `1` | One or more checks failed |
+| `2` | Configuration missing (env vars not set) |
+
+### Report location
+
+Every run writes a redacted JSON report to:
+
+```
+whilly_logs/smoke/jira-smoke-{timestamp}.json   # Jira
+whilly_logs/smoke/gitlab-smoke-{timestamp}.json  # GitLab
+```
+
+Reports contain per-check pass/fail results, durations, and a redacted target
+(hostname only — no tokens, DSNs, or full URLs with credentials).
+
+**DB audit events (`whilly jira smoke --persist`):** A best-effort audit
+event is appended to the database only when `WHILLY_DATABASE_URL` is set.
+The report file is always written regardless of database availability.
+`whilly gitlab smoke` does not support `--persist`.
 
 ## Troubleshooting
 

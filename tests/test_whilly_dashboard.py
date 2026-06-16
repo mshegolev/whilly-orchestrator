@@ -168,3 +168,44 @@ def test_null_dashboard_record_task_cost():
     nd.record_task_cost("T-1", cost_usd=0.05, input_tokens=1000, output_tokens=500)
     assert "T-1" in nd.task_costs
     assert nd.task_costs["T-1"].cost_usd == pytest.approx(0.05)
+
+
+def test_resolve_task_log_path_flattens_hierarchical_id_to_match_writer(mock_tm, tmp_path, monkeypatch):
+    """The log reader must look for the same flattened name the #318 writer produces.
+
+    ``tmux_runner`` writes ``log_dir / f"{safe_task_id_filename(task_id)}.log"``, so a
+    hierarchical id ``epic.subepic/leaf`` lands in ``epic.subepic_leaf.log``. If the
+    dashboard read the *raw* id it would look for ``epic.subepic/leaf.log`` (a
+    non-existent subdir) and the operator could never view the log.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    # Writer side: the file as the #318 writer would name it (byte-pinned).
+    (tmp_path / "epic.subepic_leaf.log").write_text("agent log line\n", encoding="utf-8")
+
+    d = Dashboard(mock_tm, "test-agent", 10)
+    d.active_agents = []  # force the standard-locations fallback (no registered abs path)
+    resolved = d._resolve_task_log_path("epic.subepic/leaf")
+
+    assert resolved.name == "epic.subepic_leaf.log"
+    assert resolved.read_text(encoding="utf-8") == "agent log line\n"
+
+
+def test_resolve_task_log_path_leading_slash_id_cannot_escape_log_dir(mock_tm, tmp_path, monkeypatch):
+    """A leading-slash id must stay inside log_dir (read-side twin of the #318 escape).
+
+    ``validate_task_id`` permits ``/`` and ``:``, so an id like ``/etc/cron.d/x`` is
+    valid. Interpolating it raw as ``log_dir / f"{id}.log"`` makes pathlib discard the
+    base (absolute RHS). Flattening keeps the lookup pinned under log_dir.
+    """
+    monkeypatch.setenv("WHILLY_LOG_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    d = Dashboard(mock_tm, "test-agent", 10)
+    d.active_agents = []
+    resolved = d._resolve_task_log_path("/etc/cron.d/x")
+
+    # No file exists → first candidate (env_log_dir / flattened-name) is returned.
+    assert resolved.name == "etc_cron.d_x.log"
+    assert resolved.parent.resolve() == tmp_path.resolve()
+    assert not str(resolved).startswith("/etc/")
+    assert ".." not in resolved.parts

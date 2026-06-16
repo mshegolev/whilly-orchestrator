@@ -1,0 +1,21 @@
+schema: spec-driven
+
+# Project context (optional)
+# This is shown to AI when creating artifacts.
+context: |
+  Whilly orchestrator — Python 3.10+, Rich TUI, FastAPI, SQLAlchemy, ruff
+  (line length 120). Agents are Claude CLI processes. Task FSM: pending |
+  in_progress | done | failed | skipped. Completion signal: <promise>COMPLETE
+  </promise>. Exit codes: 0=ok 1=some-failed 2=budget 3=timeout.
+  Full stack, contracts, and domain glossary: read openspec/project.md.
+  Authoring rules (SHALL/MUST, #### Scenario:, --strict): openspec/AUTHORING.md.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

@@ -22,6 +22,32 @@ requirements covered. v1.1 is complete and audited: 7 phases, 12 plans, and 23/2
 requirements covered. It closes UI parity gaps and adds the operator-adoption controls needed to
 run Whilly on another machine against real Jira/GitLab work.
 
+After v1.1, the out-of-band `post-auth-hardening` plan shipped the authentication stack (session
+auth, gated password change, flag-gated OIDC header trust, flag-gated WebAuthn second factor) and
+a security-review loop that closed the task-id path-traversal sink class (ADR-001 §P1.x, PRs
+#303–#318). It is functionally complete: 27 done, 2 skipped as non-issues.
+
+v1.3 "OpenSpec Project Baseline" shipped on 2026-06-16 (phases 21–28, 26 plans, all verified).
+It captured Whilly's guaranteed behavior as 32 normative OpenSpec capability specs
+(`openspec/specs/`, all `openspec validate --strict` green), a `module → capability` coverage
+matrix over all 275 `whilly/` modules (0 gaps), and the forward delta-only process
+(`openspec/FORWARD-PROCESS.md`; `CLAUDE.md`/`AGENTS.md` now require an `opsx` spec delta for
+behavior changes). Spec-capture only — zero `whilly/` behavior changes. Notably, planning caught
+that the project docs (`CLAUDE.md`) still described the removed v3 single-process loop; they were
+rewritten to the real v4.7.0 Postgres worker-claim architecture.
+
+v1.2 "Adoption & live-ops" shipped on 2026-06-12 (phases 18–20, 9 plans, 8/8 requirements,
+audit passed). The shipped v1.2 scope includes:
+
+- Full Alembic chain validation (001→028) from empty Docker Postgres with honest evidence flags,
+  a `make migrate-chain` entry point, and a green `migration-chain` CI job.
+- `whilly jira smoke` and a new `whilly gitlab` CLI group with `smoke` — read-only authenticated
+  checks with redacted persisted reports, validated live against jira.example.com and
+  gitlab.example.com (including leak-free failure paths).
+- `whilly jira watch` daemon: configurable-interval polling, graceful stop, status file +
+  `watch-status`, PID guard, exponential backoff with audit events, fail-closed pause/readiness
+  gates, and default-off `--dispatch` through the Phase-17-gated path — validated live.
+
 The shipped v1.0 scope includes:
 
 - WUI/TUI operator pause parity and a shared review-decision command path.
@@ -49,7 +75,11 @@ The shipped v1.1 scope includes:
 
 ## Current Milestone
 
-No active milestone. Start the next product slice with `$gsd-new-milestone`.
+**None active.** v1.3 — OpenSpec Project Baseline shipped 2026-06-16 (32 capability specs,
+275/275 coverage matrix, forward delta-only process enforced). Start the next milestone with
+`/gsd-new-milestone` (defines fresh requirements + roadmap). Until then, behavior changes flow
+through `opsx` proposals that update the relevant `openspec/specs/<slug>/spec.md` (see
+`openspec/FORWARD-PROCESS.md`).
 
 ## Requirements
 
@@ -83,6 +113,15 @@ No active milestone. Start the next product slice with `$gsd-new-milestone`.
   operator UI contract.
 - [x] Add Jira work classification, comment-driven approval, GitLab link refresh, and code/test
   readiness gates before autonomous Jira polling.
+
+### Validated in v1.2
+
+- [x] Full Alembic migration chain runs green and repeatably from empty Docker Postgres, with a
+  scripted/CI entry point (MIG-01, MIG-02) - validated live locally and in CI.
+- [x] Operators can run authenticated Jira and GitLab smoke checks with persisted, redacted
+  evidence reports (LIVE-01..03) - validated live on a real operator machine.
+- [x] Operators can run a long-lived `whilly jira watch` daemon with lifecycle controls, backoff
+  audit events, and pause/readiness gating before any dispatch (WATCH-01..03) - validated live.
 
 ### Out of Scope
 
@@ -132,6 +171,28 @@ No active milestone. Start the next product slice with `$gsd-new-milestone`.
 | Defer semantic memory from current scope | Deterministic events, task history, PR evidence, and verification logs remain authoritative | Good |
 | Treat hotfix as urgency, not a primary Jira work kind | Hotfix can apply to bugs, tasks, or DevOps changes and should add safety gates instead of changing the whole taxonomy | Good |
 | Gate autonomous Jira work on code/test readiness | Linked repos, GitLab refs, unit tests, and verification commands must be known before workers mutate code | Good |
+| Keep smoke commands strictly read-only against external systems | Safe to run against production Jira/GitLab; write checks would risk side effects | Good |
+| Evidence/report flags must derive from real outcomes, never literals | The fabricated-evidence bug class appeared in all three v1.2 phases; falsification tests now pin honesty | Good |
+| Watch daemon fails closed on readiness and survives dispatch failures | Unknown readiness blocks dispatch; dispatch exceptions become audit events, not crashes | Good |
+| Watch stays a thin foreground loop, independent of SchedulerWorker | Operator backgrounds it (tmux/systemd); avoids coupling to JQL-rule intake machinery | Good |
+| Jira Server/DC needs JIRA_AUTH_SCHEME=bearer + JIRA_API_VERSION=2 | Live smoke against jira.example.com exposed the Cloud-vs-DC API split; documented in usage docs | Good |
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
 
 ---
-*Last updated: 2026-05-11 after archiving v1.1*
+*Last updated: 2026-06-12 after archiving v1.2*
