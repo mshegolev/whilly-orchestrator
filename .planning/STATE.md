@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 26 — Platform Cluster (in progress)
-Plan: 26-01 complete — PLAT-01 `configuration` spec written. Remaining: PLAT-02 `auth-security`, PLAT-03 `scheduling`, PLAT-04 `state-persistence`, PLAT-05 `self-update-doctor`.
-Status: 24 specs pass `openspec validate --strict`. 26-01 reverse-spec'd the v4 config layer from whilly/config.py — the WHILLY_ env-var contract + documented defaults (MODEL=claude-opus-4-6[1m], MAX_PARALLEL=3, HEARTBEAT_INTERVAL=1, LOG_DIR=whilly_logs, MAX_ITERATIONS=0, BUDGET_USD=0.0, MAX_TASK_RETRIES=5), the five-layer precedence (defaults→user TOML→repo whilly.toml→.env→WHILLY_*→CLI), _coerce typing, the env:/keyring:/file: secret schemes resolved by WhillyConfig.resolved, the project-config surface (loader/resolver/presets + project-config/project-map/quick-setup CLI), and the truthful no-op state fields (WHILLY_WORKTREE/USE_WORKSPACE/USE_TMUX/STATE_FILE/ORCHESTRATOR). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 26 plan 26-01 executed (configuration / PLAT-01). Next: plan/execute remaining Phase 26 platform specs (PLAT-02..05).
+Plan: 26-02 complete — PLAT-02 `auth-security` spec written. Remaining: PLAT-03 `scheduling`, PLAT-04 `state-persistence`, PLAT-05 `self-update-doctor`.
+Status: 25 specs pass `openspec validate --strict`. 26-02 reverse-spec'd the v4 auth/security subsystem at subsystem altitude into openspec/specs/auth-security/spec.md — 16 requirements covering session auth + SameSite=Strict cookie, PBKDF2 hashing + 5-strike/15-min lockout, the forced password-change gate, flag-gated (default-OFF) OIDC header trust (fail-closed) / WebAuthn / TOTP with the two-phase second_factor coordinator, CSRF origin checks, login rate-limit, opt-in route auth audit + best-effort auth_audit trail, prod-mode hardening, dashboard SSE bearer, secret reference resolution + secret-lint + prompt-sanitizer, and the ADR-001 validate_task_id path-traversal sink mitigation (+ safe_task_id_filename). web-status-ui transport tokens referenced, not duplicated. Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 26 plan 26-02 executed (auth-security / PLAT-02). Next: plan/execute remaining Phase 26 platform specs (PLAT-03..05).
 
 ## Active Roadmap
 

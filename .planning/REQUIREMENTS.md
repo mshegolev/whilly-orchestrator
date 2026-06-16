@@ -106,8 +106,12 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
   specified. (Done 26-01: openspec/specs/configuration/spec.md, validates --strict; reverse-spec'd
   from whilly/config.py — env-var contract + defaults, five-layer precedence, _coerce typing,
   env:/keyring:/file: secret schemes, project-config surface, and truthful no-op state fields.)
-- [ ] **PLAT-02**: `auth-security` — session auth, gated password change, flag-gated OIDC/WebAuthn,
-  and the task-id path-traversal sink class mitigation are specified.
+- [x] **PLAT-02**: `auth-security` — session auth, gated password change, flag-gated OIDC/WebAuthn,
+  and the task-id path-traversal sink class mitigation are specified. (Plan 26-02 — wrote
+  openspec/specs/auth-security/spec.md: 16 requirements at subsystem altitude covering session
+  auth, lockout, forced password-change gate, flag-gated OIDC/WebAuthn/TOTP, CSRF, rate-limit,
+  route+auth audit, prod-mode, dashboard SSE bearer, secrets/secret-lint/prompt-sanitizer, and the
+  ADR-001 validate_task_id path-sink mitigation. Passes openspec validate auth-security --strict.)
 - [ ] **PLAT-03**: `scheduling` — scheduler behavior is specified.
 - [ ] **PLAT-04**: `state-persistence` — `StateStore` resume contract (plan/iteration/cost/sessions)
   is specified.
@@ -160,7 +164,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | OPS-02 | Phase 25 | Done (web-status-ui subsystem spec, passes openspec validate --strict) |
 | OPS-04, OPS-05 | Phase 25 | Done (cli-surface + operator-views-logs specs, both pass openspec validate --strict) |
 | PLAT-01 | Phase 26 | Done (configuration spec authored, passes openspec validate --strict) |
-| PLAT-02..05 | Phase 26 | Pending |
+| PLAT-02 | Phase 26 | Done (auth-security spec authored, passes openspec validate --strict) |
+| PLAT-03..05 | Phase 26 | Pending |
 | SAFE-01..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
 
