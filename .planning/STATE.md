@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.3
 milestone_name: OpenSpec Project Baseline
-status: Phase 25 complete — plans 25-01/25-02/25-03 done (OPS-01..05 specced)
+status: Phase 25 complete (verified) — ready for `/gsd-plan-phase 26`
 last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 25 plan 25-03 executed (cli-surface + operator-views-logs, strict-valid)
+last_activity: 2026-06-16 — Phase 25 verified + closed (5 operator-surface specs; 23/23 strict-valid)
 progress:
   total_phases: 8
-  completed_phases: 4
-  total_plans: 15
-  completed_plans: 15
-  percent: 50
+  completed_phases: 5
+  total_plans: 17
+  completed_plans: 17
+  percent: 62
 ---
 
 # Project State
@@ -40,7 +40,7 @@ See: `.planning/ROADMAP.md`
 | 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
 | 23 | PRD Pipeline & Decision | PRD-01..05 | ✅ Complete (verified) |
 | 24 | Integrations Cluster | INT-01..06 | ✅ Complete (verified) |
-| 25 | Operator Surface Cluster | OPS-01..05 | 🔄 In progress (OPS-01, OPS-03 done) |
+| 25 | Operator Surface Cluster | OPS-01..05 | ✅ Complete (verified) |
 | 26 | Platform Cluster | PLAT-01..05 | Not started |
 | 27 | Safety & Quality Cluster | SAFE-01..04 | Not started |
 | 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | Not started |
