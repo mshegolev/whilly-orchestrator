@@ -27,6 +27,15 @@ auth, gated password change, flag-gated OIDC header trust, flag-gated WebAuthn s
 a security-review loop that closed the task-id path-traversal sink class (ADR-001 §P1.x, PRs
 #303–#318). It is functionally complete: 27 done, 2 skipped as non-issues.
 
+v1.3 "OpenSpec Project Baseline" shipped on 2026-06-16 (phases 21–28, 26 plans, all verified).
+It captured Whilly's guaranteed behavior as 32 normative OpenSpec capability specs
+(`openspec/specs/`, all `openspec validate --strict` green), a `module → capability` coverage
+matrix over all 275 `whilly/` modules (0 gaps), and the forward delta-only process
+(`openspec/FORWARD-PROCESS.md`; `CLAUDE.md`/`AGENTS.md` now require an `opsx` spec delta for
+behavior changes). Spec-capture only — zero `whilly/` behavior changes. Notably, planning caught
+that the project docs (`CLAUDE.md`) still described the removed v3 single-process loop; they were
+rewritten to the real v4.7.0 Postgres worker-claim architecture.
+
 v1.2 "Adoption & live-ops" shipped on 2026-06-12 (phases 18–20, 9 plans, 8/8 requirements,
 audit passed). The shipped v1.2 scope includes:
 
@@ -66,13 +75,11 @@ The shipped v1.1 scope includes:
 
 ## Current Milestone
 
-**v1.3 — OpenSpec Project Baseline** (active, started 2026-06-13).
-
-Capture Whilly's current guaranteed behavior as ~30 normative, testable OpenSpec capability specs
-under `openspec/specs/`, with a `module → capability` matrix proving all 242 `whilly/` modules are
-covered. Spec-capture only — no `whilly/` behavior changes this milestone. After the baseline,
-behavior changes flow through `opsx` proposals (forward delta-only); GSD keeps owning execution.
-Requirements in `.planning/REQUIREMENTS.md` (41 reqs); phases 21–28 in `.planning/ROADMAP.md`.
+**None active.** v1.3 — OpenSpec Project Baseline shipped 2026-06-16 (32 capability specs,
+275/275 coverage matrix, forward delta-only process enforced). Start the next milestone with
+`/gsd-new-milestone` (defines fresh requirements + roadmap). Until then, behavior changes flow
+through `opsx` proposals that update the relevant `openspec/specs/<slug>/spec.md` (see
+`openspec/FORWARD-PROCESS.md`).
 
 ## Requirements
 

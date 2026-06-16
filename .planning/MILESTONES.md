@@ -105,3 +105,40 @@ Actions, jira.mts.ru, gitlab.services.mts.ru) — no deferred validation items a
 - Browser and assistive-technology QA for mobile WUI/review affordance polish.
 
 ---
+
+## v1.3 OpenSpec Project Baseline — Shipped 2026-06-16
+
+**Scope:** Phases 21–28 (26 plans, all verified). Spec-capture only — zero `whilly/` behavior changes.
+
+**Shipped:**
+
+- 32 normative OpenSpec capability specs under `openspec/specs/<slug>/spec.md`, all passing
+  `openspec validate --strict` (32 passed, 0 failed), reverse-spec'd from the real v4.7.0 code.
+- `module → capability` coverage matrix (`openspec/COVERAGE-MATRIX.md`) over all 275 `whilly/`
+  modules — 0 unmapped, 0 double-mapped, every one of the 32 capabilities covered.
+- Capability taxonomy (`openspec/TAXONOMY.md`), authoring conventions (`openspec/AUTHORING.md`),
+  and project context (`openspec/project.md`).
+- Forward delta-only process (`openspec/FORWARD-PROCESS.md`); `CLAUDE.md` + `AGENTS.md` now
+  require an `opsx` spec delta for any behavior change and point at `openspec/specs/`.
+
+**Key decisions / events:**
+
+- Capability = subsystem (not one spec per module) + coverage matrix proving full coverage.
+- Posture: normative & testable (MUST/SHALL + `#### Scenario:` that passes `--strict`).
+- During planning, the plan-checker caught that `CLAUDE.md` still described the removed v3
+  single-process `run_plan` loop. `CLAUDE.md` was rewritten to the real v4.7.0 Postgres
+  worker-claim architecture; specs were then reverse-spec'd from code, not stale docs.
+- Adversarial plan-checker + verifier gates per phase caught and rejected v3 lore (budget
+  kill→exit-2, StateStore resume, legacy exit codes, unwired recovery/verifier modules).
+
+**Archives:**
+
+- `.planning/milestones/v1.3-ROADMAP.md`
+- `.planning/milestones/v1.3-REQUIREMENTS.md`
+
+**Known deferred:**
+
+- Browser/screen-reader QA for the complete WUI operator workflow (OPQA-01).
+- 21-03 has no separate SUMMARY.md (exemplar spec shipped + verified via VAL-02); non-blocking.
+
+---
