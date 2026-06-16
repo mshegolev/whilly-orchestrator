@@ -127,10 +127,11 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 ### Safety & quality cluster (Phase 27)
 
-- [ ] **SAFE-01**: `budget-resource-guards` — budget thresholds (80% warn / 100% kill→exit 2) and
-  resource monitoring are specified.
-- [ ] **SAFE-02**: `recovery-self-healing` — deadlock detection, stall pause, retry/backoff, and
-  self-healing are specified.
+- [x] **SAFE-01**: `budget-resource-guards` — ResourceMonitor CPU/mem/disk/process/log-dir
+  thresholds + the Postgres `plan.budget_exceeded` sentinel and secret-free smoke exit codes
+  are specified (v3 budget→exit-2 lore superseded).
+- [x] **SAFE-02**: `recovery-self-healing` — file-based recovery + self_healing excepthook are
+  specified and marked legacy/unwired, pointing to the live `release_stale_tasks` sweep.
 - [ ] **SAFE-03**: `quality-compliance-audit` — quality/compliance/audit-event behavior is
   specified.
 - [ ] **SAFE-04**: `verification-gates` — verifier and human-review gate behavior is specified.
@@ -176,7 +177,9 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | PLAT-03 | Phase 26 | Done (scheduling spec authored, passes openspec validate --strict) |
 | PLAT-04 | Phase 26 | Done (state-persistence spec authored — Postgres layer primary, StateStore legacy/no-op; passes openspec validate --strict) |
 | PLAT-05 | Phase 26 | Done (self-update-doctor spec authored — update/doctor/repair/rollback; passes openspec validate --strict) |
-| SAFE-01..04 | Phase 27 | Pending |
+| SAFE-01 | Phase 27 | Done (budget-resource-guards spec authored — ResourceMonitor thresholds + plan.budget_exceeded sentinel; passes openspec validate --strict) |
+| SAFE-02 | Phase 27 | Done (recovery-self-healing spec authored — legacy/unwired, live path = release_stale_tasks; passes openspec validate --strict) |
+| SAFE-03..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
 
 **Coverage:**
