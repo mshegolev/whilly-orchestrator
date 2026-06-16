@@ -132,9 +132,12 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
   are specified (v3 budget→exit-2 lore superseded).
 - [x] **SAFE-02**: `recovery-self-healing` — file-based recovery + self_healing excepthook are
   specified and marked legacy/unwired, pointing to the live `release_stale_tasks` sweep.
-- [ ] **SAFE-03**: `quality-compliance-audit` — quality/compliance/audit-event behavior is
-  specified.
-- [ ] **SAFE-04**: `verification-gates` — verifier and human-review gate behavior is specified.
+- [x] **SAFE-03**: `quality-compliance-audit` — quality/compliance/audit-event behavior is
+  specified (per-language quality gates + multi aggregation, target-doc compliance report,
+  append-only JSONL audit sink, qa-release collect/plan/scaffold).
+- [x] **SAFE-04**: `verification-gates` — live pipeline verification (required-vs-warning) +
+  human-review checkpoint gate + CI verification are specified, with the legacy
+  verifier.verify_task commit-revert path marked unwired.
 
 ### Forward process, coverage & validation (Phase 28)
 
@@ -179,7 +182,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | PLAT-05 | Phase 26 | Done (self-update-doctor spec authored — update/doctor/repair/rollback; passes openspec validate --strict) |
 | SAFE-01 | Phase 27 | Done (budget-resource-guards spec authored — ResourceMonitor thresholds + plan.budget_exceeded sentinel; passes openspec validate --strict) |
 | SAFE-02 | Phase 27 | Done (recovery-self-healing spec authored — legacy/unwired, live path = release_stale_tasks; passes openspec validate --strict) |
-| SAFE-03..04 | Phase 27 | Pending |
+| SAFE-03 | Phase 27 | Done (quality-compliance-audit spec authored — quality gates + compliance report + JSONL audit sink + qa-release; passes openspec validate --strict) |
+| SAFE-04 | Phase 27 | Done (verification-gates spec authored — live pipeline + human-review + CI gates, legacy verify_task marked unwired; passes openspec validate --strict) |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
 
 **Coverage:**
