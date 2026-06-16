@@ -141,9 +141,9 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 ### Forward process, coverage & validation (Phase 28)
 
-- [ ] **FWD-01**: The forward delta-only workflow is documented — future behavior changes require an
+- [x] **FWD-01**: The forward delta-only workflow is documented — future behavior changes require an
   `opsx` proposal that updates the relevant capability spec.
-- [ ] **FWD-02**: `CLAUDE.md` and `AGENTS.md` are updated to require spec deltas for behavior changes
+- [x] **FWD-02**: `CLAUDE.md` and `AGENTS.md` are updated to require spec deltas for behavior changes
   and to point contributors at `openspec/specs/`.
 - [ ] **COV-01**: The coverage matrix (BASE-02) is verified at 100% — every module mapped, audited
   against the final capability set.
@@ -184,7 +184,9 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | SAFE-02 | Phase 27 | Done (recovery-self-healing spec authored — legacy/unwired, live path = release_stale_tasks; passes openspec validate --strict) |
 | SAFE-03 | Phase 27 | Done (quality-compliance-audit spec authored — quality gates + compliance report + JSONL audit sink + qa-release; passes openspec validate --strict) |
 | SAFE-04 | Phase 27 | Done (verification-gates spec authored — live pipeline + human-review + CI gates, legacy verify_task marked unwired; passes openspec validate --strict) |
-| FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
+| FWD-01 | Phase 28 | Done (openspec/FORWARD-PROCESS.md — propose → apply → archive forward gate; OpenSpec=WHAT/GSD=HOW; linked from project.md + AUTHORING.md) |
+| FWD-02 | Phase 28 | Done (CLAUDE.md "When editing" should → REQUIRE; AGENTS.md require-a-spec-delta rule; both point at openspec/specs/ + FORWARD-PROCESS.md) |
+| COV-01, VAL-01..02 | Phase 28 | Pending |
 
 **Coverage:**
 - v1.3 requirements: 41 total

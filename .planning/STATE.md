@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 27 — Safety & Quality Cluster (in progress)
-Plan: 27-02 complete — SAFE-03 `quality-compliance-audit` + SAFE-04 `verification-gates` specs written. All four Phase 27 specs (SAFE-01..04) authored. Remaining for Phase 27: phase verification/wrap.
+Phase: 28 — Forward Process, Coverage & Validation (in progress)
+Plan: 28-01 complete — FWD-01 `openspec/FORWARD-PROCESS.md` (propose → apply → archive; OpenSpec=WHAT/GSD=HOW) written and cross-referenced from project.md + AUTHORING.md; FWD-02 strengthened CLAUDE.md "When editing" (should → REQUIRE) and added the same require-a-spec-delta rule to AGENTS.md, both pointing at openspec/specs/ + FORWARD-PROCESS.md. Documentation-only; zero whilly/ changes. Remaining for Phase 28: COV-01 coverage audit, VAL-01 validate --strict assert, VAL-02 normative review.
 Status: 27-02 reverse-spec'd two subsystem-altitude specs from real v4 code, both passing openspec validate --strict (0 errors/0 warnings). quality-compliance-audit (SAFE-03): per-language QualityGate Protocol (detect/run → GateResult, never raises on lint/test failure or missing binary/timeout) + multi-language detect_gates/run_all aggregation (gate_kind="multi", no-gates = passed True), deterministic target-doc ComplianceReport via `whilly compliance report` (PASS/PARTIAL/FAIL/UNKNOWN, present-but-unwired = PARTIAL), append-only JsonlEventSink.record (one JSON obj/line, OSError swallowed best-effort mirror of Postgres events), and qa-release collect/plan/scaffold-tests (refuses to clobber non-generated tests without --force). verification-gates (SAFE-04): LIVE pipeline run_verification_commands → VerificationRunOutcome (required_failed gates DONE, warning-only does not), started/result events with secret redaction, env allowlist + non-hanging timeout/blocked, human-review checkpoint gate (requires_human_review/build_human_review_checkpoint/is_human_review_approved + required/approved/rejected/changes_requested events), CI verification run_ci_verification; legacy verifier.verify_task commit-revert path marked unwired (confirmed: no worker-path callers). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 27 plan 27-02 executed (SAFE-03 + SAFE-04). Next: Phase 27 verification/wrap, then Phase 28 (coverage audit + validate + sync).
+Last activity: 2026-06-16 — Phase 28 plan 28-01 executed (FWD-01 + FWD-02). Next: Phase 28 plans for COV-01 (coverage audit), VAL-01 (validate --strict), VAL-02 (normative review).
 
 ## Active Roadmap
 
