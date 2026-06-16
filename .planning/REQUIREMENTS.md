@@ -112,7 +112,7 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
   auth, lockout, forced password-change gate, flag-gated OIDC/WebAuthn/TOTP, CSRF, rate-limit,
   route+auth audit, prod-mode, dashboard SSE bearer, secrets/secret-lint/prompt-sanitizer, and the
   ADR-001 validate_task_id path-sink mitigation. Passes openspec validate auth-security --strict.)
-- [ ] **PLAT-03**: `scheduling` — scheduler behavior is specified.
+- [x] **PLAT-03**: `scheduling` — scheduler behavior is specified.
 - [ ] **PLAT-04**: `state-persistence` — `StateStore` resume contract (plan/iteration/cost/sessions)
   is specified.
 - [ ] **PLAT-05**: `self-update-doctor` — update, doctor, repair, rollback behaviors are specified.
@@ -165,7 +165,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | OPS-04, OPS-05 | Phase 25 | Done (cli-surface + operator-views-logs specs, both pass openspec validate --strict) |
 | PLAT-01 | Phase 26 | Done (configuration spec authored, passes openspec validate --strict) |
 | PLAT-02 | Phase 26 | Done (auth-security spec authored, passes openspec validate --strict) |
-| PLAT-03..05 | Phase 26 | Pending |
+| PLAT-03 | Phase 26 | Done (scheduling spec authored, passes openspec validate --strict) |
+| PLAT-04..05 | Phase 26 | Pending |
 | SAFE-01..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
 

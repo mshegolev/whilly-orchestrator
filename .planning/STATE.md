@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 26 — Platform Cluster (in progress)
-Plan: 26-02 complete — PLAT-02 `auth-security` spec written. Remaining: PLAT-03 `scheduling`, PLAT-04 `state-persistence`, PLAT-05 `self-update-doctor`.
-Status: 25 specs pass `openspec validate --strict`. 26-02 reverse-spec'd the v4 auth/security subsystem at subsystem altitude into openspec/specs/auth-security/spec.md — 16 requirements covering session auth + SameSite=Strict cookie, PBKDF2 hashing + 5-strike/15-min lockout, the forced password-change gate, flag-gated (default-OFF) OIDC header trust (fail-closed) / WebAuthn / TOTP with the two-phase second_factor coordinator, CSRF origin checks, login rate-limit, opt-in route auth audit + best-effort auth_audit trail, prod-mode hardening, dashboard SSE bearer, secret reference resolution + secret-lint + prompt-sanitizer, and the ADR-001 validate_task_id path-traversal sink mitigation (+ safe_task_id_filename). web-status-ui transport tokens referenced, not duplicated. Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 26 plan 26-02 executed (auth-security / PLAT-02). Next: plan/execute remaining Phase 26 platform specs (PLAT-03..05).
+Plan: 26-03 complete — PLAT-03 `scheduling` spec written. Remaining: PLAT-04 `state-persistence`, PLAT-05 `self-update-doctor`.
+Status: 26 specs pass `openspec validate --strict`. 26-03 reverse-spec'd the v4 scheduler subsystem into openspec/specs/scheduling/spec.md — 11 requirements covering SchedulerRule definition + defaults, JSON/TOML config loading + validation (SchedulerConfigError), the async SchedulerWorker due-rule selection (per-rule interval, concurrent gather, disabled-rule filtering), poll-cycle execution/recording (completed/failed, interval honored after failure), JQL execution against Jira + validate_jql dry-run, hash-based deduplication (seen-hashes, unhashable skip), webhook parsing + WebhookEventHandler per-type dispatch with callback isolation, RateLimiter backoff + PollRateLimiter pacing/per-minute cap, the Postgres-backed SchedulerRepository (SQLSchedulerRepository persistence + InMemory dev/test impl), and the whilly scheduler CLI (run/validate/list/status/enable/disable). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 26 plan 26-03 executed (scheduling / PLAT-03). Next: plan/execute remaining Phase 26 platform specs (PLAT-04..05).
 
 ## Active Roadmap
 
