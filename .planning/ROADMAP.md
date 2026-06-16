@@ -169,7 +169,9 @@ Plans:
   3. `recovery-self-healing` spec captures deadlock skip, stall pause, and retry/backoff
   4. Each spec has ≥1 scenario, all pass `openspec validate --strict`, covered modules checked
 
-**Plans**: TBD (defined during /gsd-plan-phase 27)
+**Plans**: 2 plans
+- [ ] 27-01-PLAN.md — budget-resource-guards (SAFE-01) + recovery-self-healing (SAFE-02)
+- [ ] 27-02-PLAN.md — quality-compliance-audit (SAFE-03) + verification-gates (SAFE-04)
 
 ### Phase 28: Forward Process, Coverage & Validation
 
