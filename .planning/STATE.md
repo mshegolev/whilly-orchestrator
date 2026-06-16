@@ -25,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 25 — Operator Surface Cluster (complete)
-Plan: 25-01 + 25-02 + 25-03 complete — all five OPS specs written (OPS-01 `dashboard-tui`, OPS-02 `web-status-ui`, OPS-03 `reporting`, OPS-04 `cli-surface`, OPS-05 `operator-views-logs`).
-Status: 23/23 specs pass `openspec validate --strict`. 25-03 reverse-spec'd the `whilly` CLI surface — pinning the REAL v4 exit-code contract (EXIT_OK=0, EXIT_VALIDATION_ERROR=1, EXIT_ENVIRONMENT_ERROR=2, WORKSPACE_FAILED_EXIT_CODE=-4) over the legacy 0/1/2/3 lore, the no-args-prints-HELP behavior, unknown-command→2, and the v3 legacy flag shim incl. WHILLY_HEADLESS — plus the operator log viewer (list/show/tail + cleanup), the operator-views taxonomy (surfaces/tables/actions/hotkeys/route-prefixes/artifacts), and the operator TUI hotkey state machine. Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 25 plan 25-03 executed (cli-surface + operator-views-logs). Phase 25 complete; next: plan/execute Phase 26 (Platform cluster).
+Phase: 26 — Platform Cluster (in progress)
+Plan: 26-01 complete — PLAT-01 `configuration` spec written. Remaining: PLAT-02 `auth-security`, PLAT-03 `scheduling`, PLAT-04 `state-persistence`, PLAT-05 `self-update-doctor`.
+Status: 24 specs pass `openspec validate --strict`. 26-01 reverse-spec'd the v4 config layer from whilly/config.py — the WHILLY_ env-var contract + documented defaults (MODEL=claude-opus-4-6[1m], MAX_PARALLEL=3, HEARTBEAT_INTERVAL=1, LOG_DIR=whilly_logs, MAX_ITERATIONS=0, BUDGET_USD=0.0, MAX_TASK_RETRIES=5), the five-layer precedence (defaults→user TOML→repo whilly.toml→.env→WHILLY_*→CLI), _coerce typing, the env:/keyring:/file: secret schemes resolved by WhillyConfig.resolved, the project-config surface (loader/resolver/presets + project-config/project-map/quick-setup CLI), and the truthful no-op state fields (WHILLY_WORKTREE/USE_WORKSPACE/USE_TMUX/STATE_FILE/ORCHESTRATOR). Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 26 plan 26-01 executed (configuration / PLAT-01). Next: plan/execute remaining Phase 26 platform specs (PLAT-02..05).
 
 ## Active Roadmap
 

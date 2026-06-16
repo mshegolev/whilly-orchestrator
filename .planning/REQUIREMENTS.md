@@ -102,8 +102,10 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 
 ### Platform cluster (Phase 26)
 
-- [ ] **PLAT-01**: `configuration` — `WhillyConfig.from_env()` env-var contract and defaults are
-  specified.
+- [x] **PLAT-01**: `configuration` — `WhillyConfig.from_env()` env-var contract and defaults are
+  specified. (Done 26-01: openspec/specs/configuration/spec.md, validates --strict; reverse-spec'd
+  from whilly/config.py — env-var contract + defaults, five-layer precedence, _coerce typing,
+  env:/keyring:/file: secret schemes, project-config surface, and truthful no-op state fields.)
 - [ ] **PLAT-02**: `auth-security` — session auth, gated password change, flag-gated OIDC/WebAuthn,
   and the task-id path-traversal sink class mitigation are specified.
 - [ ] **PLAT-03**: `scheduling` — scheduler behavior is specified.
@@ -157,7 +159,8 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | OPS-01, OPS-03 | Phase 25 | Done (dashboard-tui + reporting specs, both pass openspec validate --strict) |
 | OPS-02 | Phase 25 | Done (web-status-ui subsystem spec, passes openspec validate --strict) |
 | OPS-04, OPS-05 | Phase 25 | Done (cli-surface + operator-views-logs specs, both pass openspec validate --strict) |
-| PLAT-01..05 | Phase 26 | Pending |
+| PLAT-01 | Phase 26 | Done (configuration spec authored, passes openspec validate --strict) |
+| PLAT-02..05 | Phase 26 | Pending |
 | SAFE-01..04 | Phase 27 | Pending |
 | FWD-01..02, COV-01, VAL-01..02 | Phase 28 | Pending |
 
