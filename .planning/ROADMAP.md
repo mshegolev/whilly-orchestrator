@@ -12,35 +12,21 @@ next milestone state.
 |-----------|--------|---------|----------|
 | v1.0 | Shipped | 2026-05-08 | `.planning/milestones/v1.0-ROADMAP.md`, `.planning/milestones/v1.0-REQUIREMENTS.md`, `.planning/milestones/v1.0-MILESTONE-AUDIT.md` |
 | v1.1 UI parity completion | Shipped | 2026-05-11 | `.planning/milestones/v1.1-ROADMAP.md`, `.planning/milestones/v1.1-REQUIREMENTS.md`, `.planning/milestones/v1.1-MILESTONE-AUDIT.md`, `.planning/milestones/v1.1-RETROSPECTIVE.md` |
+| v1.2 Adoption & live-ops | Shipped | 2026-06-12 | `.planning/milestones/v1.2-ROADMAP.md`, `.planning/milestones/v1.2-REQUIREMENTS.md`, `.planning/milestones/v1.2-MILESTONE-AUDIT.md` |
+| v1.3 OpenSpec Project Baseline | Shipped | 2026-06-16 | `.planning/milestones/v1.3-ROADMAP.md`, `.planning/milestones/v1.3-REQUIREMENTS.md` |
+
+## v1.3 OpenSpec Project Baseline — summary
+
+Captured Whilly's guaranteed behavior as **32 normative, testable OpenSpec capability specs**
+(`openspec/specs/<slug>/spec.md`), all passing `openspec validate --strict` (32/0), with a
+`module → capability` coverage matrix proving **all 275 `whilly/` modules** are accounted for
+(0 unmapped, 0 double-mapped). Forward delta-only process documented
+(`openspec/FORWARD-PROCESS.md`); `CLAUDE.md` + `AGENTS.md` now require an `opsx` spec delta for
+any behavior change. Phases 21–28, all verified. Spec-capture only — zero `whilly/` behavior
+changes. Full phase detail: `.planning/milestones/v1.3-ROADMAP.md`.
 
 ## Current Milestone
 
-No active milestone.
-
-## Completed Milestone Summary
-
-v1.1 closed the post-v1.0 WUI/TUI interface gap, added explicit version update controls, added a
-GitHub feedback reporter, and introduced Jira-driven intake with classification, history refresh,
-repo hints, and code/test readiness gates.
-
-Completed phases:
-- Phase 13: Canonical UI parity contract.
-- Phase 13.1: Version update checks and manual/automatic update modes.
-- Phase 13.2: GitHub feedback issue reporter.
-- Phase 14: WUI method and fragment wiring.
-- Phase 15: TUI capability parity.
-- Phase 16: UI parity verification and docs.
-- Phase 17: Jira work classification and code readiness routing.
-
-## Deferred Scope
-
-- Browser and assistive-technology QA for the full WUI operator workflow.
-- Live authenticated Jira/GitLab smoke on a real operator machine.
-- Full Docker-backed Alembic chain run outside the focused static migration coverage.
-- Long-running Jira watcher/daemon wrapper around the current one-shot `whilly jira poll`.
-- New operator modules beyond the pulled logs/admin/PRD artifacts.
-- Replacement of the current Jinja/HTMX WUI or Rich TUI architecture.
-
-## Next Step
-
-Start the next milestone with `$gsd-new-milestone`.
+None active. Start the next milestone with `/gsd-new-milestone` (defines fresh requirements +
+roadmap). Future behavior changes flow through `opsx` proposals that update the relevant
+capability spec (see `openspec/FORWARD-PROCESS.md`).
