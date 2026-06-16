@@ -145,10 +145,10 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
   `opsx` proposal that updates the relevant capability spec.
 - [x] **FWD-02**: `CLAUDE.md` and `AGENTS.md` are updated to require spec deltas for behavior changes
   and to point contributors at `openspec/specs/`.
-- [ ] **COV-01**: The coverage matrix (BASE-02) is verified at 100% — every module mapped, audited
+- [x] **COV-01**: The coverage matrix (BASE-02) is verified at 100% — every module mapped, audited
   against the final capability set.
-- [ ] **VAL-01**: `openspec validate --strict` passes for all capability specs.
-- [ ] **VAL-02**: Every capability spec has been peer/UAT reviewed for normative accuracy against the
+- [x] **VAL-01**: `openspec validate --strict` passes for all capability specs.
+- [x] **VAL-02**: Every capability spec has been peer/UAT reviewed for normative accuracy against the
   code it describes (no descriptive-only specs).
 
 ## Out of Scope
@@ -186,7 +186,9 @@ flow through `opsx` proposals (forward delta-only); GSD continues to own milesto
 | SAFE-04 | Phase 27 | Done (verification-gates spec authored — live pipeline + human-review + CI gates, legacy verify_task marked unwired; passes openspec validate --strict) |
 | FWD-01 | Phase 28 | Done (openspec/FORWARD-PROCESS.md — propose → apply → archive forward gate; OpenSpec=WHAT/GSD=HOW; linked from project.md + AUTHORING.md) |
 | FWD-02 | Phase 28 | Done (CLAUDE.md "When editing" should → REQUIRE; AGENTS.md require-a-spec-delta rule; both point at openspec/specs/ + FORWARD-PROCESS.md) |
-| COV-01, VAL-01..02 | Phase 28 | Pending |
+| COV-01 | Phase 28 | Done (coverage matrix audited 100%: live find 275 == 275 body rows, 0 UNMAPPED, 0 double-map, 32/32 capabilities; dated COV-01 Audit note in COVERAGE-MATRIX.md) |
+| VAL-01 | Phase 28 | Done (`openspec validate --all --strict` → 32 passed / 0 failed; dated VAL-01 Validation record in COVERAGE-MATRIX.md) |
+| VAL-02 | Phase 28 | Done (32/32 specs SHALL/MUST + ≥1 Scenario, 6 cluster VERIFICATION reports consolidated, no spec pins legacy-as-current; dated VAL-02 Review note in COVERAGE-MATRIX.md) |
 
 **Coverage:**
 - v1.3 requirements: 41 total
