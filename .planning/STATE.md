@@ -4,7 +4,7 @@ milestone: v1.3
 milestone_name: OpenSpec Project Baseline
 status: Phase 25 complete (verified) — ready for `/gsd-plan-phase 26`
 last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 25 verified + closed (5 operator-surface specs; 23/23 strict-valid)
+last_activity: 2026-06-16 — Phase 26 plan 26-04 executed (state-persistence / PLAT-04; openspec strict-valid)
 progress:
   total_phases: 8
   completed_phases: 5
@@ -26,9 +26,9 @@ human control, and verification before claiming success.
 ## Current Position
 
 Phase: 26 — Platform Cluster (in progress)
-Plan: 26-03 complete — PLAT-03 `scheduling` spec written. Remaining: PLAT-04 `state-persistence`, PLAT-05 `self-update-doctor`.
-Status: 26 specs pass `openspec validate --strict`. 26-03 reverse-spec'd the v4 scheduler subsystem into openspec/specs/scheduling/spec.md — 11 requirements covering SchedulerRule definition + defaults, JSON/TOML config loading + validation (SchedulerConfigError), the async SchedulerWorker due-rule selection (per-rule interval, concurrent gather, disabled-rule filtering), poll-cycle execution/recording (completed/failed, interval honored after failure), JQL execution against Jira + validate_jql dry-run, hash-based deduplication (seen-hashes, unhashable skip), webhook parsing + WebhookEventHandler per-type dispatch with callback isolation, RateLimiter backoff + PollRateLimiter pacing/per-minute cap, the Postgres-backed SchedulerRepository (SQLSchedulerRepository persistence + InMemory dev/test impl), and the whilly scheduler CLI (run/validate/list/status/enable/disable). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 26 plan 26-03 executed (scheduling / PLAT-03). Next: plan/execute remaining Phase 26 platform specs (PLAT-04..05).
+Plan: 26-04 complete — PLAT-04 `state-persistence` spec written. Remaining: PLAT-05 `self-update-doctor`.
+Status: 26-04 reverse-spec'd the REAL v4 persistence layer into openspec/specs/state-persistence/spec.md (passes openspec validate --strict). 8 requirements with the Postgres layer as PRIMARY: asyncpg pool lifecycle + DSN coercion (postgresql+asyncpg→postgresql) + env sizing + fail-fast SELECT 1 health check (pool.py); atomic claim_task via SELECT ... FOR UPDATE SKIP LOCKED; optimistic-locked complete/fail filtered by version with VersionConflictError on lost update; events audit written in the same transaction as every transition incl. the visibility-timeout RELEASE sweep; worker registration (token-hash only) + heartbeat liveness; Alembic chain 001–028 as schema source of truth. Wiring verified before speccing: StateStore has ZERO instantiations — `.whilly_state.json`/`WHILLY_STATE_FILE` marked legacy/no-op (NOT pinned as live); PauseControl (`.whilly_pause`) confirmed LIVE in cli/jira_watch_loop and specced as a local file-based control signal distinct from Postgres. Documentation-only; zero whilly/ changes.
+Last activity: 2026-06-16 — Phase 26 plan 26-04 executed (state-persistence / PLAT-04). Next: plan/execute PLAT-05 self-update-doctor.
 
 ## Active Roadmap
 
