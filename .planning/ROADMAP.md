@@ -148,7 +148,14 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
   4. `state-persistence` spec captures the resume contract (plan/iteration/cost/sessions)
   5. Each spec has ≥1 scenario, all pass `openspec validate --strict`, covered modules checked
 
-**Plans**: TBD (defined during /gsd-plan-phase 26)
+**Plans**: 5 plans (1 wave, all parallel — disjoint spec files)
+
+Plans:
+- [ ] 26-01-PLAN.md — configuration spec (PLAT-01): WHILLY_ env-var contract, layered precedence, secret schemes, truthful no-op state fields
+- [ ] 26-02-PLAN.md — auth-security spec (PLAT-02): session auth, gated password change, flag-gated OIDC/WebAuthn/TOTP, CSRF, rate-limit, route audit, prod-mode, secret/prompt sanitization, ADR-001 validate_task_id path-sink mitigation
+- [ ] 26-03-PLAN.md — scheduling spec (PLAT-03): rules/cycles, JQL execution, dedup, webhooks, rate limiting, Postgres-backed repository
+- [ ] 26-04-PLAN.md — state-persistence spec (PLAT-04): real v4 Postgres layer (asyncpg pool, optimistic-locked TaskRepository, events audit, migrations) primary; v3 StateStore JSON-resume marked legacy/no-op
+- [ ] 26-05-PLAN.md — self-update-doctor spec (PLAT-05): self-update, doctor diagnostics, repair, git rollback
 
 ### Phase 27: Safety & Quality Cluster
 
