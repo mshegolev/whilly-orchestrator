@@ -37,7 +37,7 @@ after Phase 22, review "continue or cut" before committing to phases 23–28.
 - [x] **Phase 23: PRD Pipeline & Decision** - PRD generation/wizard, task generation, decomposition, and the Decision Gate specified
 - [x] **Phase 24: Integrations Cluster** - Jira, GitLab, GitHub, watcher daemon, notifications, and MCP integration surfaces specified
 - [x] **Phase 25: Operator Surface Cluster** - TUI dashboard, web status/API, reporting, CLI exit-code contract, and operator views/logs specified
-- [ ] **Phase 26: Platform Cluster** - Config env-var contract, auth/security, scheduling, state persistence, and self-update/doctor specified
+- [x] **Phase 26: Platform Cluster** - Config env-var contract, auth/security, scheduling, state persistence, and self-update/doctor specified
 - [ ] **Phase 27: Safety & Quality Cluster** - Budget/resource guards, recovery/self-healing, quality/compliance/audit, and verification gates specified
 - [ ] **Phase 28: Forward Process, Coverage & Validation** - Coverage matrix proven 100%, all specs validated, forward delta-only process documented — closes the milestone
 
