@@ -27,6 +27,8 @@ Pytest is the test runner; async tests use `pytest-asyncio`. Name test files `te
 
 Git history follows Conventional Commit style with scopes, such as `feat(v6-baseline): ...`, `fix(m2): ...`, `test(m1): ...`, and `docs(misc): ...`. Keep commits focused and include validation IDs when relevant. Pull requests should describe the behavior change, list tests run, link issues or planning tasks, and call out Docker, migration, or configuration impacts.
 
+Any change to `whilly/` behavior MUST ship with an `opsx` spec delta (propose → apply → archive) that updates the relevant capability spec at `openspec/specs/<slug>/spec.md` — required, not optional. OpenSpec is the living WHAT; do not let the spec and code drift. See `openspec/FORWARD-PROCESS.md` for the workflow. Pure docs/test/refactor with no behavior change is exempt.
+
 ## Security & Configuration Tips
 
 Do not commit real secrets. Use `.env.example`, `.env.worker.example`, `whilly.example.toml`, or environment variables for configuration. Treat `ANTHROPIC_API_KEY`, `GH_TOKEN`, `GROQ_API_KEY`, database URLs, worker bootstrap tokens, and Slack tokens as sensitive.

@@ -78,7 +78,7 @@ Agent prompts are built in `whilly/core/prompts.py::build_task_prompt`. They pin
 
 ## When editing
 
-- **Behavior changes should be reflected in the OpenSpec capability spec** for the affected subsystem (`openspec/specs/<slug>/spec.md`) — see `openspec/AUTHORING.md`. Don't let the spec and code drift (this file itself drifted from v3→v4; that's the failure mode the specs exist to prevent).
+- **Behavior changes REQUIRE an opsx spec delta.** Any change to `whilly/` behavior MUST ship with an `opsx` change proposal (propose → apply → archive) that updates the relevant OpenSpec capability spec at `openspec/specs/<slug>/spec.md` — the change is not complete until that delta is applied and archived. See `openspec/FORWARD-PROCESS.md` for the full workflow and `openspec/AUTHORING.md` for how to write the delta. Don't let the spec and code drift (this file itself drifted from v3→v4; that's the failure mode the specs exist to prevent). Pure docs/test/refactor with no behavior change is exempt.
 - **Postgres is the source of truth**, not files. Task state moves through `TaskRepository` (claim/start/complete/fail/release) with an optimistic-locking `version`; handle `VersionConflictError` by abandoning the row, never by force-writing. Every transition writes an `events` audit row.
 - **Don't gate behavior on removed no-op env vars** (`WHILLY_WORKTREE`, `WHILLY_USE_WORKSPACE`, `WHILLY_USE_TMUX`, `WHILLY_STATE_FILE`). They parse but do nothing.
 - **Two `Task` classes exist** — use `whilly/core/models.py` for the v4 domain/DB model; `whilly/task_manager.py` is legacy JSON-plan I/O only. Don't conflate their status vocabularies (UPPERCASE enum vs lowercase `VALID_STATUSES`).
