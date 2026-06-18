@@ -33,18 +33,18 @@ known-drift fixture.
 
 ### Orchestration (RUN)
 
-- [ ] **RUN-01**: A single check run fans out across capability clusters in parallel and covers all
+- [x] **RUN-01**: A single check run fans out across capability clusters in parallel and covers all
   32 capability specs.
-- [ ] **RUN-02**: A run is bounded and resilient — a failed cluster/spec review degrades to a
+- [x] **RUN-02**: A run is bounded and resilient — a failed cluster/spec review degrades to a
   recorded error for that unit rather than aborting the whole run.
-- [ ] **RUN-03**: A run is self-describing: it records the model used and the spec/code commit (or
+- [x] **RUN-03**: A run is self-describing: it records the model used and the spec/code commit (or
   tree state) it reviewed, so a findings set is reproducible and auditable.
 
 ### Reporting (REPORT)
 
-- [ ] **REPORT-01**: A run writes a machine-readable findings artifact (e.g. JSON) and a
+- [x] **REPORT-01**: A run writes a machine-readable findings artifact (e.g. JSON) and a
   human-readable summary with per-cluster tallies (H/M/L and clean count).
-- [ ] **REPORT-02**: The summary reports coverage (specs reviewed / 32) and distinguishes confirmed
+- [x] **REPORT-02**: The summary reports coverage (specs reviewed / 32) and distinguishes confirmed
   findings from clean specs.
 
 ### CI Integration (CI)
@@ -85,11 +85,11 @@ Every v1.5 requirement maps to exactly one phase. Coverage: 12/12, no orphans, n
 | DETECT-02 | Phase 30 — Detection Engine Core | Complete |
 | DETECT-03 | Phase 30 — Detection Engine Core | Complete |
 | DETECT-04 | Phase 30 — Detection Engine Core | Complete |
-| RUN-01 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
-| RUN-02 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
-| RUN-03 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
-| REPORT-01 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
-| REPORT-02 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
+| RUN-01 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
+| RUN-02 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
+| RUN-03 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
+| REPORT-01 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
+| REPORT-02 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
 | CI-01 | Phase 32 — Scheduled CI Integration | Pending |
 | CI-02 | Phase 32 — Scheduled CI Integration | Pending |
 | VALID-01 | Phase 33 — Known-Drift Fixture Validation | Pending |
