@@ -54,6 +54,87 @@ TRIAGE_VALUES: tuple[str, ...] = ("code-bug", "spec-overstatement")
 
 DEFAULT_MATRIX_PATH = "openspec/COVERAGE-MATRIX.md"
 
+# ---------------------------------------------------------------------------
+# Phase 31: capability clusters (RUN-01)
+# ---------------------------------------------------------------------------
+
+# Canonical disjoint 6-cluster partition of the 32 live capability slugs
+# (verified exhaustive + disjoint against openspec/specs/* by the test suite).
+# This is the reporting / parallelism grouping; the set of specs to review is
+# still derived live from the filesystem. 7 + 5 + 5 + 5 + 5 + 5 = 32.
+CLUSTERS: dict[str, list[str]] = {
+    "orchestration": [
+        "orchestration-loop",
+        "agent-dispatch",
+        "batch-planning",
+        "result-collection",
+        "worktree-isolation",
+        "plan-json-contract",
+        "task-model-fsm",
+    ],
+    "prd-decision": [
+        "prd-generation",
+        "prd-wizard",
+        "decision-gate",
+        "task-generation",
+        "decomposition",
+    ],
+    "integrations": [
+        "github-integration",
+        "gitlab-integration",
+        "jira-integration",
+        "jira-watcher-daemon",
+        "mcp-integration",
+    ],
+    "operator-surface": [
+        "cli-surface",
+        "dashboard-tui",
+        "web-status-ui",
+        "operator-views-logs",
+        "reporting",
+    ],
+    "platform": [
+        "state-persistence",
+        "configuration",
+        "scheduling",
+        "self-update-doctor",
+        "auth-security",
+    ],
+    "safety-quality": [
+        "verification-gates",
+        "budget-resource-guards",
+        "quality-compliance-audit",
+        "recovery-self-healing",
+        "notifications",
+    ],
+}
+
+# Reverse index slug -> cluster, built once at import time.
+_SLUG_TO_CLUSTER: dict[str, str] = {slug: cluster for cluster, slugs in CLUSTERS.items() for slug in slugs}
+
+
+def cluster_for_slug(slug: str) -> str | None:
+    """Return the owning cluster name for ``slug``, or ``None`` if unknown.
+
+    Pinned behavior: never raises. An unknown slug (not present in any cluster)
+    returns ``None`` so callers can record it as an out-of-partition unit.
+    """
+    return _SLUG_TO_CLUSTER.get(slug)
+
+
+def live_slugs(specs_root: str = "openspec/specs") -> set[str]:
+    """Enumerate the live capability slug set from the filesystem.
+
+    Returns the set of directory names under ``specs_root`` that contain a
+    ``spec.md``. ``specs_root`` is injectable so tests can point at a fixture;
+    the partition test asserts against the REAL ``openspec/specs`` so CLUSTERS
+    cannot silently drift from the 32 specs. Returns an empty set if the root
+    is missing (never raises).
+    """
+    if not os.path.isdir(specs_root):
+        return set()
+    return {name for name in os.listdir(specs_root) if os.path.isfile(os.path.join(specs_root, name, "spec.md"))}
+
 
 # ---------------------------------------------------------------------------
 # Task 1: matrix-driven module resolution (DETECT-04)
