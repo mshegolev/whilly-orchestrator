@@ -344,3 +344,36 @@ jobs:
           path: migration-chain-evidence.json
           if-no-files-found: warn
           retention-days: 30
+
+  spec-validation:
+    name: Spec validation (DRIFT-01)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install openspec CLI
+        # Pin the exact package + version that produced the verified v1.3/v1.4
+        # baseline. NOT the unscoped "openspec" (a 0.0.0 placeholder by an
+        # unrelated maintainer) nor "openspec-cli" (unpublished — typosquat slot).
+        run: npm install -g @fission-ai/openspec@1.4.1
+      - name: Validate all OpenSpec capability specs
+        run: openspec validate --all --strict
+
+  coverage-audit:
+    name: Coverage matrix audit (DRIFT-02)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run coverage matrix audit
+        run: python3 scripts/audit-coverage-matrix.py

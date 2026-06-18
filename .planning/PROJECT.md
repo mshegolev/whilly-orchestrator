@@ -36,6 +36,11 @@ behavior changes). Spec-capture only — zero `whilly/` behavior changes. Notabl
 that the project docs (`CLAUDE.md`) still described the removed v3 single-process loop; they were
 rewritten to the real v4.7.0 Postgres worker-claim architecture.
 
+v1.4 "Spec Drift-Guard CI" shipped on 2026-06-18 (phase 29, 2 plans, all verified). It
+operationalizes the v1.3 OpenSpec baseline with automated CI gates to prevent spec↔code drift from
+silently accumulating. Every PR/push now proves the 32 capability specs still validate `--strict`
+and the `module → capability` coverage matrix is still complete.
+
 v1.2 "Adoption & live-ops" shipped on 2026-06-12 (phases 18–20, 9 plans, 8/8 requirements,
 audit passed). The shipped v1.2 scope includes:
 
@@ -195,4 +200,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-12 after archiving v1.2*
+*Last updated: 2026-06-18 after shipping v1.4*
