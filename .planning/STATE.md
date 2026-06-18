@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-06-18T16:43:18.788Z"
 last_activity: 2026-06-18
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,18 +17,19 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2026-06-13)
+See: `.planning/PROJECT.md` (updated 2026-06-18)
 
 **Core value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
-**Current focus:** v1.3 — capture Whilly's behavior as normative OpenSpec capability specs.
+**Current focus:** v1.5 — build an agent-assisted *semantic* spec-fidelity checker that detects
+spec↔code drift the v1.4 mechanical gate cannot.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 30 — Detection Engine Core (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-18 — Milestone v1.5 started
+Status: Roadmap drafted; awaiting phase planning
+Last activity: 2026-06-18 — Milestone v1.5 roadmap created (4 phases, 12/12 requirements mapped)
 
 ## Active Roadmap
 
@@ -36,44 +37,41 @@ See: `.planning/ROADMAP.md`
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 21 | Spec Baseline & Taxonomy | BASE-01..04 | ✅ Complete |
-| 22 | Orchestration Cluster | ORCH-01..07 | ✅ Complete (verified) |
-| 23 | PRD Pipeline & Decision | PRD-01..05 | ✅ Complete (verified) |
-| 24 | Integrations Cluster | INT-01..06 | ✅ Complete (verified) |
-| 25 | Operator Surface Cluster | OPS-01..05 | ✅ Complete (verified) |
-| 26 | Platform Cluster | PLAT-01..05 | ✅ Complete (verified) |
-| 27 | Safety & Quality Cluster | SAFE-01..04 | ✅ Complete (verified) |
-| 28 | Forward Process, Coverage & Validation | FWD-01..02, COV-01, VAL-01..02 | ✅ Complete (verified) |
+| 30 | Detection Engine Core | DETECT-01..04 | ⬜ Not started |
+| 31 | Cluster-Parallel Run & Reporting | RUN-01..03, REPORT-01..02 | ⬜ Not started |
+| 32 | Scheduled CI Integration | CI-01..02 | ⬜ Not started |
+| 33 | Known-Drift Fixture Validation | VALID-01 | ⬜ Not started |
+
+**Progress:** 0/4 phases complete (0%).
 
 ## Active Scope
 
-**Milestone type:** spec capture, not feature build. No `whilly/` behavior changes this milestone.
+**Milestone type:** internal tooling build. Adds a new semantic drift-detection mechanism;
+**additive** to v1.4 — the mechanical gate (`scripts/audit-coverage-matrix.py` + per-PR CI) stays.
 
-**Tooling baseline:** OpenSpec 1.4.1 initialized 2026-06-13 (schema `spec-driven`, Claude tool wired,
-5 `/opsx:*` commands). `openspec/specs/` and `openspec/changes/` are empty — this milestone fills
-`specs/`.
+**Build path:** detection engine core (30) → cluster-parallel run + reporting (31) → scheduled CI
+integration (32) → known-drift fixture validation (33).
 
-**Granularity decision:** capability = subsystem (~30 capabilities) + a `module → capability`
-coverage matrix proving all 242 modules are mapped. NOT one spec file per module.
+**Reuse baseline:** `openspec/COVERAGE-MATRIX.md` (spec→module review set, no second mapping),
+`scripts/audit-coverage-matrix.py` (standalone-audit-script model), and the existing Claude CLI
+shell-out path (`whilly/adapters/runner/claude_cli.py`). The proven manual-audit pattern is the
+6-cluster parallel fan-out (orchestration, prd-decision, integrations, operator-surface, platform,
+safety-quality) over all 32 specs.
 
-**Posture decision:** specs are normative & testable (MUST/SHALL + `#### Scenario:` blocks that pass
-`openspec validate --strict`), not descriptive snapshots.
-
-**Role decision:** forward delta-only after baseline. OpenSpec = living WHAT; GSD = HOW/execution.
+**Cadence decision:** LLM-assisted ⇒ non-deterministic and costly ⇒ runs on a scheduled CI cadence
+(cron/manual dispatch), NOT every PR. Findings must be evidence-backed (`file:line`) and
+reproducible (run records model + reviewed commit).
 
 ## Recent Decisions
 
-- v1.3 (2026-06-13): Rejected literal per-module specs (242 files) — chose subsystem capabilities +
-  coverage matrix to keep specs normative and maintainable while still proving full coverage.
+- v1.5 (2026-06-18): Semantic check is strictly additive — v1.4's mechanical gate is not replaced or
+  weakened. The two run on different cadences (per-PR mechanical vs scheduled semantic).
 
-- v1.3 (2026-06-13): Phase 21 (taxonomy + conventions) gates all later phases — the spec format must
-  be fixed once, before 30 specs are written against it.
+- v1.5 (2026-06-18): Detection engine (Phase 30) lands before orchestration — fan-out is only worth
+  building once a single-spec review reliably produces triaged, evidence-backed findings.
 
-- v1.3 (2026-06-13): Phases 22–27 are independent once 21 lands and may be reordered/parallelized;
-  Phase 28 (coverage audit + validate + sync) closes the milestone.
-
-- v1.3 (2026-06-13): Auth/security carried context — ADR-001 path-sink fixes and the flag-gated
-  OIDC/WebAuthn stack are existing behavior to be specified (PLAT-02), not changed.
+- v1.5 (2026-06-18): The guard ships proven, not plausible — Phase 33 validates against a planted
+  known-drift fixture (detect a HIGH, report clean as clean) before the milestone closes.
 
 ## Accumulated Context
 
@@ -82,30 +80,38 @@ coverage matrix proving all 242 modules are mapped. NOT one spec file per module
 - Phases 18-20 shipped for milestone v1.2 (migration validation, live smoke, watcher daemon),
   archived 2026-06-12.
 
-- Phases 21-28 defined for milestone v1.3: OpenSpec normative baseline across the whole project.
+- Phases 21-28 shipped for milestone v1.3 (OpenSpec normative baseline across the whole project).
+
+- Phase 29 shipped for milestone v1.4 (mechanical spec-drift CI gate).
+
+- Phases 30-33 defined for milestone v1.5: agent-assisted semantic spec-fidelity drift detection.
 
 ## Previous Milestones
 
 - v1.0 shipped and archived on 2026-05-08.
 - v1.1 shipped and archived on 2026-05-11.
 - v1.2 shipped and archived on 2026-06-12.
+- v1.3 shipped on 2026-06-16.
+- v1.4 shipped on 2026-06-18.
 
 Archives:
 
 - `.planning/milestones/v1.0-ROADMAP.md`, `v1.0-REQUIREMENTS.md`, `v1.0-MILESTONE-AUDIT.md`
 - `.planning/milestones/v1.1-ROADMAP.md`, `v1.1-REQUIREMENTS.md`, `v1.1-MILESTONE-AUDIT.md`, `v1.1-RETROSPECTIVE.md`
 - `.planning/milestones/v1.2-ROADMAP.md`, `v1.2-REQUIREMENTS.md`, `v1.2-MILESTONE-AUDIT.md`
+- `.planning/milestones/v1.3-ROADMAP.md`, `v1.3-REQUIREMENTS.md`
+- `.planning/milestones/v1.4-ROADMAP.md`, `v1.4-REQUIREMENTS.md`, `v1.4-MILESTONE-AUDIT.md`, `v1.4-RETROSPECTIVE.md`
 
 ## Deferred Items
 
-- Browser/screen-reader QA for the complete WUI operator workflow (OPQA-01).
-- Behavior changes surfaced while speccing → capture as `opsx` proposals / future milestone, not
-  this one.
+- Auto-opening `opsx` proposals or code-fix PRs from confirmed findings — v1.5 detects/reports only.
+- Per-PR (diff-scoped) semantic checking — possible once cost/latency are characterized.
+- Historical drift trend tracking / dashboards.
 
 ## Next Step
 
-Plan Phase 21 with `/gsd-plan-phase 21`.
+Plan Phase 30 with `/gsd-plan-phase 30`.
 
 ## Operator Next Steps
 
-- Plan the first phase: `/gsd-plan-phase 21` (Spec Baseline & Taxonomy).
+- Plan the first phase: `/gsd-plan-phase 30` (Detection Engine Core).
