@@ -49,9 +49,9 @@ known-drift fixture.
 
 ### CI Integration (CI)
 
-- [ ] **CI-01**: The semantic check runs as a scheduled CI job (cron/manual dispatch), separate
+- [x] **CI-01**: The semantic check runs as a scheduled CI job (cron/manual dispatch), separate
   from and not blocking the v1.4 per-PR mechanical gate.
-- [ ] **CI-02**: The scheduled job surfaces results (artifact upload + summary) with a configurable
+- [x] **CI-02**: The scheduled job surfaces results (artifact upload + summary) with a configurable
   gating posture (report-only vs fail-on-HIGH).
 
 ### Self-Validation (VALID)
@@ -90,6 +90,6 @@ Every v1.5 requirement maps to exactly one phase. Coverage: 12/12, no orphans, n
 | RUN-03 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
 | REPORT-01 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
 | REPORT-02 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
-| CI-01 | Phase 32 — Scheduled CI Integration | Pending |
-| CI-02 | Phase 32 — Scheduled CI Integration | Pending |
+| CI-01 | Phase 32 — Scheduled CI Integration | Complete |
+| CI-02 | Phase 32 — Scheduled CI Integration | Complete |
 | VALID-01 | Phase 33 — Known-Drift Fixture Validation | Pending |
