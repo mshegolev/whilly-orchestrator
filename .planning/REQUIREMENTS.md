@@ -77,4 +77,19 @@ known-drift fixture.
 
 ## Traceability
 
-(Filled by roadmap — each requirement maps to exactly one phase.)
+Every v1.5 requirement maps to exactly one phase. Coverage: 12/12, no orphans, no duplicates.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| DETECT-01 | Phase 30 — Detection Engine Core | Pending |
+| DETECT-02 | Phase 30 — Detection Engine Core | Pending |
+| DETECT-03 | Phase 30 — Detection Engine Core | Pending |
+| DETECT-04 | Phase 30 — Detection Engine Core | Pending |
+| RUN-01 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
+| RUN-02 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
+| RUN-03 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
+| REPORT-01 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
+| REPORT-02 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
+| CI-01 | Phase 32 — Scheduled CI Integration | Pending |
+| CI-02 | Phase 32 — Scheduled CI Integration | Pending |
+| VALID-01 | Phase 33 — Known-Drift Fixture Validation | Pending |
