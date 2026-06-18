@@ -455,6 +455,27 @@ Store secrets once, per OS:
 python3 -c "import keyring; keyring.set_password('whilly', 'github', 'ghp_xxx')"
 ```
 
+### Scheduled semantic spec-drift sweep (CI secret)
+
+`.github/workflows/semantic-drift.yml` runs an LLM-backed semantic spec-drift
+check (`scripts/semantic_drift_check.py --all`) on a **weekly cron** (Mondays
+06:00 UTC) and on **manual dispatch**. It is intentionally **separate from and
+non-blocking** to the per-PR mechanical gate in `ci.yml` (spec-validation,
+coverage-audit) — it never runs on `pull_request`/`push` and never blocks a
+merge. It uploads the JSON findings artifact and renders the human summary into
+the run's step summary.
+
+- **Required secret:** `ANTHROPIC_API_KEY` (repo Settings → Secrets and
+  variables → Actions). The check shells out to the Claude CLI; the workflow
+  **fails fast with a clear message** if the secret is absent, so a check that
+  did not actually run never reports green.
+- **Posture (gating):** the `workflow_dispatch` `posture` input is validated
+  against an allowlist and maps to the script's `--fail-on`:
+  - `report-only` (default) → `--fail-on none` → always exit 0 (cron default;
+    flaky LLM runs never red the schedule).
+  - `fail-on-high` → `--fail-on high` → exit 1 iff at least one finding has
+    severity `HIGH` (per-unit errors never gate).
+
 ### GitHub auth resolution order
 
 Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
