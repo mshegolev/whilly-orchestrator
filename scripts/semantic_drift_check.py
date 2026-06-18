@@ -26,9 +26,15 @@ a model or subprocess itself.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
+import subprocess
+import sys
+from collections.abc import Callable
+
+DEFAULT_MODEL = "claude-opus-4-6[1m]"
 
 # ---------------------------------------------------------------------------
 # Shared schema — single source of truth for both the prompt and the validator.
@@ -247,3 +253,152 @@ def validate_finding(finding: dict) -> bool:
     if not isinstance(evidence, str) or ":" not in evidence or not evidence.strip():
         return False
     return True
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1: review_spec pipeline (DETECT-01)
+# ---------------------------------------------------------------------------
+
+
+def review_spec(
+    slug: str,
+    reviewer: Callable[[str], str],
+    *,
+    specs_root: str = "openspec/specs",
+    repo_root: str = ".",
+    matrix_path: str = DEFAULT_MATRIX_PATH,
+) -> list[dict]:
+    """Review a single capability ``slug`` for semantic drift.
+
+    The end-to-end pipeline (DETECT-01): load the capability's ``spec.md``,
+    resolve its mapped ``whilly/`` module set from the coverage matrix, read
+    those module sources, build the deterministic review prompt, hand the prompt
+    to the injected ``reviewer`` callable, and parse the result into findings.
+
+    ``reviewer`` is the dependency-injection seam: tests pass a fake returning
+    canned JSON (no network, no CLI); the default :func:`claude_reviewer` shells
+    to the Claude CLI. All filesystem I/O (spec.md + module reads) lives here so
+    :func:`build_review_prompt` stays pure.
+
+    Phase 30 is report-only and the CLI always exits 0, so this function NEVER
+    raises on bad input: a missing/invalid slug (no ``spec.md`` on disk) logs a
+    diagnostic to stderr and returns ``[]`` WITHOUT calling the reviewer. Mapped
+    modules that are absent on disk are recorded as unreadable and skipped, not
+    fatal. ``reviewer`` output that is not parseable yields ``[]`` (via
+    :func:`parse_findings`).
+    """
+    spec_path = os.path.join(specs_root, slug, "spec.md")
+    if not os.path.isfile(spec_path):
+        print(
+            f"semantic_drift_check: no spec.md for slug {slug!r} at {spec_path!r}; returning []",
+            file=sys.stderr,
+        )
+        return []
+
+    with open(spec_path, "r", encoding="utf-8") as f:
+        spec_text = f.read()
+
+    module_paths = resolve_modules_for_slug(slug, matrix_path=matrix_path)
+    sources: list[tuple[str, str]] = []
+    for module in module_paths:
+        abs_path = os.path.join(repo_root, module)
+        try:
+            with open(abs_path, "r", encoding="utf-8") as mf:
+                sources.append((module, mf.read()))
+        except OSError:
+            # A mapped module missing on disk is non-fatal: record it so the
+            # prompt still references the path, and let the reviewer note it.
+            print(
+                f"semantic_drift_check: mapped module {module!r} unreadable; skipping its source",
+                file=sys.stderr,
+            )
+            sources.append((module, "(source file unreadable / not found)"))
+
+    prompt = build_review_prompt(slug, spec_text, sources)
+    raw = reviewer(prompt)
+    return parse_findings(raw)
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2: default Claude-CLI reviewer + --slug CLI main (DETECT-01)
+# ---------------------------------------------------------------------------
+
+
+def claude_reviewer(prompt: str) -> str:
+    """Default reviewer: shell to the Claude CLI and return the model text.
+
+    Kept deliberately thin (per Phase 30 CONTEXT — no full retry stack like
+    ``whilly/adapters/runner/claude_cli.py``). Resolves the binary via
+    ``CLAUDE_BIN`` (default ``claude``), runs ``claude --model <m>
+    --disallowedTools ... -p <prompt> --output-format json`` capturing stdout,
+    then unwraps the Claude ``--output-format json`` envelope to its inner
+    ``result`` text. Falls back to raw stdout if the envelope shape is
+    unexpected (e.g. a bare JSON array). Timeout via ``WHILLY_CLAUDE_TIMEOUT``.
+
+    ``--disallowedTools`` mirrors the v4.7 deny-by-default posture so the agent
+    cannot try to Write the answer to a file and leave stdout empty.
+    """
+    claude_bin = os.environ.get("CLAUDE_BIN", "claude")
+    model = os.environ.get("WHILLY_MODEL") or DEFAULT_MODEL
+    timeout = int(os.environ.get("WHILLY_CLAUDE_TIMEOUT", "1800"))
+    cmd = [
+        claude_bin,
+        "--model",
+        model,
+        "--disallowedTools",
+        "Write,Edit,MultiEdit,NotebookEdit,Bash",
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
+    ]
+    completed = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    stdout = completed.stdout or ""
+
+    # Unwrap the {"result": "...", ...} envelope; fall back to raw stdout.
+    try:
+        envelope = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return stdout
+    if isinstance(envelope, dict) and isinstance(envelope.get("result"), str):
+        return envelope["result"]
+    return stdout
+
+
+def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = claude_reviewer) -> int:
+    """CLI entry: review one ``--slug`` and print its findings JSON to stdout.
+
+    Always returns exit code 0 — Phase 30 is report-only; severity gating is
+    Phase 32. A missing/invalid slug is handled inside :func:`review_spec`
+    (logged to stderr, ``[]`` printed) so a bad slug never produces a non-zero
+    exit. ``reviewer`` is injectable so tests drive the full CLI path with a
+    fake reviewer and no CLI/network.
+    """
+    parser = argparse.ArgumentParser(
+        prog="semantic_drift_check",
+        description="Review one OpenSpec capability spec for semantic drift against its mapped modules.",
+    )
+    parser.add_argument("--slug", required=True, help="capability slug (openspec/specs/<slug>/spec.md)")
+    parser.add_argument("--specs-root", default="openspec/specs", help="root of capability spec dirs")
+    parser.add_argument("--repo-root", default=".", help="repo root for resolving module sources")
+    parser.add_argument("--matrix-path", default=DEFAULT_MATRIX_PATH, help="coverage-matrix path")
+    args = parser.parse_args(argv)
+
+    findings = review_spec(
+        args.slug,
+        reviewer=reviewer,
+        specs_root=args.specs_root,
+        repo_root=args.repo_root,
+        matrix_path=args.matrix_path,
+    )
+    print(json.dumps(findings, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
