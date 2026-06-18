@@ -482,3 +482,78 @@ def test_live_cli_reviewer_runs_against_real_claude(tmp_path):
         matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
     )
     assert isinstance(findings, list)
+
+
+# ---------------------------------------------------------------------------
+# Phase 31 Task 1: CLUSTERS partition constant + exhaustive/disjoint live test
+# ---------------------------------------------------------------------------
+
+_CLUSTER_NAMES = {
+    "orchestration",
+    "prd-decision",
+    "integrations",
+    "operator-surface",
+    "platform",
+    "safety-quality",
+}
+
+
+def _live_specs_root() -> Path:
+    return _REPO_ROOT / "openspec" / "specs"
+
+
+def _live_slug_set() -> set[str]:
+    root = _live_specs_root()
+    return {d.name for d in root.iterdir() if (d / "spec.md").is_file()}
+
+
+def test_clusters_has_exactly_six_named_keys():
+    """CLUSTERS has exactly the six canonical cluster names."""
+    assert set(sdc.CLUSTERS.keys()) == _CLUSTER_NAMES
+
+
+def test_clusters_partition_is_exhaustive_vs_live_slugs():
+    """The union of all cluster slug lists equals the live openspec/specs slug set."""
+    flat = [slug for slugs in sdc.CLUSTERS.values() for slug in slugs]
+    assert set(flat) == _live_slug_set()
+
+
+def test_clusters_partition_is_disjoint_and_thirty_two():
+    """No slug appears in two clusters; the partition has exactly 32 unique members."""
+    flat = [slug for slugs in sdc.CLUSTERS.values() for slug in slugs]
+    assert len(flat) == len(set(flat))
+    assert len(set(flat)) == 32
+
+
+def test_clusters_no_unknown_slugs_on_disk():
+    """Every slug listed in CLUSTERS exists as a real openspec/specs/<slug>/spec.md."""
+    root = _live_specs_root()
+    for slugs in sdc.CLUSTERS.values():
+        for slug in slugs:
+            assert (root / slug / "spec.md").is_file(), slug
+
+
+def test_cluster_for_slug_returns_owning_cluster():
+    """cluster_for_slug returns the owning cluster name for a known slug."""
+    assert sdc.cluster_for_slug("orchestration-loop") == "orchestration"
+    assert sdc.cluster_for_slug("prd-wizard") == "prd-decision"
+    assert sdc.cluster_for_slug("auth-security") == "platform"
+    assert sdc.cluster_for_slug("notifications") == "safety-quality"
+
+
+def test_cluster_for_slug_unknown_returns_none():
+    """An unknown slug returns None (pinned behavior, never raises)."""
+    assert sdc.cluster_for_slug("no-such-capability") is None
+
+
+def test_live_slugs_helper_matches_filesystem():
+    """live_slugs() reads the real spec dirs and matches the partition union."""
+    assert sdc.live_slugs(specs_root=str(_live_specs_root())) == _live_slug_set()
+
+
+def test_live_slugs_helper_is_injectable(tmp_path):
+    """live_slugs honors an injected specs_root pointing at a fixture tree."""
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "alpha" / "spec.md").write_text("x", encoding="utf-8")
+    (tmp_path / "beta").mkdir()  # no spec.md -> excluded
+    assert sdc.live_slugs(specs_root=str(tmp_path)) == {"alpha"}
