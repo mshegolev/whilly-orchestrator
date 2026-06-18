@@ -105,7 +105,8 @@ begins at **Phase 30**.
   1. A known-drift fixture (a deliberately drifted spec/code pair) exists and the checker run against it reports a HIGH semantic-drift finding with file:line evidence.
   2. The same run reports a non-drifted control spec as clean (no false-positive finding).
   3. The validation is reproducible — documented inputs and expected verdict so a future run confirms the guard still works.
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 33-01-PLAN.md — Known-drift + clean control fixtures, deterministic plumbing test (CI-green) + live acceptance canary, fixture README (VALID-01)
 
 ## Progress
 
@@ -114,4 +115,4 @@ begins at **Phase 30**.
 | 30. Detection Engine Core | 2/2 | In progress | - |
 | 31. Cluster-Parallel Run & Reporting | 0/0 | Not started | - |
 | 32. Scheduled CI Integration | 0/0 | Not started | - |
-| 33. Known-Drift Fixture Validation | 0/0 | Not started | - |
+| 33. Known-Drift Fixture Validation | 0/1 | Not started | - |
