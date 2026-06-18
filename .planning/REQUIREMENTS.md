@@ -56,7 +56,7 @@ known-drift fixture.
 
 ### Self-Validation (VALID)
 
-- [ ] **VALID-01**: The mechanism is validated against a known-drift fixture (a deliberately drifted
+- [x] **VALID-01**: The mechanism is validated against a known-drift fixture (a deliberately drifted
   spec/code pair) proving it detects a HIGH semantic drift and reports a clean spec as clean — so
   the guard is demonstrably trustworthy, not just plausible.
 
@@ -92,4 +92,4 @@ Every v1.5 requirement maps to exactly one phase. Coverage: 12/12, no orphans, n
 | REPORT-02 | Phase 31 — Cluster-Parallel Run & Reporting | Complete |
 | CI-01 | Phase 32 — Scheduled CI Integration | Complete |
 | CI-02 | Phase 32 — Scheduled CI Integration | Complete |
-| VALID-01 | Phase 33 — Known-Drift Fixture Validation | Pending |
+| VALID-01 | Phase 33 — Known-Drift Fixture Validation | Complete |

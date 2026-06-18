@@ -56,7 +56,7 @@ begins at **Phase 30**.
 - [ ] **Phase 30: Detection Engine Core** - Per-spec SHALL/MUST semantic review against mapped modules, emitting triaged, evidence-backed findings.
 - [ ] **Phase 31: Cluster-Parallel Run & Reporting** - Bounded, resilient 6-cluster fan-out over all 32 specs with self-describing run metadata and machine + human reports.
 - [ ] **Phase 32: Scheduled CI Integration** - Wire the check as a scheduled (non-PR) job with artifact upload and configurable report-only vs fail-on-HIGH gating.
-- [ ] **Phase 33: Known-Drift Fixture Validation** - Prove the guard detects a planted HIGH drift and reports a clean spec as clean.
+- [x] **Phase 33: Known-Drift Fixture Validation** - Prove the guard detects a planted HIGH drift and reports a clean spec as clean. (completed 2026-06-18)
 
 ## Phase Details
 
@@ -106,7 +106,7 @@ begins at **Phase 30**.
   2. The same run reports a non-drifted control spec as clean (no false-positive finding).
   3. The validation is reproducible — documented inputs and expected verdict so a future run confirms the guard still works.
 **Plans**: 1 plan
-- [ ] 33-01-PLAN.md — Known-drift + clean control fixtures, deterministic plumbing test (CI-green) + live acceptance canary, fixture README (VALID-01)
+- [x] 33-01-PLAN.md — Known-drift + clean control fixtures, deterministic plumbing test (CI-green) + live acceptance canary, fixture README (VALID-01)
 
 ## Progress
 
@@ -115,4 +115,4 @@ begins at **Phase 30**.
 | 30. Detection Engine Core | 2/2 | In progress | - |
 | 31. Cluster-Parallel Run & Reporting | 0/0 | Not started | - |
 | 32. Scheduled CI Integration | 0/0 | Not started | - |
-| 33. Known-Drift Fixture Validation | 0/1 | Not started | - |
+| 33. Known-Drift Fixture Validation | 1/1 | Complete   | 2026-06-18 |
