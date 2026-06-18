@@ -27,14 +27,20 @@ a model or subprocess itself.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 DEFAULT_MODEL = "claude-opus-4-6[1m]"
+
+# Tool version for the self-describing run metadata block (RUN-03). Bumped
+# independently of the whilly package version since this is standalone tooling.
+TOOL_VERSION = "31.1.0"
 
 # ---------------------------------------------------------------------------
 # Shared schema — single source of truth for both the prompt and the validator.
@@ -449,6 +455,140 @@ def claude_reviewer(prompt: str) -> str:
     if isinstance(envelope, dict) and isinstance(envelope.get("result"), str):
         return envelope["result"]
     return stdout
+
+
+# ---------------------------------------------------------------------------
+# Phase 31 Task 2: bounded fleet fan-out + run metadata (RUN-01, RUN-02, RUN-03)
+# ---------------------------------------------------------------------------
+
+
+def _severity_index(severity: str) -> int:
+    """Rank a severity by ``SEVERITIES`` order; unknown severities sort last."""
+    try:
+        return SEVERITIES.index(severity)
+    except ValueError:
+        return len(SEVERITIES)
+
+
+def run_fleet(
+    slugs,
+    reviewer: Callable[[str], str],
+    *,
+    max_workers: int = 6,
+    specs_root: str = "openspec/specs",
+    repo_root: str = ".",
+    matrix_path: str = DEFAULT_MATRIX_PATH,
+) -> dict:
+    """Review every slug in ``slugs`` via a bounded ``ThreadPoolExecutor``.
+
+    Each slug is submitted as one unit of work that calls the existing
+    :func:`review_spec` with the injected ``reviewer``. The unit is wrapped in
+    try/except so a single failing review (CLI error, parse failure, raising
+    reviewer) records a structured ``{slug, cluster, error}`` entry and the
+    fleet CONTINUES — a failed unit NEVER aborts the run (RUN-02). After all
+    futures complete the findings are flattened and sorted deterministically by
+    ``(slug, severity)`` so a fixed set of reviewer responses yields byte-stable
+    ordering (RUN-01). The unit of work is a blocking subprocess to the Claude
+    CLI in production, so threads are the right primitive.
+
+    Returns a results dict::
+
+        {
+            "findings": [...],   # flat, sorted by (slug, severity)
+            "errors":   [...],   # [{slug, cluster, error}, ...]
+            "reviewed": [...],   # slugs that completed without error
+        }
+    """
+    findings: list[dict] = []
+    errors: list[dict] = []
+    reviewed: list[str] = []
+
+    def _unit(slug: str):
+        return review_spec(
+            slug,
+            reviewer,
+            specs_root=specs_root,
+            repo_root=repo_root,
+            matrix_path=matrix_path,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_to_slug = {pool.submit(_unit, slug): slug for slug in slugs}
+        for future in concurrent.futures.as_completed(future_to_slug):
+            slug = future_to_slug[future]
+            cluster = cluster_for_slug(slug)
+            try:
+                spec_findings = future.result()
+            except Exception as exc:  # noqa: BLE001 — per-unit isolation (RUN-02)
+                errors.append({"slug": slug, "cluster": cluster, "error": str(exc)})
+                continue
+            reviewed.append(slug)
+            for finding in spec_findings:
+                tagged = dict(finding)
+                tagged.setdefault("cluster", cluster)
+                findings.append(tagged)
+
+    findings.sort(key=lambda f: (f.get("slug", ""), _severity_index(f.get("severity", ""))))
+    return {"findings": findings, "errors": errors, "reviewed": reviewed}
+
+
+def _default_git_info() -> dict:
+    """Default git seam: read HEAD commit + dirty flag, degrading on failure.
+
+    Shells ``git rev-parse HEAD`` for the commit and treats a non-empty
+    ``git status --porcelain`` as dirty. Wrapped so any subprocess failure
+    (no git, not a repo, timeout) degrades to ``commit=None``/``dirty=None``
+    rather than raising — git metadata is best-effort, never fatal (RUN-03).
+    """
+    commit = None
+    dirty = None
+    try:
+        rev = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if rev.returncode == 0:
+            commit = rev.stdout.strip() or None
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if status.returncode == 0:
+            dirty = bool(status.stdout.strip())
+    except Exception:  # noqa: BLE001 — best-effort, degrade gracefully
+        return {"commit": commit, "dirty": dirty}
+    return {"commit": commit, "dirty": dirty}
+
+
+def collect_run_metadata(
+    *,
+    model: str | None = None,
+    git_info: Callable[[], dict] | None = None,
+    now: Callable[[], str] | None = None,
+    tool_version: str = TOOL_VERSION,
+) -> dict:
+    """Build the self-describing run-metadata block (RUN-03).
+
+    Resolves ``model`` by precedence: explicit ``model`` arg > ``WHILLY_MODEL``
+    env > :data:`DEFAULT_MODEL`. ``git_info`` and ``now`` are injectable seams so
+    tests never depend on real git state or the wall clock; the defaults are
+    :func:`_default_git_info` (degrades to ``None`` on failure) and an ISO-8601
+    UTC timestamp. Returns ``{model, commit, dirty, timestamp, tool_version}``.
+    """
+    resolved_model = model or os.environ.get("WHILLY_MODEL") or DEFAULT_MODEL
+    git = (git_info or _default_git_info)()
+    timestamp = (now or (lambda: datetime.now(timezone.utc).isoformat()))()
+    return {
+        "model": resolved_model,
+        "commit": git.get("commit"),
+        "dirty": git.get("dirty"),
+        "timestamp": timestamp,
+        "tool_version": tool_version,
+    }
 
 
 def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = claude_reviewer) -> int:
