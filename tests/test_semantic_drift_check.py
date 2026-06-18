@@ -732,3 +732,134 @@ def test_collect_run_metadata_default_git_seam_degrades_gracefully(monkeypatch):
     md = sdc.collect_run_metadata(model="m", now=lambda: "T")
     assert md["commit"] is None
     assert md["dirty"] is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 31 Task 3: build_artifact + pure format_summary + --all CLI
+# ---------------------------------------------------------------------------
+
+_METADATA = {
+    "model": "test-model",
+    "commit": "abc123",
+    "dirty": False,
+    "timestamp": "2026-06-19T00:00:00Z",
+    "tool_version": "31.1.0",
+}
+
+
+def _results_with(findings, errors, reviewed):
+    return {"findings": findings, "errors": errors, "reviewed": reviewed}
+
+
+def test_build_artifact_has_locked_shape():
+    """build_artifact returns exactly {run, coverage, clusters, findings, errors}."""
+    findings = [
+        _valid_finding(slug="orchestration-loop", severity="HIGH", **{}),
+        _valid_finding(slug="orchestration-loop", severity="LOW"),
+    ]
+    for f in findings:
+        f["cluster"] = "orchestration"
+    results = _results_with(findings, [], ["orchestration-loop", "agent-dispatch"])
+    artifact = sdc.build_artifact(results, _METADATA)
+
+    assert set(artifact.keys()) == {"run", "coverage", "clusters", "findings", "errors"}
+    assert artifact["run"] == _METADATA
+    assert artifact["coverage"] == {"reviewed": 2, "total": 32}
+    # All six clusters present, each with the five buckets.
+    assert set(artifact["clusters"].keys()) == set(sdc.CLUSTERS.keys())
+    for tally in artifact["clusters"].values():
+        assert set(tally.keys()) == {"high", "medium", "low", "clean", "error"}
+    orch = artifact["clusters"]["orchestration"]
+    assert orch["high"] == 1
+    assert orch["low"] == 1
+    # orchestration-loop had findings (not clean); agent-dispatch reviewed clean.
+    assert orch["clean"] == 1
+    assert artifact["findings"] == findings
+    assert artifact["errors"] == []
+
+
+def test_build_artifact_counts_errors_per_cluster():
+    """Error entries bucket into the owning cluster's 'error' tally."""
+    errors = [{"slug": "prd-wizard", "cluster": "prd-decision", "error": "boom"}]
+    results = _results_with([], errors, ["decision-gate"])
+    artifact = sdc.build_artifact(results, _METADATA)
+    assert artifact["clusters"]["prd-decision"]["error"] == 1
+    # decision-gate reviewed clean -> counts as clean in prd-decision.
+    assert artifact["clusters"]["prd-decision"]["clean"] == 1
+    assert artifact["errors"] == errors
+
+
+def test_format_summary_is_pure_and_renders_table():
+    """format_summary is pure (hand-built dict) and renders table + coverage + split."""
+    findings = [_valid_finding(slug="orchestration-loop", severity="HIGH")]
+    findings[0]["cluster"] = "orchestration"
+    results = _results_with(findings, [], ["orchestration-loop", "agent-dispatch"])
+    artifact = sdc.build_artifact(results, _METADATA)
+    text = sdc.format_summary(artifact)
+    assert isinstance(text, str)
+    # Per-cluster table mentions the cluster names + severity columns.
+    assert "orchestration" in text
+    for col in ("HIGH", "MEDIUM", "LOW", "clean"):
+        assert col in text
+    # Coverage line reviewed/32.
+    assert "/32" in text
+    assert "reviewed" in text.lower()
+    # Confirmed-findings vs clean-specs split.
+    assert "confirmed" in text.lower()
+    assert "clean" in text.lower()
+
+
+def _cli_multi(tmp_path, slugs, monkeypatch):
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    _patch_clusters(monkeypatch, slugs)
+    return repo_root, specs_root
+
+
+def test_main_all_writes_artifact_and_returns_zero(tmp_path, monkeypatch):
+    """main(--all) writes a parseable JSON artifact, prints summary, returns 0."""
+    # Use real cluster slugs so the artifact's cluster buckets line up.
+    slugs = ["orchestration-loop", "agent-dispatch"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    out_path = tmp_path / "findings.json"
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: orchestration-loop" in prompt.lower():
+            return json.dumps([_valid_finding(slug="orchestration-loop", severity="HIGH")])
+        return "[]"
+
+    rc = sdc.main(
+        [
+            "--all",
+            "--output",
+            str(out_path),
+            "--max-workers",
+            "2",
+            "--model",
+            "cli-model",
+            "--specs-root",
+            specs_root,
+            "--repo-root",
+            str(repo_root),
+            "--matrix-path",
+            str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+        ],
+        reviewer=fake_reviewer,
+    )
+    assert rc == 0
+    assert out_path.is_file()
+    artifact = json.loads(out_path.read_text(encoding="utf-8"))
+    assert set(artifact.keys()) == {"run", "coverage", "clusters", "findings", "errors"}
+    assert artifact["run"]["model"] == "cli-model"
+    assert artifact["coverage"]["total"] == 32
+
+
+def test_main_all_and_slug_mutually_exclusive(tmp_path):
+    """--all and --slug together is a usage error (SystemExit)."""
+    with pytest.raises(SystemExit):
+        sdc.main(["--all", "--slug", "orchestration-loop"], reviewer=lambda p: "[]")
+
+
+def test_main_neither_all_nor_slug_errors(tmp_path):
+    """Neither --all nor --slug is a usage error (one required)."""
+    with pytest.raises(SystemExit):
+        sdc.main([], reviewer=lambda p: "[]")
