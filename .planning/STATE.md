@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Semantic Drift-Guard
 status: planning
-last_updated: "2026-06-18T16:43:18.788Z"
-last_activity: 2026-06-18
+last_updated: "2026-06-19T00:00:00.000Z"
+last_activity: 2026-06-19 — Completed 30-02-PLAN.md (review_spec pipeline + claude_reviewer + --slug CLI, DETECT-01)
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 2
+  completed_plans: 2
+  percent: 25
 ---
 
 # Project State
@@ -26,10 +26,10 @@ spec↔code drift the v1.4 mechanical gate cannot.
 
 ## Current Position
 
-Phase: 30 — Detection Engine Core (not started)
-Plan: —
-Status: Roadmap drafted; awaiting phase planning
-Last activity: 2026-06-18 — Milestone v1.5 roadmap created (4 phases, 12/12 requirements mapped)
+Phase: 30 — Detection Engine Core (in progress)
+Plan: 02 of 02 complete
+Status: Plans 30-01 (core) and 30-02 (pipeline + CLI) done; DETECT-01..04 satisfied — phase ready for verification
+Last activity: 2026-06-19 — Completed 30-02-PLAN.md (review_spec pipeline + claude_reviewer + --slug CLI, DETECT-01)
 
 ## Active Roadmap
 
@@ -37,12 +37,12 @@ See: `.planning/ROADMAP.md`
 
 | Phase | Name | Requirements | Status |
 |-------|------|--------------|--------|
-| 30 | Detection Engine Core | DETECT-01..04 | ⬜ Not started |
+| 30 | Detection Engine Core | DETECT-01..04 | 🟡 In progress (2/2 plans) |
 | 31 | Cluster-Parallel Run & Reporting | RUN-01..03, REPORT-01..02 | ⬜ Not started |
 | 32 | Scheduled CI Integration | CI-01..02 | ⬜ Not started |
 | 33 | Known-Drift Fixture Validation | VALID-01 | ⬜ Not started |
 
-**Progress:** 0/4 phases complete (0%).
+**Progress:** [██████████] 100%
 
 ## Active Scope
 
