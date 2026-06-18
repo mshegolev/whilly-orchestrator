@@ -109,7 +109,7 @@ begins at **Phase 30**.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 30. Detection Engine Core | 0/0 | Not started | - |
+| 30. Detection Engine Core | 2/2 | In progress | - |
 | 31. Cluster-Parallel Run & Reporting | 0/0 | Not started | - |
 | 32. Scheduled CI Integration | 0/0 | Not started | - |
 | 33. Known-Drift Fixture Validation | 0/0 | Not started | - |

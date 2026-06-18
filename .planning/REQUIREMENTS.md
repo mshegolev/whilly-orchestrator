@@ -20,7 +20,7 @@ known-drift fixture.
 
 ### Detection (DETECT)
 
-- [ ] **DETECT-01**: Operator can run a semantic spec-fidelity check that reviews each capability
+- [x] **DETECT-01**: Operator can run a semantic spec-fidelity check that reviews each capability
   spec's `SHALL`/`MUST` requirements against its mapped `whilly/` modules and emits per-requirement
   findings.
 - [ ] **DETECT-02**: Each finding records severity (HIGH/MEDIUM/LOW), capability slug, requirement
@@ -81,7 +81,7 @@ Every v1.5 requirement maps to exactly one phase. Coverage: 12/12, no orphans, n
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DETECT-01 | Phase 30 — Detection Engine Core | Pending |
+| DETECT-01 | Phase 30 — Detection Engine Core | Complete |
 | DETECT-02 | Phase 30 — Detection Engine Core | Pending |
 | DETECT-03 | Phase 30 — Detection Engine Core | Pending |
 | DETECT-04 | Phase 30 — Detection Engine Core | Pending |
