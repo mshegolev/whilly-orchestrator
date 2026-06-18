@@ -23,11 +23,11 @@ known-drift fixture.
 - [x] **DETECT-01**: Operator can run a semantic spec-fidelity check that reviews each capability
   spec's `SHALL`/`MUST` requirements against its mapped `whilly/` modules and emits per-requirement
   findings.
-- [ ] **DETECT-02**: Each finding records severity (HIGH/MEDIUM/LOW), capability slug, requirement
+- [x] **DETECT-02**: Each finding records severity (HIGH/MEDIUM/LOW), capability slug, requirement
   name, a one-line drift description, and `file:line` code evidence.
-- [ ] **DETECT-03**: Each finding is triaged as `code-bug` (code diverged from a correct spec) or
+- [x] **DETECT-03**: Each finding is triaged as `code-bug` (code diverged from a correct spec) or
   `spec-overstatement` (spec claims more than the code does), with a short rationale.
-- [ ] **DETECT-04**: The checker derives the spec→module review set from
+- [x] **DETECT-04**: The checker derives the spec→module review set from
   `openspec/COVERAGE-MATRIX.md`, reusing the existing mapping rather than a hand-maintained second
   source.
 
@@ -82,9 +82,9 @@ Every v1.5 requirement maps to exactly one phase. Coverage: 12/12, no orphans, n
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | DETECT-01 | Phase 30 — Detection Engine Core | Complete |
-| DETECT-02 | Phase 30 — Detection Engine Core | Pending |
-| DETECT-03 | Phase 30 — Detection Engine Core | Pending |
-| DETECT-04 | Phase 30 — Detection Engine Core | Pending |
+| DETECT-02 | Phase 30 — Detection Engine Core | Complete |
+| DETECT-03 | Phase 30 — Detection Engine Core | Complete |
+| DETECT-04 | Phase 30 — Detection Engine Core | Complete |
 | RUN-01 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
 | RUN-02 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
 | RUN-03 | Phase 31 — Cluster-Parallel Run & Reporting | Pending |
