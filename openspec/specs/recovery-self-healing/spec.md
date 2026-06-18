@@ -11,9 +11,7 @@ mechanism is the visibility-timeout sweep `release_stale_tasks` (with optimistic
 locking) documented in the `state-persistence` capability; this spec marks the two
 modules legacy in the same manner that `state-persistence` marks the v3 StateStore
 legacy, and it does NOT assert progress-file recovery as the live v4 recovery path.
-
 ## Requirements
-
 ### Requirement: File-based done-status recovery
 The system SHALL reconstruct completed task IDs in `recover_task_statuses` by unioning IDs parsed from `progress.txt` lines of the form `[id] DONE` with IDs from per-task `whilly_logs/*.log` files whose content contains `COMPLETION_MARKER` (preferring a valid `{"type":"result"}` JSON line with `is_error` False), SHALL flip matching non-done legacy `TaskManager` tasks to `done`, SHALL persist only when at least one status changed, and SHALL return a change dict mapping each affected task ID to `"<old> → done"`.
 
@@ -61,16 +59,22 @@ The system SHALL, in `SelfHealingHandler.apply_fix`, act only on NameError (logg
 - **THEN** the system SHALL return `False` and SHALL NOT modify any files
 
 ### Requirement: Global exception hook installation
-The system SHALL, via `global_exception_handler`, run analyze-then-apply on an uncaught exception and then print the full traceback, and `enable_self_healing` SHALL install `global_exception_handler` as `sys.excepthook`.
+The system SHALL, via `global_exception_handler`, run analyze-then-apply on an
+uncaught exception, and SHALL print the full formatted traceback EXCEPT when
+`apply_fix` succeeds — in which case it SHALL print a restart notice and return
+early without printing the traceback. `enable_self_healing` SHALL install
+`global_exception_handler` as `sys.excepthook`.
 
-#### Scenario: handler analyzes then prints full traceback
-- **WHEN** `global_exception_handler` is invoked for an uncaught exception
+#### Scenario: handler prints full traceback when no fix is applied
+- **WHEN** `global_exception_handler` is invoked for an uncaught exception and
+  `apply_fix` returns `False` (or no `CodeError` is classified)
 - **THEN** the system SHALL attempt `analyze_error` and `apply_fix`
 - **AND** SHALL print the full formatted traceback afterward
 
-#### Scenario: enable installs the hook
-- **WHEN** `enable_self_healing` is called
-- **THEN** the system SHALL set `sys.excepthook` to `global_exception_handler`
+#### Scenario: handler returns early after a successful auto-fix
+- **WHEN** `global_exception_handler` is invoked and `apply_fix` returns `True`
+- **THEN** the system SHALL print a restart notice and return early
+- **AND** SHALL NOT print the full formatted traceback
 
 ### Requirement: Legacy status and live recovery reference
 The system SHALL treat `whilly/recovery.py` and `whilly/self_healing.py` as legacy modules that are NOT wired into the v4 Postgres worker-claim path (zero callers), and the live stale-task recovery contract SHALL be `release_stale_tasks` (the visibility-timeout sweep with optimistic locking) defined in the `state-persistence` capability.
@@ -82,3 +86,4 @@ The system SHALL treat `whilly/recovery.py` and `whilly/self_healing.py` as lega
 #### Scenario: live recovery emits visibility-timeout release
 - **WHEN** an aged-out CLAIMED or IN_PROGRESS row is recovered in v4
 - **THEN** the authoritative behavior SHALL be the `state-persistence` `release_stale_tasks` sweep that returns the row to PENDING under optimistic locking
+
