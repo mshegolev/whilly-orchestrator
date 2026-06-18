@@ -863,3 +863,139 @@ def test_main_neither_all_nor_slug_errors(tmp_path):
     """Neither --all nor --slug is a usage error (one required)."""
     with pytest.raises(SystemExit):
         sdc.main([], reviewer=lambda p: "[]")
+
+
+# ---------------------------------------------------------------------------
+# Phase 32 Task 1: --fail-on {none,high} severity gating (CI-02)
+# ---------------------------------------------------------------------------
+
+
+def _fail_on_args(out_path, specs_root, repo_root, *, fail_on=None):
+    args = [
+        "--all",
+        "--output",
+        str(out_path),
+        "--max-workers",
+        "2",
+        "--specs-root",
+        specs_root,
+        "--repo-root",
+        str(repo_root),
+        "--matrix-path",
+        str(Path(repo_root) / "openspec" / "COVERAGE-MATRIX.md"),
+    ]
+    if fail_on is not None:
+        args += ["--fail-on", fail_on]
+    return args
+
+
+def test_main_all_fail_on_none_with_high_finding_returns_zero(tmp_path):
+    """--fail-on none never gates, even with a HIGH finding (report-only)."""
+    slugs = ["orchestration-loop", "agent-dispatch"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    out_path = tmp_path / "findings.json"
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: orchestration-loop" in prompt.lower():
+            return json.dumps([_valid_finding(slug="orchestration-loop", severity="HIGH")])
+        return "[]"
+
+    rc = sdc.main(_fail_on_args(out_path, specs_root, repo_root, fail_on="none"), reviewer=fake_reviewer)
+    assert rc == 0
+
+
+def test_main_all_fail_on_high_with_high_finding_returns_one(tmp_path):
+    """--fail-on high exits 1 when at least one finding has severity HIGH."""
+    slugs = ["orchestration-loop", "agent-dispatch"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    out_path = tmp_path / "findings.json"
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: orchestration-loop" in prompt.lower():
+            return json.dumps([_valid_finding(slug="orchestration-loop", severity="HIGH")])
+        return "[]"
+
+    rc = sdc.main(_fail_on_args(out_path, specs_root, repo_root, fail_on="high"), reviewer=fake_reviewer)
+    assert rc == 1
+
+
+def test_main_all_fail_on_high_medium_low_only_returns_zero(tmp_path):
+    """--fail-on high only gates on HIGH — MEDIUM/LOW-only run exits 0."""
+    slugs = ["orchestration-loop", "agent-dispatch"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    out_path = tmp_path / "findings.json"
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: orchestration-loop" in prompt.lower():
+            return json.dumps([_valid_finding(slug="orchestration-loop", severity="MEDIUM")])
+        return json.dumps([_valid_finding(slug="agent-dispatch", severity="LOW")])
+
+    rc = sdc.main(_fail_on_args(out_path, specs_root, repo_root, fail_on="high"), reviewer=fake_reviewer)
+    assert rc == 0
+
+
+def test_main_all_fail_on_high_errors_only_returns_zero(tmp_path):
+    """A per-unit error (reviewer raises) with no HIGH finding still exits 0 — errors never gate."""
+    slugs = ["orchestration-loop", "agent-dispatch"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    out_path = tmp_path / "findings.json"
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: orchestration-loop" in prompt.lower():
+            raise RuntimeError("reviewer blew up")
+        return "[]"
+
+    rc = sdc.main(_fail_on_args(out_path, specs_root, repo_root, fail_on="high"), reviewer=fake_reviewer)
+    artifact = json.loads(out_path.read_text(encoding="utf-8"))
+    assert artifact["errors"], "expected the run to record a per-unit error"
+    assert rc == 0
+
+
+def test_main_all_default_fail_on_returns_zero_and_writes_artifact(tmp_path):
+    """main(--all) with no --fail-on flag defaults to none: returns 0, still writes artifact + summary."""
+    slugs = ["orchestration-loop", "agent-dispatch"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    out_path = tmp_path / "findings.json"
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: orchestration-loop" in prompt.lower():
+            return json.dumps([_valid_finding(slug="orchestration-loop", severity="HIGH")])
+        return "[]"
+
+    rc = sdc.main(_fail_on_args(out_path, specs_root, repo_root), reviewer=fake_reviewer)
+    assert rc == 0
+    assert out_path.is_file()
+    artifact = json.loads(out_path.read_text(encoding="utf-8"))
+    assert set(artifact.keys()) == {"run", "coverage", "clusters", "findings", "errors"}
+
+
+def test_main_slug_fail_on_high_with_high_finding_returns_zero(tmp_path):
+    """The --slug path is unchanged by --fail-on: still exits 0 even with a HIGH finding."""
+    slugs = ["orchestration-loop"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+
+    def fake_reviewer(prompt: str) -> str:
+        return json.dumps([_valid_finding(slug="orchestration-loop", severity="HIGH")])
+
+    rc = sdc.main(
+        [
+            "--slug",
+            "orchestration-loop",
+            "--fail-on",
+            "high",
+            "--specs-root",
+            specs_root,
+            "--repo-root",
+            str(repo_root),
+            "--matrix-path",
+            str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+        ],
+        reviewer=fake_reviewer,
+    )
+    assert rc == 0
+
+
+def test_main_fail_on_rejects_unknown_value(tmp_path):
+    """--fail-on accepts only none|high; any other value is an argparse usage error."""
+    with pytest.raises(SystemExit):
+        sdc.main(["--all", "--fail-on", "medium"], reviewer=lambda p: "[]")
