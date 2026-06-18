@@ -94,7 +94,8 @@ begins at **Phase 30**.
   1. A scheduled (cron) or manually-dispatched CI job runs the semantic check separately from, and without blocking, the v1.4 per-PR mechanical gate.
   2. The scheduled job uploads the findings artifact and renders the human summary in CI output.
   3. The job's gating posture is configurable between report-only (always green) and fail-on-HIGH (red when a HIGH finding is present).
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 32-01-PLAN.md — Add --fail-on {none,high} gating (CI-02) + new scheduled semantic-drift.yml workflow with artifact upload, step summary, and allowlisted posture (CI-01)
 
 ### Phase 33: Known-Drift Fixture Validation
 **Goal**: The guard is demonstrably trustworthy — proven against a deliberately drifted spec/code pair to detect a real HIGH drift while reporting an undrifted spec as clean.
