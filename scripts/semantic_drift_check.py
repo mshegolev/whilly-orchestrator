@@ -706,9 +706,14 @@ def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = clau
     preserves the Phase 30 behavior exactly (print findings JSON to stdout).
     ``--all`` reviews every slug in the :data:`CLUSTERS` partition via
     :func:`run_fleet`, writes the locked JSON artifact to ``--output``, and
-    prints :func:`format_summary` to stdout. Always returns exit code 0 —
-    severity gating is Phase 32. ``reviewer`` is injectable so tests drive the
-    full CLI path with a fake reviewer and no CLI/network.
+    prints :func:`format_summary` to stdout. ``--all`` honors ``--fail-on``
+    (Phase 32 / CI-02): ``none`` (the default) always returns 0 — report-only;
+    ``high`` returns 1 iff at least one finding has severity ``HIGH`` (the
+    :data:`SEVERITIES` ``[0]`` literal), and returns 0 otherwise. Per-unit
+    ``errors`` NEVER gate — gating is strictly on findings severity, so an
+    LLM/CLI hiccup is not mistaken for drift. The ``--slug`` path is unchanged
+    by ``--fail-on`` and always returns 0. ``reviewer`` is injectable so tests
+    drive the full CLI path with a fake reviewer and no CLI/network.
     """
     parser = argparse.ArgumentParser(
         prog="semantic_drift_check",
@@ -723,6 +728,13 @@ def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = clau
     parser.add_argument("--max-workers", type=int, default=6, help="fleet thread-pool size (--all)")
     parser.add_argument("--output", default="semantic-drift-findings.json", help="artifact path (--all)")
     parser.add_argument("--model", default=None, help="model recorded in run metadata (--all)")
+    parser.add_argument(
+        "--fail-on",
+        choices=("none", "high"),
+        default="none",
+        help="gating posture for --all: 'none' always exits 0 (report-only); "
+        "'high' exits 1 iff a HIGH-severity finding exists (errors never gate)",
+    )
     args = parser.parse_args(argv)
 
     if args.all:
@@ -740,6 +752,13 @@ def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = clau
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump(artifact, f, indent=2)
         print(format_summary(artifact))
+        # CI-02 gate: only --fail-on high gates, and only on a HIGH finding.
+        # Per-unit errors NEVER gate — a transient LLM/CLI hiccup must not look
+        # like a drift failure. The --slug path below is never gated.
+        if args.fail_on == "high":
+            high = SEVERITIES[0]
+            if any(f.get("severity") == high for f in artifact.get("findings", [])):
+                return 1
         return 0
 
     findings = review_spec(
