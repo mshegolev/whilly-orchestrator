@@ -32,6 +32,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+from whilly.gh_utils import gh_subprocess_env
 from whilly.workflow.base import BoardStatus
 
 log = logging.getLogger("whilly.workflow.github")
@@ -255,6 +256,7 @@ class GitHubProjectBoard:
                 capture_output=True,
                 text=True,
                 check=False,
+                env=gh_subprocess_env(),
             )
         else:
             cmd = [self._gh_path(), "api", "graphql", "-f", f"query={query}"]
@@ -263,7 +265,7 @@ class GitHubProjectBoard:
                     cmd.extend(["-F", f"{key}={val}"])
                 else:
                     cmd.extend(["-f", f"{key}={val}"])
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=gh_subprocess_env())
 
         if proc.returncode != 0:
             raise RuntimeError(f"gh api graphql failed: {proc.stderr.strip() or proc.stdout.strip()}")
