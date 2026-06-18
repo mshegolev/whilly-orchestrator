@@ -83,7 +83,8 @@ begins at **Phase 30**.
   3. The run output records the model used and the spec/code commit (or tree state) reviewed, so the findings set is reproducible.
   4. The run writes a machine-readable findings artifact (e.g. JSON) plus a human summary with per-cluster H/M/L and clean tallies.
   5. The summary reports coverage (specs reviewed / 32) and distinguishes confirmed findings from clean specs.
-**Plans**: TBD
+**Plans**: 1 plan
+- [ ] 31-01-PLAN.md — Fleet runner: CLUSTERS partition + bounded ThreadPoolExecutor fan-out over all 32 specs, per-unit resilience, self-describing run metadata, JSON artifact + pure human summary (--all)
 
 ### Phase 32: Scheduled CI Integration
 **Goal**: The semantic check runs unattended on a schedule, surfaces its results as CI artifacts and summary, and gates per a configurable posture — without touching the v1.4 per-PR mechanical gate.
