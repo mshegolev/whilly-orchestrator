@@ -7,6 +7,8 @@ findings parse/validate pair.
 """
 
 import importlib.util
+import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -229,3 +231,254 @@ def test_validate_finding_rejects_missing_key():
 
 def test_validate_finding_rejects_evidence_without_colon():
     assert sdc.validate_finding(_valid_finding(evidence="whilly/cli/run.py")) is False
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 1: review_spec pipeline with injected reviewer (DETECT-01)
+# ---------------------------------------------------------------------------
+
+
+def _write_spec(repo_root: Path, slug: str, text: str) -> None:
+    spec_dir = repo_root / "openspec" / "specs" / slug
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "spec.md").write_text(text, encoding="utf-8")
+
+
+def _write_matrix(repo_root: Path, rows: list[tuple[str, str]]) -> Path:
+    body = "\n".join(f"| {mod} | {cap} | note |" for mod, cap in rows)
+    matrix = repo_root / "openspec" / "COVERAGE-MATRIX.md"
+    matrix.parent.mkdir(parents=True, exist_ok=True)
+    matrix.write_text(
+        "## Coverage Matrix\n\n| Module | Capability | Notes |\n|--------|------------|-------|\n" + body + "\n\n",
+        encoding="utf-8",
+    )
+    return matrix
+
+
+def _scaffold_repo(tmp_path: Path, slug: str = "demo-cap") -> tuple[Path, str]:
+    """Lay out a fake repo: spec.md + a matrix mapping one real module path."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_spec(repo_root, slug, "The system SHALL drain the queue completely.\n")
+    _write_matrix(repo_root, [("whilly/cli/run.py", slug)])
+    src = repo_root / "whilly" / "cli"
+    src.mkdir(parents=True)
+    (src / "run.py").write_text("def run():\n    pass\n", encoding="utf-8")
+    return repo_root, slug
+
+
+def test_review_spec_returns_findings_for_valid_reviewer(tmp_path):
+    """A fake reviewer returning a canned valid finding round-trips through review_spec."""
+    repo_root, slug = _scaffold_repo(tmp_path)
+    captured = {}
+
+    def fake_reviewer(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return json.dumps([_valid_finding(slug=slug)])
+
+    findings = sdc.review_spec(
+        slug,
+        reviewer=fake_reviewer,
+        specs_root=str(repo_root / "openspec" / "specs"),
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert len(findings) == 1
+    assert findings[0]["slug"] == slug
+    # The prompt must contain the slug and at least one mapped module path.
+    assert slug in captured["prompt"]
+    assert "whilly/cli/run.py" in captured["prompt"]
+
+
+def test_review_spec_clean_spec_returns_empty(tmp_path):
+    """A fake reviewer returning '[]' yields [] (clean spec, no network)."""
+    repo_root, slug = _scaffold_repo(tmp_path)
+    findings = sdc.review_spec(
+        slug,
+        reviewer=lambda prompt: "[]",
+        specs_root=str(repo_root / "openspec" / "specs"),
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert findings == []
+
+
+def test_review_spec_junk_output_returns_empty(tmp_path):
+    """A fake reviewer returning non-JSON junk yields [] (report-only, no raise)."""
+    repo_root, slug = _scaffold_repo(tmp_path)
+    findings = sdc.review_spec(
+        slug,
+        reviewer=lambda prompt: "I could not analyze this, sorry <<<",
+        specs_root=str(repo_root / "openspec" / "specs"),
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert findings == []
+
+
+def test_review_spec_missing_slug_returns_empty(tmp_path):
+    """A slug whose spec.md is missing returns [] and never calls the reviewer."""
+    repo_root, _ = _scaffold_repo(tmp_path)
+    called = {"n": 0}
+
+    def fake_reviewer(prompt: str) -> str:
+        called["n"] += 1
+        return "[]"
+
+    findings = sdc.review_spec(
+        "no-such-capability",
+        reviewer=fake_reviewer,
+        specs_root=str(repo_root / "openspec" / "specs"),
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert findings == []
+    assert called["n"] == 0
+
+
+def test_review_spec_skips_missing_module_sources(tmp_path):
+    """A mapped module that does not exist on disk is skipped, not fatal."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    slug = "demo-cap"
+    _write_spec(repo_root, slug, "The system SHALL do X.\n")
+    _write_matrix(repo_root, [("whilly/ghost.py", slug)])  # never created on disk
+    captured = {}
+
+    def fake_reviewer(prompt: str) -> str:
+        captured["prompt"] = prompt
+        return "[]"
+
+    findings = sdc.review_spec(
+        slug,
+        reviewer=fake_reviewer,
+        specs_root=str(repo_root / "openspec" / "specs"),
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert findings == []
+    # Prompt still built; the missing module is referenced (recorded as unreadable).
+    assert "whilly/ghost.py" in captured["prompt"]
+
+
+# ---------------------------------------------------------------------------
+# Plan 02 Task 2: default Claude-CLI reviewer + --slug CLI main (DETECT-01)
+# ---------------------------------------------------------------------------
+
+
+def test_main_prints_findings_json_and_exits_zero(tmp_path, capsys):
+    """main(--slug ...) with an injected fake reviewer prints findings JSON, returns 0."""
+    repo_root, slug = _scaffold_repo(tmp_path)
+
+    def fake_reviewer(prompt: str) -> str:
+        return json.dumps([_valid_finding(slug=slug)])
+
+    rc = sdc.main(
+        [
+            "--slug",
+            slug,
+            "--specs-root",
+            str(repo_root / "openspec" / "specs"),
+            "--repo-root",
+            str(repo_root),
+            "--matrix-path",
+            str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+        ],
+        reviewer=fake_reviewer,
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    parsed = json.loads(out)
+    assert len(parsed) == 1
+    assert parsed[0]["slug"] == slug
+
+
+def test_main_clean_spec_exits_zero(tmp_path, capsys):
+    """The CLI returns 0 and prints [] when the reviewer reports no drift."""
+    repo_root, slug = _scaffold_repo(tmp_path)
+    rc = sdc.main(
+        [
+            "--slug",
+            slug,
+            "--specs-root",
+            str(repo_root / "openspec" / "specs"),
+            "--repo-root",
+            str(repo_root),
+            "--matrix-path",
+            str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+        ],
+        reviewer=lambda prompt: "[]",
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_main_bad_slug_exits_zero_with_empty_array(tmp_path, capsys):
+    """A missing/invalid --slug logs to stderr but exits 0 with [] on stdout."""
+    repo_root, _ = _scaffold_repo(tmp_path)
+    rc = sdc.main(
+        [
+            "--slug",
+            "does-not-exist",
+            "--specs-root",
+            str(repo_root / "openspec" / "specs"),
+            "--repo-root",
+            str(repo_root),
+            "--matrix-path",
+            str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+        ],
+        reviewer=lambda prompt: "[]",
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == []
+
+
+def test_claude_reviewer_builds_expected_argv(monkeypatch):
+    """claude_reviewer builds argv with --output-format json, -p, and honors CLAUDE_BIN."""
+    monkeypatch.setenv("CLAUDE_BIN", "my-fake-claude")
+    captured = {}
+
+    class _Result:
+        stdout = json.dumps({"result": "[]"})
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _Result()
+
+    monkeypatch.setattr(sdc.subprocess, "run", fake_run)
+    out = sdc.claude_reviewer("PROMPT-TEXT")
+    cmd = captured["cmd"]
+    assert cmd[0] == "my-fake-claude"
+    assert "--output-format" in cmd
+    assert cmd[cmd.index("--output-format") + 1] == "json"
+    assert "-p" in cmd
+    assert cmd[cmd.index("-p") + 1] == "PROMPT-TEXT"
+    # Envelope unwrap: the inner "result" string is returned, not the raw JSON.
+    assert out == "[]"
+
+
+def test_claude_reviewer_falls_back_to_raw_stdout_on_unexpected_envelope(monkeypatch):
+    """If stdout is not the expected {result: ...} envelope, return raw stdout."""
+
+    class _Result:
+        stdout = "[]"  # plain array, not an envelope
+        returncode = 0
+
+    monkeypatch.setattr(sdc.subprocess, "run", lambda cmd, **kwargs: _Result())
+    assert sdc.claude_reviewer("PROMPT") == "[]"
+
+
+@pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not on PATH")
+def test_live_cli_reviewer_runs_against_real_claude(tmp_path):
+    """Live path: only runs when claude is installed; asserts review_spec returns a list."""
+    repo_root, slug = _scaffold_repo(tmp_path)
+    findings = sdc.review_spec(
+        slug,
+        reviewer=sdc.claude_reviewer,
+        specs_root=str(repo_root / "openspec" / "specs"),
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert isinstance(findings, list)
