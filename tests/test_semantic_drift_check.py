@@ -557,3 +557,178 @@ def test_live_slugs_helper_is_injectable(tmp_path):
     (tmp_path / "alpha" / "spec.md").write_text("x", encoding="utf-8")
     (tmp_path / "beta").mkdir()  # no spec.md -> excluded
     assert sdc.live_slugs(specs_root=str(tmp_path)) == {"alpha"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 31 Task 2: run_fleet fan-out + per-unit resilience + run metadata
+# ---------------------------------------------------------------------------
+
+
+def _scaffold_multi_repo(tmp_path: Path, slugs: list[str]) -> tuple[Path, str]:
+    """Lay out a fake repo with multiple specs, each mapping one real module."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    rows = []
+    for slug in slugs:
+        _write_spec(repo_root, slug, f"The {slug} system SHALL behave.\n")
+        mod = f"whilly/mod_{slug.replace('-', '_')}.py"
+        rows.append((mod, slug))
+        mod_path = repo_root / mod
+        mod_path.parent.mkdir(parents=True, exist_ok=True)
+        mod_path.write_text("def f():\n    pass\n", encoding="utf-8")
+    _write_matrix(repo_root, rows)
+    specs_root = str(repo_root / "openspec" / "specs")
+    return repo_root, specs_root
+
+
+def _patch_clusters(monkeypatch, slugs):
+    """Point cluster_for_slug at fixture slugs so run_fleet can tag them."""
+    mapping = {slug: f"cluster-{i % 2}" for i, slug in enumerate(slugs)}
+    monkeypatch.setattr(sdc, "_SLUG_TO_CLUSTER", mapping)
+
+
+def test_run_fleet_reviews_every_spec_once(tmp_path, monkeypatch):
+    """run_fleet invokes the reviewer for every spec exactly once via the pool."""
+    slugs = ["cap-a", "cap-b", "cap-c"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    _patch_clusters(monkeypatch, slugs)
+    seen = []
+
+    def fake_reviewer(prompt: str) -> str:
+        # Identify which slug from the prompt (slug is embedded).
+        for s in slugs:
+            if f"capability under review: {s}" in prompt.lower():
+                seen.append(s)
+        return "[]"
+
+    results = sdc.run_fleet(
+        slugs,
+        reviewer=fake_reviewer,
+        max_workers=2,
+        specs_root=specs_root,
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert sorted(seen) == sorted(slugs)
+    assert set(results["reviewed"]) == set(slugs)
+    assert results["errors"] == []
+    assert results["findings"] == []
+
+
+def test_run_fleet_findings_sorted_by_slug_then_severity(tmp_path, monkeypatch):
+    """Flattened findings are deterministically sorted by (slug, severity)."""
+    slugs = ["cap-b", "cap-a"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    _patch_clusters(monkeypatch, slugs)
+
+    def fake_reviewer(prompt: str) -> str:
+        # cap-a gets a LOW then HIGH; cap-b gets a MEDIUM.
+        if "capability under review: cap-a" in prompt.lower():
+            return json.dumps(
+                [
+                    _valid_finding(slug="cap-a", severity="LOW"),
+                    _valid_finding(slug="cap-a", severity="HIGH"),
+                ]
+            )
+        return json.dumps([_valid_finding(slug="cap-b", severity="MEDIUM")])
+
+    def run():
+        return sdc.run_fleet(
+            slugs,
+            reviewer=fake_reviewer,
+            max_workers=2,
+            specs_root=specs_root,
+            repo_root=str(repo_root),
+            matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+        )
+
+    r1 = run()
+    r2 = run()
+    order = [(f["slug"], f["severity"]) for f in r1["findings"]]
+    # cap-a before cap-b; within cap-a, HIGH before LOW (SEVERITIES order).
+    assert order == [("cap-a", "HIGH"), ("cap-a", "LOW"), ("cap-b", "MEDIUM")]
+    assert [(f["slug"], f["severity"]) for f in r2["findings"]] == order
+
+
+def test_run_fleet_resilient_to_reviewer_exception(tmp_path, monkeypatch):
+    """A reviewer that raises for one slug records an error and continues."""
+    slugs = ["cap-a", "cap-boom", "cap-c"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    _patch_clusters(monkeypatch, slugs)
+
+    def fake_reviewer(prompt: str) -> str:
+        if "capability under review: cap-boom" in prompt.lower():
+            raise RuntimeError("reviewer blew up")
+        return json.dumps([_valid_finding(slug="cap-a")]) if "cap-a" in prompt.lower() else "[]"
+
+    results = sdc.run_fleet(
+        slugs,
+        reviewer=fake_reviewer,
+        max_workers=3,
+        specs_root=specs_root,
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert len(results["errors"]) == 1
+    err = results["errors"][0]
+    assert err["slug"] == "cap-boom"
+    assert "cluster" in err
+    assert "blew up" in err["error"]
+    # The other two specs were still reviewed; findings collected.
+    assert set(results["reviewed"]) == {"cap-a", "cap-c"}
+    assert any(f["slug"] == "cap-a" for f in results["findings"])
+
+
+def test_run_fleet_honors_max_workers_bound(tmp_path, monkeypatch):
+    """A small max_workers still reviews every spec."""
+    slugs = ["cap-a", "cap-b", "cap-c", "cap-d"]
+    repo_root, specs_root = _scaffold_multi_repo(tmp_path, slugs)
+    _patch_clusters(monkeypatch, slugs)
+    results = sdc.run_fleet(
+        slugs,
+        reviewer=lambda prompt: "[]",
+        max_workers=1,
+        specs_root=specs_root,
+        repo_root=str(repo_root),
+        matrix_path=str(repo_root / "openspec" / "COVERAGE-MATRIX.md"),
+    )
+    assert set(results["reviewed"]) == set(slugs)
+
+
+def test_collect_run_metadata_uses_injected_git_and_time_seams():
+    """Metadata block uses injected git_info + now seams, no real-git dependency."""
+    md = sdc.collect_run_metadata(
+        model="my-model",
+        git_info=lambda: {"commit": "abc123", "dirty": True},
+        now=lambda: "2026-06-19T00:00:00Z",
+    )
+    assert md["model"] == "my-model"
+    assert md["commit"] == "abc123"
+    assert md["dirty"] is True
+    assert md["timestamp"] == "2026-06-19T00:00:00Z"
+    assert md["tool_version"] == sdc.TOOL_VERSION
+
+
+def test_collect_run_metadata_model_resolution_precedence(monkeypatch):
+    """model resolves arg > WHILLY_MODEL env > DEFAULT_MODEL."""
+    seams = dict(git_info=lambda: {"commit": None, "dirty": None}, now=lambda: "T")
+    # Explicit arg wins over env.
+    monkeypatch.setenv("WHILLY_MODEL", "env-model")
+    assert sdc.collect_run_metadata(model="arg-model", **seams)["model"] == "arg-model"
+    # Env wins when no arg.
+    assert sdc.collect_run_metadata(model=None, **seams)["model"] == "env-model"
+    # Default when neither.
+    monkeypatch.delenv("WHILLY_MODEL", raising=False)
+    assert sdc.collect_run_metadata(model=None, **seams)["model"] == sdc.DEFAULT_MODEL
+
+
+def test_collect_run_metadata_default_git_seam_degrades_gracefully(monkeypatch):
+    """The default git seam degrades to commit=None/dirty=None on subprocess failure."""
+
+    def boom(*args, **kwargs):
+        raise OSError("no git")
+
+    monkeypatch.setattr(sdc.subprocess, "run", boom)
+    md = sdc.collect_run_metadata(model="m", now=lambda: "T")
+    assert md["commit"] is None
+    assert md["dirty"] is None
