@@ -591,24 +591,156 @@ def collect_run_metadata(
     }
 
 
-def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = claude_reviewer) -> int:
-    """CLI entry: review one ``--slug`` and print its findings JSON to stdout.
+# ---------------------------------------------------------------------------
+# Phase 31 Task 3: artifact builder + pure summary formatter (REPORT-01/02)
+# ---------------------------------------------------------------------------
 
-    Always returns exit code 0 — Phase 30 is report-only; severity gating is
-    Phase 32. A missing/invalid slug is handled inside :func:`review_spec`
-    (logged to stderr, ``[]`` printed) so a bad slug never produces a non-zero
-    exit. ``reviewer`` is injectable so tests drive the full CLI path with a
-    fake reviewer and no CLI/network.
+
+def build_artifact(results: dict, metadata: dict, *, total: int = 32) -> dict:
+    """Build the CONTEXT-locked JSON artifact from a fleet ``results`` dict.
+
+    Shape (REPORT-01)::
+
+        {
+          "run": metadata,
+          "coverage": {"reviewed": <n>, "total": 32},
+          "clusters": {<cluster>: {high, medium, low, clean, error}},
+          "findings": [...],   # the already-sorted flat findings list
+          "errors":   [...],   # the per-unit error entries
+        }
+
+    Per-cluster tallies are computed by bucketing findings by severity into the
+    owning cluster (via the finding's ``cluster`` tag, else :func:`cluster_for_slug`),
+    counting error entries into the cluster's ``error`` bucket, and counting
+    ``clean`` as reviewed specs in that cluster that produced zero findings and
+    had no error. Every one of the six clusters is always present.
+    """
+    findings = results.get("findings", [])
+    errors = results.get("errors", [])
+    reviewed = results.get("reviewed", [])
+
+    clusters: dict[str, dict[str, int]] = {
+        name: {"high": 0, "medium": 0, "low": 0, "clean": 0, "error": 0} for name in CLUSTERS
+    }
+
+    _sev_bucket = {"HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
+    slugs_with_findings: set[str] = set()
+    for finding in findings:
+        cluster = finding.get("cluster") or cluster_for_slug(finding.get("slug", ""))
+        if cluster not in clusters:
+            continue
+        bucket = _sev_bucket.get(finding.get("severity", ""))
+        if bucket is not None:
+            clusters[cluster][bucket] += 1
+        slugs_with_findings.add(finding.get("slug", ""))
+
+    error_slugs: set[str] = set()
+    for err in errors:
+        cluster = err.get("cluster") or cluster_for_slug(err.get("slug", ""))
+        if cluster in clusters:
+            clusters[cluster]["error"] += 1
+        error_slugs.add(err.get("slug", ""))
+
+    # A reviewed spec with no findings and no error is "clean".
+    for slug in reviewed:
+        cluster = cluster_for_slug(slug)
+        if cluster not in clusters:
+            continue
+        if slug not in slugs_with_findings and slug not in error_slugs:
+            clusters[cluster]["clean"] += 1
+
+    return {
+        "run": metadata,
+        "coverage": {"reviewed": len(reviewed), "total": total},
+        "clusters": clusters,
+        "findings": findings,
+        "errors": errors,
+    }
+
+
+def format_summary(artifact: dict) -> str:
+    """Render a human stdout summary from an ``artifact`` dict (PURE function).
+
+    No I/O, no subprocess, no fleet call — buildable and assertable from a
+    hand-made dict (REPORT-02). Renders a per-cluster HIGH/MEDIUM/LOW + clean
+    table, a coverage ``reviewed/32`` line, and a confirmed-findings (specs with
+    >=1 finding) vs clean-specs split.
+    """
+    clusters = artifact.get("clusters", {})
+    coverage = artifact.get("coverage", {})
+    findings = artifact.get("findings", [])
+    errors = artifact.get("errors", [])
+
+    lines: list[str] = []
+    lines.append("Semantic drift sweep")
+    reviewed = coverage.get("reviewed", 0)
+    total = coverage.get("total", 0)
+    lines.append(f"Coverage: reviewed {reviewed}/{total} specs")
+    lines.append("")
+
+    header = f"{'cluster':<18} {'HIGH':>5} {'MEDIUM':>7} {'LOW':>5} {'clean':>6} {'error':>6}"
+    lines.append(header)
+    lines.append("-" * len(header))
+    for name in CLUSTERS:
+        tally = clusters.get(name, {"high": 0, "medium": 0, "low": 0, "clean": 0, "error": 0})
+        lines.append(
+            f"{name:<18} {tally.get('high', 0):>5} {tally.get('medium', 0):>7} "
+            f"{tally.get('low', 0):>5} {tally.get('clean', 0):>6} {tally.get('error', 0):>6}"
+        )
+    lines.append("-" * len(header))
+
+    confirmed_slugs = {f.get("slug") for f in findings}
+    clean_count = sum(t.get("clean", 0) for t in clusters.values())
+    lines.append("")
+    lines.append(f"Confirmed findings: {len(findings)} across {len(confirmed_slugs)} spec(s)")
+    lines.append(f"Clean specs: {clean_count}")
+    if errors:
+        lines.append(f"Errors: {len(errors)} (see artifact 'errors')")
+    return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = claude_reviewer) -> int:
+    """CLI entry: review one ``--slug`` or the whole fleet with ``--all``.
+
+    Modes are mutually exclusive and exactly one is required. ``--slug``
+    preserves the Phase 30 behavior exactly (print findings JSON to stdout).
+    ``--all`` reviews every slug in the :data:`CLUSTERS` partition via
+    :func:`run_fleet`, writes the locked JSON artifact to ``--output``, and
+    prints :func:`format_summary` to stdout. Always returns exit code 0 —
+    severity gating is Phase 32. ``reviewer`` is injectable so tests drive the
+    full CLI path with a fake reviewer and no CLI/network.
     """
     parser = argparse.ArgumentParser(
         prog="semantic_drift_check",
-        description="Review one OpenSpec capability spec for semantic drift against its mapped modules.",
+        description="Review OpenSpec capability specs for semantic drift against their mapped modules.",
     )
-    parser.add_argument("--slug", required=True, help="capability slug (openspec/specs/<slug>/spec.md)")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--slug", help="review a single capability slug (openspec/specs/<slug>/spec.md)")
+    mode.add_argument("--all", action="store_true", help="review the whole fleet (all 32 clusters' specs)")
     parser.add_argument("--specs-root", default="openspec/specs", help="root of capability spec dirs")
     parser.add_argument("--repo-root", default=".", help="repo root for resolving module sources")
     parser.add_argument("--matrix-path", default=DEFAULT_MATRIX_PATH, help="coverage-matrix path")
+    parser.add_argument("--max-workers", type=int, default=6, help="fleet thread-pool size (--all)")
+    parser.add_argument("--output", default="semantic-drift-findings.json", help="artifact path (--all)")
+    parser.add_argument("--model", default=None, help="model recorded in run metadata (--all)")
     args = parser.parse_args(argv)
+
+    if args.all:
+        slugs = [slug for slugs in CLUSTERS.values() for slug in slugs]
+        results = run_fleet(
+            slugs,
+            reviewer=reviewer,
+            max_workers=args.max_workers,
+            specs_root=args.specs_root,
+            repo_root=args.repo_root,
+            matrix_path=args.matrix_path,
+        )
+        metadata = collect_run_metadata(model=args.model)
+        artifact = build_artifact(results, metadata)
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(artifact, f, indent=2)
+        print(format_summary(artifact))
+        return 0
 
     findings = review_spec(
         args.slug,
