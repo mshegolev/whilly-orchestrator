@@ -1,48 +1,80 @@
-# Requirements: Whilly Orchestrator — v1.4 Spec Drift-Guard CI
+# Requirements: Whilly Orchestrator — v1.5 Semantic Drift-Guard
 
-**Defined:** 2026-06-16
+**Defined:** 2026-06-18
 **Core Value:** Operators can safely coordinate AI-assisted engineering work with auditable state,
 human control, and verification before claiming success.
 
-**Milestone goal:** Operationalize the v1.3 OpenSpec baseline with an automated CI gate so that
-spec↔code drift (the v3→v4 class that v1.3 had to fix by hand) can never silently re-accumulate.
-Every PR/push must prove the 32 capability specs still validate `--strict` and the
-`module → capability` coverage matrix is still complete (live module count == matrix rows, zero
-unmapped, zero double-mapped, slugs ⊆ taxonomy, every capability ≥1 module).
+**Milestone goal:** Add a repeatable, agent-assisted *semantic* spec-fidelity check that catches
+when a capability spec's `SHALL`/`MUST` requirements no longer match live code behavior — the drift
+class the v1.4 mechanical gate (coverage matrix + `openspec validate --strict`) provably cannot
+detect. The deliverable is the detection *mechanism*, additive to v1.4 and validated against a
+known-drift fixture.
 
-**Decisions locked (2026-06-16):**
-- Gate runs in the existing GitHub Actions CI (`.github/workflows/ci.yml`) alongside lint/test/etc.
-- `openspec` is a Node CLI → the job installs Node + the openspec CLI before validating.
-- The coverage-matrix audit is a committed, testable script (no inline shell-only logic) so it
-  runs identically in CI and locally.
-- A local entry point mirrors CI (Makefile target), matching the existing `migrate-chain` pattern.
-- This milestone MAY change `whilly/`-adjacent infra (CI, Makefile, a `scripts/` checker) — it is
-  NOT spec-capture-only. It must not change `whilly/` runtime behavior.
+**Decisions locked (2026-06-18):**
+- Additive to v1.4: the mechanical gate stays per-PR; the semantic check is separate.
+- LLM/agent-assisted ⇒ non-deterministic and costly ⇒ runs on a scheduled cadence, not every PR.
+- Findings must be evidence-backed (`file:line`) and reproducible (records model + reviewed commit).
+- Reuses `openspec/COVERAGE-MATRIX.md` for the spec→module review set (no second mapping).
 
-## v1.4 Requirements
+## v1.5 Requirements
 
-### Spec Drift-Guard (Phase 29)
+### Detection (DETECT)
 
-- [ ] **DRIFT-01**: A CI job validates all OpenSpec capability specs — runs
-  `openspec validate --all --strict` on every pull_request and push, and fails the build if any
-  spec is invalid (non-zero exit / any "failed").
-- [ ] **DRIFT-02**: A committed, executable coverage-matrix audit checks, and the CI job enforces:
-  live module count (`find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l`) == matrix
-  body-row count; zero `UNMAPPED`; zero double-mapped module paths; every capability slug used is
-  one of the taxonomy slugs; every taxonomy capability has ≥1 module row. Any drift fails the build.
-- [ ] **DRIFT-03**: A local entry point reproduces the CI gate (e.g. `make spec-check`) and is
-  documented (CLAUDE.md / docs), so contributors can run the same checks before pushing.
+- [ ] **DETECT-01**: Operator can run a semantic spec-fidelity check that reviews each capability
+  spec's `SHALL`/`MUST` requirements against its mapped `whilly/` modules and emits per-requirement
+  findings.
+- [ ] **DETECT-02**: Each finding records severity (HIGH/MEDIUM/LOW), capability slug, requirement
+  name, a one-line drift description, and `file:line` code evidence.
+- [ ] **DETECT-03**: Each finding is triaged as `code-bug` (code diverged from a correct spec) or
+  `spec-overstatement` (spec claims more than the code does), with a short rationale.
+- [ ] **DETECT-04**: The checker derives the spec→module review set from
+  `openspec/COVERAGE-MATRIX.md`, reusing the existing mapping rather than a hand-maintained second
+  source.
+
+### Orchestration (RUN)
+
+- [ ] **RUN-01**: A single check run fans out across capability clusters in parallel and covers all
+  32 capability specs.
+- [ ] **RUN-02**: A run is bounded and resilient — a failed cluster/spec review degrades to a
+  recorded error for that unit rather than aborting the whole run.
+- [ ] **RUN-03**: A run is self-describing: it records the model used and the spec/code commit (or
+  tree state) it reviewed, so a findings set is reproducible and auditable.
+
+### Reporting (REPORT)
+
+- [ ] **REPORT-01**: A run writes a machine-readable findings artifact (e.g. JSON) and a
+  human-readable summary with per-cluster tallies (H/M/L and clean count).
+- [ ] **REPORT-02**: The summary reports coverage (specs reviewed / 32) and distinguishes confirmed
+  findings from clean specs.
+
+### CI Integration (CI)
+
+- [ ] **CI-01**: The semantic check runs as a scheduled CI job (cron/manual dispatch), separate
+  from and not blocking the v1.4 per-PR mechanical gate.
+- [ ] **CI-02**: The scheduled job surfaces results (artifact upload + summary) with a configurable
+  gating posture (report-only vs fail-on-HIGH).
+
+### Self-Validation (VALID)
+
+- [ ] **VALID-01**: The mechanism is validated against a known-drift fixture (a deliberately drifted
+  spec/code pair) proving it detects a HIGH semantic drift and reports a clean spec as clean — so
+  the guard is demonstrably trustworthy, not just plausible.
+
+## Future Requirements (deferred)
+
+- Auto-opening `opsx` change proposals or code-fix PRs from confirmed findings — v1.5 detects and
+  reports; remediation stays human-driven.
+- Per-PR (not scheduled) semantic checking scoped to the diff's touched capabilities — possible
+  once cost/latency are characterized.
+- Historical drift trend tracking / dashboards.
 
 ## Out of Scope
 
-| Item | Reason |
-|------|--------|
-| Changing any `whilly/` runtime behavior | This milestone is CI/tooling only. Behavior changes go through `opsx` proposals. |
-| Rewriting or re-reviewing the 32 capability specs | v1.3 shipped them validated; v1.4 only guards them. |
-| Auto-fixing drift | The gate fails loudly; fixing drift is a normal `opsx`/spec-update task, not automated here. |
+- Replacing or weakening the v1.4 mechanical gate — the semantic check is strictly additive.
+- Auto-applying fixes or auto-archiving spec deltas — externally visible mutation stays human-gated.
+- Re-auditing or rewriting the 32 baseline specs — this milestone builds detection, not content.
+- Treating LLM findings as authoritative without evidence — every finding needs `file:line` proof.
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| DRIFT-01..03 | Phase 29 | Pending |
+(Filled by roadmap — each requirement maps to exactly one phase.)
