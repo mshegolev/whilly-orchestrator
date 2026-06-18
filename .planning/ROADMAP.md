@@ -69,7 +69,9 @@ begins at **Phase 30**.
   2. Each emitted finding carries severity (HIGH/MEDIUM/LOW), capability slug, requirement name, a one-line drift description, and `file:line` code evidence.
   3. Each finding is labeled `code-bug` or `spec-overstatement` with a short rationale.
   4. The module review set for any spec is derived live from `openspec/COVERAGE-MATRIX.md`, not a hand-maintained second mapping (changing the matrix changes the review set).
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 30-01-PLAN.md — Pure core: matrix-driven module resolution, deterministic prompt builder, findings parse/validate (DETECT-02/03/04)
+- [ ] 30-02-PLAN.md — review_spec pipeline + default Claude-CLI reviewer + `--slug` CLI entry, exit 0 (DETECT-01)
 
 ### Phase 31: Cluster-Parallel Run & Reporting
 **Goal**: A single run fans out the detection engine across all 32 specs in the proven 6-cluster pattern — bounded, resilient, self-describing — and emits both a machine-readable findings artifact and a human summary.
