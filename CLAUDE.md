@@ -15,27 +15,14 @@ Requires **Python 3.12+** (`requires-python = ">=3.12"`). Most task-execution pa
 ## Common commands
 
 ```bash
-# Dev install (editable, with dev deps)
-pip install -e '.[dev]'
-
-# v4 run path needs Postgres (point at your DSN)
-export WHILLY_DATABASE_URL=postgres://user:pass@localhost:5432/whilly
-whilly plan import PLAN.json     # load a JSON plan into Postgres
-whilly run --plan <plan-id>      # start a local worker that drains the plan's queue
-
-# v3-compat shim still works (rewrites to subcommands under the hood)
-whilly --tasks tasks.json        # → run --plan ... ; ./whilly.py and python -m whilly are equivalent launchers
-
-# Lint + format (same commands CI runs)
-ruff check whilly/ tests/
-ruff format --check whilly/ tests/
-ruff format whilly/ tests/                   # apply formatting
-
 # Tests
 pytest -q
 pytest tests/test_whilly_dashboard.py        # single file
 pytest tests/test_whilly_dashboard.py::test_name   # single test
 pytest -k budget                             # by keyword
+
+# Spec validation (reproduces CI gate locally)
+make spec-check
 ```
 
 Line length is 120 (`[tool.ruff]` in `pyproject.toml`). Target `py312`.

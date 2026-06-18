@@ -1,16 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.3
-milestone_name: OpenSpec Project Baseline
-status: ✅ Milestone v1.3 SHIPPED — all 8 phases (21-28) complete, 32 specs, 275/275 coverage, 32/0 strict
-last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16 — Phase 28 verified + closed; milestone v1.3 OpenSpec Project Baseline complete
+milestone: v1.4
+milestone_name: Spec Drift-Guard CI
+status: ✅ Milestone v1.4 SHIPPED — Operationalize the v1.3 OpenSpec baseline with automated CI gate
+last_updated: "2026-06-18T00:00:00.000Z"
+last_activity: 2026-06-18 — Milestone v1.4 shipped and archived
 progress:
-  total_phases: 8
-  completed_phases: 8
-  total_plans: 26
-  completed_plans: 26
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 2
+  completed_plans: 2
   percent: 100
+completed_at: "2026-06-18T00:00:00.000Z"
+archived_at: "2026-06-18T00:00:00.000Z"
 ---
 
 # Project State
