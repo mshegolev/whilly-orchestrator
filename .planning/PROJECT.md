@@ -78,13 +78,28 @@ The shipped v1.1 scope includes:
 - Jira-driven work intake can classify incoming issues, persist task history, reread Jira/GitLab
   links, and gate autonomous execution on code/test readiness.
 
-## Current Milestone
+## Current Milestone: v1.5 Semantic Drift-Guard
 
-**None active.** v1.3 — OpenSpec Project Baseline shipped 2026-06-16 (32 capability specs,
-275/275 coverage matrix, forward delta-only process enforced). Start the next milestone with
-`/gsd-new-milestone` (defines fresh requirements + roadmap). Until then, behavior changes flow
-through `opsx` proposals that update the relevant `openspec/specs/<slug>/spec.md` (see
-`openspec/FORWARD-PROCESS.md`).
+**Goal:** Add a repeatable, agent-assisted *semantic* spec-fidelity check that catches when a
+capability spec's `SHALL`/`MUST` requirements no longer match live code behavior — the drift class
+the v1.4 mechanical gate (coverage matrix + `openspec validate --strict`) provably cannot detect.
+
+**Target features:**
+- Semantic drift-detection engine: per-capability spec↔code review producing severity-rated,
+  evidence-backed (`file:line`) findings.
+- Cluster-parallel orchestration: the proven 6-cluster fan-out over all 32 capability specs,
+  reproducible and bounded.
+- Findings format + triage convention: structured output plus code-bug vs spec-overstatement
+  classification.
+- CI / scheduled-job integration: wired as a scheduled job (not per-PR — LLM cost/latency),
+  reporting and optionally gating.
+- Builds on existing artifacts: `openspec/COVERAGE-MATRIX.md` and
+  `scripts/audit-coverage-matrix.py`.
+
+**Key context:** Additive to v1.4 (the mechanical gate stays). LLM-assisted ⇒ non-deterministic
+and costly ⇒ scheduled cadence, not every PR. Findings must be reproducible and evidence-backed.
+This milestone builds the *mechanism*, validated by reproducing the recent manual audit's known
+findings (1 HIGH agent-dispatch, 3 MEDIUM jira/github write-path bugs).
 
 ## Requirements
 
@@ -200,4 +215,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-18 after shipping v1.4*
+*Last updated: 2026-06-18 — started milestone v1.5 Semantic Drift-Guard*

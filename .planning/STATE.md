@@ -1,18 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.4
-milestone_name: Spec Drift-Guard CI
-status: ✅ Milestone v1.4 SHIPPED — Operationalize the v1.3 OpenSpec baseline with automated CI gate
-last_updated: "2026-06-18T00:00:00.000Z"
-last_activity: 2026-06-18 — Milestone v1.4 shipped and archived
+milestone: v1.5
+milestone_name: Semantic Drift-Guard
+status: planning
+last_updated: "2026-06-18T16:43:18.788Z"
+last_activity: 2026-06-18
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
-  percent: 100
-completed_at: "2026-06-18T00:00:00.000Z"
-archived_at: "2026-06-18T00:00:00.000Z"
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -27,10 +25,10 @@ human control, and verification before claiming success.
 
 ## Current Position
 
-Phase: 28 — Forward Process, Coverage & Validation (closeout gates complete)
-Plan: 28-02 complete — COV-01 coverage matrix audited at 100% (live `find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l` = 275 == 275 body rows, 0 UNMAPPED, 0 double-mapped, capability column is exactly the 32 TAXONOMY slugs and all 32 each map ≥1 module; bijective path set vs live find; no drift so rows unchanged); VAL-01 `openspec validate --all --strict` → 32 passed / 0 failed; VAL-02 consolidated normative-accuracy review (32/32 specs SHALL/MUST + ≥1 #### Scenario:, six cluster VERIFICATION reports phases 22-27 all passed and mapped to slugs, legacy-as-current sweep confirmed decomposition/reporting/recovery-self-healing/verification-gates/state-persistence/budget-resource-guards still mark legacy/unwired/no-op). All three recorded as dated notes in openspec/COVERAGE-MATRIX.md. Documentation-only; zero whilly/ changes; no capability spec needed a fix. Prior: 28-01 (FWD-01 + FWD-02).
-Status: 27-02 reverse-spec'd two subsystem-altitude specs from real v4 code, both passing openspec validate --strict (0 errors/0 warnings). quality-compliance-audit (SAFE-03): per-language QualityGate Protocol (detect/run → GateResult, never raises on lint/test failure or missing binary/timeout) + multi-language detect_gates/run_all aggregation (gate_kind="multi", no-gates = passed True), deterministic target-doc ComplianceReport via `whilly compliance report` (PASS/PARTIAL/FAIL/UNKNOWN, present-but-unwired = PARTIAL), append-only JsonlEventSink.record (one JSON obj/line, OSError swallowed best-effort mirror of Postgres events), and qa-release collect/plan/scaffold-tests (refuses to clobber non-generated tests without --force). verification-gates (SAFE-04): LIVE pipeline run_verification_commands → VerificationRunOutcome (required_failed gates DONE, warning-only does not), started/result events with secret redaction, env allowlist + non-hanging timeout/blocked, human-review checkpoint gate (requires_human_review/build_human_review_checkpoint/is_human_review_approved + required/approved/rejected/changes_requested events), CI verification run_ci_verification; legacy verifier.verify_task commit-revert path marked unwired (confirmed: no worker-path callers). Documentation-only; zero whilly/ changes.
-Last activity: 2026-06-16 — Phase 28 plan 28-02 executed (COV-01 audit + VAL-01 validate + VAL-02 normative review; all recorded in COVERAGE-MATRIX.md). v1.3 milestone closeout gates satisfied (FWD-01, FWD-02, COV-01, VAL-01, VAL-02 all done).
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-18 — Milestone v1.5 started
 
 ## Active Roadmap
 
