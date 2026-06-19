@@ -999,3 +999,28 @@ def test_main_fail_on_rejects_unknown_value(tmp_path):
     """--fail-on accepts only none|high; any other value is an argparse usage error."""
     with pytest.raises(SystemExit):
         sdc.main(["--all", "--fail-on", "medium"], reviewer=lambda p: "[]")
+
+
+# v1.5 audit tech-debt closure: --max-workers validation + CLUSTERS↔matrix module guard
+
+
+def test_main_max_workers_rejects_non_positive():
+    """--max-workers 0/negative is an argparse usage error (SystemExit), not a
+    deferred ValueError at ThreadPoolExecutor construction."""
+    for bad in ["0", "-1"]:
+        with pytest.raises(SystemExit):
+            sdc.main(["--all", "--max-workers", bad], reviewer=lambda _p: "[]")
+
+
+def test_clusters_slugs_all_resolve_at_least_one_module():
+    """Every slug in the CLUSTERS partition resolves >=1 module from the live
+    COVERAGE-MATRIX.md. Offline regression guard: a future matrix edit dropping
+    a mapped slug would red here instead of only failing in scheduled CI."""
+    matrix_path = str(_REPO_ROOT / "openspec" / "COVERAGE-MATRIX.md")
+    unresolved = [
+        slug
+        for slugs in sdc.CLUSTERS.values()
+        for slug in slugs
+        if not sdc.resolve_modules_for_slug(slug, matrix_path=matrix_path)
+    ]
+    assert unresolved == [], f"CLUSTERS slugs with zero matrix modules: {unresolved}"
