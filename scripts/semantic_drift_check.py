@@ -699,6 +699,18 @@ def format_summary(artifact: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: a thread-pool size must be >= 1.
+
+    ``ThreadPoolExecutor(max_workers=0)`` raises ``ValueError`` at fleet start;
+    reject 0/negative at parse time with a clean usage error instead.
+    """
+    ivalue = int(value)
+    if ivalue < 1:
+        raise argparse.ArgumentTypeError(f"--max-workers must be >= 1, got {ivalue}")
+    return ivalue
+
+
 def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = claude_reviewer) -> int:
     """CLI entry: review one ``--slug`` or the whole fleet with ``--all``.
 
@@ -725,7 +737,7 @@ def main(argv: list[str] | None = None, *, reviewer: Callable[[str], str] = clau
     parser.add_argument("--specs-root", default="openspec/specs", help="root of capability spec dirs")
     parser.add_argument("--repo-root", default=".", help="repo root for resolving module sources")
     parser.add_argument("--matrix-path", default=DEFAULT_MATRIX_PATH, help="coverage-matrix path")
-    parser.add_argument("--max-workers", type=int, default=6, help="fleet thread-pool size (--all)")
+    parser.add_argument("--max-workers", type=_positive_int, default=6, help="fleet thread-pool size (--all, >=1)")
     parser.add_argument("--output", default="semantic-drift-findings.json", help="artifact path (--all)")
     parser.add_argument("--model", default=None, help="model recorded in run metadata (--all)")
     parser.add_argument(
