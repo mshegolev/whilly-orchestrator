@@ -1,5 +1,15 @@
 # Milestones
 
+## v1.5 Semantic Drift-Guard (Shipped: 2026-06-19)
+
+**Phases completed:** 4 phases, 5 plans, 0 tasks
+
+**Key accomplishments:**
+
+- (none recorded)
+
+---
+
 ## v1.2 Adoption & live-ops (Shipped: 2026-06-12)
 
 **Phases completed:** 3 phases, 9 plans, 11 tasks
@@ -9,19 +19,24 @@
 - Full Alembic migration chain (001→028) validated live from empty Docker Postgres with honest
   per-check evidence flags, `make migrate-chain` entry point, and a `migration-chain` CI job —
   first live CI run green with evidence artifact uploaded.
+
 - `whilly jira smoke --issue KEY`: six read-only checks (auth/issue/comments/changelog/links/
   classify) with credential gate, redacted JSON reports, exit codes 0/1/2 — validated LIVE 6/6
   against jira.example.com (Server/DC; required JIRA_AUTH_SCHEME=bearer + JIRA_API_VERSION=2, now
   documented).
+
 - New `whilly gitlab` CLI group with `smoke` (auth/project_access/repo_hint via injectable urllib
   client, traversal-safe path encoding, token precedence) — validated LIVE 3/3 against
   gitlab.example.com; failure paths confirmed leak-free.
+
 - Shared `whilly/cli/smoke.py` foundation: SmokeReport honest accumulation, secret-redacting
   report writer into `whilly_logs/smoke/`.
+
 - `whilly jira watch` daemon: configurable interval, graceful SIGINT/SIGTERM stop, atomic status
   file + `watch-status` reader, PID single-instance guard, 5/10/20/40/60s backoff with audit
   events, fail-closed pause/readiness gates, default-off `--dispatch` through the Phase-17-gated
   path — validated LIVE (2 cycles against real Jira, clean stop).
+
 - Code-review discipline: 7 Critical + 23 Warning findings across the three phases found and
   fixed pre-completion, each with falsification tests (recurring fabricated-evidence bug class
   eliminated three times).
@@ -114,10 +129,13 @@ Actions, jira.example.com, gitlab.example.com) — no deferred validation items 
 
 - 32 normative OpenSpec capability specs under `openspec/specs/<slug>/spec.md`, all passing
   `openspec validate --strict` (32 passed, 0 failed), reverse-spec'd from the real v4.7.0 code.
+
 - `module → capability` coverage matrix (`openspec/COVERAGE-MATRIX.md`) over all 275 `whilly/`
   modules — 0 unmapped, 0 double-mapped, every one of the 32 capabilities covered.
+
 - Capability taxonomy (`openspec/TAXONOMY.md`), authoring conventions (`openspec/AUTHORING.md`),
   and project context (`openspec/project.md`).
+
 - Forward delta-only process (`openspec/FORWARD-PROCESS.md`); `CLAUDE.md` + `AGENTS.md` now
   require an `opsx` spec delta for any behavior change and point at `openspec/specs/`.
 
@@ -128,6 +146,7 @@ Actions, jira.example.com, gitlab.example.com) — no deferred validation items 
 - During planning, the plan-checker caught that `CLAUDE.md` still described the removed v3
   single-process `run_plan` loop. `CLAUDE.md` was rewritten to the real v4.7.0 Postgres
   worker-claim architecture; specs were then reverse-spec'd from code, not stale docs.
+
 - Adversarial plan-checker + verifier gates per phase caught and rejected v3 lore (budget
   kill→exit-2, StateStore resume, legacy exit codes, unwired recovery/verifier modules).
 

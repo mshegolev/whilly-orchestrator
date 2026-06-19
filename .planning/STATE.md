@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.5
 milestone_name: Semantic Drift-Guard
-status: verifying
-last_updated: "2026-06-18T21:34:32.547Z"
-last_activity: 2026-06-18
+status: Awaiting next milestone
+last_updated: "2026-06-19T06:15:17.116Z"
+last_activity: 2026-06-19 — Milestone v1.5 completed and archived
 progress:
   total_phases: 4
   completed_phases: 4
@@ -26,10 +26,10 @@ spec↔code drift the v1.4 mechanical gate cannot.
 
 ## Current Position
 
-Phase: 30 — Detection Engine Core (in progress)
-Plan: 02 of 02 complete
-Status: Phase complete — ready for verification
-Last activity: 2026-06-18
+Phase: Milestone v1.5 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-19 — Milestone v1.5 completed and archived
 
 ## Active Roadmap
 
@@ -114,7 +114,7 @@ Plan Phase 30 with `/gsd-plan-phase 30`.
 
 ## Operator Next Steps
 
-- Plan the first phase: `/gsd-plan-phase 30` (Detection Engine Core).
+- Start the next milestone with /gsd-new-milestone
 
 ## Decisions
 
