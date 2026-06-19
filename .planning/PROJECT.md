@@ -41,6 +41,15 @@ operationalizes the v1.3 OpenSpec baseline with automated CI gates to prevent sp
 silently accumulating. Every PR/push now proves the 32 capability specs still validate `--strict`
 and the `module → capability` coverage matrix is still complete.
 
+v1.5 "Semantic Drift-Guard" shipped on 2026-06-19 (phases 30–33, 5 plans, all verified, audit
+passed). It adds the semantic complement to v1.4's mechanical gate: an agent-assisted checker
+(`scripts/semantic_drift_check.py` + scheduled `semantic-drift.yml`) that reviews each of the 32
+specs' `SHALL`/`MUST` against the live `whilly/` code they map to, emitting severity-rated,
+`file:line`-evidence-backed findings triaged code-bug vs spec-overstatement, fanned across the
+6-cluster pattern with a JSON artifact + human summary and `--fail-on {none,high}` gating, validated
+by a known-drift fixture (live canary: drifted→HIGH, clean→clean). Tooling under `scripts/` — zero
+`whilly/` behavior change.
+
 v1.2 "Adoption & live-ops" shipped on 2026-06-12 (phases 18–20, 9 plans, 8/8 requirements,
 audit passed). The shipped v1.2 scope includes:
 
@@ -78,28 +87,11 @@ The shipped v1.1 scope includes:
 - Jira-driven work intake can classify incoming issues, persist task history, reread Jira/GitLab
   links, and gate autonomous execution on code/test readiness.
 
-## Current Milestone: v1.5 Semantic Drift-Guard
+## Current Milestone
 
-**Goal:** Add a repeatable, agent-assisted *semantic* spec-fidelity check that catches when a
-capability spec's `SHALL`/`MUST` requirements no longer match live code behavior — the drift class
-the v1.4 mechanical gate (coverage matrix + `openspec validate --strict`) provably cannot detect.
-
-**Target features:**
-- Semantic drift-detection engine: per-capability spec↔code review producing severity-rated,
-  evidence-backed (`file:line`) findings.
-- Cluster-parallel orchestration: the proven 6-cluster fan-out over all 32 capability specs,
-  reproducible and bounded.
-- Findings format + triage convention: structured output plus code-bug vs spec-overstatement
-  classification.
-- CI / scheduled-job integration: wired as a scheduled job (not per-PR — LLM cost/latency),
-  reporting and optionally gating.
-- Builds on existing artifacts: `openspec/COVERAGE-MATRIX.md` and
-  `scripts/audit-coverage-matrix.py`.
-
-**Key context:** Additive to v1.4 (the mechanical gate stays). LLM-assisted ⇒ non-deterministic
-and costly ⇒ scheduled cadence, not every PR. Findings must be reproducible and evidence-backed.
-This milestone builds the *mechanism*, validated by reproducing the recent manual audit's known
-findings (1 HIGH agent-dispatch, 3 MEDIUM jira/github write-path bugs).
+**None active.** v1.5 Semantic Drift-Guard shipped 2026-06-19 (phases 30–33, 5 plans, audit
+passed). Start the next milestone with `/gsd-new-milestone`. Behavior changes flow through `opsx`
+proposals updating the relevant `openspec/specs/<slug>/spec.md` (see `openspec/FORWARD-PROCESS.md`).
 
 ## Requirements
 
@@ -142,6 +134,16 @@ findings (1 HIGH agent-dispatch, 3 MEDIUM jira/github write-path bugs).
   evidence reports (LIVE-01..03) - validated live on a real operator machine.
 - [x] Operators can run a long-lived `whilly jira watch` daemon with lifecycle controls, backoff
   audit events, and pause/readiness gating before any dispatch (WATCH-01..03) - validated live.
+
+### Validated in v1.5
+
+- [x] Semantic spec-fidelity checker reviews each spec's SHALL/MUST vs mapped code with triaged,
+  file:line-evidence findings (DETECT-01..04) — v1.5.
+- [x] Bounded, resilient, self-describing 6-cluster fan-out over all 32 specs with JSON artifact +
+  human summary (RUN-01..03, REPORT-01..02) — v1.5.
+- [x] Scheduled (non-PR) CI job with configurable report-only vs fail-on-HIGH gating (CI-01..02) — v1.5.
+- [x] Known-drift fixture proves the guard detects a planted HIGH and reports clean as clean
+  (VALID-01) — v1.5.
 
 ### Out of Scope
 
@@ -196,6 +198,9 @@ findings (1 HIGH agent-dispatch, 3 MEDIUM jira/github write-path bugs).
 | Watch daemon fails closed on readiness and survives dispatch failures | Unknown readiness blocks dispatch; dispatch exceptions become audit events, not crashes | Good |
 | Watch stays a thin foreground loop, independent of SchedulerWorker | Operator backgrounds it (tmux/systemd); avoids coupling to JQL-rule intake machinery | Good |
 | Jira Server/DC needs JIRA_AUTH_SCHEME=bearer + JIRA_API_VERSION=2 | Live smoke against jira.example.com exposed the Cloud-vs-DC API split; documented in usage docs | Good |
+| Semantic drift-guard lives in `scripts/`, not `whilly/` | A drift checker inside the package would owe itself a coverage-matrix entry + capability spec (recursive); as tooling it is exempt and ships zero behavior change | Good |
+| Semantic check is LLM-assisted ⇒ scheduled, not per-PR | Non-determinism + cost make it unfit for blocking every PR; weekly cron + report-only default keeps the per-PR mechanical gate fast and deterministic | Good |
+| Drift findings are evidence-backed (file:line) + injected-reviewer testable | Every finding needs code proof so the LLM is not authoritative; the reviewer seam makes 60+ offline tests deterministic | Good |
 
 ## Evolution
 
@@ -215,4 +220,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-18 — started milestone v1.5 Semantic Drift-Guard*
+*Last updated: 2026-06-19 after v1.5 Semantic Drift-Guard milestone*
