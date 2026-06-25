@@ -455,6 +455,12 @@ async def _empty_snapshot() -> OperatorSnapshot:
     )
 
 
+def _read_only_hint(state: TuiState) -> str:
+    if getattr(state, "read_only", False):
+        return "read-only (HTTP) — connect to the DB for control/review"
+    return ""
+
+
 def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     title = "Whilly operator - compact control plane"
     if snapshot.control_state.paused:
@@ -472,11 +478,19 @@ def _header(snapshot: OperatorSnapshot, state: TuiState) -> Table:
     mode = "search" if state.searching else "live"
     filter_part = f"filter: {state.filter_text}" if state.filter_text else "filter: -"
     error_part = f" error: {state.last_error}" if state.last_error else ""
-    table.caption = (
+    caption_str = (
         f"hotkeys: q=quit  r=refresh  R=resume workers  {operator_surface_hotkey_help()}  /=filter  p=pause workers  "
         f"j/k=select  a=Approve review  x=Reject review  c=Changes  {filter_part}  "
         f"mode: {mode}  rendered: {snapshot.rendered_at.strftime('%H:%M:%S')}{error_part}"
     )
+    hint = _read_only_hint(state)
+    if hint:
+        caption = Text()
+        caption.append(caption_str)
+        caption.append(f"\n{hint}", style="dim")
+        table.caption = caption
+    else:
+        table.caption = caption_str
     table.caption_justify = "left"
     return table
 
