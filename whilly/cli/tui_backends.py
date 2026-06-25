@@ -67,6 +67,8 @@ class HttpOperatorBackend:
         insecure: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        if not base_url:
+            raise ValueError("HttpOperatorBackend: base_url must be a non-empty URL.")
         parsed = urlparse(base_url)
         if parsed.scheme == "http" and (parsed.hostname or "") not in _LOOPBACK_HOSTS and not insecure:
             raise build_scheme_guard_error(base_url)
