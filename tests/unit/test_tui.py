@@ -282,10 +282,6 @@ async def test_poll_loop_applies_pending_control_action(monkeypatch: pytest.Monk
     calls: list[str | None] = []
     control_actions: list[tuple[str, str, str]] = []
 
-    async def fake_fetch_operator_snapshot(pool: Any, *, plan_id: str | None) -> OperatorSnapshot:
-        calls.append(plan_id)
-        return _snapshot()
-
     class FakeTaskRepository:
         def __init__(self, pool: Any) -> None:
             self.pool = pool
@@ -298,13 +294,20 @@ async def test_poll_loop_applies_pending_control_action(monkeypatch: pytest.Monk
             control_actions.append(("resume", "", operator or ""))
             return object()
 
-    monkeypatch.setattr(tui_module, "fetch_operator_snapshot", fake_fetch_operator_snapshot)
+    class FakeBackend:
+        read_only = False
+        pool = object()
+
+        async def fetch_snapshot(self, plan_id: str | None) -> OperatorSnapshot:
+            calls.append(plan_id)
+            return _snapshot()
+
     monkeypatch.setattr(tui_module, "TaskRepository", FakeTaskRepository)
     state = TuiState(pending_control_action="pause", immediate_refresh=True)
     console = Console(file=io.StringIO(), force_terminal=False, no_color=True)
 
     await tui_module._poll_loop(
-        object(),
+        FakeBackend(),
         "P-1",
         state,
         snapshot=_snapshot(),
@@ -467,6 +470,7 @@ def test_run_tui_command_without_database_url_returns_exit_2(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.delenv(DATABASE_URL_ENV, raising=False)
+    monkeypatch.delenv("WHILLY_CONTROL_URL", raising=False)
 
     rc = run_tui_command([])
 

@@ -19,8 +19,6 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
-from whilly.adapters.db import close_pool, create_pool
-from whilly.adapters.db.repository import TaskRepository
 from whilly.operator_views import (
     EventRow,
     OperatorSnapshot,
@@ -29,7 +27,6 @@ from whilly.operator_views import (
     OperatorTaskRow,
     ReviewGap,
     WorkerRow,
-    fetch_operator_snapshot,
     filter_snapshot,
     operator_surface_hotkey_help,
     operator_surface_hotkeys,
@@ -52,8 +49,14 @@ except ImportError:  # pragma: no cover
     _HAS_TERMIOS = False
 
 
+# Lazy sentinel – populated on first DB-path call; can be replaced by tests via monkeypatch.
+TaskRepository: Any = None
+
 DATABASE_URL_ENV: Final[str] = "WHILLY_DATABASE_URL"
 REVIEWER_ENV: Final[str] = "WHILLY_OPERATOR_EMAIL"
+CONTROL_URL_ENV: Final[str] = "WHILLY_CONTROL_URL"
+WORKER_TOKEN_ENV: Final[str] = "WHILLY_WORKER_TOKEN"
+INSECURE_ENV: Final[str] = "WHILLY_INSECURE"
 DEFAULT_POLL_INTERVAL: Final[float] = 1.0
 EXIT_OK: Final[int] = 0
 EXIT_ENVIRONMENT_ERROR: Final[int] = 2
@@ -61,6 +64,36 @@ EXIT_ENVIRONMENT_ERROR: Final[int] = 2
 KeySource = Callable[[], Awaitable[str | None]]
 
 _SURFACE_BY_KEY: Final[dict[str, OperatorSurface]] = dict(operator_surface_hotkeys())
+
+
+@dataclass(frozen=True)
+class BackendSpec:
+    kind: str  # "db" | "http"
+    dsn: str | None = None
+    base_url: str | None = None
+    token: str = ""
+    insecure: bool = False
+
+
+def resolve_backend_spec(
+    *,
+    connect: str | None,
+    token: str | None,
+    insecure: bool,
+    dsn: str | None,
+) -> BackendSpec:
+    if connect:
+        return BackendSpec(
+            kind="http",
+            base_url=connect.rstrip("/"),
+            token=(token or ""),
+            insecure=insecure,
+        )
+    if dsn:
+        return BackendSpec(kind="db", dsn=dsn)
+    raise ValueError(
+        f"whilly tui: set --connect ({CONTROL_URL_ENV}) for HTTP mode or {DATABASE_URL_ENV} for direct DB mode."
+    )
 
 
 @dataclass
@@ -74,6 +107,7 @@ class TuiState:
     selected_review_index: int = 0
     pending_review_action: str | None = None
     pending_control_action: str | None = None
+    read_only: bool = False
 
 
 def build_tui_parser() -> argparse.ArgumentParser:
@@ -94,6 +128,21 @@ def build_tui_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Reviewer identity for human-review hotkeys (env: {REVIEWER_ENV}).",
     )
+    parser.add_argument(
+        "--connect",
+        default=None,
+        help=f"Control-plane URL for read-only HTTP mode (env {CONTROL_URL_ENV}).",
+    )
+    parser.add_argument(
+        "--token",
+        default=None,
+        help=f"Bearer token for HTTP mode (env {WORKER_TOKEN_ENV}).",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Allow plain http:// to a non-loopback host.",
+    )
     return parser
 
 
@@ -104,16 +153,25 @@ def run_tui_command(
 ) -> int:
     parser = build_tui_parser()
     args = parser.parse_args(list(argv))
+
+    # Resolve connection mode: --connect (or WHILLY_CONTROL_URL) wins over DATABASE_URL.
+    connect = args.connect or os.environ.get(CONTROL_URL_ENV)
+    token = args.token or os.environ.get(WORKER_TOKEN_ENV, "")
+    insecure_env = os.environ.get(INSECURE_ENV, "").lower().strip() in {"1", "true", "yes", "on"}
+    insecure = args.insecure or insecure_env
     dsn = os.environ.get(DATABASE_URL_ENV)
-    if not dsn:
-        print(f"whilly tui: {DATABASE_URL_ENV} is not set.", file=sys.stderr)
+
+    try:
+        spec = resolve_backend_spec(connect=connect, token=token, insecure=insecure, dsn=dsn)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return EXIT_ENVIRONMENT_ERROR
 
     use_color = not args.no_color and _stream_supports_color()
     try:
         asyncio.run(
             _async_run(
-                dsn=dsn,
+                spec=spec,
                 plan_id=args.plan_id,
                 interval=args.interval,
                 max_iterations=args.max_iterations,
@@ -122,7 +180,7 @@ def run_tui_command(
                 reviewer=(args.reviewer or os.environ.get(REVIEWER_ENV) or "").strip(),
             )
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(f"whilly tui: {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_ENVIRONMENT_ERROR
     return EXIT_OK
@@ -195,7 +253,7 @@ def render_tui(snapshot: OperatorSnapshot, state: TuiState) -> Group:
 
 async def _async_run(
     *,
-    dsn: str,
+    spec: BackendSpec,
     plan_id: str | None,
     interval: float,
     max_iterations: int | None,
@@ -203,8 +261,17 @@ async def _async_run(
     key_source: KeySource,
     reviewer: str,
 ) -> None:
-    pool = await create_pool(dsn)
-    state = TuiState()
+    from whilly.cli.tui_backends import DbOperatorBackend, HttpOperatorBackend  # noqa: PLC0415
+
+    if spec.kind == "db":
+        from whilly.adapters.db import create_pool  # noqa: PLC0415 — lazy: no asyncpg in HTTP mode
+
+        pool = await create_pool(spec.dsn)
+        backend: Any = DbOperatorBackend(pool)
+    else:
+        backend = HttpOperatorBackend(spec.base_url, spec.token, insecure=spec.insecure)
+
+    state = TuiState(read_only=backend.read_only)
     snapshot = await _empty_snapshot()
     console = Console(file=sys.stdout, force_terminal=use_color, no_color=not use_color, highlight=False)
     try:
@@ -212,7 +279,7 @@ async def _async_run(
             tg.create_task(_listen_for_keys(state, key_source))
             tg.create_task(
                 _poll_loop(
-                    pool,
+                    backend,
                     plan_id,
                     state,
                     snapshot=snapshot,
@@ -223,11 +290,11 @@ async def _async_run(
                 )
             )
     finally:
-        await close_pool(pool)
+        await backend.close()
 
 
 async def _poll_loop(
-    pool: Any,
+    backend: Any,
     plan_id: str | None,
     state: TuiState,
     *,
@@ -243,14 +310,23 @@ async def _poll_loop(
             iteration += 1
             state.immediate_refresh = False
             if state.pending_control_action is not None:
-                await _apply_pending_control_action(pool, state, operator=reviewer)
+                await _apply_pending_control_action(
+                    None if state.read_only else backend.pool,
+                    state,
+                    operator=reviewer,
+                )
             try:
-                snapshot = await fetch_operator_snapshot(pool, plan_id=plan_id)
+                snapshot = await backend.fetch_snapshot(plan_id)
                 state.last_error = None
-            except (OSError, RuntimeError) as exc:
+            except Exception as exc:  # noqa: BLE001 — keep loop alive on transient DB or HTTP errors
                 state.last_error = f"{type(exc).__name__}: {exc}"
             if state.pending_review_action is not None:
-                await _apply_pending_review_action(pool, snapshot, state, reviewer=reviewer)
+                await _apply_pending_review_action(
+                    None if state.read_only else backend.pool,
+                    snapshot,
+                    state,
+                    reviewer=reviewer,
+                )
             live.update(render_tui(snapshot, state))
             if max_iterations is not None and iteration >= max_iterations:
                 state.stop = True
@@ -263,10 +339,20 @@ async def _poll_loop(
 
 
 async def _apply_pending_control_action(pool: Any, state: TuiState, *, operator: str) -> bool:
+    if state.read_only:
+        # Silently discard mutating actions in read-only (HTTP) mode.
+        state.pending_control_action = None
+        return False
     action = state.pending_control_action
     state.pending_control_action = None
     if action is None:
         return False
+    # Lazy import: keeps asyncpg out of the import path when running in HTTP mode.
+    global TaskRepository
+    if TaskRepository is None:
+        from whilly.adapters.db.repository import TaskRepository as _lazy_tr  # noqa: PLC0415
+
+        TaskRepository = _lazy_tr  # type: ignore[assignment]
     repo = TaskRepository(pool)
     operator = operator.strip() or "tui"
     try:
@@ -301,6 +387,10 @@ async def _apply_pending_review_action(
 ) -> bool:
     """Apply the pending review action to the selected actionable gap."""
 
+    if state.read_only:
+        # Silently discard mutating actions in read-only (HTTP) mode.
+        state.pending_review_action = None
+        return False
     decision = state.pending_review_action
     state.pending_review_action = None
     if decision is None:
@@ -320,6 +410,12 @@ async def _apply_pending_review_action(
 
 
 async def _record_human_review_decision(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
+    # Lazy import: keeps asyncpg out of the import path when running in HTTP mode.
+    global TaskRepository
+    if TaskRepository is None:
+        from whilly.adapters.db.repository import TaskRepository as _lazy_tr  # noqa: PLC0415
+
+        TaskRepository = _lazy_tr  # type: ignore[assignment]
     requested_changes: tuple[str, ...] = ()
     if decision == "changes_requested":
         requested_changes = ("Requested from TUI operator controls.",)
@@ -624,14 +720,19 @@ def _make_termios_key_source(fd: int) -> KeySource:
 
 
 __all__ = [
+    "BackendSpec",
+    "CONTROL_URL_ENV",
     "DATABASE_URL_ENV",
     "DEFAULT_POLL_INTERVAL",
     "EXIT_ENVIRONMENT_ERROR",
     "EXIT_OK",
+    "INSECURE_ENV",
     "REVIEWER_ENV",
     "TuiState",
+    "WORKER_TOKEN_ENV",
     "build_tui_parser",
     "handle_tui_key",
     "render_tui",
+    "resolve_backend_spec",
     "run_tui_command",
 ]
