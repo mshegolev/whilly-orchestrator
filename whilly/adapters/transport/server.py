@@ -270,6 +270,8 @@ from whilly.adapters.transport.schemas import (
     TaskEventResponse,
     TaskPayload,
 )
+from whilly.operator_snapshot_codec import snapshot_to_dict
+from whilly.operator_views import fetch_operator_snapshot
 from whilly.pipeline.events import PipelineTaskEvent
 from whilly.pipeline.human_review import (
     HUMAN_REVIEW_REQUIRED,
@@ -3163,6 +3165,19 @@ def create_app(
             ping_message_factory=lambda: ServerSentEvent(event="ping", data=""),
             headers=response_headers,
         )
+
+    @app.get("/api/v1/operator/snapshot", include_in_schema=True)
+    async def _operator_snapshot(request: Request, plan: str | None = None) -> JSONResponse:
+        # Read-only operator surface for the TUI HTTP backend.  Same bearer
+        # gate as GET /events/stream (worker bearer / bootstrap / legacy).
+        await _authenticate_stream_request(
+            repo=repo,
+            authorization=request.headers.get("authorization"),
+            legacy_worker_token=legacy_worker_token,
+            legacy_bootstrap_token=legacy_bootstrap_token,
+        )
+        snapshot = await fetch_operator_snapshot(pool, plan_id=plan)
+        return JSONResponse(snapshot_to_dict(snapshot))
 
     @app.get(
         "/api/v1/scheduler/status",
