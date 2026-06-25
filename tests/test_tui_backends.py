@@ -81,3 +81,19 @@ async def test_http_backend_allows_loopback_plain_http():
     backend = HttpOperatorBackend("http://127.0.0.1:8000", "tok", insecure=False)
     assert backend.read_only is True
     await backend.close()
+
+
+async def test_http_backend_rejects_empty_base_url():
+    with pytest.raises(ValueError):
+        HttpOperatorBackend("", "tok")
+
+
+async def test_http_backend_raises_on_server_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503)
+
+    transport = httpx.MockTransport(handler)
+    backend = HttpOperatorBackend("https://whilly.corp", "tok", transport=transport)
+    with pytest.raises(httpx.HTTPStatusError):
+        await backend.fetch_snapshot(plan_id=None)
+    await backend.close()
