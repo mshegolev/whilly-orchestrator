@@ -75,7 +75,7 @@ def _task_from_dict(d: dict[str, Any]) -> OperatorTaskRow:
         priority=d["priority"],
         claimed_by=d.get("claimed_by"),
         started_at=_opt_dt(d.get("started_at")),
-        updated_at=_opt_dt(d["updated_at"]),
+        updated_at=datetime.fromisoformat(d["updated_at"]),
         acceptance_criteria=tuple(d.get("acceptance_criteria", ())),
         test_steps=tuple(d.get("test_steps", ())),
         human_review=_human_review_from_dict(d.get("human_review", {})),
@@ -102,7 +102,7 @@ def _worker_from_dict(d: dict[str, Any]) -> WorkerRow:
         hostname=d["hostname"],
         owner_email=d.get("owner_email"),
         status=d["status"],
-        last_heartbeat=_opt_dt(d["last_heartbeat"]),
+        last_heartbeat=datetime.fromisoformat(d["last_heartbeat"]),
     )
 
 
@@ -123,7 +123,7 @@ def _event_from_dict(d: dict[str, Any]) -> EventRow:
         task_id=d.get("task_id"),
         plan_id=d.get("plan_id"),
         event_type=d["event_type"],
-        created_at=_opt_dt(d["created_at"]),
+        created_at=datetime.fromisoformat(d["created_at"]),
         detail=dict(d.get("detail", {})),
     )
 
@@ -208,7 +208,7 @@ def snapshot_to_dict(snap: OperatorSnapshot) -> dict[str, Any]:
 
 def snapshot_from_dict(payload: dict[str, Any]) -> OperatorSnapshot:
     return OperatorSnapshot(
-        rendered_at=_opt_dt(payload["rendered_at"]),
+        rendered_at=datetime.fromisoformat(payload["rendered_at"]),
         summary=_summary_from_dict(payload["summary"]),
         tasks=tuple(_task_from_dict(t) for t in payload.get("tasks", ())),
         workers=tuple(_worker_from_dict(w) for w in payload.get("workers", ())),
