@@ -1,6 +1,8 @@
 # tests/test_operator_snapshot_codec.py
 from datetime import datetime, timezone
 
+import pytest
+
 from whilly.operator_snapshot_codec import snapshot_from_dict, snapshot_to_dict
 from whilly.operator_views import (
     ComplianceSummary,
@@ -68,7 +70,36 @@ def test_unknown_keys_are_ignored():
 def test_missing_required_key_raises():
     payload = snapshot_to_dict(_sample())
     del payload["summary"]
-    import pytest
-
     with pytest.raises(KeyError):
         snapshot_from_dict(payload)
+
+
+def test_optional_none_fields_round_trip():
+    ts = datetime(2026, 6, 26, 12, 0, tzinfo=timezone.utc)
+    snap = OperatorSnapshot(
+        rendered_at=ts,
+        summary=ComplianceSummary(
+            total_tasks=0,
+            tasks_by_status={},
+            workers_online=0,
+            workers_total=0,
+            failed_tasks=0,
+            open_review_gaps=0,
+        ),
+        tasks=(
+            OperatorTaskRow(
+                task_id="t",
+                plan_id="p",
+                status="PENDING",
+                priority="P2",
+                claimed_by=None,
+                started_at=None,
+                updated_at=ts,
+            ),
+        ),
+        workers=(WorkerRow(worker_id="w", hostname="h", owner_email=None, status="offline", last_heartbeat=ts),),
+        events=(),
+        review_gaps=(),
+        control_state=OperatorControlState(paused=True, paused_at=ts),
+    )
+    assert snapshot_from_dict(snapshot_to_dict(snap)) == snap
