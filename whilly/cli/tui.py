@@ -11,7 +11,7 @@ import sys
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from rich import box
 from rich.console import Console, Group
@@ -66,9 +66,21 @@ KeySource = Callable[[], Awaitable[str | None]]
 _SURFACE_BY_KEY: Final[dict[str, OperatorSurface]] = dict(operator_surface_hotkeys())
 
 
+def _lazy_task_repo() -> type:
+    # Lazy import keeps asyncpg out of the import path when running in HTTP mode.
+    # Writes through the module global so tests can still monkeypatch
+    # `setattr(tui_module, "TaskRepository", Fake)`.
+    global TaskRepository
+    if TaskRepository is None:
+        from whilly.adapters.db.repository import TaskRepository as _t  # noqa: PLC0415
+
+        TaskRepository = _t  # type: ignore[assignment]
+    return TaskRepository  # type: ignore[return-value]
+
+
 @dataclass(frozen=True)
 class BackendSpec:
-    kind: str  # "db" | "http"
+    kind: Literal["db", "http"]
     dsn: str | None = None
     base_url: str | None = None
     token: str = ""
@@ -157,7 +169,7 @@ def run_tui_command(
     # Resolve connection mode: --connect (or WHILLY_CONTROL_URL) wins over DATABASE_URL.
     connect = args.connect or os.environ.get(CONTROL_URL_ENV)
     token = args.token or os.environ.get(WORKER_TOKEN_ENV, "")
-    insecure_env = os.environ.get(INSECURE_ENV, "").lower().strip() in {"1", "true", "yes", "on"}
+    insecure_env = os.environ.get(INSECURE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
     insecure = args.insecure or insecure_env
     dsn = os.environ.get(DATABASE_URL_ENV)
 
@@ -318,7 +330,10 @@ async def _poll_loop(
             try:
                 snapshot = await backend.fetch_snapshot(plan_id)
                 state.last_error = None
-            except Exception as exc:  # noqa: BLE001 — keep loop alive on transient DB or HTTP errors
+            except Exception as exc:  # noqa: BLE001
+                # CancelledError / KeyboardInterrupt are BaseException and still escape.
+                # Catches transient DB (asyncpg) and HTTP (httpx) errors without importing
+                # either at module level; a persistent error surfaces in state.last_error.
                 state.last_error = f"{type(exc).__name__}: {exc}"
             if state.pending_review_action is not None:
                 await _apply_pending_review_action(
@@ -347,13 +362,7 @@ async def _apply_pending_control_action(pool: Any, state: TuiState, *, operator:
     state.pending_control_action = None
     if action is None:
         return False
-    # Lazy import: keeps asyncpg out of the import path when running in HTTP mode.
-    global TaskRepository
-    if TaskRepository is None:
-        from whilly.adapters.db.repository import TaskRepository as _lazy_tr  # noqa: PLC0415
-
-        TaskRepository = _lazy_tr  # type: ignore[assignment]
-    repo = TaskRepository(pool)
+    repo = _lazy_task_repo()(pool)
     operator = operator.strip() or "tui"
     try:
         if action == "pause":
@@ -410,17 +419,11 @@ async def _apply_pending_review_action(
 
 
 async def _record_human_review_decision(pool: Any, gap: ReviewGap, decision: str, reviewer: str) -> None:
-    # Lazy import: keeps asyncpg out of the import path when running in HTTP mode.
-    global TaskRepository
-    if TaskRepository is None:
-        from whilly.adapters.db.repository import TaskRepository as _lazy_tr  # noqa: PLC0415
-
-        TaskRepository = _lazy_tr  # type: ignore[assignment]
     requested_changes: tuple[str, ...] = ()
     if decision == "changes_requested":
         requested_changes = ("Requested from TUI operator controls.",)
     await record_review_decision(
-        TaskRepository(pool),
+        _lazy_task_repo()(pool),
         HumanReviewDecisionCommand(
             task_id=gap.task_id,
             decision=decision,  # type: ignore[arg-type]
