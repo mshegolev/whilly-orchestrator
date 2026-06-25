@@ -42,20 +42,20 @@ def fake_pool() -> _FakePool:
     return _FakePool()
 
 
-async def _client(pool: _FakePool) -> AsyncClient:
+def _client(pool: _FakePool) -> AsyncClient:
     app = create_app(pool, worker_token="legacy-worker", bootstrap_token="legacy-boot")  # type: ignore[arg-type]
     transport = ASGITransport(app=app)
     return AsyncClient(transport=transport, base_url="http://test")
 
 
 async def test_snapshot_requires_bearer(fake_pool: _FakePool) -> None:
-    async with await _client(fake_pool) as c:
+    async with _client(fake_pool) as c:
         resp = await c.get("/api/v1/operator/snapshot")
     assert resp.status_code == 401
 
 
 async def test_snapshot_rejects_bad_bearer(fake_pool: _FakePool) -> None:
-    async with await _client(fake_pool) as c:
+    async with _client(fake_pool) as c:
         resp = await c.get(
             "/api/v1/operator/snapshot",
             headers={"Authorization": "Bearer nope"},
@@ -64,7 +64,7 @@ async def test_snapshot_rejects_bad_bearer(fake_pool: _FakePool) -> None:
 
 
 async def test_snapshot_returns_payload_with_legacy_token(fake_pool: _FakePool) -> None:
-    async with await _client(fake_pool) as c:
+    async with _client(fake_pool) as c:
         resp = await c.get(
             "/api/v1/operator/snapshot",
             headers={"Authorization": "Bearer legacy-worker"},

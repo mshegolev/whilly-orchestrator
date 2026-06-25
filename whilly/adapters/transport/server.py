@@ -3167,7 +3167,7 @@ def create_app(
         )
 
     @app.get("/api/v1/operator/snapshot", include_in_schema=True)
-    async def _operator_snapshot(request: Request, plan: str | None = None) -> JSONResponse:
+    async def operator_snapshot(request: Request, plan: str | None = None) -> JSONResponse:
         # Read-only operator surface for the TUI HTTP backend.  Same bearer
         # gate as GET /events/stream (worker bearer / bootstrap / legacy).
         await _authenticate_stream_request(
