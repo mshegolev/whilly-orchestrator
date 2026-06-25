@@ -1,0 +1,28 @@
+Whilly Orchestrator is deploying. Roles from one image (whilly-entrypoint):
+
+  control-plane : {{ include "whilly.fullname" . }}-control-plane  (WUI, :{{ .Values.controlPlane.service.port }})
+  workers       : {{ include "whilly.fullname" . }}-worker  (replicas={{ .Values.worker.replicas }}, plan={{ .Values.worker.planId }})
+  migrate Job   : ran as a pre-install/pre-upgrade hook ({{ .Values.migrate.enabled }})
+
+1) WUI (browser):
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/
+{{- end }}
+{{- else }}
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "whilly.fullname" . }}-control-plane {{ .Values.controlPlane.service.port }}:{{ .Values.controlPlane.service.port }}
+   open http://127.0.0.1:{{ .Values.controlPlane.service.port }}/
+{{- end }}
+
+2) TUI — two modes:
+   a) Direct DB (full capability). Point at the managed PG DSN:
+      WHILLY_DATABASE_URL=... whilly tui
+   b) Read-only over the WUI FQDN (no DB reachability needed):
+      whilly tui --connect https://whilly.<corp-domain> --token <worker-or-bootstrap-bearer>
+
+3) Scale workers (parallelism = N workers vs one plan):
+   kubectl -n {{ .Release.Namespace }} scale deploy/{{ include "whilly.fullname" . }}-worker --replicas=5
+
+4) Inspect a worker container:
+   kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "whilly.fullname" . }}-worker
+   kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "whilly.fullname" . }}-worker -- /usr/local/bin/whilly-entrypoint shell

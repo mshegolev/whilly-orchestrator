@@ -771,7 +771,7 @@ Add `WHILLY_CONTROL_URL`, `WHILLY_WORKER_TOKEN`, `WHILLY_INSECURE` to the env va
 
 In `deploy/helm/whilly/README.md` (the "Using it → TUI" bullet) and `templates/NOTES.txt` (item 2), add that operators without DB reachability can run the TUI read-only against the WUI FQDN:
 
-```bash
+```text
 whilly tui --connect https://whilly.<corp-domain> --token <worker-or-bootstrap-bearer>
 ```
 
