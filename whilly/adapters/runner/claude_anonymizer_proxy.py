@@ -71,7 +71,7 @@ class ClaudeAnonymizerProxy:
             # This is the artefact GDPR compliance asks for: proof that what
             # left the perimeter was anonymized, and what came back from
             # Anthropic was the anonymized form (e.g., "Acme") before any
-            # local-side substitution turned it back into "Acme".
+            # local-side substitution turned it back into the original company name.
             logger.info("anonymized response from API: %s", result.output[:200])
             original_output = self.anonymizer.deanonymize_response(result.output, mapping)
             logger.info(

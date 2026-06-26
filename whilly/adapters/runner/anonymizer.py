@@ -6,11 +6,38 @@ Maintains a mapping of original → anonymized values for reversible transformat
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger("whilly.anonymizer")
+
+
+def _load_company_mappings() -> dict[str, str]:
+    """Load company-name redaction map from WHILLY_ANONYMIZER_MAP env var.
+
+    The variable must be a JSON object string, e.g.::
+
+        WHILLY_ANONYMIZER_MAP='{"Globex": "Acme", "globex": "Acme"}'
+
+    Returns an empty dict (no redaction) when the variable is unset, empty,
+    or contains invalid JSON.  A non-object JSON value (array, string, …)
+    also returns an empty dict with a warning.
+    """
+    raw = os.environ.get("WHILLY_ANONYMIZER_MAP", "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("WHILLY_ANONYMIZER_MAP is not valid JSON; anonymizer disabled")
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("WHILLY_ANONYMIZER_MAP must be a JSON object; anonymizer disabled")
+        return {}
+    return {str(k): str(v) for k, v in data.items()}
 
 
 @dataclass(frozen=True)
@@ -33,19 +60,15 @@ class AnonymizationMapping:
 class Anonymizer:
     """Anonymizes/deanonymizes sensitive data in prompts and responses."""
 
-    # Default company name mappings: real → placeholder
-    company_mappings: dict[str, str] = field(
-        default_factory=lambda: {
-            "acme": "Acme",
-            "Acme": "Acme",
-            "Acme": "Acme",
-        }
-    )
+    # Company-name redaction map: original → placeholder.
+    # Loaded from WHILLY_ANONYMIZER_MAP (JSON object) at construction time.
+    # Defaults to an empty dict (no redaction) when the env var is unset or
+    # invalid.  Example entry: {"Globex": "Acme", "globex": "Acme"}.
+    company_mappings: dict[str, str] = field(default_factory=_load_company_mappings)
     # Optional: when set, deanonymize_response uses this as the canonical
     # restore target for any placeholder (overriding the per-call mapping).
-    # Useful when multiple originals collapse to one placeholder ("acme",
-    # "Acme", "Acme" → "Acme") and the desired user-facing form is a single
-    # canonical variant (e.g., Russian uppercase "Acme").
+    # Useful when multiple originals collapse to one placeholder and the
+    # desired user-facing form is a single canonical variant.
     canonical_form: str | None = None
 
     def __post_init__(self) -> None:
@@ -130,7 +153,7 @@ class Anonymizer:
         If ``canonical_form`` is configured on this Anonymizer, every
         placeholder is mapped back to that single canonical string,
         regardless of which original variant was used in the prompt. This
-        is the GDPR-friendly path: the user always sees one tidy company
+        is the privacy-friendly path: the user always sees one tidy company
         name. Without ``canonical_form`` the per-call mapping is honoured
         so the exact variant the user typed is restored.
 
