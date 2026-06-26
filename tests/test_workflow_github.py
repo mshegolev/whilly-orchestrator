@@ -548,3 +548,46 @@ class TestAddStatus:
         sent_names = [opt["name"] for opt in sent]
         assert sent_names == ["Todo", "A", "B"]
         assert all("id" not in opt for opt in sent)
+
+
+# ── gh subprocess env propagation (spec: every gh subprocess uses gh_subprocess_env) ──
+
+
+class TestGraphqlUsesGhSubprocessEnv:
+    """Regression: `_graphql` must build its subprocess env via
+    `gh_subprocess_env`, so a stale ambient GITHUB_TOKEN is overridden by
+    WHILLY_GH_TOKEN (the github-integration spec asserts this holds for every
+    gh CLI subprocess; the GraphQL path used to bypass it)."""
+
+    def _status_response(self):
+        return {
+            "data": {
+                "user": {
+                    "projectV2": {
+                        "id": "PVT_xxx",
+                        "title": "Backlog",
+                        "fields": {"nodes": [{"id": "PVTSSF", "name": "Status", "options": []}]},
+                    }
+                }
+            }
+        }
+
+    def test_env_overrides_stale_github_token(self):
+        import os
+
+        board = GitHubProjectBoard(url="https://github.com/users/x/projects/4", gh_bin="/usr/bin/gh")
+        fake_run, _ = _fake_run([self._status_response()])
+        captured = {}
+
+        def run_capture(cmd, *args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return fake_run(cmd, *args, **kwargs)
+
+        env_patch = {"GITHUB_TOKEN": "stale-ambient", "WHILLY_GH_TOKEN": "whilly-good"}
+        with patch.dict(os.environ, env_patch, clear=False):
+            with patch("whilly.workflow.github.subprocess.run", side_effect=run_capture):
+                board.list_statuses()
+
+        assert captured["env"] is not None, "_graphql must pass an explicit env (gh_subprocess_env)"
+        assert captured["env"]["GITHUB_TOKEN"] == "whilly-good"
+        assert "GH_TOKEN" not in captured["env"]

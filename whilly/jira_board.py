@@ -131,14 +131,23 @@ class JiraBoardClient:
 
     # ── Internals ────────────────────────────────────────────────────────────
 
+    def _rest_path(self, resource: str) -> str:
+        """Build a Jira REST path honouring the configured API version.
+
+        Mirrors the read path's ``whilly.sources.jira._jira_rest_path`` so the
+        mutating board-sync path applies ``[jira].api_version`` instead of
+        hardcoding v3 (Jira Server/DC commonly run the v2 API).
+        """
+        return f"/rest/api/{self.auth.api_version}/{resource.lstrip('/')}"
+
     def _fetch_transitions(self, key: str) -> list[dict]:
-        data = self._api("GET", f"/rest/api/3/issue/{key}/transitions")
+        data = self._api("GET", self._rest_path(f"issue/{key}/transitions"))
         return list(data.get("transitions") or [])
 
     def _post_transition(self, key: str, transition_id: str) -> None:
         self._api(
             "POST",
-            f"/rest/api/3/issue/{key}/transitions",
+            self._rest_path(f"issue/{key}/transitions"),
             payload={"transition": {"id": transition_id}},
             expect_empty=True,
         )
@@ -153,13 +162,19 @@ class JiraBoardClient:
         expect_empty: bool = False,
     ) -> dict:
         url = f"{self.auth.server_url}{path}"
-        header = base64.b64encode(f"{self.auth.username}:{self.auth.token}".encode("utf-8")).decode("ascii")
+        # Honour the configured auth scheme, mirroring the read path
+        # (whilly.sources.jira): a bearer/PAT config must NOT be sent as Basic.
+        if self.auth.auth_scheme == "bearer":
+            authorization = f"Bearer {self.auth.token}"
+        else:
+            header = base64.b64encode(f"{self.auth.username}:{self.auth.token}".encode("utf-8")).decode("ascii")
+            authorization = f"Basic {header}"
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = Request(
             url,
             data=data,
             headers={
-                "Authorization": f"Basic {header}",
+                "Authorization": authorization,
                 "Accept": "application/json",
                 **({"Content-Type": "application/json"} if data else {}),
             },

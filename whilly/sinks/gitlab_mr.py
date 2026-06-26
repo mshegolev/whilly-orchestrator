@@ -212,7 +212,9 @@ def open_mr_for_task(
 
     Steps:
     1. Resolve branch name (default ``whilly/{task.id}``).
-    2. ``git push origin HEAD:{branch} --force-with-lease``
+    2. ``git push origin HEAD:{branch} --force`` (plain ``--force``; see the
+       inline comment at the push site for why ``--force-with-lease`` is wrong
+       on a fresh worktree)
     3. ``glab mr create --target-branch {base} --source-branch {branch}
          --title ... --description-file ...``
 

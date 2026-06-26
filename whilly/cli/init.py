@@ -9,7 +9,7 @@ the v4 Postgres-backed plan storage:
    ``docs/PRD-<slug>.md`` either way.
 3. **Plan import** — ``prd_generator.generate_tasks_dict`` builds the
    payload in-memory, ``plan_io.parse_plan_dict`` validates it, and
-   ``cli.plan._insert_plan_and_tasks`` does the batched INSERT — same
+   ``cli.plan._async_import`` does the transactional INSERT — the same
    helper that ``whilly plan import`` uses, so the v4 import surface
    stays single-sourced.
 
