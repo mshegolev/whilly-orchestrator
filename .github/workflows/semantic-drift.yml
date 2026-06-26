@@ -1,0 +1,119 @@
+name: Semantic spec-drift sweep (scheduled)
+
+# Scheduled semantic guard (CI-01). This job runs the LLM-backed semantic
+# spec-drift check (scripts/semantic_drift_check.py --all) on a bounded weekly
+# cadence and on manual dispatch ONLY. It is intentionally DECOUPLED from the
+# per-PR mechanical gate in ci.yml (spec-validation, coverage-audit): it has NO
+# pull_request / push trigger, never blocks a PR merge, and is the cost-bounded
+# semantic complement to that mechanical gate.
+#
+# REQUIRES the `ANTHROPIC_API_KEY` repository secret — the check shells out to
+# the Claude CLI. The job FAILS FAST with a clear message if the secret is
+# absent, so a check that did not actually run never reports green.
+#
+# Posture (gating) is operator-selectable via the workflow_dispatch `posture`
+# input: `report-only` (default, --fail-on none, always exit 0) or
+# `fail-on-high` (--fail-on high, exit 1 iff a HIGH finding exists). Cron runs
+# always default to report-only so a flaky LLM run never reds the schedule.
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC — one run per week bounds the LLM/API cost while
+    # keeping a regular semantic-drift heartbeat. Mirrors big-pickle-health.yml.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      posture:
+        description: "Gating posture: report-only (exit 0) or fail-on-high (exit 1 on a HIGH finding)"
+        required: false
+        default: "report-only"
+
+permissions:
+  contents: read
+
+jobs:
+  semantic-drift:
+    name: Semantic spec-drift sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Claude CLI
+        # First-party Anthropic-published package; scoped to this ephemeral
+        # runner. Mirrors the spec-validation `npm install -g` pattern in ci.yml.
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install dev deps
+        run: pip install -e '.[dev]'
+
+      - name: Fail fast if ANTHROPIC_API_KEY is absent
+        # The key enters only via step env from the repo secret — never inlined
+        # into the run script, never echoed. We check emptiness without printing
+        # the value, so a missing-key run reds the job instead of silently
+        # "passing" a check that never ran. (T-32-02, T-32-04)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::error::ANTHROPIC_API_KEY repository secret is empty or unset." >&2
+            echo "::error::The scheduled semantic-drift check cannot run without it. Add the secret in repo Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+          echo "ANTHROPIC_API_KEY is present."
+
+      - name: Resolve gating posture into FAIL_ON
+        # The operator-supplied posture string is UNTRUSTED. We read it from a
+        # QUOTED env var (never interpolate ${{ github.event.inputs.posture }}
+        # directly into a shell line — T-32-01) and map it through an explicit
+        # allowlist. Cron runs leave POSTURE empty, so we default to report-only.
+        env:
+          POSTURE: ${{ github.event.inputs.posture }}
+        run: |
+          set -euo pipefail
+          posture="${POSTURE:-report-only}"
+          case "${posture}" in
+            report-only)
+              echo "FAIL_ON=none" >> "$GITHUB_ENV"
+              ;;
+            fail-on-high)
+              echo "FAIL_ON=high" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "::error::Unknown posture '${posture}'. Allowed: report-only, fail-on-high." >&2
+              exit 1
+              ;;
+          esac
+          echo "Resolved posture '${posture}'."
+
+      - name: Run semantic spec-drift sweep
+        # --all writes the JSON artifact to --output and prints the human summary
+        # to stdout. We tee the summary into $GITHUB_STEP_SUMMARY while PRESERVING
+        # the script exit code (set -o pipefail) so fail-on-high still reds the
+        # job. FAIL_ON is the allowlisted value resolved above; ANTHROPIC_API_KEY
+        # enters only via step env. (T-32-01, T-32-02)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/semantic_drift_check.py --all \
+            --output semantic-drift-findings.json \
+            --fail-on "${FAIL_ON}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload findings artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-drift-findings
+          path: semantic-drift-findings.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -213,6 +213,47 @@ config the watcher exits immediately with code `2` and the standard setup
 guidance — it never starts looping with credentials it cannot use. Use
 `--interactive-config` from a terminal to be prompted for the missing values.
 
+## Scheduler: JQL → claimable tasks
+
+`whilly scheduler run <config>` polls Jira on each rule's `jql_filter` (e.g.
+`assignee = currentUser() AND status = 'To Do'`), deduplicates the matches, and
+— **when `WHILLY_DATABASE_URL` is set** — persists each unique issue as a
+`PENDING` task so any worker (local `whilly run`, remote `whilly-worker`, or the
+opencode-devbox adapter) can claim it. Without a database URL the scheduler runs
+**log-only** (dev/dry-run): it lists what it found and persists nothing.
+
+One rule maps to **one plan**: the plan id is the rule's
+`custom_metadata.plan_id` if set, otherwise the rule `id`. Every matched issue
+becomes task `JIRA-<key>` appended to that plan. Persistence is idempotent
+(`ON CONFLICT (id) DO NOTHING`), so re-polling the same issue never creates a
+duplicate task. Point a worker's `WHILLY_PLAN_ID` at the same plan id to drain
+the queue.
+
+```toml
+[[scheduler]]
+name             = "demo-plan"          # also the default plan id
+jira_project_key = "DEMO"
+jql_filter       = "assignee = currentUser() AND status = 'To Do'"
+poll_interval_seconds = 300
+
+[scheduler.custom_metadata]
+repo_target    = "gitlab:example-group/autotests/example-repo"  # "<provider>:<full_name>"
+# repo_clone_url = "git@gitlab.example:grp/repo.git"  # overrides derived URL
+# plan_id        = "demo-plan"                      # overrides the rule id
+```
+
+`repo_target` attaches a `repo_targets` block to the plan and sets each task's
+`repo_target_id`; the clone URL is derived per provider (`github:` → HTTPS,
+`gitlab:` → `git@gitlab.example.com:<full_name>.git`) unless
+`repo_clone_url` pins one. Completed cycles record the plan id in the
+`scheduler_poll_cycles.created_plans` audit column.
+
+```bash
+export WHILLY_DATABASE_URL=postgresql://user:pass@host:5432/whilly
+whilly scheduler run whilly.toml --duration 3600   # daemon; loops for the duration
+whilly scheduler list                              # show rules from whilly.toml
+```
+
 ## Lifecycle sync
 
 Two integrations drive cards/tickets automatically as whilly task statuses change. Enable one or both in `whilly.toml`.
@@ -455,6 +496,27 @@ Store secrets once, per OS:
 python3 -c "import keyring; keyring.set_password('whilly', 'github', 'ghp_xxx')"
 ```
 
+### Scheduled semantic spec-drift sweep (CI secret)
+
+`.github/workflows/semantic-drift.yml` runs an LLM-backed semantic spec-drift
+check (`scripts/semantic_drift_check.py --all`) on a **weekly cron** (Mondays
+06:00 UTC) and on **manual dispatch**. It is intentionally **separate from and
+non-blocking** to the per-PR mechanical gate in `ci.yml` (spec-validation,
+coverage-audit) — it never runs on `pull_request`/`push` and never blocks a
+merge. It uploads the JSON findings artifact and renders the human summary into
+the run's step summary.
+
+- **Required secret:** `ANTHROPIC_API_KEY` (repo Settings → Secrets and
+  variables → Actions). The check shells out to the Claude CLI; the workflow
+  **fails fast with a clear message** if the secret is absent, so a check that
+  did not actually run never reports green.
+- **Posture (gating):** the `workflow_dispatch` `posture` input is validated
+  against an allowlist and maps to the script's `--fail-on`:
+  - `report-only` (default) → `--fail-on none` → always exit 0 (cron default;
+    flaky LLM runs never red the schedule).
+  - `fail-on-high` → `--fail-on high` → exit 1 iff at least one finding has
+    severity `HIGH` (per-unit errors never gate).
+
 ### GitHub auth resolution order
 
 Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
@@ -498,6 +560,9 @@ Used by `whilly/gh_utils.py::gh_subprocess_env()` when invoking `gh`:
 | `WHILLY_GH_TOKEN`                 | *(unset)*              | Whilly-only GitHub token (overrides ambient) |
 | `WHILLY_GH_PREFER_KEYRING`        | `0`                    | Force `gh` keyring auth even when `GITHUB_TOKEN` is set |
 | `WHILLY_SUPPRESS_DOTENV_WARNING`  | `0`                    | Silence the legacy `.env` deprecation warning |
+| `WHILLY_CONTROL_URL`              | *(unset)*              | TUI HTTP-mode control-plane URL; consumed by `whilly tui` HTTP mode (worker also uses this) |
+| `WHILLY_WORKER_TOKEN`             | *(unset)*              | Bearer token (worker or bootstrap) for `whilly tui` HTTP mode; consumed by `whilly tui` HTTP mode (worker also uses this) |
+| `WHILLY_INSECURE`                 | `0`                    | Allow plain `http://` to a non-loopback host in TUI HTTP mode; consumed by `whilly tui` HTTP mode (worker also uses this) |
 
 Every `WHILLY_*` variable corresponds to an equivalent `whilly.toml` field (same name, any case).
 See `whilly.example.toml` for the complete template.
@@ -654,6 +719,29 @@ deferring the failure to the first login attempt.
 The active browser WUI and browserless TUI expose the same canonical operator
 surfaces: Overview, Compliance, Plans/Tasks, Workers, and Events. Shared surface
 copy is `1-5=switch`.
+
+### `whilly tui` — transport modes
+
+`whilly tui` connects two ways:
+
+- **Direct DB (default, full capability):** set `WHILLY_DATABASE_URL`. Enables
+  view, control, and human-review actions.
+- **HTTP read-only:** pass `--connect URL --token TOKEN` (or env
+  `WHILLY_CONTROL_URL` / `WHILLY_WORKER_TOKEN`). View-only; control and
+  human-review actions are disabled. Plain `http://` to a non-loopback host
+  requires `--insecure` (`WHILLY_INSECURE=1`). The bearer is a worker or
+  bootstrap token.
+
+```bash
+# Direct DB (default)
+WHILLY_DATABASE_URL=postgresql://whilly:pass@pg:5432/whilly whilly tui
+
+# HTTP read-only — no DB access required
+whilly tui --connect https://whilly.example.com --token TOKEN
+
+# HTTP read-only — plain HTTP to non-loopback host (e.g. in-cluster port-forward)
+whilly tui --connect http://whilly-control.internal:8000 --token TOKEN --insecure
+```
 
 Active worker controls use `/api/v1/admin/workers/*`; active review decisions
 use `/api/v1/tasks/*/human-review`. `_logs.html` remains a routeable

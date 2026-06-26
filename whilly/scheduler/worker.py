@@ -165,8 +165,15 @@ class SchedulerWorker:
             )
 
             if unique_issues and self.on_issues_found:
-                await self.on_issues_found(rule, unique_issues)
+                # The callback may persist the issues and return the list of
+                # plan ids it wrote to; record those on the cycle so the
+                # ``created_plans`` audit column reflects reality. Callbacks
+                # that only log (the pre-persistence default) return ``None``
+                # and leave ``created_plans`` empty — backward compatible.
+                created = await self.on_issues_found(rule, unique_issues)
                 cycle.new_issues_created = len(unique_issues)
+                if isinstance(created, list):
+                    cycle.created_plans = [str(plan_id) for plan_id in created]
 
             cycle.poll_status = "completed"
         except JQLExecutionError as exc:

@@ -11,48 +11,63 @@ from whilly.adapters.runner.claude_anonymizer_proxy import (
 from whilly.adapters.runner.result_parser import AgentResult
 
 
+# ---------------------------------------------------------------------------
+# Helper: build an Anonymizer pre-loaded with a fictional company mapping.
+# The default map is now EMPTY (loaded from WHILLY_ANONYMIZER_MAP); tests
+# that need redaction must supply an explicit map via this helper.
+# ---------------------------------------------------------------------------
+
+
+def _anon(**kw) -> Anonymizer:
+    """Return an Anonymizer with fictional Globex→Acme mappings."""
+    return Anonymizer(
+        company_mappings={"globex": "Acme", "GLOBEX": "Acme", "Globex": "Acme"},
+        **kw,
+    )
+
+
 class TestAnonymizer:
     """Test anonymizer.Anonymizer basic operations."""
 
     def test_anonymize_text_company_name(self):
         """Test company name anonymization."""
-        anon = Anonymizer()
-        text = "я из компании acme, напиши ее название на русском"
+        anon = _anon()
+        text = "I am from globex, write its name in uppercase"
 
         anonymized, mapping = anon.anonymize_text(text)
 
-        assert "acme" not in anonymized.lower()
+        assert "globex" not in anonymized
         assert "Acme" in anonymized
-        assert mapping == {"acme": "Acme"}
-        assert anonymized == "я из компании Acme, напиши ее название на русском"
+        assert mapping == {"globex": "Acme"}
+        assert anonymized == "I am from Acme, write its name in uppercase"
 
     def test_anonymize_text_multiple_occurrences(self):
         """Test that all occurrences are replaced."""
-        anon = Anonymizer()
-        text = "acme is great, acme rocks, use acme"
+        anon = _anon()
+        text = "globex is great, globex rocks, use globex"
 
         anonymized, mapping = anon.anonymize_text(text)
 
         assert anonymized == "Acme is great, Acme rocks, use Acme"
-        assert mapping == {"acme": "Acme"}
+        assert mapping == {"globex": "Acme"}
 
     def test_anonymize_text_case_sensitive(self):
         """Test that replacement is case-sensitive."""
-        anon = Anonymizer()
-        text = "Acme and acme and Acme"
+        anon = _anon()
+        text = "GLOBEX and globex and Globex"
 
         anonymized, mapping = anon.anonymize_text(text)
 
-        assert "Acme" not in anonymized
-        assert "acme" not in anonymized
-        assert "Acme" not in anonymized
+        assert "GLOBEX" not in anonymized
+        assert "globex" not in anonymized
+        assert "Globex" not in anonymized
         # All three variants in the mapping
         assert len(mapping) == 3
 
     def test_deanonymize_text(self):
         """Test reversing anonymization."""
-        anon = Anonymizer()
-        original = "я из компании acme, напиши ее название"
+        anon = _anon()
+        original = "I am from globex, what should I do"
         anonymized, mapping = anon.anonymize_text(original)
 
         restored = anon.deanonymize_text(anonymized, mapping)
@@ -61,48 +76,70 @@ class TestAnonymizer:
 
     def test_deanonymize_with_default_mapping(self):
         """Test deanonymize without explicit mapping uses internal reverse mapping."""
-        anon = Anonymizer()
+        anon = _anon()
         anonymized = "Company Acme is great"
 
         restored = anon.deanonymize_text(anonymized)
 
-        assert "acme" in restored.lower()
+        assert "globex" in restored.lower()
 
     def test_anonymize_json_object(self):
         """Test anonymization of JSON objects."""
-        anon = Anonymizer()
+        anon = _anon()
         obj = {
-            "company": "acme",
-            "description": "я работаю в acme",
-            "nested": {"name": "Acme"},
+            "company": "globex",
+            "description": "I work at globex",
+            "nested": {"name": "Globex"},
         }
 
         anon_obj, mapping = anon.anonymize_json(obj)
 
         assert anon_obj["company"] == "Acme"
-        assert "acme" not in anon_obj["description"]
+        assert "globex" not in anon_obj["description"]
         assert "Acme" in anon_obj["description"]
         assert anon_obj["nested"]["name"] == "Acme"
 
     def test_anonymize_json_list(self):
         """Test anonymization of JSON arrays."""
-        anon = Anonymizer()
-        arr = ["I work at acme", "Acme is great", {"company": "Acme"}]
+        anon = _anon()
+        arr = ["I work at globex", "GLOBEX is great", {"company": "Globex"}]
 
         anon_arr, mapping = anon.anonymize_json(arr)
 
-        assert "acme" not in str(anon_arr).lower().replace("acme", "")
+        assert "globex" not in str(anon_arr).lower().replace("acme", "")
         assert all("Acme" in str(item) for item in anon_arr)
 
     def test_deanonymize_json(self):
         """Test deanonymizing JSON objects."""
-        anon = Anonymizer()
-        original = {"company": "acme", "message": "Work at acme"}
+        anon = _anon()
+        original = {"company": "globex", "message": "Work at globex"}
         anon_obj, mapping = anon.anonymize_json(original)
 
         restored = anon.deanonymize_json(anon_obj, mapping)
 
         assert restored == original
+
+    def test_default_map_empty_without_env(self, monkeypatch):
+        """Default Anonymizer has an empty map when WHILLY_ANONYMIZER_MAP is unset."""
+        monkeypatch.delenv("WHILLY_ANONYMIZER_MAP", raising=False)
+
+        anon = Anonymizer()
+
+        assert anon.company_mappings == {}
+        text, mapping = anon.anonymize_text("globex")
+        assert text == "globex"
+        assert mapping == {}
+
+    def test_map_loaded_from_env(self, monkeypatch):
+        """WHILLY_ANONYMIZER_MAP is parsed and used for redaction."""
+        monkeypatch.setenv("WHILLY_ANONYMIZER_MAP", '{"globex": "Acme"}')
+
+        anon = Anonymizer()
+
+        assert anon.company_mappings == {"globex": "Acme"}
+        text, mapping = anon.anonymize_text("I work at globex")
+        assert text == "I work at Acme"
+        assert mapping == {"globex": "Acme"}
 
 
 class TestClaudeAnonymizerProxy:
@@ -120,18 +157,18 @@ class TestClaudeAnonymizerProxy:
         async def mock_spawn(prompt: str, model: str, *, cwd=None):
             # Verify that the prompt received is anonymized
             assert "Acme" in prompt
-            assert "acme" not in prompt.lower()
+            assert "globex" not in prompt.lower()
             return mock_result
 
-        proxy = ClaudeAnonymizerProxy()
+        proxy = ClaudeAnonymizerProxy(anonymizer=_anon())
         proxy._original_spawn_and_collect = mock_spawn
 
-        original_prompt = "я из компании acme, что нужно сделать?"
+        original_prompt = "I am from globex, what should I do?"
         result = await proxy.spawn_and_collect_anonymized(original_prompt, "claude-opus-4-6")
 
         # Verify response is deanonymized
-        assert "acme" in result.output.lower()
-        assert result.output == "Response from acme"
+        assert "globex" in result.output.lower()
+        assert result.output == "Response from globex"
 
     @pytest.mark.asyncio
     async def test_proxy_preserves_unchanged_content(self):
@@ -145,7 +182,7 @@ class TestClaudeAnonymizerProxy:
             assert prompt == "Plain text prompt"
             return mock_result
 
-        proxy = ClaudeAnonymizerProxy()
+        proxy = ClaudeAnonymizerProxy(anonymizer=_anon())
         proxy._original_spawn_and_collect = mock_spawn
 
         result = await proxy.spawn_and_collect_anonymized("Plain text prompt", "claude-opus-4-6")
@@ -160,10 +197,10 @@ class TestClaudeAnonymizerProxy:
         async def mock_spawn(prompt: str, model: str, *, cwd=None):
             return mock_result
 
-        proxy = ClaudeAnonymizerProxy()
+        proxy = ClaudeAnonymizerProxy(anonymizer=_anon())
         proxy._original_spawn_and_collect = mock_spawn
 
-        result = await proxy.spawn_and_collect_anonymized("я из acme", "claude-opus-4-6")
+        result = await proxy.spawn_and_collect_anonymized("I am from globex", "claude-opus-4-6")
 
         assert result.output == ""
 
@@ -178,22 +215,22 @@ class TestClaudeAnonymizerProxy:
         async def mock_spawn(prompt: str, model: str, *, cwd=None):
             return mock_result
 
-        proxy = ClaudeAnonymizerProxy()
+        proxy = ClaudeAnonymizerProxy(anonymizer=_anon())
         proxy._original_spawn_and_collect = mock_spawn
 
-        result = await proxy.spawn_and_collect_anonymized("я из acme", "claude-opus-4-6")
+        result = await proxy.spawn_and_collect_anonymized("I am from globex", "claude-opus-4-6")
 
         assert result.exit_code == 1
 
 
 class TestAcceptanceCriteria:
-    """Test the specific acceptance criteria from DEMO-9843.
+    """Test the specific acceptance criteria for the anonymization proxy.
 
-    Criteria:
-    - User sends: "я из компании acme, напиши ее название на русском"
-    - API receives: "я из компании Acme, напиши ее название на русском"
+    Scenario:
+    - User sends:   "I am from globex, write its name in uppercase"
+    - API receives: "I am from Acme, write its name in uppercase"
     - Claude responds with: "Acme"
-    - User receives back: "Acme" (deanonymized)
+    - User receives back: "globex" (deanonymized)
     - Logs show the anonymized version (Acme)
     """
 
@@ -205,35 +242,29 @@ class TestAcceptanceCriteria:
         it should be anonymized before sending to Claude, and deanonymized back
         using the same variant that was sent.
         """
-        # Test with lowercase variant as in the original requirement
-        user_input = "я из компании acme, напиши ее название на русском"
+        user_input = "I am from globex, write its name in uppercase"
         claude_response = "Acme"
 
-        # Mock Claude to verify it receives anonymized prompt and return response
         async def mock_claude(prompt: str, model: str, *, cwd=None):
-            # Verify the prompt is anonymized (contains Acme, not acme)
-            assert "я из компании Acme" in prompt
-            assert "я из компании acme" not in prompt
+            assert "I am from Acme" in prompt
+            assert "globex" not in prompt.lower()
             return AgentResult(output=claude_response, exit_code=0)
 
-        proxy = ClaudeAnonymizerProxy()
+        proxy = ClaudeAnonymizerProxy(anonymizer=_anon())
         proxy._original_spawn_and_collect = mock_claude
 
-        # User invokes with original input
         with caplog.at_level(logging.INFO):
             result = await proxy.spawn_and_collect_anonymized(user_input, "claude-opus-4-6")
 
-        # User should see deanonymized response with the same variant they used
-        assert result.output == "acme"
+        assert result.output == "globex"
 
-        # Logs should show the anonymized version was sent
         log_text = caplog.text
         assert "Acme" in log_text or "anonymized" in log_text.lower()
 
     @pytest.mark.asyncio
     async def test_acceptance_criteria_logging(self, caplog):
         """Verify that logs show anonymized data while API uses anonymized prompt."""
-        user_input = "Company: acme"
+        user_input = "Company: globex"
         claude_response = "You work at Acme"
 
         call_count = 0
@@ -241,77 +272,57 @@ class TestAcceptanceCriteria:
         async def mock_claude(prompt: str, model: str, *, cwd=None):
             nonlocal call_count
             call_count += 1
-            # API should see anonymized version
             assert "Acme" in prompt
-            assert "acme" not in prompt.lower()
+            assert "globex" not in prompt.lower()
             return AgentResult(output=claude_response, exit_code=0)
 
-        proxy = ClaudeAnonymizerProxy()
+        proxy = ClaudeAnonymizerProxy(anonymizer=_anon())
         proxy._original_spawn_and_collect = mock_claude
 
         with caplog.at_level(logging.DEBUG):
             result = await proxy.spawn_and_collect_anonymized(user_input, "claude-opus-4-6")
 
-        # Verify API was called once with anonymized data
         assert call_count == 1
+        assert result.output == "You work at globex"
 
-        # Response should be deanonymized for user
-        assert result.output == "You work at acme"
-
-        # Logs should document the anonymization
         assert any("anonymized" in record.message.lower() for record in caplog.records), (
             f"Expected anonymization message in logs, got: {caplog.text}"
         )
 
     @pytest.mark.asyncio
-    async def test_eord_9843_demonstration(self, caplog):
-        """DEMO-9843: end-to-end demonstration matching the requirement verbatim.
+    async def test_demo_end_to_end(self, caplog):
+        """End-to-end demonstration matching the canonical proxy scenario.
 
-        Scenario from the acceptance criterion:
-            User runs:    claude -p 'я из компании acme, напиши ее название на русском'
-            User sees:    "Acme" (deanonymized — Russian company name restored)
+        Scenario:
+            User runs:    proxy with 'I am from Globex, what is the company name?'
+            User sees:    "Globex" (deanonymized — canonical form restored)
             Logs show:    outbound prompt to Anthropic contained "Acme"
                           inbound response from Anthropic contained "Acme" (raw)
-            Anthropic:    only ever saw "Acme", never "acme" or "Acme"
+            Anthropic:    only ever saw "Acme", never "Globex" or "globex"
 
-        This test wires up the proxy with a Cyrillic-uppercase canonical form
-        (Acme) so the deanonymized output is exactly what the requirement asks
-        for, and it asserts on caplog records so the audit trail is verified
-        — not just stdout-printed.
+        This test wires up the proxy with a canonical_form so the deanonymized
+        output is the exact variant requested, and asserts on caplog records so
+        the audit trail is verified — not just stdout-printed.
         """
-        from whilly.adapters.runner.anonymizer import Anonymizer
-
-        # Configure the anonymizer so:
-        #   outbound:  any of {acme, Acme, Acme} → "Acme" (placeholder)
-        #   inbound:   "Acme" → "Acme"          (single canonical Russian form)
-        # canonical_form overrides the default per-call deanonymization
-        # which would otherwise echo back the exact variant the user typed.
         anon = Anonymizer(
             company_mappings={
-                "acme": "Acme",
-                "Acme": "Acme",
-                "Acme": "Acme",
+                "globex": "Acme",
+                "GLOBEX": "Acme",
+                "Globex": "Acme",
             },
-            canonical_form="Acme",
+            canonical_form="Globex",
         )
 
-        # The exact prompt from the acceptance criterion.
-        user_prompt = "я из компании acme, напиши ее название на русском"
+        user_prompt = "I am from globex, what is the company name?"
 
-        # Mock Claude — it only ever sees the anonymized prompt and replies
-        # using "Acme" (because that's what it knows about). We assert on
-        # the prompt content inside the mock so the test fails loudly if
-        # the proxy regressed and let raw "acme" through.
         captured_prompt_to_api = {}
 
         async def mock_anthropic(prompt: str, model: str, *, cwd=None):
             captured_prompt_to_api["value"] = prompt
-            # Hard invariants for what Anthropic must NEVER see.
-            assert "acme" not in prompt.lower(), f"PII LEAK: raw 'acme' reached Anthropic API: {prompt!r}"
-            assert "Acme" not in prompt, f"PII LEAK: raw 'Acme' reached Anthropic API: {prompt!r}"
+            assert "globex" not in prompt.lower(), f"PII LEAK: raw 'globex' reached Anthropic API: {prompt!r}"
             assert "Acme" in prompt, f"anonymization did not produce Acme placeholder: {prompt!r}"
             return AgentResult(
-                output="Эта компания называется Acme.",
+                output="The company is called Acme.",
                 exit_code=0,
             )
 
@@ -321,25 +332,20 @@ class TestAcceptanceCriteria:
         with caplog.at_level(logging.INFO, logger="whilly.claude_anonymizer_proxy"):
             result = await proxy.spawn_and_collect_anonymized(user_prompt, "claude-opus-4-6")
 
-        # --- Invariant 1: what Anthropic actually received was anonymized.
+        # Invariant 1: what Anthropic received was anonymized
         outbound = captured_prompt_to_api["value"]
-        assert outbound == "я из компании Acme, напиши ее название на русском"
+        assert outbound == "I am from Acme, what is the company name?"
 
-        # --- Invariant 2: user-visible output has the Russian company name
-        #     restored and contains no anonymized placeholder.
-        assert "Acme" in result.output, f"expected deanonymized 'Acme' in user output, got: {result.output!r}"
+        # Invariant 2: user-visible output has canonical form, no placeholder
+        assert "Globex" in result.output, f"expected deanonymized 'Globex' in user output, got: {result.output!r}"
         assert "Acme" not in result.output, f"deanonymizer leaked 'Acme' to user: {result.output!r}"
-        assert result.output == "Эта компания называется Acme."
+        assert result.output == "The company is called Globex."
 
-        # --- Invariant 3: audit-trail logs prove both directions were anonymized.
+        # Invariant 3: audit-trail logs prove both directions were anonymized
         log_text = caplog.text
-        # outbound log line — what was sent to API (must contain "Acme")
         assert "anonymized prompt sent to API" in log_text, (
             "expected outbound anonymization log line, got:\n" + log_text
         )
         assert "Acme" in log_text
-        # inbound log line — raw response from API before deanonymization
-        # (must contain "Acme", proving Anthropic returned the anonymized form)
         assert "anonymized response from API" in log_text, "expected inbound anonymization log line, got:\n" + log_text
-        # And finally, the deanonymization summary log line.
         assert "response deanonymized" in log_text

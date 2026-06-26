@@ -7,9 +7,7 @@ This capability covers how a GitLab API token is resolved, how the smoke verb
 performs only authenticated read probes against a live instance, and how the MR
 sink is the single path that pushes branches and opens merge requests — never
 breaking the orchestration loop on failure.
-
 ## Requirements
-
 ### Requirement: GitLab token resolution and host derivation
 The system SHALL resolve the GitLab token in the precedence order `GITLAB_TOKEN` → `GITLAB_API_TOKEN` → `WHILLY_GITLAB_API_TOKEN`, falling back to `glab config get token -h <host>` when no env var is set, and SHALL derive `<host>` from the repository URL rather than any hardcoded hostname.
 
@@ -64,3 +62,23 @@ The system SHALL confine GitLab mutations to `open_mr_for_task` (git push to the
 - **WHEN** the push or `glab mr create` step fails, times out, or the worktree is missing
 - **THEN** the system SHALL return a `PRResult` with `ok=False` and a specific `failure_mode` (for example `git_push_failed`, `git_push_timeout`, `mr_create_failed`, `mr_create_timeout`, or `worktree_missing`)
 - **AND** the call SHALL NOT raise an exception into the caller
+
+### Requirement: Configurable GitLab host inference fallback
+
+When the GitLab MR sink cannot parse a host from `remote.origin.url`, it SHALL
+fall back to the `WHILLY_GITLAB_SSH_HOST` environment variable, defaulting to
+the neutral host `gitlab.example.com` when unset or empty, rather than a
+hardcoded internal host.
+
+#### Scenario: Fallback honours the environment
+
+- **WHEN** `remote.origin.url` cannot be parsed for a host **AND**
+  `WHILLY_GITLAB_SSH_HOST` is set
+- **THEN** the inferred host SHALL equal `WHILLY_GITLAB_SSH_HOST`
+
+#### Scenario: Fallback default when unset
+
+- **WHEN** `remote.origin.url` cannot be parsed for a host **AND**
+  `WHILLY_GITLAB_SSH_HOST` is unset or empty
+- **THEN** the inferred host SHALL be `gitlab.example.com`
+

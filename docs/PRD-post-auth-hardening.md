@@ -22,7 +22,7 @@ This PRD covers the 24 follow-up work items needed to restore CI, close the cove
 - Achieve ≥ 90 % branch coverage on all code added during the auth-hardening sprint (P1).
 - Deliver a production-hardened auth layer: per-request gate, persistent session secret, cluster-aware rate limiting, self-service password change, admin user management, login audit, and SMTP magic-link transport (P1/P2).
 - Ship the worker tag-pool filter (hybrid pool model) so operators can route tasks to specialist workers (P2).
-- Publish the `claude-anonymizer` as a standalone GitHub project with its own CI (P2).
+- Publish the `claude-anonymizer` as a standalone GitHub project with its own CI (P2) — company↔placeholder redaction proxy.
 - Fix CLI UX regressions introduced by `worker launch` (`--model` and `--connect` ignored on update paths) (P2).
 - Produce accurate end-user and architecture documentation reflecting the hardened state (P3).
 
@@ -400,7 +400,7 @@ This PRD covers the 24 follow-up work items needed to restore CI, close the cove
 
 #### Item 19 — Push `claude-anonymizer` to GitHub `mshegolev/claude-anonymizer`
 
-**Goal:** Make the Acme↔Acme redaction proxy independently usable by teams outside the Whilly project.
+**Goal:** Make the company↔placeholder redaction proxy independently usable by teams outside the Whilly project.
 
 **Scope:** Create `mshegolev/claude-anonymizer` GitHub repository from `/opt/develop/qa-team/claude-anonymizer/`. Add `README.md`, `LICENSE` (MIT), and link from `whilly/docs/anonymizer-usage.md` (update the existing file at `docs/anonymizer-usage.md`).
 
