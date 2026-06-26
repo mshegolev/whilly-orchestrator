@@ -1,0 +1,159 @@
+# Whilly Orchestrator — Helm values
+#
+# Corporate profile (as configured): image mirrored to corporate Harbor,
+# external managed Postgres, Ingress exposes the WUI (control-plane) only.
+# Workers and Postgres stay in-cluster / private.
+#
+# Quick start:
+#   helm upgrade --install whilly deploy/helm/whilly \
+#     -n whilly --create-namespace \
+#     --set image.repository=<harbor-host>/<project>/whilly \
+#     --set worker.planId=demo \
+#     --set ingress.hosts[0].host=whilly.<corp-domain>
+# (with secrets provided out-of-band — see `secrets:` below)
+
+# ─── Image (mirrored to corporate Harbor) ───────────────────────────────────
+image:
+  # Push mshegolev/whilly:<tag> to Harbor and point here, e.g.
+  #   registry.example.com/myproject/whilly
+  repository: harbor.example.com/whilly/whilly
+  tag: "4.7.0"            # keep in sync with Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# Harbor pull credentials. Either reference an existing docker-registry
+# secret (recommended — created by platform/ExternalSecrets) or let this
+# chart create one from `imagePullSecret.dockerconfigjson`.
+imagePullSecrets: []      # e.g. [{ name: harbor-pull }]
+imagePullSecret:
+  create: false
+  name: ""                # name to create when create=true
+  dockerconfigjson: ""    # base64 .dockerconfigjson (use --set-file / Vault)
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ─── Secrets ─────────────────────────────────────────────────────────────────
+# Two modes:
+#   create=true  → this chart renders a Secret from the values below
+#                  (fine for PoC; do NOT commit real values).
+#   create=false → reference an existing Secret (managed by Vault /
+#                  ExternalSecrets). Provide the key names below.
+secrets:
+  create: false
+  existingSecret: "whilly-secrets"
+  keys:
+    databaseUrl: WHILLY_DATABASE_URL              # full DSN incl. password
+    bootstrapToken: WHILLY_WORKER_BOOTSTRAP_TOKEN # cluster-join secret
+  # Used only when create=true:
+  values:
+    WHILLY_DATABASE_URL: ""   # postgresql://user:pass@host:5432/whilly
+    WHILLY_WORKER_BOOTSTRAP_TOKEN: ""
+
+# ─── LLM backend ─────────────────────────────────────────────────────────────
+# Default zero-key path: opencode + Big Pickle (free, anonymous).
+# To use a keyed model, set model + reference the key from a secret.
+llm:
+  cli: "opencode"                  # WHILLY_CLI
+  model: "opencode/big-pickle"     # WHILLY_MODEL ("" = image default)
+  # Optional API keys pulled from a secret (envFrom-style). Leave empty
+  # for the zero-key path.
+  apiKeys: {}                      # e.g. { ANTHROPIC_API_KEY: { secret: whilly-llm, key: anthropic } }
+
+logLevel: INFO                     # WHILLY_LOG_LEVEL
+
+# ─── External integrations: Jira & GitLab ───────────────────────────────────
+# Tokens come from a Secret (default: the main whilly secret — add the keys
+# there, or point tokenSecret.name at a dedicated Vault-managed secret).
+# Add JIRA_API_TOKEN / GITLAB_TOKEN keys to whatever secret you reference.
+integrations:
+  jira:
+    enabled: false
+    serverUrl: ""                  # https://jira.example.com
+    username: ""                   # service account
+    autoClose: true               # JIRA_AUTO_CLOSE — transition issue on task done
+    transitionTo: "Done"          # JIRA_TRANSITION_TO
+    tokenSecret:
+      name: ""                     # "" → reuse secrets.existingSecret
+      key: JIRA_API_TOKEN
+  gitlab:
+    enabled: false
+    url: ""                        # https://gitlab.example.com
+    tokenSecret:
+      name: ""                     # "" → reuse secrets.existingSecret
+      key: GITLAB_TOKEN
+  # Continuous Jira JQL intake → tasks (whilly scheduler run). Optional pod.
+  # Rules live in Postgres (scheduler_rules); manage with `whilly scheduler`.
+  scheduler:
+    enabled: false
+    replicas: 1
+    resources:
+      requests: { cpu: 50m, memory: 256Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+
+# Common pod hardening. Image already runs as USER whilly (non-root).
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false    # workers write .whilly_workspaces
+  capabilities:
+    drop: ["ALL"]
+
+# ─── DB migrations (Helm hook: pre-install,pre-upgrade) ─────────────────────
+# Runs `whilly-entrypoint migrate` (alembic upgrade head) BEFORE the
+# control-plane rolls, so multi-replica control-plane never races migrations.
+migrate:
+  enabled: true
+  backoffLimit: 3
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 256Mi }
+
+# ─── Control-plane (FastAPI + WUI on :8000) ─────────────────────────────────
+controlPlane:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: "1",  memory: 512Mi }
+  service:
+    type: ClusterIP
+    port: 8000
+  # Liveness/readiness hit /health (Dockerfile HEALTHCHECK target).
+  probes:
+    enabled: true
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# ─── Workers (role=worker, scale for parallelism) ───────────────────────────
+# Workers reach the control-plane over in-cluster Service DNS by plain HTTP,
+# which is non-loopback → WHILLY_INSECURE=1 is required so the worker's
+# URL-scheme guard accepts it (TLS terminates at the ingress, not here).
+worker:
+  replicas: 2
+  planId: "demo"                 # WHILLY_PLAN_ID — the plan to drain
+  insecure: true                 # WHILLY_INSECURE=1 for in-cluster http://
+  # Override if control-plane is reached differently (e.g. external URL).
+  controlUrl: ""                 # default: http://<release>-control-plane:<port>
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: "2",  memory: "2Gi" }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# ─── Ingress — WUI (control-plane) only ─────────────────────────────────────
+ingress:
+  enabled: true
+  className: ""                  # e.g. nginx
+  annotations: {}                # corp TLS/cert-manager/auth annotations
+  hosts:
+    - host: whilly.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []                        # [{ secretName: whilly-tls, hosts: [whilly.example.com] }]

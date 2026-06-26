@@ -1,0 +1,42 @@
+{{- if .Values.integrations.scheduler.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "whilly.fullname" . }}-scheduler
+  labels:
+    {{- include "whilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: {{ .Values.integrations.scheduler.replicas }}
+  selector:
+    matchLabels:
+      {{- include "whilly.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "whilly.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: scheduler
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: scheduler
+          image: {{ include "whilly.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # Generic exec role: entrypoint runs `whilly scheduler run` directly.
+          # Polls JQL rules (scheduler_rules in Postgres) → converts issues to
+          # tasks. Requires Jira integration env + WHILLY_DATABASE_URL.
+          args: ["whilly", "scheduler", "run"]
+          env:
+            {{- include "whilly.coreEnv" . | nindent 12 }}
+            {{- include "whilly.integrationsEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.integrations.scheduler.resources | nindent 12 }}
+{{- end }}
