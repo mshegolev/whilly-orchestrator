@@ -178,10 +178,19 @@ def test_infer_remote_host_ssh_url(tmp_path: Path) -> None:
     assert host == "gitlab.example.com"
 
 
-def test_infer_remote_host_defaults_on_failure(tmp_path: Path) -> None:
+def test_infer_remote_host_defaults_on_failure(tmp_path: Path, monkeypatch) -> None:
+    # Unset so the neutral in-code default applies deterministically.
+    monkeypatch.delenv("WHILLY_GITLAB_SSH_HOST", raising=False)
     with patch("subprocess.run", side_effect=OSError("git not found")):
         host = _infer_remote_host(tmp_path)
     assert host == "gitlab.example.com"
+
+
+def test_infer_remote_host_fallback_honours_env(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("WHILLY_GITLAB_SSH_HOST", "git.internal.example")
+    with patch("subprocess.run", side_effect=OSError("git not found")):
+        host = _infer_remote_host(tmp_path)
+    assert host == "git.internal.example"
 
 
 # ── open_mr_for_task happy path ───────────────────────────────────────────────

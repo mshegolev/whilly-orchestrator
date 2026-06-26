@@ -58,14 +58,24 @@ class TestResolveRepoTarget:
     def test_none_when_absent(self) -> None:
         assert resolve_repo_target(_rule()) is None
 
-    def test_gitlab_target(self) -> None:
-        rule = _rule(custom_metadata={"repo_target": "gitlab:example-group/autotests/example-repo"})
+    def test_gitlab_target(self, monkeypatch) -> None:
+        # Unset so the neutral in-code default applies deterministically,
+        # regardless of any WHILLY_GITLAB_SSH_HOST in the dev's shell/.env.
+        monkeypatch.delenv("WHILLY_GITLAB_SSH_HOST", raising=False)
+        rule = _rule(custom_metadata={"repo_target": "gitlab:group/sub/repo"})
         rt = resolve_repo_target(rule)
         assert rt is not None
-        assert rt.id == "gitlab:example-group/autotests/example-repo"
+        assert rt.id == "gitlab:group/sub/repo"
         assert rt.provider == "gitlab"
-        assert rt.repo_full_name == "example-group/autotests/example-repo"
-        assert rt.clone_url == "git@gitlab.example.com:example-group/autotests/example-repo.git"
+        assert rt.repo_full_name == "group/sub/repo"
+        assert rt.clone_url == "git@gitlab.example.com:group/sub/repo.git"
+
+    def test_gitlab_target_host_from_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("WHILLY_GITLAB_SSH_HOST", "git.internal.example")
+        rule = _rule(custom_metadata={"repo_target": "gitlab:group/repo"})
+        rt = resolve_repo_target(rule)
+        assert rt is not None
+        assert rt.clone_url == "git@git.internal.example:group/repo.git"
 
     def test_github_target(self) -> None:
         rule = _rule(custom_metadata={"repo_target": "github:my-org/my-repo"})
