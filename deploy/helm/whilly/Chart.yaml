@@ -1,0 +1,21 @@
+apiVersion: v2
+name: whilly
+description: >-
+  Whilly Orchestrator — Postgres-backed, horizontally-scalable Claude-CLI
+  worker cluster. Deploys the control-plane (FastAPI + WUI), a pool of
+  workers, and a pre-upgrade migration Job from a single multi-role image.
+type: application
+# Chart version is independent of the app version. Bump on chart changes.
+version: 0.1.0
+# Tracks the published whilly image tag this chart was validated against.
+appVersion: "4.7.0"
+keywords:
+  - whilly
+  - orchestrator
+  - claude
+  - worker-cluster
+home: https://github.com/mshegolev/whilly-orchestrator
+maintainers:
+  - name: Whilly Orchestrator
+sources:
+  - https://github.com/mshegolev/whilly-orchestrator
