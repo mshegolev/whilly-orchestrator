@@ -6,9 +6,9 @@ auditable for Phase 28 (COV-01): zero silent gaps, zero double-mapping.
 
 ## Counts
 
-- **Live module count: 275** — authoritative, computed at execution time via
+- **Live module count: 278** — authoritative, computed at execution time via
   `find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l`.
-- **Body rows: 275** (one row per module — a strict one-to-one mapping).
+- **Body rows: 278** (one row per module — a strict one-to-one mapping).
 - **Unmapped: 0** (zero silent gaps — every row carries a real taxonomy slug).
 - **Double-mapped: 0** (no module appears under two capabilities).
 
@@ -175,6 +175,7 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/cli/skill.py | cli-surface | skill CLI command |
 | whilly/cli/smoke.py | budget-resource-guards | smoke/resource check CLI |
 | whilly/cli/tui.py | operator-views-logs | operator TUI |
+| whilly/cli/tui_backends.py | operator-views-logs | TUI transport backends (DB + HTTP) |
 | whilly/cli/update.py | self-update-doctor | update CLI |
 | whilly/cli/worker.py | agent-dispatch | worker runtime CLI |
 | whilly/cli/worker_launch.py | agent-dispatch | worker launch CLI |
@@ -220,6 +221,7 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/mcp/profiles.py | mcp-integration | MCP server/client |
 | whilly/mcp/registry.py | mcp-integration | MCP server/client |
 | whilly/notifications.py | notifications | notification dispatch |
+| whilly/operator_snapshot_codec.py | operator-views-logs | operator snapshot JSON codec |
 | whilly/operator_views.py | operator-views-logs | operator views |
 | whilly/orchestrator.py | batch-planning | plan_batches logic |
 | whilly/pause_control.py | state-persistence | pause/resume control state |
@@ -268,6 +270,7 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/scheduler/config.py | scheduling | scheduler |
 | whilly/scheduler/deduplicator.py | scheduling | scheduler |
 | whilly/scheduler/docs.py | scheduling | scheduler |
+| whilly/scheduler/intake.py | scheduling | scheduler |
 | whilly/scheduler/jql_executor.py | scheduling | scheduler |
 | whilly/scheduler/metrics.py | scheduling | scheduler |
 | whilly/scheduler/models.py | scheduling | scheduler |
@@ -325,7 +328,7 @@ canonical commands (results captured live, not hardcoded):
 
 | Assertion | Command | Result | Status |
 |-----------|---------|--------|--------|
-| Live module count == body rows | `find whilly/ -name "*.py" -not -path "*/__pycache__/*" \| wc -l` vs `grep -cE '^\| whilly/' COVERAGE-MATRIX.md` | live **275** == rows **275** | ✅ PASS |
+| Live module count == body rows | `find whilly/ -name "*.py" -not -path "*/__pycache__/*" \| wc -l` vs `grep -cE '^\| whilly/' COVERAGE-MATRIX.md` | live **276** == rows **276** | ✅ PASS |
 | Zero UNMAPPED | `grep -cE '^\| whilly/.*\| *UNMAPPED'` | **0** | ✅ PASS |
 | Zero double-mapped module paths | each module path appears in exactly one data row | **0 duplicates** | ✅ PASS |
 | Capability column ⊆ 32 TAXONOMY slugs | matrix capabilities vs `TAXONOMY.md` 32 slugs | **0 stray slugs** | ✅ PASS |
