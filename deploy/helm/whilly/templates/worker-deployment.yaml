@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "whilly.fullname" . }}-worker
+  labels:
+    {{- include "whilly.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "whilly.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "whilly.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "whilly.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["worker"]
+          env:
+            {{- include "whilly.coreEnv" . | nindent 12 }}
+            {{- include "whilly.llmEnv" . | nindent 12 }}
+            {{- include "whilly.integrationsEnv" . | nindent 12 }}
+            - name: WHILLY_CONTROL_URL
+              value: {{ include "whilly.controlUrl" . | quote }}
+            - name: WHILLY_PLAN_ID
+              value: {{ required "worker.planId is required" .Values.worker.planId | quote }}
+            {{- if .Values.worker.insecure }}
+            # In-cluster http:// to the control-plane Service is non-loopback;
+            # the worker's URL-scheme guard rejects it unless WHILLY_INSECURE=1.
+            - name: WHILLY_INSECURE
+              value: "1"
+            {{- end }}
+            {{- with .Values.worker.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

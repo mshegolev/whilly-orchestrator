@@ -54,7 +54,9 @@ _REMOTE_HOST_RE = re.compile(r"(?:https?://|git@)([^/:]+)", re.IGNORECASE)
 def _infer_remote_host(worktree_path: Path, git_bin: str = DEFAULT_GIT_BIN, timeout: float = 10.0) -> str:
     """Return the hostname extracted from ``git config --get remote.origin.url``.
 
-    Falls back to ``gitlab.example.com`` if the remote URL cannot be parsed.
+    Falls back to ``WHILLY_GITLAB_SSH_HOST`` (default ``gitlab.example.com``) if
+    the remote URL cannot be parsed — keeps the real internal host in a
+    gitignored ``.env`` rather than hardcoded in source.
     """
     try:
         result = subprocess.run(
@@ -72,7 +74,7 @@ def _infer_remote_host(worktree_path: Path, git_bin: str = DEFAULT_GIT_BIN, time
                 return m.group(1)
     except Exception:  # noqa: BLE001
         pass
-    return "gitlab.example.com"
+    return os.environ.get("WHILLY_GITLAB_SSH_HOST", "").strip() or "gitlab.example.com"
 
 
 def _resolve_gitlab_token(host: str, env: dict[str, str] | None = None) -> str | None:
@@ -212,7 +214,9 @@ def open_mr_for_task(
 
     Steps:
     1. Resolve branch name (default ``whilly/{task.id}``).
-    2. ``git push origin HEAD:{branch} --force-with-lease``
+    2. ``git push origin HEAD:{branch} --force`` (plain ``--force``; see the
+       inline comment at the push site for why ``--force-with-lease`` is wrong
+       on a fresh worktree)
     3. ``glab mr create --target-branch {base} --source-branch {branch}
          --title ... --description-file ...``
 

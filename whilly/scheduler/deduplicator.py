@@ -31,6 +31,16 @@ def compute_issue_hash(
     for field in fields_to_hash:
         value = issue.get(field)
         if value is None:
+            # Raw Jira search results (``execute_jql``) nest most attributes
+            # under ``fields`` — only ``key``/``id``/``self`` are top-level. Fall
+            # back to ``issue["fields"][field]`` so the default
+            # ``("key", "summary")`` hashes correctly against real payloads while
+            # already-flattened issue dicts (which expose the field at the top
+            # level) keep working unchanged.
+            nested = issue.get("fields")
+            if isinstance(nested, dict):
+                value = nested.get(field)
+        if value is None:
             raise DeduplicationError(f"Missing field '{field}' for deduplication")
 
         if isinstance(value, dict):

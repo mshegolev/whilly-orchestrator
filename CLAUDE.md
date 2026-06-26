@@ -15,27 +15,14 @@ Requires **Python 3.12+** (`requires-python = ">=3.12"`). Most task-execution pa
 ## Common commands
 
 ```bash
-# Dev install (editable, with dev deps)
-pip install -e '.[dev]'
-
-# v4 run path needs Postgres (point at your DSN)
-export WHILLY_DATABASE_URL=postgres://user:pass@localhost:5432/whilly
-whilly plan import PLAN.json     # load a JSON plan into Postgres
-whilly run --plan <plan-id>      # start a local worker that drains the plan's queue
-
-# v3-compat shim still works (rewrites to subcommands under the hood)
-whilly --tasks tasks.json        # → run --plan ... ; ./whilly.py and python -m whilly are equivalent launchers
-
-# Lint + format (same commands CI runs)
-ruff check whilly/ tests/
-ruff format --check whilly/ tests/
-ruff format whilly/ tests/                   # apply formatting
-
 # Tests
 pytest -q
 pytest tests/test_whilly_dashboard.py        # single file
 pytest tests/test_whilly_dashboard.py::test_name   # single test
 pytest -k budget                             # by keyword
+
+# Spec validation (reproduces CI gate locally)
+make spec-check
 ```
 
 Line length is 120 (`[tool.ruff]` in `pyproject.toml`). Target `py312`.
@@ -78,6 +65,7 @@ Agent prompts are built in `whilly/core/prompts.py::build_task_prompt`. They pin
 
 ## When editing
 
+- **Never commit company or user data — this is a PUBLIC repo.** Do not put company-internal or personal identifiers in tracked files (source, tests, docs, fixtures, `.planning`): real internal hostnames (your corporate GitLab/Jira/registry hosts), Jira/GitLab project or issue keys, team/namespace names, repo paths, personal names/emails, or any credential/token. Tracked code carries only neutral placeholders — `gitlab.example.com`, `jira.example.com`, `DEMO-123`, `ACME`, `example-group/repo`, `you@example.com`. Real values are configured **locally only**, via gitignored config (`.env`, `whilly.toml`); the repo ships only `*.example` templates. When a real value is needed at runtime, read it from env/config with a **neutral default in code** (pattern: `os.environ.get("WHILLY_GITLAB_SSH_HOST", "gitlab.example.com")`) — never hardcode the real value. (Sole exception: the redaction anonymizer in `whilly/adapters/runner/anonymizer.py` intentionally contains the company→placeholder mapping it exists to apply.)
 - **Behavior changes REQUIRE an opsx spec delta.** Any change to `whilly/` behavior MUST ship with an `opsx` change proposal (propose → apply → archive) that updates the relevant OpenSpec capability spec at `openspec/specs/<slug>/spec.md` — the change is not complete until that delta is applied and archived. See `openspec/FORWARD-PROCESS.md` for the full workflow and `openspec/AUTHORING.md` for how to write the delta. Don't let the spec and code drift (this file itself drifted from v3→v4; that's the failure mode the specs exist to prevent). Pure docs/test/refactor with no behavior change is exempt.
 - **Postgres is the source of truth**, not files. Task state moves through `TaskRepository` (claim/start/complete/fail/release) with an optimistic-locking `version`; handle `VersionConflictError` by abandoning the row, never by force-writing. Every transition writes an `events` audit row.
 - **Don't gate behavior on removed no-op env vars** (`WHILLY_WORKTREE`, `WHILLY_USE_WORKSPACE`, `WHILLY_USE_TMUX`, `WHILLY_STATE_FILE`). They parse but do nothing.

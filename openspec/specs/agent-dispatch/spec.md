@@ -9,46 +9,46 @@ permission posture of the spawned agent, and the retry/auth handling around a
 single agent invocation. It does NOT cover the workspace/worktree directory
 layout (see worktree-isolation), result parsing (see result-collection), or
 the task state machine (see task-model-fsm).
-
 ## Requirements
-
 ### Requirement: Runner selection between tmux and subprocess
-The system SHALL dispatch an agent via the tmux-session runner when tmux is
-available on the host AND the `USE_TMUX` flag (`WHILLY_USE_TMUX`) is enabled,
-and MUST fall back to the subprocess runner (the `run_task` Claude CLI wrapper)
-in all other cases.
+The system SHALL dispatch every agent in the live run path (`whilly/cli/run.py`
+and `whilly/cli/worker.py`) through the subprocess runner
+(`whilly.adapters.runner.run_task`, the Claude CLI wrapper). The tmux-session
+runner (`tmux_runner.launch_agent`) and the `USE_TMUX` flag (`WHILLY_USE_TMUX`)
+are **legacy and unwired**: no live dispatch path imports the tmux runner for
+runner selection or reads `WHILLY_USE_TMUX`, and `WHILLY_USE_TMUX` is a
+parsed-but-inert no-op (see configuration). The system SHALL NOT select the
+tmux runner in the live path.
 
-#### Scenario: tmux available and USE_TMUX enabled
-- **WHEN** an agent is dispatched and `tmux_runner.tmux_available()` returns
-  true and `WHILLY_USE_TMUX` is enabled
-- **THEN** the system SHALL launch the agent in a tmux session via
-  `tmux_runner.launch_agent`
+#### Scenario: Live dispatch always uses the subprocess runner
+- **WHEN** the local worker (`whilly/cli/run.py`) or remote worker
+  (`whilly/cli/worker.py`) dispatches a task to its runner
+- **THEN** the system SHALL invoke `whilly.adapters.runner.run_task` and SHALL
+  NOT launch a tmux session
 
-#### Scenario: tmux unavailable
-- **WHEN** an agent is dispatched and `tmux_runner.tmux_available()` returns
-  false
-- **THEN** the system SHALL dispatch the agent through the subprocess runner
-  (`whilly.adapters.runner.run_task`) instead of a tmux session
-
-#### Scenario: USE_TMUX disabled
-- **WHEN** an agent is dispatched while `WHILLY_USE_TMUX` is disabled
-- **THEN** the system SHALL NOT create a tmux session and SHALL use the
-  subprocess runner
+#### Scenario: USE_TMUX does not select a tmux runner
+- **WHEN** `WHILLY_USE_TMUX` is set in the environment
+- **THEN** the system SHALL dispatch agents identically to when it is unset,
+  because `WHILLY_USE_TMUX` is a no-op and no live path consults it for runner
+  selection
 
 ### Requirement: One tmux session per task
-The system SHALL name each tmux agent session `whilly-{task_id}` using the
-flattened safe task id, and MUST run exactly one agent session per task,
-killing any pre-existing session of the same name before launch.
+The legacy `tmux_runner` module SHALL name each tmux agent session
+`whilly-{task_id}` using the flattened safe task id and MUST run exactly one
+agent session per task, killing any pre-existing session of the same name
+before launch. This behavior is **not wired into the live run path** — neither
+the local nor the remote worker invokes `tmux_runner.launch_agent` — and it
+applies only when `tmux_runner.launch_agent` is called directly.
 
 #### Scenario: Session name derived from task id
-- **WHEN** `tmux_runner.launch_agent` launches an agent for a task
+- **WHEN** `tmux_runner.launch_agent` is invoked directly for a task
 - **THEN** the session name SHALL be `whilly-` followed by the safe-flattened
   task id produced by `safe_task_id_filename`
 
 #### Scenario: Stale session replaced before launch
 - **WHEN** a tmux session named `whilly-{task_id}` already exists at launch
-- **THEN** the system SHALL kill that session before starting the new one so
-  exactly one session per task remains
+- **THEN** the legacy runner SHALL kill that session before starting the new one
+  so exactly one session per task remains
 
 ### Requirement: Dispatched agent receives the built prompt
 The system SHALL pass each dispatched agent the prompt produced by
@@ -131,3 +131,27 @@ returning them immediately.
   failure
 - **THEN** the system SHALL return that result immediately without consuming
   any retry attempt
+
+### Requirement: Anonymizer map loaded from environment
+The system SHALL load the anonymizer's redaction map from the
+`WHILLY_ANONYMIZER_MAP` environment variable (a JSON object string) at
+`Anonymizer` construction time via `_load_company_mappings()`, and MUST
+default to an empty map — performing no redaction — when the variable is
+unset, empty, or contains invalid JSON.  No company name SHALL be hardcoded
+in source; all real company names MUST be supplied through local,
+gitignored environment configuration.
+
+#### Scenario: Map loaded when env var is set
+- **WHEN** `WHILLY_ANONYMIZER_MAP` is set to a valid JSON object string
+- **THEN** `Anonymizer().company_mappings` SHALL equal the parsed dict
+- **AND** anonymization SHALL replace occurrences of keys with their values
+
+#### Scenario: Empty map when env var is absent
+- **WHEN** `WHILLY_ANONYMIZER_MAP` is unset or empty
+- **THEN** `Anonymizer().company_mappings` SHALL be an empty dict
+- **AND** `anonymize_text` SHALL return the input unchanged with an empty mapping
+
+#### Scenario: Empty map on invalid JSON
+- **WHEN** `WHILLY_ANONYMIZER_MAP` contains a string that is not valid JSON
+- **THEN** the system SHALL log a WARNING and `Anonymizer().company_mappings` SHALL be an empty dict
+

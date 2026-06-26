@@ -364,7 +364,7 @@ def test_live_full_workflow_plan_to_real_gitlab_mr(  # noqa: PLR0915 — runbook
     # urllib on macOS ignores NO_PROXY for system-configured PAC proxies
     # (scutil --proxy). Force the jira.py opener to bypass.
     server_env["WHILLY_JIRA_NO_PROXY"] = "1"
-    # Acme jira.example.com uses corp PKI not trusted by Python's default CA bundle,
+    # corporate jira.example.com uses corp PKI not trusted by Python's default CA bundle,
     # and runs on api/2 (api/3 only on Atlassian Cloud).  Hard-code both so
     # the test doesn't depend on the operator's [jira] toml section.
     server_env["JIRA_VERIFY_SSL"] = "false"

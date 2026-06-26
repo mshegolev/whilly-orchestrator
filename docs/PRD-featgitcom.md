@@ -25,7 +25,7 @@
 ## Target Users
 
 - **Соло-разработчики**, использующие Whilly для автоматизации мелких/средних фич — хотят «один раз настроить и забыть».
-- **Acme DevOps команды**, работающие через `gitlab.example.com` (`glab`) — нужен MR-флоу + сохранение токена.
+- **corporate DevOps команды**, работающие через `gitlab.example.com` (`glab`) — нужен MR-флоу + сохранение токена.
 - **Open-source мейнтейнеры** Whilly-подобных пакетов на GitHub (`gh`) — нужен полный pipeline вплоть до GitHub Release + PyPI upload.
 
 ## Requirements
@@ -54,7 +54,7 @@
 
 - Whilly спрашивает: `Which git provider to use for MR/PR? (gh / glab / none)`.
 - `gh`: использовать GitHub CLI (`gh pr create`, `gh pr merge`, `gh release create`).
-- `glab`: использовать GitLab CLI или GitLab API (`gitlab.example.com` по умолчанию для Acme env, конфигурируемо).
+- `glab`: использовать GitLab CLI или GitLab API (`gitlab.example.com` по умолчанию для corporate env, конфигурируемо).
 - `none`: не открывать PR — Whilly останавливается на `git push` ветки.
 - Сохранить в `.whilly/git.yaml` ключ `git.provider`.
 
@@ -174,7 +174,7 @@
 ### Technical Constraints
 
 - **`gh` CLI** должен быть установлен и аутентифицирован для GitHub-провайдера. При отсутствии — fall back на режим «push only, no PR» с предупреждением.
-- **`glab` CLI** или `python-gitlab` для GitLab. Acme env: использовать паттерн из `~/.claude/CLAUDE.md` (`glab config get token -h gitlab.example.com`).
+- **`glab` CLI** или `python-gitlab` для GitLab. corporate env: использовать паттерн из `~/.claude/CLAUDE.md` (`glab config get token -h gitlab.example.com`).
 - **Stdin/TTY detection**: preflight только в TTY-режиме. В headless — error + exit, как описано выше.
 - **Не модифицировать `whilly_logs/` ИЛИ `.whilly_state.json`** в commit'ах — добавить в `.gitignore` если их там нет.
 - **`pyproject.toml` version bump** должен использовать `tomllib` (Python 3.11+) или `tomli` (3.10), чтобы парсить корректно — не regex.

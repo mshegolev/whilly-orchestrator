@@ -33,6 +33,8 @@ Any change to `whilly/` behavior MUST ship with an `opsx` spec delta (propose â†
 
 Do not commit real secrets. Use `.env.example`, `.env.worker.example`, `whilly.example.toml`, or environment variables for configuration. Treat `ANTHROPIC_API_KEY`, `GH_TOKEN`, `GROQ_API_KEY`, database URLs, worker bootstrap tokens, and Slack tokens as sensitive.
 
+**This is a PUBLIC repo â€” do not commit company or user data either.** Keep company-internal identifiers out of tracked files (source, tests, docs, fixtures): real internal hostnames (your corporate GitLab/Jira/registry hosts), Jira/GitLab project/issue keys, team/namespace names, repo paths, and personal names/emails. Use neutral placeholders in tracked code (`gitlab.example.com`, `jira.example.com`, `DEMO-123`, `ACME`, `example-group/repo`, `you@example.com`); configure real values locally via gitignored `.env`/`whilly.toml`, and read them at runtime with a neutral default in code (`os.environ.get("WHILLY_GITLAB_SSH_HOST", "gitlab.example.com")`). The redaction anonymizer (`whilly/adapters/runner/anonymizer.py`) is the sole intentional exception.
+
 ## Active Codex Mission
 
 The Factory mission is migrated in `docs/CODEX-MISSION.md`. Use it for v6.0 hardening scope, feature order, validation gates, and boundaries. Do not delete untracked `out/`, `.planning/distributed-audit/`, or analysis artifacts unless explicitly asked.

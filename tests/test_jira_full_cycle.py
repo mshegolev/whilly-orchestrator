@@ -416,3 +416,41 @@ def test_status_mapping_override(monkeypatch, _jira_env):
     client = JiraBoardClient(JiraAuth.from_config(), status_mapping={"in_progress": "Doing"})
     assert client.status_mapping["in_progress"] == "Doing"
     assert client.status_mapping["done"] == DEFAULT_JIRA_STATUS_MAPPING["done"]
+
+
+def test_board_api_sends_bearer_header_under_bearer_scheme(monkeypatch):
+    """Regression: the mutating board path must honour auth_scheme like the read
+    path does — a bearer/PAT config must NOT be sent as Basic."""
+    from whilly import jira_board as board_mod
+
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["authorization"] = req.get_header("Authorization")
+        return _FakeResponse(b'{"transitions": []}')
+
+    monkeypatch.setattr(board_mod, "urlopen", fake_urlopen)
+    client = JiraBoardClient(
+        JiraAuth(server_url="https://jira.example.test", username="", token="pat-token", auth_scheme="bearer")
+    )
+    client._fetch_transitions("ABC-1")
+    assert captured["authorization"] == "Bearer pat-token"
+
+
+def test_board_paths_honour_configured_api_version(monkeypatch):
+    """Regression: the mutating board path must use [jira].api_version, not a
+    hardcoded v3 (Jira Server/DC commonly run v2)."""
+    from whilly import jira_board as board_mod
+
+    captured: dict = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        return _FakeResponse(b'{"transitions": []}')
+
+    monkeypatch.setattr(board_mod, "urlopen", fake_urlopen)
+    client = JiraBoardClient(
+        JiraAuth(server_url="https://jira.example.test", username="qa", token="token", api_version="2")
+    )
+    client._fetch_transitions("ABC-1")
+    assert captured["url"] == "https://jira.example.test/rest/api/2/issue/ABC-1/transitions"

@@ -5,7 +5,7 @@ PYTHON ?= python3
 PIPX ?= pipx
 PKG := whilly-orchestrator
 
-.PHONY: help install install-dev uninstall lint format test migrate-chain version
+.PHONY: help install install-dev uninstall lint format test migrate-chain spec-check version
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -63,6 +63,15 @@ migrate-chain: ## Run full Alembic migration chain validation (requires Docker)
 	$(PYTHON) -m pytest -q -s \
 	    tests/integration/test_alembic_full_chain.py \
 	    -v --tb=short
+
+spec-check: ## Run OpenSpec validation and coverage matrix audit (reproduces CI gate locally)
+	@command -v openspec >/dev/null 2>&1 || { \
+		echo "openspec not found. Install OpenSpec CLI first:"; \
+		echo "  npm install -g @fission-ai/openspec@1.4.1"; \
+		exit 1; \
+	}
+	openspec validate --all --strict
+	$(PYTHON) scripts/audit-coverage-matrix.py
 
 version: ## Show source version vs installed CLI version (diagnoses install drift)
 	@echo "Source (whilly/__init__.py): $$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' whilly/__init__.py | head -1)"
