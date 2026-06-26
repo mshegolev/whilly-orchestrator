@@ -22,6 +22,7 @@ fields a second (subtly different) way.
 from __future__ import annotations
 
 import logging
+import os
 
 from whilly.core.models import Plan, PlanOrigin, Priority, RepoTarget, Task, TaskStatus
 from whilly.scheduler.models import SchedulerRule
@@ -40,9 +41,19 @@ _PRIORITY_BY_NAME: dict[str, Priority] = {
 }
 
 # Default clone-URL templates per provider when the rule does not pin one
-# explicitly via ``custom_metadata.repo_clone_url``. GitLab defaults to the
-# internal Acme host over SSH (matches how opencode-devbox clones repos).
-_GITLAB_SSH_HOST = "gitlab.example.com"
+# explicitly via ``custom_metadata.repo_clone_url``. The GitLab SSH host is
+# read from ``WHILLY_GITLAB_SSH_HOST`` so the real internal host lives in a
+# gitignored ``.env`` rather than in source; the in-code default is neutral.
+_DEFAULT_GITLAB_SSH_HOST = "gitlab.example.com"
+
+
+def _gitlab_ssh_host() -> str:
+    """Resolve the GitLab SSH host for derived clone URLs.
+
+    Reads ``WHILLY_GITLAB_SSH_HOST`` at call time (so a value loaded from a
+    gitignored ``.env`` is honoured), falling back to the neutral default.
+    """
+    return os.environ.get("WHILLY_GITLAB_SSH_HOST", "").strip() or _DEFAULT_GITLAB_SSH_HOST
 
 
 def plan_id_for_rule(rule: SchedulerRule) -> str:
@@ -80,7 +91,7 @@ def resolve_repo_target(rule: SchedulerRule) -> RepoTarget | None:
         if provider == "github":
             clone_url = f"https://github.com/{full_name}.git"
         elif provider == "gitlab":
-            clone_url = f"git@{_GITLAB_SSH_HOST}:{full_name}.git"
+            clone_url = f"git@{_gitlab_ssh_host()}:{full_name}.git"
 
     return RepoTarget(
         id=raw,
