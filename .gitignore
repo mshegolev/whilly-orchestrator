@@ -45,7 +45,8 @@ whilly_logs/
 migration-chain-evidence.json
 whilly_events.jsonl
 progress.txt
-.planning/reports/
+# GSD planning artifacts — local-only (may contain company-internal references)
+.planning/
 
 # whilly-auto.sh iteration logs
 whilly-auto-runs/
