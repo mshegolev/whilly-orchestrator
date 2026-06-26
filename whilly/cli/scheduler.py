@@ -158,11 +158,48 @@ async def run_scheduler_command(
             )
             await repo.record_poll_cycle(cycle)
 
-        async def on_issues_found(rule: Any, issues: list[dict[str, Any]]) -> None:
-            """Callback when issues are discovered."""
+        async def on_issues_found(rule: Any, issues: list[dict[str, Any]]) -> list[str] | None:
+            """Persist discovered issues as claimable tasks.
+
+            When ``WHILLY_DATABASE_URL`` is set, each unique issue is converted
+            to a ``PENDING`` task and imported (idempotently) under one plan per
+            rule, then the plan id is returned so the poll cycle records it in
+            ``created_plans``. Without a DB URL the scheduler stays in log-only
+            mode (dev / dry-run) and returns ``None``.
+            """
+            import os as _os
+
+            def _summary(issue: dict[str, Any]) -> str:
+                # Raw Jira search results nest ``summary`` under ``fields``.
+                value = issue.get("summary")
+                fields = issue.get("fields")
+                if not value and isinstance(fields, dict):
+                    value = fields.get("summary")
+                return str(value or "")
+
             log.info("Found %d unique issues for rule %s", len(issues), rule.id)
             for issue in issues[:3]:
-                log.info("  - %s: %s", issue.get("key"), issue.get("summary", "")[:60])
+                log.info("  - %s: %s", issue.get("key"), _summary(issue)[:60])
+
+            dsn = _os.environ.get("WHILLY_DATABASE_URL", "").strip()
+            if not dsn:
+                log.warning(
+                    "WHILLY_DATABASE_URL not set — scheduler is log-only; %d issue(s) "
+                    "for rule %s were NOT persisted as tasks.",
+                    len(issues),
+                    rule.id,
+                )
+                return None
+
+            from whilly.cli.plan import _async_import
+            from whilly.scheduler.intake import build_plan_from_issues
+
+            plan = build_plan_from_issues(rule, issues)
+            if not plan.tasks:
+                return []
+            await _async_import(dsn, plan, plan.tasks)
+            log.info("Persisted %d task(s) into plan %s", len(plan.tasks), plan.id)
+            return [plan.id]
 
         worker = SchedulerWorker(
             rules,
