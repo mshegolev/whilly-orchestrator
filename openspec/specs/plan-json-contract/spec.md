@@ -6,9 +6,7 @@ plan envelope, the required and optional fields on every task, the v4
 provenance and routing extensions, how parse errors are surfaced, how plans
 are written atomically, how unknown keys round-trip, and how every task id is
 validated before a plan is accepted.
-
 ## Requirements
-
 ### Requirement: Plan envelope shape
 The system SHALL require a plan JSON document to be an object carrying a
 non-empty string `project` and a `tasks` JSON array, and SHALL raise a
@@ -135,3 +133,10 @@ and SHALL NOT limit validation to only the first three tasks.
 - **WHEN** any task in the array carries an id that fails `validate_task_id`
 - **THEN** the system SHALL raise a `ValueError` naming the offending id before
   any downstream side effect
+
+### Requirement: Artifact fences do not interfere with plan parsing
+The system SHALL consume labelled artifact fences without mistaking their closing delimiters for unlabelled plan blocks.
+
+#### Scenario: BMAD artifacts precede a canonical JSON plan
+- **WHEN** a planner returns a bmad-artifacts block followed by a json plan block
+- **THEN** only the canonical JSON plan is parsed for task validation

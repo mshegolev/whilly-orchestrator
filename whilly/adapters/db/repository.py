@@ -66,7 +66,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -2303,6 +2303,8 @@ class TaskRepository:
         task_id: TaskId,
         version: int,
         cost_usd: Decimal | float | int | None = None,
+        *,
+        on_complete: Callable[[asyncpg.Connection], Awaitable[None]] | None = None,
     ) -> Task:
         """Atomically transition ``task_id`` from ``IN_PROGRESS`` → ``DONE``.
 
@@ -2377,6 +2379,11 @@ class TaskRepository:
                 row = await conn.fetchrow(_COMPLETE_SQL, task_id, version)
                 if row is None:
                     await self._raise_version_conflict(conn, task_id, version)
+
+                # Optional adapter metadata must commit with DONE, never after it.
+                # Hook failures roll back state, evidence and the completion event.
+                if on_complete is not None:
+                    await on_complete(conn)
 
                 # COMPLETE event payload (v4.4.0 enriched shape;
                 # VAL-CROSS-BACKCOMPAT-910). The v4.3.1 baseline only

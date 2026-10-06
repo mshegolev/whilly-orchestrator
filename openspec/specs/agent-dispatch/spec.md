@@ -155,3 +155,132 @@ gitignored environment configuration.
 - **WHEN** `WHILLY_ANONYMIZER_MAP` contains a string that is not valid JSON
 - **THEN** the system SHALL log a WARNING and `Anonymizer().company_mappings` SHALL be an empty dict
 
+### Requirement: Explicit swarm child environment boundary
+The system SHALL expose `build_swarm_environment` that constructs a child environment from explicit host inputs without copying ambient environment entries.
+
+#### Scenario: Host and identity allowlists are enforced
+- **WHEN** the helper receives base, host path, home, temporary, and identity inputs
+- **THEN** it SHALL use the explicit `PATH`, `HOME`, and `TMPDIR` values
+- **AND** it SHALL copy only `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, and the four named `WHILLY_SWARM_*` identity keys
+
+#### Scenario: Provider credential is scoped
+- **WHEN** an online phase selects Claude or Codex
+- **THEN** the helper SHALL include only that provider's host-supplied credential
+- **AND** it SHALL reject unknown provider keys
+
+#### Scenario: Offline phases are credential-free
+- **WHEN** phase is `verify`, `git`, or `host_script`
+- **THEN** the returned environment SHALL omit provider credentials
+
+#### Scenario: Invalid contract keys are rejected
+- **WHEN** the phase, provider, or identity key is unknown
+- **THEN** the helper SHALL raise `ValueError` without exposing input values
+
+### Requirement: Fail-closed local execution
+The swarm execution adapter MUST run supported local verification commands inside a host-enforced macOS sandbox with explicit policy roots and no direct-host fallback.
+
+#### Scenario: Unsupported isolation
+- **WHEN** macOS `sandbox-exec` is unavailable or the host is not macOS
+- **THEN** execution returns the named `execution_isolation_unavailable` blocker
+- **AND** the requested argv is not executed directly
+
+### Requirement: Bounded sandbox transport
+The swarm execution adapter MUST bound stdout and stderr independently, terminate the complete process group on timeout or cancellation, and return a named result for output overflow.
+
+#### Scenario: Child output exceeds the policy cap
+- **WHEN** a sandboxed child exceeds the configured output limit
+- **THEN** the adapter terminates the process group
+- **AND** returns `output_limit_exceeded` without waiting indefinitely for descendants
+
+### Requirement: Real isolation evidence
+The local acceptance probe MUST verify allowed file access and denial of synthetic outside-file, descendant-write, and localhost-network attempts using successful unsandboxed positive controls.
+
+#### Scenario: Offline verification probe
+- **WHEN** the disposable fixture contains readable and writable outside sentinels and a reachable localhost listener
+- **THEN** unsandboxed controls succeed
+- **AND** the sandboxed policy allows the approved read while denying outside reads, writes, descendant writes, and network access
+
+### Requirement: Explicit execution roots
+The sandbox profile MUST derive every read, write, executable and protected-write grant from canonicalized roots explicitly present in the execution policy.
+
+#### Scenario: Relative executable resolution
+- **WHEN** a caller supplies a relative executable and an explicit child `PATH`
+- **THEN** the adapter resolves it against that `PATH` and `cwd`
+- **AND** rejects execution when `PATH` is absent or the resolved executable is outside policy read roots
+
+### Requirement: Fail-closed probe evidence
+The local probe MUST use only fresh disposable fixture targets and MUST report `execution_isolation_unavailable` when any control or denial probe is not a completed concrete result.
+
+#### Scenario: Backend failure during a negative probe
+- **WHEN** a denial attempt has no exit code, a named spawn failure, a timeout, or cancellation
+- **THEN** the probe reports unavailable
+- **AND** it does not count the attempt as isolation denial
+
+### Requirement: Independent candidate repositories
+
+Candidate-consuming swarm Git operations SHALL materialize an ordinary or bare
+source at the approved base commit into a repository with independent Git
+objects, no imported publication remote, and no writes to the source checkout,
+refs, or worktree metadata.
+
+#### Scenario: Dirty source checkout
+
+- **WHEN** the source checkout has ordinary dirty tracked and untracked files
+- **THEN** materialization preserves those files in the source
+- **AND** the candidate starts at the approved base SHA without importing the
+  dirty files
+
+### Requirement: Guarded Git and explicit hooks
+
+Candidate-consuming Git and coordinator commits SHALL use the explicit offline
+Git execution policy and environment. A required executable hook SHALL have
+pinned bytes, source-relative dependency digests, `git` phase, and expected exit
+zero in the approved hook policy before it can run.
+
+#### Scenario: Hook approval or failure
+
+- **WHEN** a required hook has no valid approval, fails, or writes outside the
+  candidate policy roots
+- **THEN** the operation blocks with a named policy or Git failure
+- **AND** it does not silently skip the hook or publish the candidate
+
+### Requirement: Candidate identity
+
+The candidate identity SHALL expose its exact head SHA and deterministic tracked
+tree digest through the guarded Git seam for later evidence binding.
+
+#### Scenario: Exact candidate identity
+
+- **WHEN** the coordinator captures a candidate identity
+- **THEN** it receives the candidate HEAD SHA and tracked-tree digest from
+  guarded Git reads
+
+### Requirement: Host-owned project verification
+The swarm SHALL require every project entering guarded execution to have nonempty host-owned test, lint, and architecture argv policies with an explicit toolchain identifier.
+
+#### Scenario: Task commands cannot replace absent policy
+- **WHEN** a plan supplies verification commands for a project without a mandatory project policy
+- **THEN** discussion and plan proposal remain available
+- **AND** guarded application is rejected before worker admission
+
+#### Scenario: Policy-backed plan omits duplicate commands
+- **WHEN** a trusted project policy has all three categories
+- **THEN** a plan may omit task-authored verification commands
+- **AND** execution uses the canonical project policy
+
+### Requirement: Approval binding includes verification identity
+The swarm SHALL bind each guarded revision to its resolved base SHA, verification policy digest, and pinned hook-policy digest.
+
+#### Scenario: Binding is missing or stale
+- **WHEN** an applied snapshot or approved product specification lacks the binding or any bound identity changes
+- **THEN** guarded admission is rejected with a named blocker
+- **AND** the system does not invent a legacy default
+
+### Requirement: Trusted gate evidence is fail-closed
+The host SHALL accept only enrolled pytest JUnit, Ruff JSON, or architecture JSON parser schemas and SHALL reject malformed, missing, oversized, unsupported, zero-discovery, or required-skipped evidence.
+
+#### Scenario: Exit zero is insufficient
+- **WHEN** a JUnit report contains no testcase, contains a required skip, or architecture JSON does not prove evaluated rules
+- **THEN** the gate is not passed
+- **AND** worker-supplied report text is not treated as host proof
+

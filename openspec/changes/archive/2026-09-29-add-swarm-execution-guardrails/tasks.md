@@ -1,0 +1,5 @@
+- [x] Add pure immutable execution policy and deterministic digest.
+- [x] Add fail-closed macOS sandbox profile and bounded async/sync transport.
+- [x] Add unit validation and real macOS acceptance probes with positive controls.
+- [x] Run unit tests first, local acceptance, import-linter and scoped Ruff.
+- [x] Record command output and source paths in the Task3 report.

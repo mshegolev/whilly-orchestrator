@@ -11,9 +11,7 @@ optimistic-locking race is tolerated. It references the `task-model-fsm`
 capability for the legal status transitions and defers budget thresholds and
 verification-gate semantics to their own capabilities rather than redefining
 them here.
-
 ## Requirements
-
 ### Requirement: Run-command composition root
 The `_async_run` composition root MUST open an asyncpg pool against
 `WHILLY_DATABASE_URL`, register the worker row idempotently, load the plan and
@@ -123,3 +121,243 @@ as a task failure rather than crashing the worker.
 - **THEN** the system SHALL return an `AgentResult` marking the task not
   complete with a workspace-failure exit code so the loop routes it to
   `fail_task`
+
+### Requirement: Dual-engine task dispatch
+
+The runtime MUST support Claude and Codex engine adapters with engine-specific
+argv construction and structured output parsing. A task-level engine override
+MUST take precedence over its role engine, which MUST take precedence over the
+registry default. Unknown engines MUST fail validation.
+
+#### Scenario: Task override
+
+- **WHEN** a task selects a configured engine
+- **THEN** the worker uses that engine while the task's role and registry remain
+  unchanged
+
+### Requirement: Durable call accounting
+
+The runtime MUST reserve each planner, worker, and reviewer call before launch.
+The reservation MUST remain durable if the process fails, and usage/cost MAY be
+unknown. Unknown cost MUST remain null rather than being reported as zero.
+
+#### Scenario: Engine process fails before usage
+
+- **WHEN** an engine exits without a trustworthy usage envelope
+- **THEN** its call reservation records the error and nullable cost
+
+### Requirement: Task-local mailbox IPC
+The task-local mailbox contract MUST be available to offline workers.
+When `WHILLY_SWARM_MAILBOX` is set, worker `message` and `inbox` operations
+MUST use task-local JSON IPC without PostgreSQL credentials or network access.
+The coordinator MUST drain requests, pin the sender to the task identity,
+validate session and recipient through the durable store, refresh the scoped
+inbox, and write `delivered`, `rejected`, or acknowledgement receipts. The
+mailbox transport MUST use one descriptor-anchored boundary for enqueue,
+request draining, receipts, inbox state, proposal status, and removals.
+
+#### Scenario: Worker sends while offline
+- **WHEN** a worker writes a valid message request to its task-local outbox
+- **THEN** the coordinator later validates and persists it, and the worker can
+  observe a delivery receipt and refreshed scoped inbox
+
+#### Scenario: Crash after durable delivery
+- **WHEN** the coordinator commits a message and crashes before completing
+  receipt handling
+- **THEN** the request may be retried or redelivered; delivery is at-least-once,
+  not exactly-once
+
+#### Scenario: Special files cannot block or dispatch
+- **WHEN** an outbox entry is a FIFO, symlink, malformed JSON document, or oversized request
+- **THEN** the coordinator SHALL use no-follow nonblocking bounded reads and SHALL NOT invoke the service for that entry
+- **AND** it SHALL write a named rejection receipt through the opened receipts descriptor when safe, while retaining the original special file for inspection and avoiding payload retry
+
+#### Scenario: Durable delivery receipt
+- **WHEN** a valid request is persisted by the service
+- **THEN** the coordinator SHALL write a durable receipt through a descriptor-relative temporary file and atomic replacement
+- **AND** the request SHALL be removed only after receipt publication succeeds
+
+#### Scenario: Mailbox directory is replaced while service is awaited
+- **WHEN** an outbox or receipts directory is renamed and recreated during an awaited service call
+- **THEN** the coordinator SHALL continue using the descriptors opened for that attempt
+- **AND** it SHALL NOT modify files in the replacement directories
+
+#### Scenario: Mailbox path ancestors are untrusted
+- **WHEN** a mailbox ancestor is a symlink or is swapped to a symlink before the mailbox is opened
+- **THEN** the coordinator SHALL open or create path components one at a time with directory descriptors and no-follow checks
+- **AND** it SHALL reject the mailbox without modifying the symlink target
+
+#### Scenario: Inbox and status state are bounded
+- **WHEN** inbox or proposal status state is read
+- **THEN** the adapter SHALL read only regular files through the opened mailbox root descriptor
+- **AND** a state document exceeding 4 MiB SHALL raise an explicit error rather than being truncated
+
+#### Scenario: Directory scan and backlog are bounded
+- **WHEN** the coordinator scans an outbox containing valid and invalid names
+- **THEN** it SHALL inspect at most 100 directory entries per tick, count all inspected entries for the enqueue backlog cap, and avoid materializing or sorting the entire directory
+
+#### Scenario: Atomic write failure cleans temporary state
+- **WHEN** an exclusive mailbox temporary file fails during write or fsync
+- **THEN** the coordinator SHALL close and remove that temporary file before propagating the error
+
+### Requirement: Codex sandbox boundary
+
+Codex network access MUST remain disabled. A Codex worker MUST be able to edit
+only the task worktree and task-local mailbox. It MUST NOT write Git metadata,
+the repository checkout outside that worktree, or review state; review MUST
+remain read-only. No sandbox relaxation is part of this contract.
+
+#### Scenario: Codex consumer cannot use network or broad checkout writes
+
+- **WHEN** a Codex worker attempts network access or writes outside the allowed
+  worktree/mailbox set
+- **THEN** the attempt is blocked and the canary is not reported as passed
+
+### Requirement: Coordinator-owned Codex commit
+
+For Codex tasks, the trusted coordinator MUST commit worker changes after the
+worker exits. It MUST guard the expected swarm branch, stage literal named
+files, use normal Git hooks, and verify the resulting head before independent
+verification and review. Claude workers MAY commit their own changes.
+
+#### Scenario: Codex worker leaves edits without Git metadata access
+
+- **WHEN** a Codex worker edits its worktree and mailbox but cannot commit
+- **THEN** the coordinator creates the guarded task commit and only then runs
+  verification and review before allowing `DONE`
+
+### Requirement: Atomic acceptance
+
+The runtime MUST commit accepted attempt evidence and the task `DONE` transition
+in one repository transaction through the completion callback. It MUST NOT
+expose `DONE` while result, verification, review, and accepted-attempt evidence
+are missing.
+
+#### Scenario: Completion callback fails
+
+- **WHEN** persistence of accepted evidence fails
+- **THEN** the task transition and completion event roll back together
+
+### Requirement: Fail-closed recovery and repository integration
+
+Recovery MUST refuse ambiguous orphan process identities rather than promising
+to kill a possibly reused process group. A same-project dependent task MUST use
+its sole accepted predecessor head as its base. Multiple divergent accepted
+predecessor heads MUST fail with `integration_required` and MUST NOT be
+implicitly merged.
+
+#### Scenario: Divergent same-project predecessors
+
+- **WHEN** two accepted predecessors have different heads in one project
+- **THEN** the dependent task remains unexecuted and reports `integration_required`
+
+#### Scenario: Crash before launch identity is persisted
+
+- **WHEN** a running attempt has no recorded process identity
+- **THEN** recovery refuses to release it automatically, and a launcher callback
+  failure terminates and reaps any process group already created
+
+### Requirement: Combined verification
+
+The coordinator MUST execute project-level verification commands followed by
+task-level verification commands. Task-level verification MUST add to the
+project contract; it MUST NOT replace it or be treated as an inheritance-only
+alternative.
+
+#### Scenario: Project and task checks are configured
+
+- **WHEN** both levels provide verification commands
+- **THEN** the runtime executes the project command list followed by the task
+  command list
+
+### Requirement: BMAD specification artifacts remain host controlled
+The system SHALL keep planners read-only and persist validated BMAD specification artifacts in private revision workspaces through the host executor.
+
+#### Scenario: Script-dependent skill without host executor
+- **WHEN** a configured skill requires helper scripts but host execution is unavailable
+- **THEN** planning stops with a named setup blocker before invoking a model
+
+#### Scenario: Artifact escapes or failed preservation
+- **WHEN** a returned artifact escapes its workspace or reports failed preservation
+- **THEN** the specification cannot become approvable
+
+### Requirement: Product features bind execution approval
+The system SHALL bind approval to a server-computed digest of the feature specification, plan revision, registry hash, base SHAs, execution profiles and budget.
+
+#### Scenario: Approved metadata changes
+- **WHEN** specification, budget, registry or base commit changes
+- **THEN** execution is blocked pending renewed planning and approval
+
+### Requirement: Model roles and global capacity are explicit
+The system SHALL use configured strong profiles for planning and cheap profiles for implementation and independent review, with at most five admitted model calls globally.
+
+#### Scenario: Missing profile or exhausted capacity
+- **WHEN** a required profile is missing or five calls are active
+- **THEN** the call is blocked with a named reason and no fallback model is invoked
+
+### Requirement: Publication requires trusted evidence
+The system SHALL restrict publication to explicitly allowlisted destinations and SHALL NOT merge or deploy changes.
+
+#### Scenario: Pipeline evidence absent
+- **WHEN** exact-SHA successful CI evidence is absent
+- **THEN** publication cannot be reported ready
+
+### Requirement: Test database cleanup is explicitly requested
+The test harness SHALL NOT automatically delete labelled test database containers at session startup without explicit operator opt-in, and SHALL NOT perform this cleanup from xdist workers.
+
+#### Scenario: Concurrent test sessions start
+- **WHEN** a test session starts without explicit cleanup opt-in
+- **THEN** existing test database containers remain untouched by startup cleanup
+
+### Requirement: Optional subscription monetary limit
+Execution profiles SHALL accept an absent or null monetary limit while retaining
+explicit model selection, runtime timeout and feature/global call admission.
+An explicit monetary limit SHALL be positive and finite. Unknown costs SHALL
+remain unknown, and unsupported provider caps SHALL not be described as enforced.
+
+#### Scenario: Subscription CLI profile
+- **WHEN** the operator configures an explicit model without budget_usd
+- **THEN** profile validation succeeds without inventing a dollar amount
+- **AND** runtime and call admission limits still apply
+
+#### Scenario: Invalid explicit monetary limit
+- **WHEN** budget_usd is zero, negative, nonfinite, boolean or a string
+- **THEN** validation rejects the profile before execution
+
+#### Scenario: Invalid agent engine selection
+- **WHEN** the configured planner or reviewer engine is not a string naming a configured engine
+- **THEN** registry validation rejects it before runtime lookup
+### Requirement: Explicit complete product publication policies
+The system SHALL require a policy for every registered project when the explicit product registry loader is requested, while legacy registry loading remains valid without product policies.
+
+#### Scenario: Missing policy or remote in one project
+- **WHEN** any declared project lacks required publication policy fields
+- **THEN** the whole product snapshot is blocked rather than silently omitting that project
+
+#### Scenario: Thirteen project inventory
+- **WHEN** thirteen valid projects form a dependency graph
+- **THEN** all thirteen policies and their dependencies remain in the immutable snapshot
+
+### Requirement: Strict inert product policy declarations
+The system SHALL validate canonical remote and unique GitLab identities, protected-target and branch-prefix declarations, bounded local argv and CI checks, ownership and relative allowed paths, artifact digest rules, stage/prod delivery observations, manual-decision boundaries and revert-MR compensation without executing commands or contacting remotes.
+
+#### Scenario: Invalid graph or untrusted literal
+- **WHEN** dependencies contain cycles or unknown projects, identities conflict, JSON keys repeat or a secret-looking literal is present
+- **THEN** parsing fails with a bounded error without echoing registry paths or credentials
+
+#### Scenario: Declarative protection
+- **WHEN** a target is declared protected in a valid registry
+- **THEN** the snapshot records that policy requirement without claiming it was observed remotely
+- **AND** prod delivery remains conditional on release approval and compensation never declares history rewriting
+
+### Requirement: Canonical product policy approval binding
+The system SHALL expose separate canonical policy and complete registry bytes and digests, bind both to approval input, and reject a changed snapshot after verification before it can be used for a later external effect.
+
+#### Scenario: Policy or profile changes after verification
+- **WHEN** remote, target, checks, dependencies, artifact, delivery, compensation or full-registry profile content changes
+- **THEN** the registry binding and approval digest change and snapshot revalidation blocks continuation
+
+#### Scenario: Formatting-only change
+- **WHEN** JSON key order or whitespace changes without changing resolved content
+- **THEN** canonical digests remain equal
+- **AND** returned dictionaries cannot mutate the frozen snapshot

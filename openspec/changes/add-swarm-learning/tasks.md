@@ -1,0 +1,7 @@
+- [x] L1 scoped memory, source freshness, runtime binding and API
+- [x] L2 durable cross-session messages (live inspector/schema; delivery policy intentionally unconfigured)
+- [x] L3 approval-bound cross-project proposals (safe mode; contract-impact admission stays blocked without host proof)
+- [ ] L4 disabled-by-default bounded research and retrospective
+- [ ] L5 evaluated improvement decisions
+- [ ] Regression, architecture, database and browser acceptance
+- [ ] Archive verified capability delta

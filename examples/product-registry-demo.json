@@ -1,0 +1,1129 @@
+{
+  "version": 1,
+  "name": "Synthetic product",
+  "projects": {
+    "repo-1": {
+      "path": "../repo-1",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-1.git",
+        "gitlab_project_id": 1,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-2": {
+      "path": "../repo-2",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-1"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-2.git",
+        "gitlab_project_id": 2,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-3": {
+      "path": "../repo-3",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-2"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-3.git",
+        "gitlab_project_id": 3,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-4": {
+      "path": "../repo-4",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-3"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-4.git",
+        "gitlab_project_id": 4,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-5": {
+      "path": "../repo-5",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-4"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-5.git",
+        "gitlab_project_id": 5,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-6": {
+      "path": "../repo-6",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-5"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-6.git",
+        "gitlab_project_id": 6,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-7": {
+      "path": "../repo-7",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-6"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-7.git",
+        "gitlab_project_id": 7,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-8": {
+      "path": "../repo-8",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-7"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-8.git",
+        "gitlab_project_id": 8,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-9": {
+      "path": "../repo-9",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-8"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-9.git",
+        "gitlab_project_id": 9,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-10": {
+      "path": "../repo-10",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-9"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-10.git",
+        "gitlab_project_id": 10,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-11": {
+      "path": "../repo-11",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-10"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-11.git",
+        "gitlab_project_id": 11,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-12": {
+      "path": "../repo-12",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-11"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-12.git",
+        "gitlab_project_id": 12,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    },
+    "repo-13": {
+      "path": "../repo-13",
+      "base_ref": "master",
+      "purpose": "Synthetic component",
+      "depends_on": [
+        "repo-12"
+      ],
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/demo/repo-13.git",
+        "gitlab_project_id": 13,
+        "target_branch": "master",
+        "target_protected": true,
+        "branch_prefix": "whilly/",
+        "checks": {
+          "fast": [
+            [
+              "python",
+              "-m",
+              "pytest",
+              "-q",
+              "tests/unit"
+            ]
+          ],
+          "full": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "ci": [
+            "test",
+            "build"
+          ]
+        },
+        "allowed_paths": [
+          "src/**",
+          "tests/**"
+        ],
+        "worktree_owner": "coordinator",
+        "contracts": [
+          "demo-api-v1"
+        ],
+        "artifacts": [
+          {
+            "name": "package",
+            "kind": "package",
+            "digest": "sha256"
+          }
+        ],
+        "delivery": {
+          "stage": {
+            "mode": "pipeline",
+            "job": "deploy-stage",
+            "observations": [
+              "smoke-stage"
+            ]
+          },
+          "prod": {
+            "mode": "pipeline",
+            "job": "deploy-prod",
+            "observations": [
+              "smoke-prod"
+            ],
+            "requires_approval": true
+          }
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [
+            [
+              "bash",
+              "bin/preflight.sh"
+            ]
+          ],
+          "stage_rollback_job": "rollback-stage"
+        },
+        "manual_decisions": [
+          "external_effect",
+          "secrets",
+          "network_policy",
+          "kept_storage",
+          "prod_release"
+        ]
+      }
+    }
+  },
+  "roles": {
+    "implementer": {
+      "purpose": "Implement",
+      "projects": [
+        "repo-1",
+        "repo-2",
+        "repo-3",
+        "repo-4",
+        "repo-5",
+        "repo-6",
+        "repo-7",
+        "repo-8",
+        "repo-9",
+        "repo-10",
+        "repo-11",
+        "repo-12",
+        "repo-13"
+      ]
+    }
+  }
+}

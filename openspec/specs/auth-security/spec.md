@@ -24,9 +24,7 @@ bootstrap token and the per-worker bearer token used by worker RPCs — is
 referenced as a boundary here and is NOT re-specified; those machine-to-machine
 credentials bypass the cookie session, the must-change gate, and CSRF by
 design.
-
 ## Requirements
-
 ### Requirement: Session authentication and signed session cookie
 The system SHALL establish an authenticated operator session only by writing a
 `sessions` row (`whilly.api.sessions.create_session`) after a successful
@@ -346,3 +344,45 @@ flattened by `safe_task_id_filename`.
 - **THEN** `safe_task_id_filename` SHALL replace every character outside
   `[A-Za-z0-9_.-]` with `_` so the id cannot escape its base directory or break
   the tmux target syntax
+
+### Requirement: Canonical email identity for the admin permission guard
+
+The admin-users permission guard MUST resolve the authenticated user through
+the canonical session-email lookup, including the seeded real email
+`admin@whilly.local`. It MUST apply the existing admin-role permission check
+unchanged and MUST fail closed when the session email is missing or not unique.
+This requirement MUST NOT grant rights by bypassing the permission guard.
+
+#### Scenario: Seeded admin reaches the existing admin guard
+
+- **WHEN** the authenticated session email is `admin@whilly.local`
+- **THEN** the guard resolves that user through the canonical email lookup and
+  applies the existing admin permission
+
+#### Scenario: Non-admin remains forbidden
+
+- **WHEN** a valid session resolves to an operator without the admin role
+- **THEN** the route returns `403` through the same permission guard
+
+#### Scenario: Ambiguous identity fails closed
+
+- **WHEN** the canonical session-email lookup cannot establish one unique user
+- **THEN** the request is rejected and no admin rights are granted
+
+### Requirement: Product workflow keeps admin and CSRF boundaries
+The system SHALL require an administrator session for all product swarm routes and same-origin CSRF checks for mutations.
+
+#### Scenario: Worker credential used on cockpit
+- **WHEN** a caller presents only worker bearer authentication
+- **THEN** product messages, feature state and workflow actions are inaccessible
+
+#### Scenario: Browser attempts to supply execution metadata
+- **WHEN** a specification request includes plan revision, trusted profiles or base SHAs
+- **THEN** the request is rejected rather than binding caller-supplied execution metadata
+
+### Requirement: Consistent challenge expiry clock
+WebAuthn challenge creation and redemption SHALL use the database clock for expiry calculations.
+
+#### Scenario: Application clock differs from database
+- **WHEN** a challenge is created with an already elapsed lifetime
+- **THEN** redemption rejects it regardless of application clock skew

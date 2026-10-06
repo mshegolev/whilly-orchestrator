@@ -1,0 +1,7 @@
+- [x] Add explicit toolchain/auth provisioning and guarded executor phases.
+- [x] Route discussion, planner, escalation, worker, review, verification, Git and BMAD host scripts through the executor.
+- [x] Preserve reservation/release/cancel semantics, approval bindings and Store boolean acceptance wrappers.
+- [x] Enforce candidate baseline/tree/head/protected-change checks and retain failed Git logs.
+- [x] Fail closed before legacy publication Git/transport construction.
+- [x] Add synthetic unit coverage and macOS sandbox/Git acceptance coverage.
+- [ ] Controller review of the complete per-launcher inventory.

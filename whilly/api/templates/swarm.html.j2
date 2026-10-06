@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <script src="/static/whilly-theme.js"></script>
+  <script src="/static/whilly-navigation.js" defer></script>
+  <title>{{ title }} — Whilly</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/whilly-design.css">
+  <link rel="stylesheet" href="/static/whilly-app.css">
+  <style>
+    body { font-family: var(--font-mono); color: var(--text); background: var(--bg); }
+    .swarm-wrap { display: grid; grid-template-columns: 1fr 300px; gap: 12px; min-height: 100dvh; padding: 12px; box-sizing: border-box; }
+    .swarm-main { display: flex; flex-direction: column; gap: 12px; }
+    .swarm-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border: 1px solid var(--line); padding: 8px; background: var(--surface); }
+    .swarm-toolbar select, .swarm-toolbar input { padding: 4px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--line); font-family: inherit; }
+    .swarm-toolbar button { padding: 4px 12px; background: var(--accent); color: var(--bg); border: none; font-weight: bold; cursor: pointer; }
+    .swarm-toolbar button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .swarm-messages { flex: 1; overflow-y: auto; border: 1px solid var(--line); background: var(--surface); padding: 12px; }
+    .swarm-message { margin-bottom: 8px; padding: 8px; border-left: 2px solid var(--line-strong); }
+    .swarm-message.user { border-color: var(--accent); }
+    .swarm-message.assistant { border-color: var(--success); }
+    .swarm-message.system { border-color: var(--muted); color: var(--muted); font-size: 0.9em; }
+    .swarm-message.error { border-color: var(--danger); color: var(--danger); }
+    .swarm-message-sender { font-weight: bold; font-size: 0.85em; text-transform: uppercase; margin-bottom: 4px; }
+    .swarm-input { display: flex; gap: 8px; border: 1px solid var(--line); padding: 8px; background: var(--surface); }
+    .swarm-input textarea { flex: 1; padding: 8px; background: var(--bg); color: var(--text); border: 1px solid var(--line); font-family: inherit; resize: none; height: 60px; }
+    .swarm-input button { padding: 8px 16px; background: var(--accent); color: var(--bg); border: none; font-weight: bold; cursor: pointer; }
+    .swarm-sidebar { display: flex; flex-direction: column; gap: 12px; }
+    .swarm-panel { border: 1px solid var(--line); background: var(--surface); padding: 12px; }
+    .swarm-panel-title { font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    .swarm-sessions { max-height: 200px; overflow-y: auto; }
+    .swarm-session { padding: 6px; margin: 4px 0; background: var(--bg); cursor: pointer; border: 1px solid var(--line); text-align: left; }
+    .swarm-session:hover { background: var(--surface-strong); }
+    .swarm-session.active { background: var(--accent); color: var(--bg); }
+    .swarm-revisions { max-height: 250px; overflow-y: auto; }
+    .swarm-revision { padding: 8px; margin: 4px 0; background: var(--bg); border-left: 3px solid var(--line); cursor: pointer; }
+    .swarm-revision.proposed { border-left-color: var(--success); }
+    .swarm-revision.applied { border-left-color: var(--accent); }
+    .swarm-revision.invalid { border-left-color: var(--danger); }
+    .swarm-revision:hover { background: var(--surface-strong); }
+    .swarm-status { font-size: 0.85em; color: var(--muted); }
+    .swarm-detail { white-space: pre-wrap; max-height: 260px; overflow: auto; font-size: .85em; }
+    .swarm-link { color: var(--accent); text-decoration: none; }
+    .swarm-link:hover { text-decoration: underline; }
+    .swarm-main, .swarm-sidebar { min-width: 0; }
+    .swarm-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .swarm-revision.active { outline: 2px solid var(--accent); }
+    [hidden] { display: none !important; }
+    #gantt-panel { overflow: auto; min-height: 260px; max-height: 70vh; }
+    .gantt-row { padding: 12px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+    .gantt-track { position: relative; height: 18px; margin-top: 8px; background: var(--bg); overflow: hidden; }
+    .gantt-bar { position: absolute; height: 100%; min-width: 2px; background: var(--info); }
+    .gantt-bar.accepted { background: var(--ok); }
+    .gantt-bar.failed { background: var(--danger); }
+    .gantt-bar.cancelled { background: var(--muted); }
+    .gantt-axis { display: flex; justify-content: space-between; gap: 12px; font-size: .8em; }
+    .gantt-blocker { color: var(--danger); }
+    .gantt-row small { display: block; color: var(--muted); }
+    @media (max-width: 760px) {
+      .swarm-wrap { grid-template-columns: minmax(0, 1fr); height: auto; }
+      .swarm-toolbar { flex-wrap: wrap; }
+      .swarm-toolbar select { max-width: 100%; }
+      .swarm-toolbar input { min-width: 0; width: 100%; }
+      .swarm-messages { min-height: 260px; max-height: 55vh; }
+      .swarm-input textarea { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="swarm-wrap">
+    <div class="swarm-main">
+      <div class="swarm-toolbar">
+        <span>Session:</span>
+        <select id="session-select">
+          <option value="">— new —</option>
+        </select>
+        <input type="text" id="title-input" placeholder="conversation title" />
+        <button id="create-btn">Create</button>
+        <label><input type="checkbox" id="show-test-sessions">Показать тестовые</label>
+        <label><input type="checkbox" id="show-archived-sessions">Показать архив</label>
+        <button id="archive-session-btn" disabled title="Только скрывает из списка, не останавливает задачи">В архив</button>
+        <button id="archive-visible-btn" title="Скрывает все видимые сессии; данные можно вернуть через 'Показать архив'">Очистить список</button>
+        <label><input type="checkbox" id="test-session-flag" disabled>Тестовая сессия</label>
+        <a href="/" class="swarm-link" style="margin-left: auto;">back to dashboard</a>
+      </div>
+
+      <div class="swarm-toolbar" aria-label="Представление">
+        {% include '_theme_control.html.j2' %}
+        {% include '_keyboard_controls.html.j2' %}
+        <button id="chat-view-btn" aria-pressed="true">Чат</button>
+        <button id="gantt-view-btn" aria-pressed="false">Гант</button>
+        <label id="gantt-group-label" hidden>Группировка:
+          <select id="gantt-group"><option value="project">Проекты</option><option value="role">Агенты / роли</option></select>
+        </label>
+      </div>
+      <div id="gantt-panel" class="swarm-panel" hidden></div>
+      <div class="swarm-messages" id="messages">
+        <div class="swarm-message system">Swarm conversation — select or create a session to begin.</div>
+      </div>
+
+      <div class="swarm-input">
+        <textarea id="chat-input" placeholder="Discuss revisions or request plan generation..."></textarea>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <button id="discuss-btn" title="Discuss with planner">Discuss</button>
+          <button id="plan-btn" title="Request plan generation">Plan</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="swarm-sidebar">
+      <div class="swarm-panel">
+        <div class="swarm-panel-title">Revisions</div>
+        <div class="swarm-revisions" id="revisions-list"></div>
+        <div style="margin-top: 8px; display: flex; gap: 4px;">
+          <input type="number" id="workers-input" value="1" min="1" max="8" style="width: 50px;" title="Parallel workers" />
+          <button id="run-btn" style="flex: 1;">Run Selected</button>
+        </div>
+      </div>
+
+      <div class="swarm-panel">
+        <div class="swarm-panel-title">Job Status</div>
+        <div id="job-status" class="swarm-status">idle</div>
+        <div style="margin-top: 8px; display: flex; gap: 4px;">
+          <button id="stop-btn" style="flex: 1;">Stop</button>
+          <button id="resume-btn" style="flex: 1;">Resume</button>
+        </div>
+      </div>
+      <div class="swarm-panel"><div class="swarm-panel-title">Tasks / result / blockers</div><div id="task-panel" class="swarm-detail">No task data.</div><a id="report-link" class="swarm-link" hidden>Open report</a></div>
+      <div class="swarm-panel"><div class="swarm-panel-title">Selected plan preview</div><div id="plan-preview" class="swarm-detail">Select a proposed revision.</div></div>
+    </div>
+  </div>
+
+  <script src="/static/swarm-gantt.js"></script>
+  <script>
+    const API = '/api/v1/swarm';
+    let currentSession = null;
+    let selectedRevision = null;
+    let pollTimer = null;
+    let loadGeneration = 0;
+    let currentReport = null;
+    let ganttVisible = false;
+    let loadingGeneration = null;
+    let sessionListGeneration = 0;
+    const directSession = new URLSearchParams(window.location.search).get('session');
+    function retainDirectSession(select) {
+      if (directSession && /^s[a-f0-9]{10}$/.test(directSession) && !Array.from(select.options).some(option => option.value === directSession)) {
+        const option = document.createElement('option');
+        option.value = directSession; option.textContent = `[direct] ${directSession}`; select.append(option);
+      }
+    }
+    function renderGantt() {
+      if (ganttVisible) SwarmGantt.render(document.getElementById('gantt-panel'), currentSession, currentReport, selectedRevision, document.getElementById('gantt-group').value);
+    }
+    function setView(gantt) {
+      ganttVisible = gantt;
+      document.getElementById('gantt-panel').hidden = !gantt;
+      document.getElementById('gantt-group-label').hidden = !gantt;
+      document.getElementById('messages').hidden = gantt;
+      document.querySelector('.swarm-input').hidden = gantt;
+      document.getElementById('gantt-view-btn').setAttribute('aria-pressed', String(gantt));
+      document.getElementById('chat-view-btn').setAttribute('aria-pressed', String(!gantt));
+      renderGantt();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    async function loadSessions() {
+      const generation = ++sessionListGeneration;
+      try {
+        const params = new URLSearchParams({
+          include_test: document.getElementById('show-test-sessions').checked,
+          include_archived: document.getElementById('show-archived-sessions').checked,
+        });
+        const r = await fetch(`${API}/sessions?${params}`);
+        if (!r.ok) return;
+        const data = await r.json();
+        if (generation !== sessionListGeneration) return;
+        const sel = document.getElementById('session-select');
+        const previous = sel.value;
+        sel.innerHTML = '<option value="">— new —</option>';
+        for (const s of data.sessions) {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = `${s.is_test ? '[test] ' : ''}${s.archived ? '[archive] ' : ''}${s.id.substring(0, 8)}: ${s.title || 'untitled'}`;
+          sel.appendChild(opt);
+        }
+        retainDirectSession(sel);
+        sel.value = [...sel.options].some(option => option.value === previous) ? previous : '';
+        if (previous && !sel.value) sel.dispatchEvent(new Event('change'));
+      } catch (e) {
+        console.error('loadSessions:', e);
+      }
+    }
+
+    async function loadSession(id, generation = loadGeneration) {
+      if (loadingGeneration === generation) return;
+      loadingGeneration = generation;
+      try {
+        const r = await fetch(`${API}/sessions/${id}`);
+        if (!r.ok) {
+          alert(`Error: ${r.status}`);
+          return;
+        }
+        const data = await r.json();
+        if (generation !== loadGeneration) return;
+        currentSession = data;
+        document.getElementById('archive-session-btn').disabled = false;
+        document.getElementById('archive-session-btn').textContent = data.status.session.archived ? 'Из архива' : 'В архив';
+        document.getElementById('test-session-flag').disabled = false;
+        document.getElementById('test-session-flag').checked = Boolean(data.status.session.is_test);
+        currentReport = null;
+        renderMessages(data.history);
+        renderRevisions(data.revisions || data.status.revisions);
+        renderTasks(data.status, null);
+        if (data.status.session.applied_revision !== null) {
+          const reportResponse = await fetch(`${API}/sessions/${id}/report`);
+          const report = reportResponse.ok ? await reportResponse.json() : null;
+          if (generation !== loadGeneration) return;
+          currentReport = report;
+          if (report) renderTasks(data.status, report);
+        }
+        updateJobStatus(data.job);
+        renderGantt();
+      } catch (e) {
+        console.error('loadSession:', e);
+      } finally {
+        if (loadingGeneration === generation) loadingGeneration = null;
+      }
+    }
+
+    function renderMessages(messages) {
+      const m = document.getElementById('messages');
+      m.innerHTML = '';
+      for (const msg of messages) {
+        const div = document.createElement('div');
+        div.className = `swarm-message ${msg.sender}`;
+        const sender = document.createElement('div');
+        sender.className = 'swarm-message-sender';
+        sender.textContent = msg.sender.toUpperCase();
+        const body = document.createElement('div');
+        body.textContent = msg.body;
+        div.appendChild(sender);
+        div.appendChild(body);
+        m.appendChild(div);
+      }
+      m.scrollTop = m.scrollHeight;
+    }
+
+    function renderRevisions(revisions) {
+      const r = document.getElementById('revisions-list');
+      r.innerHTML = '';
+      for (const rev of revisions) {
+        const div = document.createElement('div');
+        div.className = `swarm-revision ${rev.status}`;
+        if (rev.revision === selectedRevision) div.classList.add('active');
+        const title = document.createElement('strong');
+        title.textContent = `Rev ${rev.revision}`;
+        div.appendChild(title);
+        div.appendChild(document.createTextNode(` (${rev.status})`));
+        div.appendChild(document.createElement('br'));
+        const tasks = document.createElement('span');
+        tasks.className = 'swarm-status';
+        tasks.textContent = `${rev.tasks ?? rev.plan?.tasks?.length ?? 0} task(s)`;
+        div.appendChild(tasks);
+        if (rev.error) {
+          const error = document.createElement('div');
+          error.className = 'swarm-status';
+          error.style.color = 'var(--danger)';
+          error.textContent = rev.error;
+          div.appendChild(error);
+        }
+        div.onclick = () => selectRevision(rev.revision, div, rev);
+        r.appendChild(div);
+      }
+    }
+
+    function selectRevision(rev, element, revision) {
+      selectedRevision = rev;
+      document.querySelectorAll('.swarm-revision').forEach(e => e.classList.remove('active'));
+      element.classList.add('active');
+      document.getElementById('plan-preview').textContent = JSON.stringify(revision.preview || revision.plan || {}, null, 2);
+      updateJobStatus(currentSession.job);
+      renderGantt();
+    }
+
+    function renderTasks(status, report) {
+      const tasks = status.tasks || [];
+      const blockers = (report && report.blockers) || tasks.filter(t => t.blocker).map(t => `${t.task}: ${t.blocker}`);
+      const lines = tasks.map(t => `${t.status} · ${t.task}\n${t.project} · attempt ${t.attempts}\n${t.blocker || t.outcome || ''}`);
+      if (report?.summary) lines.push(`Accepted: ${report.summary.accepted.join(', ') || '—'}\nFailed: ${report.summary.failed.join(', ') || '—'}`);
+      document.getElementById('task-panel').textContent = lines.join('\n\n') || 'No tasks yet.';
+      const link = document.getElementById('report-link');
+      if (report?.report_path) { link.hidden = false; link.href = `/api/v1/swarm/sessions/${status.session.id}/report`; }
+    }
+
+    function updateJobStatus(job) {
+      const status = document.getElementById('job-status');
+      if (job.active) {
+        status.textContent = `${job.type} — running`;
+        status.style.color = 'var(--accent)';
+      } else if (job.error) {
+        status.textContent = `error: ${job.error}`;
+        status.style.color = 'var(--danger)';
+      } else {
+        status.textContent = 'idle';
+        status.style.color = 'var(--muted)';
+      }
+      document.getElementById('stop-btn').disabled = !job.active;
+      document.getElementById('run-btn').disabled = !selectedRevision;
+      document.getElementById('resume-btn').disabled = job.active;
+    }
+
+    async function chat(mode) {
+      if (!currentSession) {
+        alert('Select or create a session first');
+        return;
+      }
+      const text = document.getElementById('chat-input').value.trim();
+      if (!text) return;
+      document.getElementById('chat-input').value = '';
+      try {
+        const r = await fetch(`${API}/sessions/${currentSession.status.session.id}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, mode }),
+        });
+        if (r.ok) {
+          poll(currentSession.status.session.id);
+        } else {
+          alert(`Error: ${r.status} ${await r.text()}`);
+        }
+      } catch (e) {
+        console.error('chat:', e);
+      }
+    }
+
+    async function run() {
+      if (!currentSession || !selectedRevision) {
+        alert('Select a revision first');
+        return;
+      }
+      const workers = parseInt(document.getElementById('workers-input').value, 10);
+      try {
+        const r = await fetch(`${API}/sessions/${currentSession.status.session.id}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revision: selectedRevision, workers }),
+        });
+        if (r.ok) {
+          poll(currentSession.status.session.id);
+        } else {
+          alert(`Error: ${r.status} ${await r.text()}`);
+        }
+      } catch (e) {
+        console.error('run:', e);
+      }
+    }
+
+    async function stop() {
+      if (!currentSession) return;
+      try {
+        const r = await fetch(`${API}/sessions/${currentSession.status.session.id}/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        if (r.ok) {
+          loadSession(currentSession.status.session.id);
+        }
+      } catch (e) {
+        console.error('stop:', e);
+      }
+    }
+
+    async function resume() {
+      if (!currentSession) return;
+      const workers = parseInt(document.getElementById('workers-input').value, 10);
+      try {
+        const r = await fetch(`${API}/sessions/${currentSession.status.session.id}/resume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workers }),
+        });
+        if (r.ok) {
+          poll(currentSession.status.session.id);
+        }
+      } catch (e) {
+        console.error('resume:', e);
+      }
+    }
+
+    function stopPolling() {
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+
+    function poll(id) {
+      stopPolling();
+      const tick = async () => {
+        if (!currentSession || currentSession.status.session.id !== id || document.hidden) {
+          stopPolling();
+          return;
+        }
+        await loadSession(id);
+        if (currentSession?.status?.session?.id === id && currentSession?.job?.active && !document.hidden) {
+          pollTimer = setTimeout(tick, 500);
+        } else {
+          stopPolling();
+        }
+      };
+      pollTimer = setTimeout(tick, 0);
+    }
+
+    // Event listeners
+    for (const id of ['show-test-sessions', 'show-archived-sessions']) {
+      document.getElementById(id).addEventListener('change', loadSessions);
+    }
+    async function setSessionFlags(flags) {
+      if (!currentSession) return;
+      const id = currentSession.status.session.id;
+      try {
+        const response = await fetch(`${API}/sessions/${id}/flags`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(flags),
+        });
+        if (!response.ok) throw new Error(`Flags update failed: ${response.status}`);
+        await loadSessions();
+        if (document.getElementById('session-select').value === id) await loadSession(id);
+      } catch (error) {
+        alert(error.message);
+        if (document.getElementById('session-select').value === id) await loadSession(id);
+      }
+    }
+    async function archiveVisibleSessions() {
+      const includeTest = document.getElementById('show-test-sessions').checked;
+      const response = await fetch(`${API}/sessions?include_test=${includeTest}&include_archived=false`);
+      if (!response.ok) throw new Error(`Session list failed: ${response.status}`);
+      const data = await response.json();
+      const sessions = data.sessions || [];
+      if (!sessions.length) return;
+      if (!confirm(`Скрыть ${sessions.length} сессий в архив? Данные не удаляются, активные задачи не останавливаются.`)) return;
+      for (const session of sessions) {
+        const result = await fetch(`${API}/sessions/${session.id}/flags`, {
+          method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({archived: true}),
+        });
+        if (!result.ok) throw new Error(`Archive failed for ${session.id}: ${result.status}`);
+      }
+      stopPolling();
+      currentSession = null;
+      await loadSessions();
+      document.getElementById('session-select').value = '';
+      document.getElementById('archive-session-btn').disabled = true;
+      document.getElementById('test-session-flag').disabled = true;
+    }
+    document.getElementById('archive-visible-btn').addEventListener('click', async () => {
+      try { await archiveVisibleSessions(); } catch (error) { alert(error.message); }
+    });
+    document.getElementById('archive-session-btn').addEventListener('click', () => {
+      if (currentSession) setSessionFlags({archived: !currentSession.status.session.archived});
+    });
+    document.getElementById('test-session-flag').addEventListener('change', event => setSessionFlags({is_test: event.target.checked}));
+    document.getElementById('session-select').addEventListener('change', (e) => {
+      loadGeneration += 1;
+      stopPolling();
+      currentSession = null;
+      document.getElementById('archive-session-btn').disabled = true;
+      document.getElementById('test-session-flag').disabled = true;
+      document.getElementById('test-session-flag').checked = false;
+      currentReport = null;
+      selectedRevision = null;
+      renderGantt();
+      if (e.target.value) {
+        loadSession(e.target.value, loadGeneration);
+      } else {
+        currentSession = null;
+        document.getElementById('messages').innerHTML = '<div class="swarm-message system">Ready to create session.</div>';
+        document.getElementById('revisions-list').innerHTML = '';
+        document.getElementById('plan-preview').textContent = 'Select a proposed revision.';
+        document.getElementById('task-panel').textContent = 'No task data.';
+        updateJobStatus({ active: false, type: 'none' });
+      }
+    });
+
+    document.getElementById('create-btn').addEventListener('click', async () => {
+      const title = document.getElementById('title-input').value.trim();
+      try {
+        const r = await fetch(`${API}/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          await loadSessions();
+          document.getElementById('session-select').value = data.id;
+          loadGeneration += 1;
+          stopPolling();
+          currentSession = null;
+          selectedRevision = null;
+          loadSession(data.id, loadGeneration);
+          document.getElementById('title-input').value = '';
+        } else {
+          alert(`Error: ${r.status} ${await r.text()}`);
+        }
+      } catch (e) {
+        console.error('create:', e);
+      }
+    });
+
+    document.getElementById('discuss-btn').addEventListener('click', () => chat('discuss'));
+    document.getElementById('plan-btn').addEventListener('click', () => chat('plan'));
+    document.getElementById('run-btn').addEventListener('click', run);
+    document.getElementById('stop-btn').addEventListener('click', stop);
+    document.getElementById('resume-btn').addEventListener('click', resume);
+    document.getElementById('gantt-view-btn').addEventListener('click', () => setView(true));
+    document.getElementById('chat-view-btn').addEventListener('click', () => setView(false));
+    document.getElementById('gantt-group').addEventListener('change', renderGantt);
+    // Read-only refresh also observes work started from another client.
+    setInterval(() => {
+      if (ganttVisible && currentSession && !pollTimer && !document.hidden) loadSession(currentSession.status.session.id);
+    }, 5000);
+
+    // Initial load
+    loadSessions().then(async () => {
+      const requested = directSession;
+      const select = document.getElementById('session-select');
+      // A direct link remains usable even when its session is filtered from the list.
+      retainDirectSession(select);
+      if (requested && Array.from(select.options).some(option => option.value === requested)) {
+        select.value = requested;
+        await loadSession(requested);
+      }
+    });
+  </script>
+</body>
+</html>

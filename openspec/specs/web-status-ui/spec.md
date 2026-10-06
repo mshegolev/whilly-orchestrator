@@ -347,3 +347,143 @@ endpoint.
 - **THEN** the system SHALL return data without altering any task, plan, or
   worker state
 
+### Requirement: Safe swarm conversation rendering
+The web status UI SHALL return original message JSON and render untrusted conversation and revision content as text.
+
+#### Scenario: safe conversation rendering
+- **WHEN** history or a revision contains `<`, `>`, or `&`
+- **THEN** the API returns the original JSON string and the browser inserts it with `textContent`
+
+### Requirement: Explicit swarm execution
+The web status UI SHALL preview a proposed plan and execute it only after an explicit revision selection.
+
+#### Scenario: explicit execution
+- **WHEN** an admin selects a proposed revision and clicks Run Selected
+- **THEN** the validated plan is previewable before the click and only that explicit request applies and executes it
+
+### Requirement: Bounded operation control
+The web status UI SHALL cap active in-process jobs and cancel any active job on stop.
+
+#### Scenario: bounded operation control
+- **WHEN** the global active-job limit is reached, or an admin stops a chat/run
+- **THEN** new work is rejected with a bounded error, and any active async task is cancelled; coordinator stop is requested when one exists
+
+### Requirement: Stale browser state protection
+The web status UI SHALL prevent stale polling responses from overwriting the selected session.
+
+#### Scenario: stale browser state
+- **WHEN** the admin switches or creates sessions while a poll response is outstanding
+- **THEN** the old poll is cleared, selection is reset, and the stale response cannot overwrite the newly selected session
+
+### Requirement: Swarm execution Gantt
+The swarm UI SHALL offer a revision-scoped Gantt view grouped by project and role, showing actual attempt intervals, statuses, retries and named dependencies without inventing dates for unstarted tasks.
+
+#### Scenario: Inspect executed and proposed work
+- **WHEN** an administrator selects a session and opens Gantt
+- **THEN** recorded attempts appear on a time scale and running attempts extend to the current time
+- **AND** unstarted tasks and missing timestamps are explicitly labeled without fabricated bars
+- **AND** choosing another revision or session removes unrelated execution data
+
+#### Scenario: Refresh and safe rendering
+- **WHEN** task data changes while the Gantt view is open
+- **THEN** the view refreshes without starting model calls or tasks
+- **AND** task labels are rendered as text, including on mobile layouts
+
+### Requirement: Dashboard swarm navigation
+The dashboard SHALL display a link labeled Swarm to `/swarm` in its authenticated header when the swarm route is enabled, without changing destination authorization.
+
+#### Scenario: Open the swarm conversation
+- **WHEN** a signed-in user opens a swarm-enabled dashboard
+- **THEN** the header includes a visible Swarm navigation link
+- **AND** following it opens the existing swarm page subject to existing access checks
+
+#### Scenario: Swarm disabled or shared view
+- **WHEN** the swarm route is absent or the dashboard is an anonymous shared view
+- **THEN** the Swarm navigation link is omitted
+
+### Requirement: Opt-in product cockpit
+The system SHALL provide an admin-only product chat and feature cockpit when product swarm is enabled, while preserving legacy sessions and Gantt.
+
+#### Scenario: Product cockpit enabled
+- **WHEN** the administrator enables product swarm
+- **THEN** the main Swarm navigation opens the product cockpit
+- **AND** feature planning, approval and execution remain separate explicit actions
+
+### Requirement: Persistent terminal UI themes
+The UI SHALL support light, dark and system preferences while retaining monospace typography and the terminal-style line-based layout.
+
+#### Scenario: Explicit preference persists across navigation
+- **WHEN** a user selects light or dark on the dashboard, swarm, product cockpit or sign-in page
+- **THEN** that palette is applied immediately and persisted locally for subsequent pages and reloads before content paint
+
+#### Scenario: System preference follows device changes
+- **WHEN** no valid explicit preference exists or the user selects system
+- **THEN** the palette follows the device color scheme, including changes while the page is open
+
+#### Scenario: Storage is unavailable
+- **WHEN** browser storage cannot be read or written
+- **THEN** theme controls remain usable for the current page without breaking other UI actions
+
+#### Scenario: Accessible terminal rendering
+- **WHEN** either palette is active
+- **THEN** text, statuses, controls and the Gantt chart remain legible on desktop and mobile, with keyboard-accessible theme selection
+
+### Requirement: Theme controls survive dashboard refresh
+The UI SHALL preserve the selected theme and keep replacement theme controls synchronized and interactive after HTMX body or fragment replacement.
+
+#### Scenario: Change theme after refresh
+- **WHEN** an operator selects dark mode, refreshes the dashboard without full navigation, and selects light mode
+- **THEN** the page colors change to light mode and the saved preference becomes light
+- **AND** repeated refreshes preserve this behavior without reacting to unrelated form controls
+
+### Requirement: Focus-only keyboard hints
+The operator UI SHALL support F to label visible enabled controls, letter sequences to focus without activation, Escape to cancel, and ? for keyboard help while preserving native keyboard behavior outside hint mode.
+
+#### Scenario: Safe hint selection
+- **WHEN** an operator enters the label of an execution control
+- **THEN** that control receives focus without clicking or sending a request
+- **AND** the hint letters do not trigger existing dashboard shortcuts
+
+#### Scenario: Text entry and dynamic pages
+- **WHEN** an operator types in an editable control or uses a modifier/composition event
+- **THEN** global navigation does not intercept that event
+- **AND** navigation remains available after a dashboard refresh
+
+### Requirement: Reversible swarm session organization
+The UI SHALL hide explicitly marked test sessions and archived sessions by default, offer independent filters to reveal them, and allow administrators to change those flags without deleting history or starting or stopping execution.
+
+#### Scenario: Archive and restore
+- **WHEN** an administrator archives a session and enables the archived filter
+- **THEN** the session remains accessible with its history and can be restored
+
+#### Scenario: Explicit test classification
+- **WHEN** a session is marked as test data
+- **THEN** it is hidden unless the test filter is enabled
+- **AND** titles alone do not determine test classification
+
+### Requirement: Explicit planner readiness
+The product cockpit SHALL require explicit selection of a configured planner and reject unavailable profiles before queuing work without selecting a fallback or altering feature history.
+
+#### Scenario: No configured planner
+- **WHEN** the trusted registry contains no supported planner profiles
+- **THEN** Plan and Discuss are disabled with a setup message
+- **AND** direct requests for unavailable planners return a named setup blocker without creating jobs
+
+### Requirement: Current selection owns asynchronous rendering
+The UI SHALL reject stale session-list and feature/publication responses and retain a directly linked session across filter changes.
+
+#### Scenario: Responses arrive out of order
+- **WHEN** the user changes selection or filters before an earlier request completes
+- **THEN** the earlier response does not replace the latest selection's rendered state or approval data
+
+#### Scenario: Direct link while filtering
+- **WHEN** the user opens a filtered session by direct link and changes a list filter
+- **THEN** the directly linked session remains selectable
+
+### Requirement: Native keys exit hint mode
+The UI SHALL close hint mode on Tab, Enter or Space while preserving the native behavior of that key.
+
+#### Scenario: Tab during hints
+- **WHEN** the operator presses Tab with hints visible
+- **THEN** hints close and focus moves by normal browser tab order
+

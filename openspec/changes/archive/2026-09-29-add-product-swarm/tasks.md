@@ -1,0 +1,7 @@
+- [x] Profiles and bounded engine configuration
+- [x] Product persistence and cockpit scaffolding
+- [x] Integrate approval, planning and execution gates
+- [x] Global admission and budget verification
+- [x] Controlled publication integration
+- [x] Disposable database, browser and regression verification
+- [x] Archive validated capability changes

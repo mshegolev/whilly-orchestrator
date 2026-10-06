@@ -1,0 +1,11 @@
+cognee==1.6.1
+fastembed==0.8.0
+onnxruntime==1.23.2
+lancedb==0.39.0
+huggingface-hub==0.36.2
+transformers==4.57.6
+gliner2[local]==2.0.0
+torch==2.14.0
+tokenizers==0.22.2
+sentencepiece==0.2.2
+numpy==2.5.3
