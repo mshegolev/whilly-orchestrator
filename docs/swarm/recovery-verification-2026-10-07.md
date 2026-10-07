@@ -15,8 +15,27 @@ Base: `origin/main` at `43948b0752c1810f34571d99b9f50583aab7b70b`.
 
 The first plain `make lint` invocation selected the host's Python 3.8, where Ruff was not installed, and exited 2. Re-running the unchanged Make target with `.venv/bin` first in `PATH` used Python 3.12 and passed. This is retained as environment evidence, not reported as a source failure.
 
-## Live-canary decision
+## Live-canary decision and later evidence
 
-The bounded real-model canary was not started. Publication was verified fail-closed for the normal API composition: `ProductWorkflow` is constructed without a publication backend, and `publish_feature()` returns `publication_unavailable` before constructing transport. However, no disposable PostgreSQL server was available: Docker had no reachable daemon, `pg_isready` reported no response, and the installed client package did not include the `postgres` server executable. No trusted private product registry was present in the recovery checkout either.
+At the time of this recovery run, the bounded real-model canary was not
+started. Docker had no reachable daemon, `pg_isready` reported no response,
+and the installed client package did not include the `postgres` server
+executable. The recovery checkout had no trusted private product registry.
+That earlier blocker is historical; it is not the current canary result.
 
-The named activation blocker is `live_canary_postgres_unavailable` (with registry/toolchain configuration still required after PostgreSQL is supplied). A unit or fake-adapter pass is not substituted for real provider evidence. The next operator action is to provision an ephemeral PostgreSQL instance and a disposable registry/toolchain, then follow the one-feature/one-worker procedure in the recovery manifest. Do not weaken sandbox, approval, publication, or budget gates to make that canary run.
+A later disposable first-use canary completed one documentation-only task with
+one worker. It used three model calls (planner, worker, reviewer), completed in
+60.386 seconds, and recorded cost as unknown. Task, test, lint, and architecture
+verification passed. The feature reached `review`, and publication stopped
+with `publication_unavailable` before transport provisioning. Stop returned
+`drained: true`. The redacted receipt and operator procedure are in
+[`first-use.md`](first-use.md).
+
+The independent reviewer model returned `approve` from the exact
+coordinator-produced diff and byte-for-byte host verification evidence, but
+its explanation states that direct workspace inspection was blocked by the
+execution sandbox. This proves an independent evidence review, not independent
+workspace inspection. Do not claim production readiness, human-quality review,
+or hard Codex cost enforcement from this canary. Before relying on Swarm for
+non-disposable engineering changes, confirm the reviewer can inspect the
+candidate under the actual configured sandbox.

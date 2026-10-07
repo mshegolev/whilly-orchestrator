@@ -259,6 +259,42 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  mutation:
+    name: Mutation testing (scoped mutmut pilot)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Mutation testing is deliberately the final code-quality signal: do not
+    # spend mutant runs when lint or the ordinary unit suite is already red.
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.head_ref || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dev deps
+        run: pip install -e '.[dev]'
+      - name: Run scoped mutation pilot
+        # The accepted baseline currently contains four reviewed equivalent or
+        # presentation-only survivors. This job detects harness/runtime errors
+        # and publishes the complete diagnostic result; it does not invent a
+        # mutation-score threshold before more modules have measured baselines.
+        run: |
+          set +e
+          mutmut run --max-children 1
+          mutation_status=$?
+          mutmut results --all true
+          results_status=$?
+          set -e
+          if [ "$mutation_status" -ne 0 ]; then
+            exit "$mutation_status"
+          fi
+          exit "$results_status"
+
   agent-backends:
     name: Agent backends (OC-119)
     runs-on: ubuntu-latest

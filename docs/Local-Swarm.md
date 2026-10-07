@@ -204,13 +204,17 @@ that code was merged, pushed, deployed, or automatically accepted.
 - Treat `FAILED`, `ABANDONED`, and `integration_required` as requiring operator
   action.
 - Inspect retained worktrees and review evidence before any manual integration.
-- Main PostgreSQL atomic/budget checks currently pass (4/4); the first four
-  runtime checks pass while the remaining runtime checks are still validating.
-- The current canary contract has a Haiku-produced task accepted by Codex; the
-  first Codex consumer attempt was blocked by `.git` metadata/network access,
-  is being fixed and rerun, and is not yet a live-passed result.
-- Run the repository's OpenSpec and remaining integration checks before calling
-  the runtime production-ready.
+- For the Product Swarm cockpit, see the bounded first-use preflight, workflow,
+  stop procedure, and redacted real-canary receipt in
+  [`swarm/first-use.md`](swarm/first-use.md). The legacy CLI session commands
+  documented above remain a separate workflow.
+- A successful disposable canary demonstrates one run, not production
+  readiness. Its reviewer approval text reported that independent diff
+  inspection was blocked by the execution sandbox; verify real review access
+  before relying on that check for engineering work. Missing model cost remains
+  unknown, not zero.
+- Run the repository's OpenSpec and relevant integration checks before making
+  claims beyond the specific evidence recorded in the first-use runbook.
 
 ## Admin permission boundary
 

@@ -58,3 +58,13 @@ The pilot produced these survivors:
 These dispositions describe this pilot only. They are not exclusions from
 future reports and no score threshold is set. Reassess survivors when the
 decision-gate contract or operator-facing reason format changes.
+
+## Continuous integration
+
+The `mutation` job in `.github/workflows/ci.yml` starts only after both the
+`lint` and `test` jobs pass. It installs the development extra, including the
+explicitly pinned mutmut version, runs the same scoped pilot serially, and
+prints all results even when the mutation run fails. The job preserves that
+failure status as a hard gate for mutation harness or test failures, while the
+reviewed survivors remain diagnostic until measured evidence supports a
+repository policy and threshold.
