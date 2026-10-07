@@ -6,6 +6,21 @@ Enable `WHILLY_PRODUCT_SWARM=1` alongside the existing trusted
 task Gantt. Both interfaces require an administrator session and same-origin
 CSRF protection. Worker bearer credentials do not grant dashboard access.
 
+## Research and evaluated improvements
+
+The cockpit exposes durable daily-research reports and frozen experiment
+evidence under **Research & evaluation**. Research schedules and optional
+external export remain disabled by default and report the named setup blockers
+`schedule_configuration_required` and `export_policy_required`. Manual dry runs
+accept only already-redacted structured fixture events; retrieved text is
+untrusted evidence and cannot change policy or invoke tools.
+
+Experiments pin baseline/candidate revisions, dataset and held-out hashes,
+rubric, policy, models, acceptance limits and TRIZ evidence. Missing costs stay
+unknown, regressions reject recommendations, and only an authenticated owner may
+record a decision. Acceptance and rollback records never authorize execution;
+normal feature approval, publication and delivery boundaries still apply.
+
 ## Workflow
 
 1. Discuss requirements with the product chief. Product messages persist across

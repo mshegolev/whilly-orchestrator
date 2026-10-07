@@ -8,11 +8,11 @@ from tests.conftest import _build_alembic_config
 from whilly.adapters.db import MIGRATIONS_DIR
 
 
-def test_016_is_head_revision() -> None:
+def test_016_remains_in_current_chain() -> None:
     cfg = _build_alembic_config("postgresql+asyncpg://placeholder/whilly")
     script = ScriptDirectory.from_config(cfg)
 
-    assert script.get_current_head() == "016_jira_work_sessions"
+    assert script.get_current_head() == "042_learning_evaluations"
     revision = script.get_revision("016_jira_work_sessions")
     assert revision is not None
     assert revision.down_revision == "015_plan_verification_commands"

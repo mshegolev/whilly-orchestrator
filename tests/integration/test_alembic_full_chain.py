@@ -128,6 +128,7 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "039_learning_proposals",
     "040_learning_runs",
     "041_product_change_sets",
+    "042_learning_evaluations",
 )
 
 

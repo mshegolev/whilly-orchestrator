@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import subprocess
-import sys
-from pathlib import Path
+from shutil import which
 
 
-LINT_IMPORTS = str(Path(sys.executable).with_name("lint-imports"))
+LINT_IMPORTS = which("lint-imports") or "lint-imports"
 
 
 def test_production_learning_import_contract_passes() -> None:
