@@ -39,19 +39,28 @@ class ProductPublicationBackend:
         except ValueError:
             raise WorkflowBlocked("publication_registry_changed") from None
         current = await self.store.get(request.change_id)
-        if (current is None or current.status not in {ChangeSetStatus.EXECUTING, ChangeSetStatus.VERIFYING_REPOS}
-                or current.registry_digest != request.registry_digest
-                or self.snapshot.registry_digest != request.registry_digest
-                or self.snapshot.policy_digest != request.policy_digest
-                or current.approval_digest != request.candidate.approved_digest
-                or self.snapshot.projects.get(request.candidate.project) != policy):
+        if (
+            current is None
+            or current.status not in {ChangeSetStatus.EXECUTING, ChangeSetStatus.VERIFYING_REPOS}
+            or current.registry_digest != request.registry_digest
+            or self.snapshot.registry_digest != request.registry_digest
+            or self.snapshot.policy_digest != request.policy_digest
+            or current.approval_digest != request.candidate.approved_digest
+            or self.snapshot.projects.get(request.candidate.project) != policy
+        ):
             raise WorkflowBlocked("publication_approval_binding_changed")
         repo = next((value for value in current.repo_changes if value.repo_id == request.candidate.project), None)
         offsets = {RepoChangeStatus.LOCAL_VERIFIED: 0, RepoChangeStatus.MR_OPEN: 1, RepoChangeStatus.PIPELINE_GREEN: 2}
-        if (repo is None or repo.status not in offsets or repo.version != request.repo_version + offsets[repo.status]
-                or repo.base_sha != request.candidate.base_sha or request.target_sha != repo.base_sha
-                or repo.last_evidence is None or repo.last_evidence.outcome != EvidenceOutcome.PASSED
-                or repo.last_evidence.sha != request.candidate.head_sha):
+        if (
+            repo is None
+            or repo.status not in offsets
+            or repo.version != request.repo_version + offsets[repo.status]
+            or repo.base_sha != request.candidate.base_sha
+            or request.target_sha != repo.base_sha
+            or repo.last_evidence is None
+            or repo.last_evidence.outcome != EvidenceOutcome.PASSED
+            or repo.last_evidence.sha != request.candidate.head_sha
+        ):
             raise WorkflowBlocked("publication_repo_binding_changed")
         return repo
 
@@ -69,15 +78,27 @@ class ProductPublicationBackend:
         repo = await self._recheck(request, policy)
         details = receipt.to_dict()
         if repo.status == RepoChangeStatus.LOCAL_VERIFIED:
-            evidence = Evidence("mr_open", EvidenceOutcome.PASSED, sha=receipt.source_sha,
-                                job_id=f"mr:{receipt.mr_iid}", details=details)
-            repo = await self.store.transition_repo(request.change_id, request.candidate.project,
-                                                    repo.version, RepoChangeStatus.MR_OPEN, evidence)
+            evidence = Evidence(
+                "mr_open",
+                EvidenceOutcome.PASSED,
+                sha=receipt.source_sha,
+                job_id=f"mr:{receipt.mr_iid}",
+                details=details,
+            )
+            repo = await self.store.transition_repo(
+                request.change_id, request.candidate.project, repo.version, RepoChangeStatus.MR_OPEN, evidence
+            )
         if repo.status == RepoChangeStatus.MR_OPEN and receipt.pipeline.green:
-            evidence = Evidence("exact_sha_pipeline", EvidenceOutcome.PASSED, sha=receipt.source_sha,
-                                job_id=f"pipeline:{receipt.pipeline.pipeline_id}", details=details)
-            await self.store.transition_repo(request.change_id, request.candidate.project,
-                                            repo.version, RepoChangeStatus.PIPELINE_GREEN, evidence)
+            evidence = Evidence(
+                "exact_sha_pipeline",
+                EvidenceOutcome.PASSED,
+                sha=receipt.source_sha,
+                job_id=f"pipeline:{receipt.pipeline.pipeline_id}",
+                details=details,
+            )
+            await self.store.transition_repo(
+                request.change_id, request.candidate.project, repo.version, RepoChangeStatus.PIPELINE_GREEN, evidence
+            )
         return receipt
 
 
@@ -118,8 +139,10 @@ async def publish_feature(workflow, feature_id: str, *, transport_factory=None) 
     if backend.feature_requests is None:
         raise WorkflowBlocked("publication_change_set_binding_required")
     requests = await backend.feature_requests(feature_id)
-    if not requests or any(not isinstance(request, RepoPublicationRequest)
-                           or request.candidate.feature_id != feature_id for request in requests):
+    if not requests or any(
+        not isinstance(request, RepoPublicationRequest) or request.candidate.feature_id != feature_id
+        for request in requests
+    ):
         raise WorkflowBlocked("publication_change_set_binding_required")
     receipts = [await backend.prepare_repo_change(request) for request in requests]
     return {"status": "published_candidates", "receipts": [receipt.to_dict() for receipt in receipts]}

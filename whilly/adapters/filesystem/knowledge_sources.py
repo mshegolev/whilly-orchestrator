@@ -48,7 +48,10 @@ class GitSourceVerifier:
     @staticmethod
     async def _git(repo_path: str, *args: str) -> str:
         process = await asyncio.create_subprocess_exec(
-            "git", "-C", repo_path, *args,
+            "git",
+            "-C",
+            repo_path,
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )

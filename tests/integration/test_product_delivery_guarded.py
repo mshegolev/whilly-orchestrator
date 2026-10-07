@@ -33,6 +33,9 @@ async def test_product_reaches_done_only_after_every_stage_observation(tmp_path)
     assert all(repo.status == RepoChangeStatus.ARTIFACT_READY for repo in done.repo_changes)
     operations = {receipt.operation for receipt in store.effects.values()}
     assert operations == {
-        "deliver_stage_intent", "deliver_stage", "accept_stage_intent", "accept_stage",
+        "deliver_stage_intent",
+        "deliver_stage",
+        "accept_stage_intent",
+        "accept_stage",
     }
     assert port.prod_calls == []

@@ -7,7 +7,10 @@ import pytest
 from tests.unit.test_product_merge import setup as merge_setup
 from whilly.swarm.change_set import ChangeSetStatus
 from whilly.swarm.product_delivery import (
-    ArtifactDigest, DeliveryBoundaryError, ProductDeliveryCoordinator, StageDeploymentReceipt,
+    ArtifactDigest,
+    DeliveryBoundaryError,
+    ProductDeliveryCoordinator,
+    StageDeploymentReceipt,
 )
 from whilly.swarm.product_merge import ProductMergeCoordinator
 
@@ -24,7 +27,11 @@ class DeliveryPort:
         self.deliveries.append(policy.project_id)
         deployed = "0" * 40 if policy.project_id == self.stale_repo else source_sha
         return StageDeploymentReceipt(
-            change_id, policy.project_id, deployed, tuple(artifacts), f"stage:{policy.project_id}:1",
+            change_id,
+            policy.project_id,
+            deployed,
+            tuple(artifacts),
+            f"stage:{policy.project_id}:1",
         )
 
     async def observe_stage(self, change_id, policy, source_sha, deployment):

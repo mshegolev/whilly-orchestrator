@@ -222,7 +222,9 @@ async def check_feature_budget(conn: Any, session_id: str, mode: str) -> int | N
 
 
 class ProductWorkflow:
-    def __init__(self, pool: Any, registry_path: str, executor: GuardedExecutor | None = None, *, publication_backend=None):
+    def __init__(
+        self, pool: Any, registry_path: str, executor: GuardedExecutor | None = None, *, publication_backend=None
+    ):
         self.publication_backend = publication_backend
         self.pool = pool
         self.registry_path = registry_path

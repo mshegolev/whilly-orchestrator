@@ -13,7 +13,10 @@ from tests.unit.test_product_registry import policy as raw_policy
 from whilly.swarm.product_registry import parse_product_policy
 from whilly.swarm.publication import Candidate
 from whilly.swarm.gitlab_change_transport import (
-    GitLabChangeTransport, PinnedGitLabHTTPS, PublicationError, RepoPublicationRequest,
+    GitLabChangeTransport,
+    PinnedGitLabHTTPS,
+    PublicationError,
+    RepoPublicationRequest,
 )
 
 SHA = "b" * 40
@@ -30,9 +33,13 @@ def policy():
 def request():
     return RepoPublicationRequest(
         change_id="change-demo",
-        candidate=Candidate("feature-demo", "demo", "/tmp/demo", "whilly/change-demo", TARGET, SHA,
-                            "d" * 64, SHA, True, "approval-demo"),
-        target_sha=TARGET, registry_digest="e" * 64, policy_digest="f" * 64, repo_version=4,
+        candidate=Candidate(
+            "feature-demo", "demo", "/tmp/demo", "whilly/change-demo", TARGET, SHA, "d" * 64, SHA, True, "approval-demo"
+        ),
+        target_sha=TARGET,
+        registry_digest="e" * 64,
+        policy_digest="f" * 64,
+        repo_version=4,
     )
 
 
@@ -69,9 +76,17 @@ class API:
         assert req.url.host == "gitlab.example.com"
         assert req.headers["PRIVATE-TOKEN"] == SECRET
         p = req.url.path
-        mr = {"iid": 7, "source_branch": "whilly/change-demo", "target_branch": "master",
-              "source_project_id": 17, "target_project_id": 17, "state": "opened",
-              "sha": SHA, "draft": True, "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7"}
+        mr = {
+            "iid": 7,
+            "source_branch": "whilly/change-demo",
+            "target_branch": "master",
+            "source_project_id": 17,
+            "target_project_id": 17,
+            "state": "opened",
+            "sha": SHA,
+            "draft": True,
+            "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7",
+        }
         if p == "/api/v4/projects/17":
             body = {"id": 17, "http_url_to_repo": self.remote}
         elif "/repository/branches/" in p:
@@ -81,8 +96,7 @@ class API:
         elif p.endswith("/pipelines"):
             body = [] if self.status == "missing" else [{"id": 31, "sha": self.pipeline_sha, "status": self.status}]
         elif p.endswith("/pipelines/31/jobs"):
-            body = [{"id": 41, "name": "test", "status": "success"},
-                    {"id": 42, "name": "build", "status": "success"}]
+            body = [{"id": 41, "name": "test", "status": "success"}, {"id": 42, "name": "build", "status": "success"}]
         elif p.endswith("/pipelines/31"):
             body = {"id": 31, "sha": self.pipeline_sha, "status": self.status}
         else:
@@ -92,8 +106,12 @@ class API:
 
 def transport(git=None, api=None):
     api = api or API()
-    http = PinnedGitLabHTTPS("https://gitlab.example.com", allowed_project_ids=frozenset({17}),
-                            credentials=lambda project_id: SECRET, transport=httpx.MockTransport(api))
+    http = PinnedGitLabHTTPS(
+        "https://gitlab.example.com",
+        allowed_project_ids=frozenset({17}),
+        credentials=lambda project_id: SECRET,
+        transport=httpx.MockTransport(api),
+    )
     return GitLabChangeTransport(git or Git(), http), api
 
 
@@ -101,6 +119,7 @@ def transport(git=None, api=None):
 def block_real_network(monkeypatch):
     def deny(*args, **kwargs):
         raise AssertionError("real endpoint forbidden")
+
     monkeypatch.setattr(socket.socket, "connect", deny)
     monkeypatch.setattr(socket, "getaddrinfo", deny)
 
@@ -112,7 +131,9 @@ async def test_new_or_existing_draft_mr_keeps_exact_source_target_and_pipeline(e
     assert receipt.mr_iid == 7 and receipt.source_sha == SHA and receipt.target_sha == TARGET
     assert receipt.pipeline.pipeline_id == 31 and receipt.pipeline.sha == SHA
     assert receipt.pipeline.status == "success" and receipt.status == "pipeline_green"
-    assert sum(method == "POST" and path.endswith("/merge_requests") for method, path in api.calls) == (0 if existing else 1)
+    assert sum(method == "POST" and path.endswith("/merge_requests") for method, path in api.calls) == (
+        0 if existing else 1
+    )
     assert not any(method in {"PUT", "DELETE"} for method, _ in api.calls)
 
 
@@ -148,11 +169,13 @@ async def test_unavailable_readiness_does_not_read_credentials_or_contact_endpoi
 
 async def test_exact_pipeline_detail_sha_and_required_jobs_are_checked():
     api = API()
+
     def handler(req):
         response = api(req)
         if req.url.path.endswith("/pipelines/31/jobs"):
             return httpx.Response(200, json=[{"id": 41, "name": "test", "status": "success"}])
         return response
+
     adapter, _ = transport(api=handler)
     receipt = await adapter.prepare_repo_change(request(), policy())
     assert receipt.pipeline.status == "missing" and not receipt.pipeline.green
@@ -161,19 +184,31 @@ async def test_exact_pipeline_detail_sha_and_required_jobs_are_checked():
 async def test_http_boundary_rejects_origin_override_and_redacts_transport_error():
     def unsafe(req):
         raise httpx.ConnectError("leaked " + SECRET, request=req)
-    http = PinnedGitLabHTTPS("https://gitlab.example.com", allowed_project_ids=frozenset({17}),
-                            credentials=lambda _: SECRET, transport=httpx.MockTransport(unsafe))
+
+    http = PinnedGitLabHTTPS(
+        "https://gitlab.example.com",
+        allowed_project_ids=frozenset({17}),
+        credentials=lambda _: SECRET,
+        transport=httpx.MockTransport(unsafe),
+    )
     with pytest.raises(PublicationError, match="publication_request_unavailable") as caught:
         await http.request("GET", "/api/v4/projects/17")
     assert SECRET not in str(caught.value)
-    for path in ("https://attacker.example/api/v4/projects/17", "/api/v4/projects/99", "/api/v4/projects/17/../../users"):
+    for path in (
+        "https://attacker.example/api/v4/projects/17",
+        "/api/v4/projects/99",
+        "/api/v4/projects/17/../../users",
+    ):
         with pytest.raises(PublicationError, match="publication_endpoint_blocked"):
             await http.request("GET", path)
 
 
 async def test_encoded_route_traversal_is_rejected_before_credentials():
-    http = PinnedGitLabHTTPS("https://gitlab.example.com", allowed_project_ids=frozenset({17}),
-                            credentials=lambda _: pytest.fail("invalid route reached credentials"))
+    http = PinnedGitLabHTTPS(
+        "https://gitlab.example.com",
+        allowed_project_ids=frozenset({17}),
+        credentials=lambda _: pytest.fail("invalid route reached credentials"),
+    )
     for suffix in ("%2e%2e%2fusers", "master%3Ftoken=secret", "master%252Fusers"):
         with pytest.raises(PublicationError, match="publication_endpoint_blocked"):
             await http.request("GET", "/api/v4/projects/17/repository/branches/" + suffix)
@@ -182,6 +217,7 @@ async def test_encoded_route_traversal_is_rejected_before_credentials():
 @pytest.mark.parametrize("foreign", ["pipeline", "job"])
 async def test_foreign_pipeline_or_job_commit_never_green(foreign):
     api = API()
+
     def handler(req):
         response = api(req)
         body = response.json()
@@ -190,13 +226,16 @@ async def test_foreign_pipeline_or_job_commit_never_green(foreign):
         elif foreign == "job" and req.url.path.endswith("/pipelines/31/jobs"):
             body[0]["commit"] = {"id": TARGET}
         return httpx.Response(200, json=body)
+
     adapter, _ = transport(api=handler)
     receipt = await adapter.prepare_repo_change(request(), policy())
     assert not receipt.pipeline.green
 
+
 async def test_existing_foreign_mr_refuses_before_pushing():
     git = Git()
     api = API(existing=True)
+
     def handler(req):
         response = api(req)
         if req.url.path.endswith("/merge_requests"):
@@ -204,6 +243,7 @@ async def test_existing_foreign_mr_refuses_before_pushing():
             body[0]["target_project_id"] = 99
             return httpx.Response(200, json=body)
         return response
+
     adapter, _ = transport(git=git, api=handler)
     with pytest.raises(PublicationError, match="publication_mr_identity_changed"):
         await adapter.prepare_repo_change(request(), policy())
@@ -212,14 +252,18 @@ async def test_existing_foreign_mr_refuses_before_pushing():
 
 async def test_cancellation_drains_push_receipt_and_never_creates_mr():
     from whilly.swarm.change_set import EvidenceOutcome
+
     class Store:
         def __init__(self):
             self.receipts = {}
+
         async def get_effect(self, key):
             return self.receipts.get(key)
+
         async def record_effect(self, receipt):
             self.receipts[receipt.effect_key] = receipt
             return receipt
+
     git = Git()
     git.release = asyncio.Event()
     store = Store()
@@ -245,11 +289,14 @@ async def test_publication_effect_replay_does_not_repeat_push_or_mr():
     class Store:
         def __init__(self):
             self.receipts = {}
+
         async def get_effect(self, key):
             return self.receipts.get(key)
+
         async def record_effect(self, receipt):
             self.receipts.setdefault(receipt.effect_key, receipt)
             return self.receipts[receipt.effect_key]
+
     git = Git()
     adapter, api = transport(git=git)
     adapter.effect_store = Store()
@@ -262,8 +309,15 @@ async def test_publication_effect_replay_does_not_repeat_push_or_mr():
 
 def test_publication_phase_is_explicit_and_offline_git_remains_closed(tmp_path):
     from whilly.core.swarm_execution import ExecutionPolicy
-    values = dict(read_roots=(str(tmp_path),), write_roots=(str(tmp_path / "scratch"),),
-                  denied_roots=(), network=True, timeout_seconds=5, max_output_bytes=4096)
+
+    values = dict(
+        read_roots=(str(tmp_path),),
+        write_roots=(str(tmp_path / "scratch"),),
+        denied_roots=(),
+        network=True,
+        timeout_seconds=5,
+        max_output_bytes=4096,
+    )
     assert ExecutionPolicy(phase="publication", **values).phase == "publication"
     for phase in ("git", "verify", "host_script"):
         with pytest.raises(ValueError, match="offline phase"):
@@ -273,44 +327,72 @@ def test_publication_phase_is_explicit_and_offline_git_remains_closed(tmp_path):
 async def test_guarded_git_fixed_push_injected_credentials_and_redacted_logs(tmp_path):
     from types import SimpleNamespace
     from whilly.swarm.gitlab_change_transport import GuardedPublicationGit
+
     calls = []
+
     class Executor:
         def toolchain_for_phase(self, phase):
             assert phase == "publication"
             return "git"
+
         def roots(self, toolchain):
             return ((), ())
+
         def ready(self):
             return {"ready": True}
+
         def environment(self, **kwargs):
             return {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home"), "TMPDIR": str(tmp_path / "tmp")}
+
         async def run(self, argv, **kwargs):
             calls.append((argv, kwargs))
             stdout = tmp_path / f"stdout-{len(calls)}"
             stderr = tmp_path / f"stderr-{len(calls)}"
             command = tuple(argv[1:])
-            value = {("config", "--local", "--no-includes", "--name-only", "--null", "--list"): "core.repositoryformatversion\0",
-                     ("remote", "get-url", "origin"): policy().canonical_remote,
-                     ("rev-parse", "HEAD"): SHA,
-                     ("symbolic-ref", "--short", "HEAD"): request().candidate.branch,
-                     ("status", "--porcelain", "--untracked-files=all"): "",
-                     ("rev-parse", "--git-path", "hooks"): str(tmp_path / "hooks")}.get(command, "")
+            value = {
+                (
+                    "config",
+                    "--local",
+                    "--no-includes",
+                    "--name-only",
+                    "--null",
+                    "--list",
+                ): "core.repositoryformatversion\0",
+                ("remote", "get-url", "origin"): policy().canonical_remote,
+                ("rev-parse", "HEAD"): SHA,
+                ("symbolic-ref", "--short", "HEAD"): request().candidate.branch,
+                ("status", "--porcelain", "--untracked-files=all"): "",
+                ("rev-parse", "--git-path", "hooks"): str(tmp_path / "hooks"),
+            }.get(command, "")
             stdout.write_text(value)
             stderr.write_text("synthetic failure " + SECRET if command[0] == "push" else "")
-            return SimpleNamespace(exit_code=0, timed_out=False, cancelled=False, reason=None,
-                                   stdout_path=str(stdout), stderr_path=str(stderr))
+            return SimpleNamespace(
+                exit_code=0,
+                timed_out=False,
+                cancelled=False,
+                reason=None,
+                stdout_path=str(stdout),
+                stderr_path=str(stderr),
+            )
+
     repo = tmp_path / "repo"
     repo.mkdir()
     (tmp_path / "hooks").mkdir()
     change = replace(request(), candidate=replace(request().candidate, repo_path=str(repo)))
-    git = GuardedPublicationGit(Executor(), git_executable="/usr/bin/git", output_root=tmp_path / "receipts",
-                                approved_hooks={})
+    git = GuardedPublicationGit(
+        Executor(), git_executable="/usr/bin/git", output_root=tmp_path / "receipts", approved_hooks={}
+    )
     assert (await git.ready())["ready"] is True
     assert (await git.inspect(change, policy()))["sha"] == SHA
     assert await git.push(change, policy(), SECRET) == {"exit_code": 0}
     argv, kwargs = calls[-1]
-    assert argv == ("/usr/bin/git", "push", "--", policy().canonical_remote,
-                    f"{SHA}:refs/heads/{change.candidate.branch}")
+    assert argv == (
+        "/usr/bin/git",
+        "push",
+        "--",
+        policy().canonical_remote,
+        f"{SHA}:refs/heads/{change.candidate.branch}",
+    )
     assert kwargs["policy"].phase == "publication" and kwargs["policy"].network is True
     assert SECRET not in str(argv)
     assert kwargs["environment"]["GIT_CONFIG_KEY_0"].startswith("http.https://gitlab.example.com/")
@@ -321,8 +403,10 @@ async def test_guarded_git_fixed_push_injected_credentials_and_redacted_logs(tmp
 async def test_guarded_git_default_unprovisioned_is_unavailable(tmp_path):
     from whilly.swarm.execution import GuardedExecutor
     from whilly.swarm.gitlab_change_transport import GuardedPublicationGit
-    git = GuardedPublicationGit(GuardedExecutor(), git_executable="/usr/bin/git", output_root=tmp_path,
-                               approved_hooks={})
+
+    git = GuardedPublicationGit(
+        GuardedExecutor(), git_executable="/usr/bin/git", output_root=tmp_path, approved_hooks={}
+    )
     assert (await git.ready())["ready"] is False
 
 
@@ -337,11 +421,19 @@ async def test_merge_reads_revalidate_target_and_merge_request_identity():
 
     def handler(req):
         if req.url.path.endswith("/merge_requests/7"):
-            return httpx.Response(200, json={
-                "iid": 7, "source_branch": "whilly/change-demo", "target_branch": "master",
-                "source_project_id": 17, "target_project_id": 17, "state": "opened", "sha": SHA,
-                "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7",
-            })
+            return httpx.Response(
+                200,
+                json={
+                    "iid": 7,
+                    "source_branch": "whilly/change-demo",
+                    "target_branch": "master",
+                    "source_project_id": 17,
+                    "target_project_id": 17,
+                    "state": "opened",
+                    "sha": SHA,
+                    "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7",
+                },
+            )
         return base(req)
 
     adapter, _ = transport(api=handler)
@@ -352,13 +444,22 @@ async def test_merge_reads_revalidate_target_and_merge_request_identity():
 
 async def test_durable_unfinished_intent_blocks_retry_without_repeating_effect():
     from whilly.swarm.change_set import Evidence, EvidenceOutcome, ExternalEffectReceipt
+
     class Store:
         async def get_effect(self, key):
             if key.endswith(":intent"):
-                return ExternalEffectReceipt(key, "change-demo", "demo", "push_intent", "a" * 64,
-                    Evidence("push_intent", EvidenceOutcome.UNAVAILABLE, absence="in_flight"))
+                return ExternalEffectReceipt(
+                    key,
+                    "change-demo",
+                    "demo",
+                    "push_intent",
+                    "a" * 64,
+                    Evidence("push_intent", EvidenceOutcome.UNAVAILABLE, absence="in_flight"),
+                )
+
         async def record_effect(self, receipt):
             pytest.fail("unfinished durable intent must not authorize another effect")
+
     git = Git()
     adapter, _ = transport(git=git)
     adapter.effect_store = Store()

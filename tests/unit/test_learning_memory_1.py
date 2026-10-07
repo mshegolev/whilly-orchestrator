@@ -7,10 +7,21 @@ from whilly.swarm.learning.domain import ContextPackage, KnowledgeRevision, Prin
 
 def revision(**overrides):
     values = {
-        "id": "r1", "product_id": "p1", "project_id": "proj1", "kind": "fact", "body": "body",
-        "source_uri": "https://example.test/source", "source_sha": None, "evidence_hash": "eh",
-        "observed_at": datetime.now(timezone.utc), "verified_at": None, "expires_at": None,
-        "classification": "internal", "status": "candidate", "author_id": "a1", "verifier_id": None,
+        "id": "r1",
+        "product_id": "p1",
+        "project_id": "proj1",
+        "kind": "fact",
+        "body": "body",
+        "source_uri": "https://example.test/source",
+        "source_sha": None,
+        "evidence_hash": "eh",
+        "observed_at": datetime.now(timezone.utc),
+        "verified_at": None,
+        "expires_at": None,
+        "classification": "internal",
+        "status": "candidate",
+        "author_id": "a1",
+        "verifier_id": None,
         "policy_version": "v1",
     }
     values.update(overrides)

@@ -30,9 +30,7 @@ async def test_prepare_binds_spec_revision_registry_and_session(
     monkeypatch.setattr(
         product_module,
         "load_registry",
-        lambda _path: SimpleNamespace(
-            projects={"demo-lib": SimpleNamespace(path=str(tmp_path), execution=None)}
-        ),
+        lambda _path: SimpleNamespace(projects={"demo-lib": SimpleNamespace(path=str(tmp_path), execution=None)}),
     )
 
     result = await service.prepare(

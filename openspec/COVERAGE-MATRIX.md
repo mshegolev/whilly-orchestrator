@@ -1,6 +1,6 @@
 # Whilly Module → Capability Coverage Matrix (BASE-02)
 
-Every `whilly/` Python module is mapped to **exactly one** of the 32 capability slugs
+Every `whilly/` Python module is mapped to **exactly one** of the 33 capability slugs
 in [`TAXONOMY.md`](TAXONOMY.md) (or the literal `UNMAPPED`). This matrix makes coverage
 auditable for Phase 28 (COV-01): zero silent gaps, zero double-mapping.
 
@@ -326,8 +326,8 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/swarm/product_delivery.py | orchestration-loop | immutable stage delivery and acceptance boundary |
 | whilly/api/product_swarm.py | web-status-ui | authenticated product and feature API |
 | whilly/api/product_workflow.py | web-status-ui | product cockpit and workflow jobs |
-| whilly/api/static/product-swarm.js | web-status-ui | product cockpit controls |
-| whilly/api/templates/product_swarm.html.j2 | web-status-ui | product cockpit template |
+| whilly/api/swarm_memory.py | swarm-memory | authenticated shared-memory API boundary |
+| whilly/swarm/learning/memory.py | swarm-memory | governed revision and retention service |
 | whilly/adapters/db/migrations/versions/031_product_swarm.py | orchestration-loop | product persistence schema |
 | whilly/adapters/db/migrations/versions/032_model_admission.py | orchestration-loop | durable admission schema |
 | whilly/adapters/db/migrations/versions/033_product_chief.py | orchestration-loop | chief session identity |

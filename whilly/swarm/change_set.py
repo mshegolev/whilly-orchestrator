@@ -75,7 +75,9 @@ def _text(value: str, label: str) -> None:
 
 
 def _sha(value: str, *, digest: bool = False) -> None:
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}" if digest else r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9a-f]{64}" if digest else r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value
+    ):
         raise ValueError("invalid_digest" if digest else "invalid_sha")
 
 
@@ -148,37 +150,89 @@ class Evidence:
         object.__setattr__(self, "details", freeze(self.details))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "outcome": self.outcome.value, "sha": self.sha, "command": list(self.command),
-                "job_id": self.job_id, "exit_code": self.exit_code, "absence": self.absence,
-                "environment": self.environment, "details": thaw(self.details)}
+        return {
+            "kind": self.kind,
+            "outcome": self.outcome.value,
+            "sha": self.sha,
+            "command": list(self.command),
+            "job_id": self.job_id,
+            "exit_code": self.exit_code,
+            "absence": self.absence,
+            "environment": self.environment,
+            "details": thaw(self.details),
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Evidence:
         return cls(**{**value, "command": tuple(value.get("command", ()))})
 
 
-_C_FORWARD = tuple(ChangeSetStatus(value) for value in (
-    "DRAFT", "PLANNED", "EXECUTING", "VERIFYING_REPOS", "VERIFYING_INTEGRATION", "READY_TO_MERGE",
-    "MERGING", "MERGED", "DEPLOYING_STAGE", "ACCEPTING_STAGE", "DONE"))
+_C_FORWARD = tuple(
+    ChangeSetStatus(value)
+    for value in (
+        "DRAFT",
+        "PLANNED",
+        "EXECUTING",
+        "VERIFYING_REPOS",
+        "VERIFYING_INTEGRATION",
+        "READY_TO_MERGE",
+        "MERGING",
+        "MERGED",
+        "DEPLOYING_STAGE",
+        "ACCEPTING_STAGE",
+        "DONE",
+    )
+)
 _C_PRE = _C_FORWARD[:6]
-_C_EDGES = set(zip(_C_FORWARD, _C_FORWARD[1:])) | {
-    (source, target) for source in _C_PRE
-    for target in (ChangeSetStatus.BLOCKED, ChangeSetStatus.FAILED, ChangeSetStatus.MANUAL_DECISION_REQUIRED)
-} | {(ChangeSetStatus.MERGING, ChangeSetStatus.FAILED), (ChangeSetStatus.MERGING, ChangeSetStatus.PARTIAL_MERGE)} | {
-    (source, ChangeSetStatus.ROLLING_BACK)
-    for source in (ChangeSetStatus.MERGED, ChangeSetStatus.DEPLOYING_STAGE, ChangeSetStatus.ACCEPTING_STAGE,
-                   ChangeSetStatus.PARTIAL_MERGE, ChangeSetStatus.ROLLBACK_FAILED)
-} | {(ChangeSetStatus.ROLLING_BACK, ChangeSetStatus.ROLLED_BACK),
-     (ChangeSetStatus.ROLLING_BACK, ChangeSetStatus.ROLLBACK_FAILED)}
-_R_FORWARD = tuple(RepoChangeStatus(value) for value in (
-    "PLANNED", "WORKTREE_READY", "IMPLEMENTING", "LOCAL_VERIFIED", "MR_OPEN", "PIPELINE_GREEN",
-    "READY_TO_MERGE", "MERGED", "ARTIFACT_READY"))
-_R_EDGES = set(zip(_R_FORWARD, _R_FORWARD[1:])) | {
-    (source, target) for source in _R_FORWARD[:7] for target in (RepoChangeStatus.BLOCKED, RepoChangeStatus.FAILED)
-} | {(RepoChangeStatus.PLANNED, RepoChangeStatus.NOT_IMPACTED),
-     (RepoChangeStatus.MERGED, RepoChangeStatus.REVERT_OPEN), (RepoChangeStatus.ARTIFACT_READY, RepoChangeStatus.REVERT_OPEN),
-     (RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.REVERTED), (RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.ROLLBACK_FAILED),
-     (RepoChangeStatus.ROLLBACK_FAILED, RepoChangeStatus.REVERT_OPEN)}
+_C_EDGES = (
+    set(zip(_C_FORWARD, _C_FORWARD[1:]))
+    | {
+        (source, target)
+        for source in _C_PRE
+        for target in (ChangeSetStatus.BLOCKED, ChangeSetStatus.FAILED, ChangeSetStatus.MANUAL_DECISION_REQUIRED)
+    }
+    | {(ChangeSetStatus.MERGING, ChangeSetStatus.FAILED), (ChangeSetStatus.MERGING, ChangeSetStatus.PARTIAL_MERGE)}
+    | {
+        (source, ChangeSetStatus.ROLLING_BACK)
+        for source in (
+            ChangeSetStatus.MERGED,
+            ChangeSetStatus.DEPLOYING_STAGE,
+            ChangeSetStatus.ACCEPTING_STAGE,
+            ChangeSetStatus.PARTIAL_MERGE,
+            ChangeSetStatus.ROLLBACK_FAILED,
+        )
+    }
+    | {
+        (ChangeSetStatus.ROLLING_BACK, ChangeSetStatus.ROLLED_BACK),
+        (ChangeSetStatus.ROLLING_BACK, ChangeSetStatus.ROLLBACK_FAILED),
+    }
+)
+_R_FORWARD = tuple(
+    RepoChangeStatus(value)
+    for value in (
+        "PLANNED",
+        "WORKTREE_READY",
+        "IMPLEMENTING",
+        "LOCAL_VERIFIED",
+        "MR_OPEN",
+        "PIPELINE_GREEN",
+        "READY_TO_MERGE",
+        "MERGED",
+        "ARTIFACT_READY",
+    )
+)
+_R_EDGES = (
+    set(zip(_R_FORWARD, _R_FORWARD[1:]))
+    | {(source, target) for source in _R_FORWARD[:7] for target in (RepoChangeStatus.BLOCKED, RepoChangeStatus.FAILED)}
+    | {
+        (RepoChangeStatus.PLANNED, RepoChangeStatus.NOT_IMPACTED),
+        (RepoChangeStatus.MERGED, RepoChangeStatus.REVERT_OPEN),
+        (RepoChangeStatus.ARTIFACT_READY, RepoChangeStatus.REVERT_OPEN),
+        (RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.REVERTED),
+        (RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.ROLLBACK_FAILED),
+        (RepoChangeStatus.ROLLBACK_FAILED, RepoChangeStatus.REVERT_OPEN),
+    }
+)
 
 
 def _require_passed(evidence: Evidence) -> None:
@@ -209,7 +263,9 @@ class RepoChange:
 
     def transition(self, target: RepoChangeStatus, evidence: Evidence) -> RepoChange:
         target = RepoChangeStatus(target)
-        resume = self.status == RepoChangeStatus.BLOCKED and self.resume_status is not None and target == self.resume_status
+        resume = (
+            self.status == RepoChangeStatus.BLOCKED and self.resume_status is not None and target == self.resume_status
+        )
         if not resume and (self.status, target) not in _R_EDGES:
             raise TransitionError("repo_transition_not_allowed")
         if target in {RepoChangeStatus.BLOCKED, RepoChangeStatus.FAILED, RepoChangeStatus.ROLLBACK_FAILED}:
@@ -219,9 +275,14 @@ class RepoChange:
             _require_passed(evidence)
         if target == RepoChangeStatus.NOT_IMPACTED and evidence.kind != "impact_graph":
             raise TransitionError("impact_graph_evidence_required")
-        return replace(self, status=target, version=self.version + 1, last_evidence=evidence,
-                       mandatory=False if target == RepoChangeStatus.NOT_IMPACTED else self.mandatory,
-                       resume_status=self.status if target == RepoChangeStatus.BLOCKED else None)
+        return replace(
+            self,
+            status=target,
+            version=self.version + 1,
+            last_evidence=evidence,
+            mandatory=False if target == RepoChangeStatus.NOT_IMPACTED else self.mandatory,
+            resume_status=self.status if target == RepoChangeStatus.BLOCKED else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -251,7 +312,9 @@ class ProductChangeSet:
         object.__setattr__(self, "status", ChangeSetStatus(self.status))
         if self.resume_status is not None:
             object.__setattr__(self, "resume_status", ChangeSetStatus(self.resume_status))
-        if not isinstance(self.repo_changes, tuple) or any(not isinstance(repo, RepoChange) for repo in self.repo_changes):
+        if not isinstance(self.repo_changes, tuple) or any(
+            not isinstance(repo, RepoChange) for repo in self.repo_changes
+        ):
             raise ValueError("immutable_repo_changes_required")
         if self.last_evidence is not None and not isinstance(self.last_evidence, Evidence):
             raise ValueError("change_evidence_invalid")
@@ -292,8 +355,18 @@ class ProductChangeSet:
             visit(repo)
 
     @classmethod
-    def create(cls, *, change_id, product_id, goal, acceptance_criteria, registry_snapshot, base_shas,
-               approval_digest=None, dependencies=None) -> ProductChangeSet:
+    def create(
+        cls,
+        *,
+        change_id,
+        product_id,
+        goal,
+        acceptance_criteria,
+        registry_snapshot,
+        base_shas,
+        approval_digest=None,
+        dependencies=None,
+    ) -> ProductChangeSet:
         if not isinstance(acceptance_criteria, (tuple, list)):
             raise ValueError("acceptance_criteria_array_required")
         if not isinstance(registry_snapshot, Mapping) or not isinstance(base_shas, Mapping):
@@ -301,12 +374,23 @@ class ProductChangeSet:
         projects = registry_snapshot.get("projects", {})
         if not isinstance(projects, Mapping) or any(not isinstance(value, Mapping) for value in projects.values()):
             raise ValueError("registry_projects_object_required")
-        dependencies = dependencies if dependencies is not None else {
-            repo: tuple(value.get("depends_on", ())) for repo, value in projects.items()
-        }
-        return cls(change_id, product_id, goal, tuple(acceptance_criteria), registry_snapshot,
-                   canonical_digest(registry_snapshot), base_shas, dependencies,
-                   tuple(RepoChange(repo, base_shas[repo]) for repo in sorted(base_shas)), approval_digest)
+        dependencies = (
+            dependencies
+            if dependencies is not None
+            else {repo: tuple(value.get("depends_on", ())) for repo, value in projects.items()}
+        )
+        return cls(
+            change_id,
+            product_id,
+            goal,
+            tuple(acceptance_criteria),
+            registry_snapshot,
+            canonical_digest(registry_snapshot),
+            base_shas,
+            dependencies,
+            tuple(RepoChange(repo, base_shas[repo]) for repo in sorted(base_shas)),
+            approval_digest,
+        )
 
     def transition(self, target: ChangeSetStatus, evidence: Evidence) -> ProductChangeSet:
         target = ChangeSetStatus(target)
@@ -316,8 +400,13 @@ class ProductChangeSet:
                 raise TransitionError("change_resume_boundary_mismatch")
         elif (self.status, target) not in _C_EDGES:
             raise TransitionError("change_transition_not_allowed")
-        failures = {ChangeSetStatus.BLOCKED, ChangeSetStatus.FAILED, ChangeSetStatus.MANUAL_DECISION_REQUIRED,
-                    ChangeSetStatus.PARTIAL_MERGE, ChangeSetStatus.ROLLBACK_FAILED}
+        failures = {
+            ChangeSetStatus.BLOCKED,
+            ChangeSetStatus.FAILED,
+            ChangeSetStatus.MANUAL_DECISION_REQUIRED,
+            ChangeSetStatus.PARTIAL_MERGE,
+            ChangeSetStatus.ROLLBACK_FAILED,
+        }
         if target in failures:
             if not isinstance(evidence, Evidence) or evidence.outcome == EvidenceOutcome.PASSED:
                 raise TransitionError("failure_evidence_required")
@@ -326,24 +415,40 @@ class ProductChangeSet:
                 raise TransitionError("compensation_evidence_required")
         else:
             _require_passed(evidence)
-        merged = any(repo.status in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY,
-                     RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.REVERTED, RepoChangeStatus.ROLLBACK_FAILED}
-                     for repo in self.repo_changes)
+        merged = any(
+            repo.status
+            in {
+                RepoChangeStatus.MERGED,
+                RepoChangeStatus.ARTIFACT_READY,
+                RepoChangeStatus.REVERT_OPEN,
+                RepoChangeStatus.REVERTED,
+                RepoChangeStatus.ROLLBACK_FAILED,
+            }
+            for repo in self.repo_changes
+        )
         if target == ChangeSetStatus.FAILED and merged:
             raise TransitionError("post_merge_failure_requires_compensation")
         if target == ChangeSetStatus.PARTIAL_MERGE and not merged:
             raise TransitionError("partial_merge_requires_observed_merge")
         if target == ChangeSetStatus.ROLLED_BACK and (
             not any(repo.status == RepoChangeStatus.REVERTED for repo in self.repo_changes)
-            or any(repo.status in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY,
-                                  RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.ROLLBACK_FAILED}
-                   for repo in self.repo_changes)
+            or any(
+                repo.status
+                in {
+                    RepoChangeStatus.MERGED,
+                    RepoChangeStatus.ARTIFACT_READY,
+                    RepoChangeStatus.REVERT_OPEN,
+                    RepoChangeStatus.ROLLBACK_FAILED,
+                }
+                for repo in self.repo_changes
+            )
         ):
             raise TransitionError("compensation_incomplete")
         mandatory = tuple(repo for repo in self.repo_changes if repo.mandatory)
-        if target == ChangeSetStatus.MERGED and (not mandatory or any(
-            repo.status not in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY} for repo in mandatory
-        )):
+        if target == ChangeSetStatus.MERGED and (
+            not mandatory
+            or any(repo.status not in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY} for repo in mandatory)
+        ):
             raise TransitionError("mandatory_merges_incomplete")
         approval_digest = self.approval_digest
         if target == ChangeSetStatus.EXECUTING:
@@ -356,13 +461,22 @@ class ProductChangeSet:
                 _sha(submitted, digest=True)
                 approval_digest = submitted
         if target == ChangeSetStatus.DONE and (
-            evidence.kind != "stage_acceptance" or evidence.environment != "stage" or not mandatory
+            evidence.kind != "stage_acceptance"
+            or evidence.environment != "stage"
+            or not mandatory
             or any(repo.status != RepoChangeStatus.ARTIFACT_READY for repo in mandatory)
         ):
             raise TransitionError("stage_acceptance_and_artifacts_required")
-        return replace(self, status=target, version=self.version + 1, last_evidence=evidence, approval_digest=approval_digest,
-                       resume_status=self.status if target in {ChangeSetStatus.BLOCKED,
-                       ChangeSetStatus.MANUAL_DECISION_REQUIRED} else None)
+        return replace(
+            self,
+            status=target,
+            version=self.version + 1,
+            last_evidence=evidence,
+            approval_digest=approval_digest,
+            resume_status=self.status
+            if target in {ChangeSetStatus.BLOCKED, ChangeSetStatus.MANUAL_DECISION_REQUIRED}
+            else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -387,10 +501,12 @@ class ExternalEffectReceipt:
 class ChangeSetStorePort(Protocol):
     async def create(self, value: ProductChangeSet) -> ProductChangeSet: ...
     async def get(self, change_id: str) -> ProductChangeSet | None: ...
-    async def transition(self, change_id: str, expected_version: int, target: ChangeSetStatus,
-                         evidence: Evidence) -> ProductChangeSet: ...
-    async def transition_repo(self, change_id: str, repo_id: str, expected_version: int,
-                              target: RepoChangeStatus, evidence: Evidence) -> RepoChange: ...
+    async def transition(
+        self, change_id: str, expected_version: int, target: ChangeSetStatus, evidence: Evidence
+    ) -> ProductChangeSet: ...
+    async def transition_repo(
+        self, change_id: str, repo_id: str, expected_version: int, target: RepoChangeStatus, evidence: Evidence
+    ) -> RepoChange: ...
     async def record_effect(self, receipt: ExternalEffectReceipt) -> ExternalEffectReceipt: ...
     async def get_effect(self, effect_key: str) -> ExternalEffectReceipt | None: ...
     async def effects(self, change_id: str) -> tuple[ExternalEffectReceipt, ...]: ...
@@ -404,10 +520,12 @@ class ProductChangeSetService:
         identity = "change_" + uuid4().hex if change_id is None else change_id
         return await self.store.create(ProductChangeSet.create(change_id=identity, **values))
 
-    async def transition(self, change_id: str, expected_version: int, target: ChangeSetStatus,
-                         evidence: Evidence) -> ProductChangeSet:
+    async def transition(
+        self, change_id: str, expected_version: int, target: ChangeSetStatus, evidence: Evidence
+    ) -> ProductChangeSet:
         return await self.store.transition(change_id, expected_version, target, evidence)
 
-    async def transition_repo(self, change_id: str, repo_id: str, expected_version: int,
-                              target: RepoChangeStatus, evidence: Evidence) -> RepoChange:
+    async def transition_repo(
+        self, change_id: str, repo_id: str, expected_version: int, target: RepoChangeStatus, evidence: Evidence
+    ) -> RepoChange:
         return await self.store.transition_repo(change_id, repo_id, expected_version, target, evidence)

@@ -44,7 +44,11 @@ class ToolchainProvision:
         if self.provider not in {None, "claude", "codex"}:
             raise ValueError("provider_unsupported")
         if self.auth_mode not in {
-            None, "api_key", "codex_subscription_file", "claude_subscription_dir", "claude_subscription_keychain"
+            None,
+            "api_key",
+            "codex_subscription_file",
+            "claude_subscription_dir",
+            "claude_subscription_keychain",
         }:
             raise ValueError("auth_mode_unsupported")
         if self.auth_mode == "codex_subscription_file" and self.provider != "codex":

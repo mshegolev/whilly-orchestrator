@@ -37,19 +37,29 @@ class Store:
 
 def setup(tmp_path):
     from whilly.swarm.change_set import ChangeSetStatus, ProductChangeSet, RepoChange
+
     data = registry(1)
     data["projects"]["demo"] = data["projects"].pop("repo-1")
     data["roles"]["implementer"]["projects"] = ["demo"]
     data["projects"]["demo"]["product_policy"]["gitlab_project_id"] = 17
     data["projects"]["demo"]["product_policy"]["canonical_remote"] = "https://gitlab.example.com/demo/repo.git"
     snapshot = load_product_registry(write(tmp_path, data))
-    value = ProductChangeSet.create(change_id="change-demo", product_id="demo", goal="publish fixture",
-        acceptance_criteria=("exact SHA CI",), registry_snapshot=snapshot.to_dict(),
-        base_shas={"demo": TARGET}, dependencies={"demo": ()}, approval_digest="d" * 64)
+    value = ProductChangeSet.create(
+        change_id="change-demo",
+        product_id="demo",
+        goal="publish fixture",
+        acceptance_criteria=("exact SHA CI",),
+        registry_snapshot=snapshot.to_dict(),
+        base_shas={"demo": TARGET},
+        dependencies={"demo": ()},
+        approval_digest="d" * 64,
+    )
     evidence = Evidence("local_checks", EvidenceOutcome.PASSED, SHA, ("pytest", "-q"), exit_code=0)
-    value = replace(value, status=ChangeSetStatus.VERIFYING_REPOS,
-                    repo_changes=(RepoChange("demo", TARGET, RepoChangeStatus.LOCAL_VERIFIED, 4,
-                                            last_evidence=evidence),))
+    value = replace(
+        value,
+        status=ChangeSetStatus.VERIFYING_REPOS,
+        repo_changes=(RepoChange("demo", TARGET, RepoChangeStatus.LOCAL_VERIFIED, 4, last_evidence=evidence),),
+    )
     store = Store(value)
     adapter, api = transport()
     change = replace(request(), registry_digest=snapshot.registry_digest, policy_digest=snapshot.policy_digest)
@@ -60,8 +70,10 @@ def setup(tmp_path):
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
     import socket
+
     def blocked(*args, **kwargs):
         raise AssertionError("real network forbidden in publication acceptance")
+
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket, "getaddrinfo", blocked)
 
@@ -91,13 +103,16 @@ async def test_current_change_binding_blocks_every_effect(tmp_path, mutation):
     elif mutation == "registry":
         import json
         from pathlib import Path
+
         path = Path(backend.snapshot.source_path)
         data = json.loads(path.read_text())
         data["projects"]["demo"]["product_policy"]["checks"]["ci"] = ["different-check"]
         path.write_text(json.dumps(data))
     elif mutation == "sha":
         repo = store.change.repo_changes[0]
-        store.change = replace(store.change, repo_changes=(replace(repo, last_evidence=replace(repo.last_evidence, sha=TARGET)),))
+        store.change = replace(
+            store.change, repo_changes=(replace(repo, last_evidence=replace(repo.last_evidence, sha=TARGET)),)
+        )
     elif mutation == "version":
         change = replace(change, repo_version=3)
     else:
@@ -110,6 +125,7 @@ async def test_current_change_binding_blocks_every_effect(tmp_path, mutation):
 async def test_default_feature_path_never_invokes_factory_or_reads_registry():
     async def require(feature_id):
         return {"id": feature_id}
+
     workflow = SimpleNamespace(require=require)
     with pytest.raises(WorkflowBlocked, match="publication_unavailable"):
         await publish_feature(workflow, "feature", transport_factory=lambda: pytest.fail("legacy factory called"))

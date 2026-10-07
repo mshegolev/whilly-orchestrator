@@ -64,10 +64,10 @@ DEFAULT_MATRIX_PATH = "openspec/COVERAGE-MATRIX.md"
 # Phase 31: capability clusters (RUN-01)
 # ---------------------------------------------------------------------------
 
-# Canonical disjoint 6-cluster partition of the 32 live capability slugs
+# Canonical disjoint 6-cluster partition of the 33 live capability slugs
 # (verified exhaustive + disjoint against openspec/specs/* by the test suite).
 # This is the reporting / parallelism grouping; the set of specs to review is
-# still derived live from the filesystem. 7 + 5 + 5 + 5 + 5 + 5 = 32.
+# still derived live from the filesystem. 8 + 5 + 5 + 5 + 5 + 5 = 33.
 CLUSTERS: dict[str, list[str]] = {
     "orchestration": [
         "orchestration-loop",
@@ -77,6 +77,7 @@ CLUSTERS: dict[str, list[str]] = {
         "worktree-isolation",
         "plan-json-contract",
         "task-model-fsm",
+        "swarm-memory",
     ],
     "prd-decision": [
         "prd-generation",
@@ -134,7 +135,7 @@ def live_slugs(specs_root: str = "openspec/specs") -> set[str]:
     Returns the set of directory names under ``specs_root`` that contain a
     ``spec.md``. ``specs_root`` is injectable so tests can point at a fixture;
     the partition test asserts against the REAL ``openspec/specs`` so CLUSTERS
-    cannot silently drift from the 32 specs. Returns an empty set if the root
+    cannot silently drift from the 33 specs. Returns an empty set if the root
     is missing (never raises).
     """
     if not os.path.isdir(specs_root):

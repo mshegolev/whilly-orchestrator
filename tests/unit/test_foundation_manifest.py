@@ -38,8 +38,19 @@ def git_source(tmp_path):
     (source / "README.md").write_text("Public fixture\n")
     subprocess.run(["git", "-C", str(source), "add", "README.md"], check=True)
     subprocess.run(
-        ["git", "-C", str(source), "-c", "user.name=Example", "-c", "user.email=you@example.com",
-         "commit", "-qm", "baseline"], check=True
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=you@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        check=True,
     )
     base = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     return source, base
@@ -59,22 +70,36 @@ def test_duplicate_paths_are_rejected(tmp_path):
         checker.load_manifest(manifest_file(tmp_path, [row, row]))
 
 
-@pytest.mark.parametrize("name", [
-    "whilly/swarm/__pycache__/runtime.pyc", ".whilly/registry.json", "backups/state.json",
-    "graphify-out/graph.json", "whilly/graphify-out/graph.json", ".env", "private/registry.json",
-    "/workspace/runtime.py", "../runtime.py", "whilly/../runtime.py", "whilly//runtime.py",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "whilly/swarm/__pycache__/runtime.pyc",
+        ".whilly/registry.json",
+        "backups/state.json",
+        "graphify-out/graph.json",
+        "whilly/graphify-out/graph.json",
+        ".env",
+        "private/registry.json",
+        "/workspace/runtime.py",
+        "../runtime.py",
+        "whilly/../runtime.py",
+        "whilly//runtime.py",
+    ],
+)
 def test_generated_private_and_nonrelative_paths_are_rejected(tmp_path, name):
     checker = load_checker()
     with pytest.raises(ValueError, match="unsafe|generated|private"):
         checker.load_manifest(manifest_file(tmp_path, [("source", name, "a" * 64)]))
 
 
-@pytest.mark.parametrize("category,name,digest", [
-    ("unknown", "whilly/swarm/runtime.py", "a" * 64),
-    ("tests", "whilly/swarm/runtime.py", "a" * 64),
-    ("source", "whilly/swarm/runtime.py", "not-a-digest"),
-])
+@pytest.mark.parametrize(
+    "category,name,digest",
+    [
+        ("unknown", "whilly/swarm/runtime.py", "a" * 64),
+        ("tests", "whilly/swarm/runtime.py", "a" * 64),
+        ("source", "whilly/swarm/runtime.py", "not-a-digest"),
+    ],
+)
 def test_unclassified_paths_and_invalid_hashes_are_rejected(tmp_path, category, name, digest):
     checker = load_checker()
     with pytest.raises(ValueError):
@@ -142,8 +167,16 @@ def test_required_completion_hook_dependency_cannot_be_omitted_even_when_in_base
     subprocess.run(["git", "-C", str(source), "add", dependency], check=True)
     subprocess.run(
         [
-            "git", "-C", str(source), "-c", "user.name=Example", "-c", "user.email=you@example.com",
-            "commit", "-qm", "baseline repository",
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Example",
+            "-c",
+            "user.email=you@example.com",
+            "commit",
+            "-qm",
+            "baseline repository",
         ],
         check=True,
     )
@@ -155,12 +188,15 @@ def test_required_completion_hook_dependency_cannot_be_omitted_even_when_in_base
         checker.validate_manifest(manifest, source)
 
 
-@pytest.mark.parametrize("category,name,content", [
-    ("docs", "docs/JEV-Decision-Layer.md", "# Standalone decision layer\n"),
-    ("source", "whilly/core/decision_layer.py", "enabled = False\n"),
-    ("docs", "docs/unrelated.md", "# Unrelated capability\n"),
-    ("source", "whilly/quality/architecture.py", "enabled = False\n"),
-])
+@pytest.mark.parametrize(
+    "category,name,content",
+    [
+        ("docs", "docs/JEV-Decision-Layer.md", "# Standalone decision layer\n"),
+        ("source", "whilly/core/decision_layer.py", "enabled = False\n"),
+        ("docs", "docs/unrelated.md", "# Unrelated capability\n"),
+        ("source", "whilly/quality/architecture.py", "enabled = False\n"),
+    ],
+)
 def test_extra_excluded_capability_rows_are_rejected_even_with_valid_hash(tmp_path, category, name, content):
     checker = load_checker()
     source, base = git_source(tmp_path)

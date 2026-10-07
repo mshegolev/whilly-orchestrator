@@ -23,7 +23,9 @@ def upgrade():
         revision_id TEXT PRIMARY KEY REFERENCES swarm_learning_revisions(id) ON DELETE CASCADE,
         body TEXT NOT NULL, source_uri TEXT NOT NULL, source_sha TEXT, redacted_at TIMESTAMPTZ
     )""")
-    op.execute("CREATE INDEX swarm_learning_visible_idx ON swarm_learning_revisions(product_id, project_id, classification, status)")
+    op.execute(
+        "CREATE INDEX swarm_learning_visible_idx ON swarm_learning_revisions(product_id, project_id, classification, status)"
+    )
 
 
 def downgrade():

@@ -215,9 +215,7 @@ def test_claude_subscription_uses_explicit_read_only_config_directory(tmp_path: 
     )
 
     executor = GuardedExecutor.from_registry(registry)
-    environment = executor.environment(
-        toolchain_id="claude-local", phase="planner", attempt_root=tmp_path / "attempt"
-    )
+    environment = executor.environment(toolchain_id="claude-local", phase="planner", attempt_root=tmp_path / "attempt")
 
     assert environment["CLAUDE_CONFIG_DIR"] == str(config)
     assert environment["CLAUDE_CODE_TMPDIR"] == environment["TMPDIR"]
@@ -247,9 +245,7 @@ def test_claude_keychain_auth_is_host_selected_and_redactable(tmp_path: Path, mo
     monkeypatch.setattr(GuardedExecutor, "_read_claude_keychain_token", staticmethod(lambda service: "secret-token"))
 
     executor = GuardedExecutor.from_registry(registry)
-    environment = executor.environment(
-        toolchain_id="claude-local", phase="planner", attempt_root=tmp_path / "attempt"
-    )
+    environment = executor.environment(toolchain_id="claude-local", phase="planner", attempt_root=tmp_path / "attempt")
 
     assert environment["CLAUDE_CODE_OAUTH_TOKEN"] == "secret-token"
     assert environment["CLAUDE_CODE_TMPDIR"] == environment["TMPDIR"]

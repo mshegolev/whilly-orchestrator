@@ -56,7 +56,17 @@ class KnowledgeRevision:
     conflicts: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for name in ("id", "product_id", "kind", "source_uri", "evidence_hash", "classification", "status", "author_id", "policy_version"):
+        for name in (
+            "id",
+            "product_id",
+            "kind",
+            "source_uri",
+            "evidence_hash",
+            "classification",
+            "status",
+            "author_id",
+            "policy_version",
+        ):
             _text(getattr(self, name), name)
         if self.project_id is not None:
             _text(self.project_id, "project_id")
@@ -70,7 +80,9 @@ class KnowledgeRevision:
             _text(self.supersedes, "supersedes")
         if self.kind not in _KINDS or self.status not in _STATUSES:
             raise ValueError("invalid kind or status")
-        if not isinstance(self.conflicts, tuple) or any(not isinstance(v, str) or not v.strip() for v in self.conflicts):
+        if not isinstance(self.conflicts, tuple) or any(
+            not isinstance(v, str) or not v.strip() for v in self.conflicts
+        ):
             raise ValueError("conflicts must contain non-empty strings")
         for name in ("observed_at", "verified_at", "expires_at"):
             _aware(getattr(self, name), name)

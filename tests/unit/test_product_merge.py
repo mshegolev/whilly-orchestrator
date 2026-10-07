@@ -8,7 +8,14 @@ import pytest
 
 from tests.unit.test_product_registry import registry, write
 from whilly.swarm.change_set import (
-    ChangeSetStatus, Evidence, EvidenceOutcome, ProductChangeSet, RepoChange, RepoChangeStatus, canonical_digest, thaw,
+    ChangeSetStatus,
+    Evidence,
+    EvidenceOutcome,
+    ProductChangeSet,
+    RepoChange,
+    RepoChangeStatus,
+    canonical_digest,
+    thaw,
 )
 from whilly.swarm.gitlab_change_transport import PipelineReceipt, RepoPublicationReceipt
 from whilly.swarm.product_merge import MergeBarrierError, ProductMergeCoordinator
@@ -104,19 +111,40 @@ def setup(tmp_path, count=2):
     for index, repo in enumerate(change.repo_changes, 1):
         source = chr(100 + index) * 40
         policy = snapshot.projects[repo.repo_id]
-        pipeline = PipelineReceipt(policy.gitlab_project_id, source, 100 + index, "success", (
-            ("test", "success", 200 + index), ("build", "success", 300 + index),
-        ))
+        pipeline = PipelineReceipt(
+            policy.gitlab_project_id,
+            source,
+            100 + index,
+            "success",
+            (
+                ("test", "success", 200 + index),
+                ("build", "success", 300 + index),
+            ),
+        )
         receipt = RepoPublicationReceipt(
-            change.change_id, repo.repo_id, source, repo.base_sha, f"whilly/{change.change_id}", index,
-            f"https://gitlab.example.com/demo/repo-{index}/-/merge_requests/{index}", pipeline,
-            snapshot.registry_digest, snapshot.policy_digest, change.approval_digest,
+            change.change_id,
+            repo.repo_id,
+            source,
+            repo.base_sha,
+            f"whilly/{change.change_id}",
+            index,
+            f"https://gitlab.example.com/demo/repo-{index}/-/merge_requests/{index}",
+            pipeline,
+            snapshot.registry_digest,
+            snapshot.policy_digest,
+            change.approval_digest,
         )
         receipts[repo.repo_id] = receipt
-        evidence = Evidence("exact_sha_pipeline", EvidenceOutcome.PASSED, sha=source,
-                            job_id=f"pipeline:{pipeline.pipeline_id}", details=receipt.to_dict())
-        repos.append(RepoChange(repo.repo_id, repo.base_sha, RepoChangeStatus.PIPELINE_GREEN, 7,
-                                last_evidence=evidence))
+        evidence = Evidence(
+            "exact_sha_pipeline",
+            EvidenceOutcome.PASSED,
+            sha=source,
+            job_id=f"pipeline:{pipeline.pipeline_id}",
+            details=receipt.to_dict(),
+        )
+        repos.append(
+            RepoChange(repo.repo_id, repo.base_sha, RepoChangeStatus.PIPELINE_GREEN, 7, last_evidence=evidence)
+        )
     change = replace(change, status=ChangeSetStatus.READY_TO_MERGE, version=8, repo_changes=tuple(repos))
     return snapshot, Store(change), Transport(receipts), receipts
 

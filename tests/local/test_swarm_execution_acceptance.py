@@ -38,7 +38,9 @@ def test_child_cannot_read_sibling_launch_secret_or_plant_future_host_log_symlin
     executor = GuardedExecutor(
         ExecutionProvisioning(
             toolchains={
-                "fixture": ToolchainProvision("fixture", (Path("/bin"), candidate, launch_one), "/bin", launch_one, launch_one)
+                "fixture": ToolchainProvision(
+                    "fixture", (Path("/bin"), candidate, launch_one), "/bin", launch_one, launch_one
+                )
             },
             phase_toolchains={"worker": "fixture"},
         )

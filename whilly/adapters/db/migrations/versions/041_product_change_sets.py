@@ -54,8 +54,12 @@ def upgrade():
             FOREIGN KEY (change_id, repo_id) REFERENCES repo_changes(change_id, repo_id) ON DELETE RESTRICT
         )
     """)
-    op.execute("CREATE UNIQUE INDEX uq_change_set_event_version ON change_set_events(change_id, entity_version) WHERE repo_id IS NULL")
-    op.execute("CREATE UNIQUE INDEX uq_repo_change_event_version ON change_set_events(change_id, repo_id, entity_version) WHERE repo_id IS NOT NULL")
+    op.execute(
+        "CREATE UNIQUE INDEX uq_change_set_event_version ON change_set_events(change_id, entity_version) WHERE repo_id IS NULL"
+    )
+    op.execute(
+        "CREATE UNIQUE INDEX uq_repo_change_event_version ON change_set_events(change_id, repo_id, entity_version) WHERE repo_id IS NOT NULL"
+    )
     op.execute("""
         CREATE TABLE external_effect_receipts (
             effect_key TEXT PRIMARY KEY, change_id TEXT NOT NULL REFERENCES product_change_sets(id) ON DELETE RESTRICT,
@@ -95,16 +99,26 @@ def upgrade():
             FALSE)
         $$
     """)
-    for table, column in (("product_change_sets", "last_evidence"), ("repo_changes", "last_evidence"),
-                          ("change_set_events", "evidence"), ("external_effect_receipts", "evidence")):
-        op.execute(f"ALTER TABLE {table} ADD CONSTRAINT ck_{table}_valid_evidence CHECK (valid_change_set_evidence({column}))")
+    for table, column in (
+        ("product_change_sets", "last_evidence"),
+        ("repo_changes", "last_evidence"),
+        ("change_set_events", "evidence"),
+        ("external_effect_receipts", "evidence"),
+    ):
+        op.execute(
+            f"ALTER TABLE {table} ADD CONSTRAINT ck_{table}_valid_evidence CHECK (valid_change_set_evidence({column}))"
+        )
     op.execute("""
         CREATE FUNCTION guard_change_set_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN RAISE EXCEPTION 'change_set_evidence_is_append_only'; END; $$
     """)
     for table in ("change_set_events", "external_effect_receipts"):
-        op.execute(f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION guard_change_set_append_only()")
-        op.execute(f"CREATE TRIGGER {table}_no_truncate BEFORE TRUNCATE ON {table} FOR EACH STATEMENT EXECUTE FUNCTION guard_change_set_append_only()")
+        op.execute(
+            f"CREATE TRIGGER {table}_immutable BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION guard_change_set_append_only()"
+        )
+        op.execute(
+            f"CREATE TRIGGER {table}_no_truncate BEFORE TRUNCATE ON {table} FOR EACH STATEMENT EXECUTE FUNCTION guard_change_set_append_only()"
+        )
     op.execute("""
         CREATE FUNCTION guard_change_set_definition() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -122,7 +136,9 @@ def upgrade():
             RETURN NEW;
         END; $$
     """)
-    op.execute("CREATE TRIGGER product_change_sets_definition BEFORE UPDATE ON product_change_sets FOR EACH ROW EXECUTE FUNCTION guard_change_set_definition()")
+    op.execute(
+        "CREATE TRIGGER product_change_sets_definition BEFORE UPDATE ON product_change_sets FOR EACH ROW EXECUTE FUNCTION guard_change_set_definition()"
+    )
     op.execute("""
         CREATE FUNCTION guard_repo_change_definition() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -138,7 +154,9 @@ def upgrade():
             RETURN NEW;
         END; $$
     """)
-    op.execute("CREATE TRIGGER repo_changes_definition BEFORE UPDATE ON repo_changes FOR EACH ROW EXECUTE FUNCTION guard_repo_change_definition()")
+    op.execute(
+        "CREATE TRIGGER repo_changes_definition BEFORE UPDATE ON repo_changes FOR EACH ROW EXECUTE FUNCTION guard_repo_change_definition()"
+    )
 
 
 def downgrade():

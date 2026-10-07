@@ -15,12 +15,26 @@ from whilly.swarm.learning.domain import KnowledgeRevision, Principal
 pytestmark = pytest.mark.integration
 
 
-def _revision(product: str, *, project: str | None = "project-a", revision_id: str | None = None, **changes) -> KnowledgeRevision:
+def _revision(
+    product: str, *, project: str | None = "project-a", revision_id: str | None = None, **changes
+) -> KnowledgeRevision:
     values = dict(
-        id=revision_id or str(uuid4()), product_id=product, project_id=project, kind="fact", body="neutral test body",
-        source_uri="https://example.test/neutral", source_sha=None, evidence_hash="evidence",
-        observed_at=datetime.now(timezone.utc), verified_at=None, expires_at=None, classification="internal",
-        status="candidate", author_id="actor-a", verifier_id=None, policy_version="v1",
+        id=revision_id or str(uuid4()),
+        product_id=product,
+        project_id=project,
+        kind="fact",
+        body="neutral test body",
+        source_uri="https://example.test/neutral",
+        source_sha=None,
+        evidence_hash="evidence",
+        observed_at=datetime.now(timezone.utc),
+        verified_at=None,
+        expires_at=None,
+        classification="internal",
+        status="candidate",
+        author_id="actor-a",
+        verifier_id=None,
+        policy_version="v1",
     )
     values.update(changes)
     return KnowledgeRevision(**values)
@@ -57,7 +71,9 @@ async def test_product_project_classification_isolation_and_unauthorized_redact(
     await store.append(_revision(product, project="project-a", classification="restricted"))
     assert len(await store.visible(allowed, product, ("project-a",))) == 1
     assert await store.redact(allowed, unauthorized_revision.id) is False
-    project_b_view = await store.visible(_principal(products=(product,), projects=("project-b",)), product, ("project-b",))
+    project_b_view = await store.visible(
+        _principal(products=(product,), projects=("project-b",)), product, ("project-b",)
+    )
     assert [item.body for item in project_b_view] == [unauthorized_revision.body]
     assert [item.source_uri for item in project_b_view] == [unauthorized_revision.source_uri]
     assert len(await store.visible(allowed, product, ("project-a",))) == 1  # classification grant excludes restricted

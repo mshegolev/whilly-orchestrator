@@ -38,19 +38,36 @@ class API:
         elif "/repository/branches/" in path:
             body = {"name": "master", "protected": True, "commit": {"id": TARGET}}
         elif path.endswith("/merge_requests/7"):
-            body = {"iid": 7, "source_branch": "whilly/change-demo",
-                    "target_branch": "other" if self.wrong_target else "master",
-                    "source_project_id": 17, "target_project_id": 17, "state": "opened", "sha": SHA,
-                    "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7"}
+            body = {
+                "iid": 7,
+                "source_branch": "whilly/change-demo",
+                "target_branch": "other" if self.wrong_target else "master",
+                "source_project_id": 17,
+                "target_project_id": 17,
+                "state": "opened",
+                "sha": SHA,
+                "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7",
+            }
         elif path.endswith("/merge_requests/7/merge"):
-            body = {"iid": 7, "state": "merged", "sha": "c" * 40 if self.wrong_merge_sha else SHA,
-                    "merge_commit_sha": "9" * 40, "target_branch": "master",
-                    "source_project_id": 17, "target_project_id": 17}
+            body = {
+                "iid": 7,
+                "state": "merged",
+                "sha": "c" * 40 if self.wrong_merge_sha else SHA,
+                "merge_commit_sha": "9" * 40,
+                "target_branch": "master",
+                "source_project_id": 17,
+                "target_project_id": 17,
+            }
         elif path.endswith("/merge_requests/7/revert"):
             body = {"branch": "whilly/revert/change-demo/demo", "commit": {"id": "8" * 40}}
         elif path.endswith("/merge_requests"):
-            body = {"iid": 107, "source_branch": "whilly/revert/change-demo/demo", "target_branch": "master",
-                    "sha": "8" * 40, "state": "opened"}
+            body = {
+                "iid": 107,
+                "source_branch": "whilly/revert/change-demo/demo",
+                "target_branch": "master",
+                "sha": "8" * 40,
+                "state": "opened",
+            }
         elif path.endswith("/merge_requests/107/merge"):
             body = {"iid": 107, "state": "merged", "sha": "8" * 40, "merge_commit_sha": "7" * 40}
         else:
@@ -67,8 +84,10 @@ def no_network(monkeypatch):
 def adapter(api):
     store = Store()
     http = PinnedGitLabHTTPS(
-        "https://gitlab.example.com", allowed_project_ids=frozenset({17}),
-        credentials=lambda _: SECRET, transport=httpx.MockTransport(api),
+        "https://gitlab.example.com",
+        allowed_project_ids=frozenset({17}),
+        credentials=lambda _: SECRET,
+        transport=httpx.MockTransport(api),
     )
     return GitLabChangeTransport(Git(), http, effect_store=store), store
 
@@ -95,7 +114,10 @@ async def test_merge_and_revert_are_idempotent_receipted_effects():
     assert [method for method, _path in methods_and_paths].count("PUT") == 2
     assert [method for method, _path in methods_and_paths].count("POST") == 2
     assert {receipt.operation for receipt in store.receipts.values()} == {
-        "merge_intent", "merge", "revert_intent", "revert",
+        "merge_intent",
+        "merge",
+        "revert_intent",
+        "revert",
     }
 
 

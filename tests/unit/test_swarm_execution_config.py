@@ -78,9 +78,7 @@ def test_registry_execution_rejects_unknown_phase_name(tmp_path: Path) -> None:
     registry = SimpleNamespace(
         raw={
             "execution": {
-                "toolchains": {
-                    "fixture": {"read_roots": [str(tmp_path)], "path": "/bin", "auth": {}}
-                },
+                "toolchains": {"fixture": {"read_roots": [str(tmp_path)], "path": "/bin", "auth": {}}},
                 "phases": {"surprise": "fixture"},
             }
         },

@@ -61,7 +61,14 @@ def test_explicit_bmad_paths_load_assets_scripts_and_customization_content(tmp_p
     write_skill(tmp_path, body="Use the configured BMAD files.")
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "spec.md").write_text("Actual spec asset", encoding="utf-8")
-    config = {"bmad": {"skill_root": str(tmp_path), "workflow_skills": ["bmad-build"], "resources": ["assets/spec.md"], "customization_content": "customize.toml: configured"}}
+    config = {
+        "bmad": {
+            "skill_root": str(tmp_path),
+            "workflow_skills": ["bmad-build"],
+            "resources": ["assets/spec.md"],
+            "customization_content": "customize.toml: configured",
+        }
+    }
     context = build_bmad_context(registry(config))
     assert "Actual spec asset" in context
     assert "customize.toml: configured" in context
@@ -73,7 +80,13 @@ def test_explicit_script_helper_requires_executor(tmp_path: Path) -> None:
     script = tmp_path / "_bmad" / "scripts" / "resolve_config.py"
     script.parent.mkdir(parents=True)
     script.write_text("print('never execute')", encoding="utf-8")
-    config = {"bmad": {"skill_root": str(tmp_path), "workflow_skills": ["bmad-build"], "resources": ["_bmad/scripts/resolve_config.py"]}}
+    config = {
+        "bmad": {
+            "skill_root": str(tmp_path),
+            "workflow_skills": ["bmad-build"],
+            "resources": ["_bmad/scripts/resolve_config.py"],
+        }
+    }
     with pytest.raises(BmadContextError, match="bmad_executor_required"):
         build_bmad_context(registry(config))
 
