@@ -497,6 +497,18 @@ class GitLabChangeTransport:
         }
 
         async def execute():
+            if await self.read_target_sha(policy) != binding.target_sha:
+                raise PublicationError("publication_target_changed")
+            mr = await self.http.request(
+                "GET", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests/{binding.mr_iid}"
+            )
+            if (not isinstance(mr, dict) or mr.get("iid") != binding.mr_iid
+                    or mr.get("source_branch") != binding.source_branch
+                    or mr.get("target_branch") != policy.target_branch
+                    or mr.get("source_project_id") != policy.gitlab_project_id
+                    or mr.get("target_project_id") != policy.gitlab_project_id
+                    or mr.get("state") != "opened" or mr.get("sha") != binding.source_sha):
+                raise PublicationError("publication_mr_identity_changed")
             response = await self.http.request(
                 "PUT", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests/{binding.mr_iid}/merge",
                 json={"sha": binding.source_sha, "merge_when_pipeline_succeeds": False,
@@ -505,6 +517,9 @@ class GitLabChangeTransport:
             merge_sha = response.get("merge_commit_sha") if isinstance(response, dict) else None
             if (not isinstance(response, dict) or response.get("iid") != binding.mr_iid
                     or response.get("state") != "merged" or response.get("sha") != binding.source_sha
+                    or response.get("target_branch") != policy.target_branch
+                    or response.get("source_project_id") != policy.gitlab_project_id
+                    or response.get("target_project_id") != policy.gitlab_project_id
                     or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", str(merge_sha or ""))):
                 raise PublicationError("merge_response_invalid")
             return {"mr_iid": binding.mr_iid, "source_sha": binding.source_sha,

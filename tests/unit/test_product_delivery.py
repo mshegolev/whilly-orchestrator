@@ -93,3 +93,30 @@ async def test_prod_delivery_requires_separate_matching_approval(tmp_path):
     with pytest.raises(DeliveryBoundaryError, match="prod_approval_changed"):
         await coordinator.deliver_prod("change-demo", artifacts, approval="a" * 64)
     assert port.prod_calls == []
+
+
+async def test_prod_delivery_replay_uses_durable_receipt(tmp_path):
+    snapshot, store, artifacts = await merged_setup(tmp_path)
+    port = DeliveryPort()
+    coordinator = ProductDeliveryCoordinator(store, snapshot, port)
+    done = await coordinator.deliver_stage("change-demo", artifacts)
+    approval = coordinator.prod_approval_digest(done)
+    first = await coordinator.deliver_prod("change-demo", artifacts, approval=approval)
+    second = await coordinator.deliver_prod("change-demo", artifacts, approval=approval)
+    assert first == second == {"status": "unexpected"}
+    assert len(port.prod_calls) == 1
+
+
+async def test_registry_change_before_stage_effect_fails_closed(tmp_path):
+    import json
+    from pathlib import Path
+
+    snapshot, store, artifacts = await merged_setup(tmp_path)
+    path = Path(snapshot.source_path)
+    data = json.loads(path.read_text())
+    data["projects"]["repo-1"]["product_policy"]["delivery"]["stage"]["job"] = "changed"
+    path.write_text(json.dumps(data))
+    port = DeliveryPort()
+    result = await ProductDeliveryCoordinator(store, snapshot, port).deliver_stage("change-demo", artifacts)
+    assert result.status == ChangeSetStatus.ROLLING_BACK
+    assert port.deliveries == [] and port.observations == []

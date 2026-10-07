@@ -25,16 +25,27 @@ class Store:
 
 
 class API:
-    def __init__(self, *, wrong_merge_sha=False):
+    def __init__(self, *, wrong_merge_sha=False, wrong_target=False):
         self.calls = []
         self.wrong_merge_sha = wrong_merge_sha
+        self.wrong_target = wrong_target
 
     def __call__(self, request):
         self.calls.append((request.method, request.url.path, request.content))
         path = request.url.path
-        if path.endswith("/merge_requests/7/merge"):
+        if path == "/api/v4/projects/17":
+            body = {"id": 17, "http_url_to_repo": policy().canonical_remote}
+        elif "/repository/branches/" in path:
+            body = {"name": "master", "protected": True, "commit": {"id": TARGET}}
+        elif path.endswith("/merge_requests/7"):
+            body = {"iid": 7, "source_branch": "whilly/change-demo",
+                    "target_branch": "other" if self.wrong_target else "master",
+                    "source_project_id": 17, "target_project_id": 17, "state": "opened", "sha": SHA,
+                    "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7"}
+        elif path.endswith("/merge_requests/7/merge"):
             body = {"iid": 7, "state": "merged", "sha": "c" * 40 if self.wrong_merge_sha else SHA,
-                    "merge_commit_sha": "9" * 40}
+                    "merge_commit_sha": "9" * 40, "target_branch": "master",
+                    "source_project_id": 17, "target_project_id": 17}
         elif path.endswith("/merge_requests/7/revert"):
             body = {"branch": "whilly/revert/change-demo/demo", "commit": {"id": "8" * 40}}
         elif path.endswith("/merge_requests"):
@@ -75,7 +86,14 @@ async def test_merge_and_revert_are_idempotent_receipted_effects():
     reverted = await transport.revert_merge_request("change-demo", policy(), binding(), merged)
     assert reverted["mr_iid"] == 107 and reverted["revert_commit_sha"] == "7" * 40
     assert await transport.revert_merge_request("change-demo", policy(), binding(), merged) == reverted
-    assert [method for method, _path, _body in api.calls] == ["PUT", "POST", "POST", "PUT"]
+    methods_and_paths = [(method, path) for method, path, _body in api.calls]
+    assert methods_and_paths[:3] == [
+        ("GET", "/api/v4/projects/17"),
+        ("GET", "/api/v4/projects/17/repository/branches/master"),
+        ("GET", "/api/v4/projects/17/merge_requests/7"),
+    ]
+    assert [method for method, _path in methods_and_paths].count("PUT") == 2
+    assert [method for method, _path in methods_and_paths].count("POST") == 2
     assert {receipt.operation for receipt in store.receipts.values()} == {
         "merge_intent", "merge", "revert_intent", "revert",
     }
@@ -86,7 +104,15 @@ async def test_merge_response_must_preserve_exact_source_identity():
     transport, _ = adapter(api)
     with pytest.raises(PublicationError, match="merge_effect_requires_reconciliation"):
         await transport.merge_request("change-demo", policy(), binding())
-    assert len(api.calls) == 1
+    assert api.calls[-1][0] == "PUT"
+
+
+async def test_merge_rereads_mr_identity_immediately_before_effect():
+    api = API(wrong_target=True)
+    transport, _ = adapter(api)
+    with pytest.raises(PublicationError, match="merge_effect_requires_reconciliation"):
+        await transport.merge_request("change-demo", policy(), binding())
+    assert not any(method == "PUT" for method, _path, _body in api.calls)
 
 
 async def test_merge_boundary_rejects_unallowlisted_mutations():

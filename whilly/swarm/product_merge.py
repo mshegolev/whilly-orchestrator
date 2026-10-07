@@ -164,6 +164,19 @@ class ProductMergeCoordinator:
             raise MergeBarrierError("merge_barrier_receipt_missing")
         return MergeBarrierReceipt.from_dict(change.last_evidence.details["barrier"])
 
+    async def _assert_binding(self, change_id: str, barrier: MergeBarrierReceipt):
+        current = await self.store.get(change_id)
+        if (current is None or current.registry_digest != barrier.registry_digest
+                or current.approval_digest != barrier.approval_digest
+                or self.snapshot.registry_digest != barrier.registry_digest
+                or self.snapshot.policy_digest != barrier.policy_digest):
+            raise MergeBarrierError("merge_approval_binding_changed")
+        try:
+            self.snapshot.assert_unchanged()
+        except ValueError:
+            raise MergeBarrierError("product_registry_changed") from None
+        return current
+
     async def _compensate(self, change_id: str, barrier: MergeBarrierReceipt):
         change = await self.store.get(change_id)
         if change.status in {ChangeSetStatus.PARTIAL_MERGE, ChangeSetStatus.ROLLBACK_FAILED}:
@@ -196,6 +209,7 @@ class ProductMergeCoordinator:
                     change_id, repo_id, repo.version, RepoChangeStatus.REVERT_OPEN, opened
                 )
             try:
+                await self._assert_binding(change_id, barrier)
                 result = await self.transport.revert_merge_request(
                     change_id, self.snapshot.projects[repo_id], binding, merge_effect
                 )
@@ -247,7 +261,7 @@ class ProductMergeCoordinator:
                 sha=barrier.repositories[0].source_sha, job_id="product-barrier", details=barrier_details,
             )
             for binding in barrier.repositories:
-                change = await self.store.get(change_id)
+                change = await self._assert_binding(change_id, barrier)
                 repo = next(item for item in change.repo_changes if item.repo_id == binding.repo_id)
                 if repo.status == RepoChangeStatus.PIPELINE_GREEN:
                     await self.store.transition_repo(
@@ -264,7 +278,7 @@ class ProductMergeCoordinator:
                          for repo in change.repo_changes)
         try:
             for binding in barrier.repositories:
-                change = await self.store.get(change_id)
+                change = await self._assert_binding(change_id, barrier)
                 repo = next(item for item in change.repo_changes if item.repo_id == binding.repo_id)
                 if repo.status in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY}:
                     merged_any = True
@@ -276,6 +290,7 @@ class ProductMergeCoordinator:
                 result = await self.transport.merge_request(
                     change_id, self.snapshot.projects[repo.repo_id], binding
                 )
+                merged_any = True
                 evidence = Evidence(
                     "merge_observed", EvidenceOutcome.PASSED,
                     sha=result["merge_commit_sha"], job_id=f"mr:{result['mr_iid']}",
@@ -284,7 +299,6 @@ class ProductMergeCoordinator:
                 await self.store.transition_repo(
                     change_id, repo.repo_id, repo.version, RepoChangeStatus.MERGED, evidence
                 )
-                merged_any = True
         except Exception:
             current = await self.store.get(change_id)
             failed = Evidence(

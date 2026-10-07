@@ -206,3 +206,25 @@ async def test_failed_compensation_is_durable_and_retry_does_not_repeat_merge(tm
     resumed = await coordinator.merge_all("change-demo")
     assert resumed.status == ChangeSetStatus.ROLLED_BACK
     assert transport.merged == ["repo-1"] and transport.reverted == ["repo-1"]
+
+
+async def test_registry_mutation_between_merges_stops_and_compensates(tmp_path):
+    import json
+    from pathlib import Path
+
+    snapshot, store, transport, _ = setup(tmp_path)
+    original_merge = transport.merge_request
+
+    async def merge_and_mutate(change_id, policy, binding):
+        result = await original_merge(change_id, policy, binding)
+        if binding.repo_id == "repo-1":
+            path = Path(snapshot.source_path)
+            data = json.loads(path.read_text())
+            data["projects"]["repo-2"]["product_policy"]["checks"]["ci"] = ["changed"]
+            path.write_text(json.dumps(data))
+        return result
+
+    transport.merge_request = merge_and_mutate
+    result = await ProductMergeCoordinator(store, snapshot, transport).merge_all("change-demo")
+    assert result.status == ChangeSetStatus.ROLLBACK_FAILED
+    assert transport.merged == ["repo-1"] and transport.reverted == []

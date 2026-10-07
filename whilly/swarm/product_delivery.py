@@ -71,6 +71,19 @@ class ProductDeliveryCoordinator:
             raise DeliveryBoundaryError("merge_barrier_receipt_missing")
         return MergeBarrierReceipt.from_dict(value)
 
+    async def _assert_binding(self, change_id: str, barrier: MergeBarrierReceipt):
+        current = await self.store.get(change_id)
+        if (current is None or current.registry_digest != barrier.registry_digest
+                or current.approval_digest != barrier.approval_digest
+                or self.snapshot.registry_digest != barrier.registry_digest
+                or self.snapshot.policy_digest != barrier.policy_digest):
+            raise DeliveryBoundaryError("delivery_approval_binding_changed")
+        try:
+            self.snapshot.assert_unchanged()
+        except ValueError:
+            raise DeliveryBoundaryError("product_registry_changed") from None
+        return current
+
     def _validate_artifacts(self, barrier: MergeBarrierReceipt,
                             artifacts: Mapping[str, tuple[ArtifactDigest, ...]]) -> None:
         required_repos = {binding.repo_id for binding in barrier.repositories}
@@ -142,6 +155,10 @@ class ProductDeliveryCoordinator:
                                  ChangeSetStatus.ACCEPTING_STAGE}:
             raise DeliveryBoundaryError("change_set_not_stage_deliverable")
         barrier = self._barrier(change)
+        try:
+            await self._assert_binding(change_id, barrier)
+        except DeliveryBoundaryError as exc:
+            return await self._rollback_boundary(change_id, barrier, str(exc))
         self._validate_artifacts(barrier, artifacts)
         if change.status == ChangeSetStatus.MERGED:
             evidence = Evidence(
@@ -154,6 +171,7 @@ class ProductDeliveryCoordinator:
         deployments: dict[str, StageDeploymentReceipt] = {}
         try:
             for binding in barrier.repositories:
+                await self._assert_binding(change_id, barrier)
                 request = {"change_id": change_id, "repo_id": binding.repo_id,
                            "source_sha": binding.source_sha,
                            "artifacts": [item.to_dict() for item in artifacts[binding.repo_id]]}
@@ -197,6 +215,7 @@ class ProductDeliveryCoordinator:
                     change_id, current.version, ChangeSetStatus.ACCEPTING_STAGE, accepting
                 )
             for binding in barrier.repositories:
+                await self._assert_binding(change_id, barrier)
                 deployment = deployments[binding.repo_id]
                 policy = self.snapshot.projects[binding.repo_id]
                 request = {"change_id": change_id, "repo_id": binding.repo_id,
@@ -225,18 +244,35 @@ class ProductDeliveryCoordinator:
         )
         return await self.store.transition(change_id, current.version, ChangeSetStatus.DONE, accepted)
 
+    @staticmethod
+    def prod_approval_digest(change) -> str:
+        return canonical_digest({"change_id": change.change_id, "stage_acceptance": change.last_evidence.to_dict(),
+                                 "boundary": "prod"})
+
     async def deliver_prod(self, change_id: str, artifacts, *, approval: str | None):
         change = await self.store.get(change_id)
         if approval is None:
             raise DeliveryBoundaryError("prod_approval_required")
         if change is None or change.status != ChangeSetStatus.DONE:
             raise DeliveryBoundaryError("stage_acceptance_required")
-        expected = canonical_digest({"change_id": change_id, "stage_acceptance": change.last_evidence.to_dict(),
-                                     "boundary": "prod"})
+        expected = self.prod_approval_digest(change)
         if approval != expected:
             raise DeliveryBoundaryError("prod_approval_changed")
-        self._validate_artifacts(self._barrier(change), artifacts)
-        return await self.port.deliver_prod(change_id, artifacts, approval)
+        barrier = self._barrier(change)
+        await self._assert_binding(change_id, barrier)
+        self._validate_artifacts(barrier, artifacts)
+        request = {"change_id": change_id, "source_sha": barrier.repositories[-1].source_sha,
+                   "approval": approval,
+                   "artifacts": {repo_id: [item.to_dict() for item in values]
+                                 for repo_id, values in artifacts.items()}}
+
+        async def execute():
+            return await self.port.deliver_prod(change_id, artifacts, approval)
+
+        return await self._effect(
+            key=f"{change_id}:product:{approval}:deliver-prod", change_id=change_id, repo_id="product",
+            operation="deliver_prod", request=request, execute=execute,
+        )
 
 
 __all__ = ["ArtifactDigest", "DeliveryBoundaryError", "ProductDeliveryCoordinator", "StageDeploymentReceipt"]
