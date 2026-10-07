@@ -6,10 +6,10 @@ auditable for Phase 28 (COV-01): zero silent gaps, zero double-mapping.
 
 ## Counts
 
-- **Live module count: 357** — authoritative, computed at execution time via
+- **Live module count: 364** — authoritative, computed at execution time via
   `find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l`.
   (Includes the local swarm runtime and engine/migration additions.)
-- **Body rows: 357** (one row per module — a strict one-to-one mapping).
+- **Body rows: 364** (one row per module — a strict one-to-one mapping).
 - **Unmapped: 0** (zero silent gaps — every row carries a real taxonomy slug).
 - **Double-mapped: 0** (no module appears under two capabilities).
 
@@ -28,7 +28,7 @@ Only `__pycache__/` byte-compiled artifacts are excluded.
 
 `REQUIREMENTS.md` (BASE-02) references **242** modules. That is a *historical,
 pre-growth* figure that excluded package `__init__.py` files; the codebase has since
-grown. The **live `find` count (275) supersedes it** and is the only row-count target —
+grown. The **live `find` count (364) supersedes it** and is the only row-count target —
 the `242` value here is a prose reconciliation note, never a gate.
 
 ## Locked Rules
@@ -333,6 +333,52 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/adapters/db/migrations/versions/033_product_chief.py | orchestration-loop | chief session identity |
 | whilly/adapters/db/migrations/versions/034_publication_receipts.py | orchestration-loop | durable MR receipts |
 | whilly/adapters/db/migrations/versions/035_spec_bindings.py | orchestration-loop | immutable execution binding history |
+| whilly/adapters/db/learning_delivery.py | state-persistence | durable delivery evidence adapter |
+| whilly/adapters/db/learning_evaluations.py | state-persistence | durable research and evaluation evidence adapter |
+| whilly/adapters/db/learning_memory.py | state-persistence | governed learning-memory persistence |
+| whilly/adapters/db/learning_messages.py | state-persistence | durable collaboration message persistence |
+| whilly/adapters/db/learning_proposal_admission.py | state-persistence | proposal admission persistence boundary |
+| whilly/adapters/db/learning_proposals.py | state-persistence | cross-project proposal persistence |
+| whilly/adapters/db/learning_runs.py | state-persistence | bounded research-run persistence |
+| whilly/adapters/db/migrations/versions/036_learning_memory.py | state-persistence | learning-memory schema |
+| whilly/adapters/db/migrations/versions/037_session_organization.py | state-persistence | session organization schema |
+| whilly/adapters/db/migrations/versions/038_learning_messages.py | state-persistence | durable learning-message schema |
+| whilly/adapters/db/migrations/versions/039_learning_proposals.py | state-persistence | cross-project proposal schema |
+| whilly/adapters/db/migrations/versions/040_learning_runs.py | state-persistence | bounded research-run schema |
+| whilly/adapters/db/migrations/versions/042_learning_evaluations.py | state-persistence | immutable learning-evidence schema |
+| whilly/adapters/filesystem/knowledge_sources.py | swarm-memory | configured knowledge-source adapter |
+| whilly/adapters/filesystem/memory_leases.py | swarm-memory | memory worker lease adapter |
+| whilly/adapters/filesystem/swarm_mailbox.py | agent-dispatch | task-scoped filesystem mailbox adapter |
+| whilly/adapters/filesystem/swarm_workspace.py | worktree-isolation | isolated swarm workspace adapter |
+| whilly/adapters/http/__init__.py | swarm-memory | bounded research HTTP adapter package |
+| whilly/adapters/http/research_fetch.py | swarm-memory | restricted public research fetcher |
+| whilly/adapters/memory/__init__.py | swarm-memory | optional semantic-memory adapter package |
+| whilly/adapters/memory/cognee_process.py | swarm-memory | isolated semantic-memory process adapter |
+| whilly/adapters/memory/cognee_sandbox.py | swarm-memory | semantic-memory sandbox policy |
+| whilly/adapters/memory/cognee_worker.py | swarm-memory | semantic-memory worker adapter |
+| whilly/adapters/memory/config.py | configuration | semantic-memory adapter configuration |
+| whilly/adapters/runner/swarm_environment.py | agent-dispatch | bounded swarm execution environment |
+| whilly/adapters/runner/swarm_sandbox.py | worktree-isolation | swarm subprocess sandbox adapter |
+| whilly/api/swarm_learning.py | web-status-ui | authenticated learning control API |
+| whilly/api/swarm_messages.py | web-status-ui | authenticated collaboration message API |
+| whilly/api/swarm_proposals.py | web-status-ui | authenticated proposal review API |
+| whilly/core/swarm_execution.py | orchestration-loop | pure guarded swarm execution policy |
+| whilly/swarm/execution.py | orchestration-loop | guarded execution coordinator |
+| whilly/swarm/execution_config.py | configuration | explicit execution policy configuration |
+| whilly/swarm/learning/__init__.py | swarm-memory | governed learning package |
+| whilly/swarm/learning/domain.py | swarm-memory | scoped learning identities and authority |
+| whilly/swarm/learning/experiments.py | swarm-memory | frozen improvement evaluation policy |
+| whilly/swarm/learning/lookup.py | swarm-memory | scoped learning lookup policy |
+| whilly/swarm/learning/messages.py | swarm-memory | durable collaboration message policy |
+| whilly/swarm/learning/ports.py | swarm-memory | framework-free learning ports |
+| whilly/swarm/learning/proposals.py | swarm-memory | approval-bound proposal policy |
+| whilly/swarm/learning/research.py | swarm-memory | bounded retrospective policy |
+| whilly/swarm/learning/retrieval.py | swarm-memory | permission-filtered retrieval policy |
+| whilly/swarm/learning/schedules.py | scheduling | disabled-by-default learning schedules |
+| whilly/swarm/learning_binding.py | orchestration-loop | runtime learning-context binding |
+| whilly/swarm/proposal_mailbox.py | agent-dispatch | cross-agent proposal mailbox |
+| whilly/swarm/verification.py | verification-gates | swarm verification evidence policy |
+| whilly/swarm/verification_runner.py | verification-gates | isolated verification command runner |
 | whilly/task_manager.py | task-model-fsm | Task FSM implementation |
 | whilly/tmux_runner.py | agent-dispatch | tmux runner |
 | whilly/triz_analyzer.py | decision-gate | TRIZ contradiction analysis |
