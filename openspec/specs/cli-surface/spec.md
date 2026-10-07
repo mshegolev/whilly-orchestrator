@@ -11,9 +11,7 @@ in the `EXIT_*` constants in `whilly/cli/plan.py`, `whilly/cli/run.py`, and
 `whilly/workspaces.py`. This capability deliberately documents observed v4
 behavior, not the legacy v3 "0=ok / 1=some failed / 2=budget / 3=timeout"
 narrative.
-
 ## Requirements
-
 ### Requirement: Real v4 exit-code contract
 The `whilly` CLI MUST surface process exit codes drawn from the real v4 `EXIT_*`
 constants — `EXIT_OK = 0`, `EXIT_VALIDATION_ERROR = 1`, `EXIT_ENVIRONMENT_ERROR = 2`,
@@ -179,3 +177,27 @@ The `python -m whilly` and `python -m whilly.cli` entry shims MUST delegate to
 #### Scenario: python -m whilly runs the dispatcher
 - **WHEN** the interpreter executes `whilly/__main__.py` or `whilly/cli/__main__.py`
 - **THEN** it SHALL call `whilly.cli.main()` and pass its return value to `sys.exit`
+
+### Requirement: Swarm command family
+
+The CLI MUST expose 13 top-level `whilly swarm` commands, with
+`registry validate` as the nested executable leaf, for 14 executable leaves in
+total. It MUST preserve exit codes 0 (success), 1 (execution failure), 2
+(usage or validation error), and 4 (coordinator or revision conflict).
+
+#### Scenario: Validate a registry
+
+- **WHEN** an operator runs `whilly swarm registry validate --registry FILE`
+- **THEN** the CLI validates the registry without creating a session or running
+  an agent
+
+### Requirement: Explicit execution
+
+The CLI MUST keep planning separate from execution. `chat`, `propose`, and
+interactive planning MUST NOT queue or execute tasks; execution MUST require an
+explicit `run` or `resume` command.
+
+#### Scenario: A plan is proposed
+
+- **WHEN** a valid plan is proposed
+- **THEN** its revision is durable and no queue task is executed until `run`

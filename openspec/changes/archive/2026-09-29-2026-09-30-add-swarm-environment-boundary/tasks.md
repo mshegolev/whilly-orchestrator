@@ -1,0 +1,3 @@
+- [x] Add the pure environment builder and focused executable-child tests.
+- [ ] Integrate launch paths in Task 6.
+- [ ] Archive the delta after Task 6 integration and verification.

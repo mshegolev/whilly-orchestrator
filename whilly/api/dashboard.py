@@ -30,6 +30,7 @@ import asyncpg
 from fastapi import Request, status
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from starlette.routing import NoMatchFound
 
 from whilly import __version__ as WHILLY_VERSION
 from whilly.operator_views import (
@@ -319,6 +320,10 @@ async def render_dashboard(
 
     surface_items = operator_surface_items()
     surface_order = [surface.value for surface, _label in surface_items]
+    try:
+        swarm_url = str(request.app.url_path_for("swarm_ui"))
+    except NoMatchFound:
+        swarm_url = None
     context: dict[str, Any] = {
         "request": request,
         "snapshot": snapshot,
@@ -347,6 +352,7 @@ async def render_dashboard(
         "format_iso": _format_iso,
         "format_human": _format_human,
         "auth_email": auth_email,
+        "swarm_url": swarm_url,
         "plan_id_for_share_link": plan_id_for_share_link,
         "current_plan_id": effective_plan_id,
     }

@@ -202,6 +202,10 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
     OperatorUiArtifact("whilly/api/templates/choose_factor.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/admin_users.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact("whilly/api/templates/admin_auth_audit.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/_keyboard_controls.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/_theme_control.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/product_swarm.html.j2", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/templates/swarm.html.j2", OperatorUiArtifactStatus.ACTIVE),
     OperatorUiArtifact(
         "whilly/api/templates/_logs.html",
         OperatorUiArtifactStatus.ROUTEABLE_NONCANONICAL,
@@ -221,6 +225,10 @@ OPERATOR_WUI_ARTIFACTS: Final[tuple[OperatorUiArtifact, ...]] = (
         followup_phase="future",
     ),
     OperatorUiArtifact("whilly/api/static/whilly-hotkeys.js", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/static/product-swarm.js", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/static/swarm-gantt.js", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/static/whilly-navigation.js", OperatorUiArtifactStatus.ACTIVE),
+    OperatorUiArtifact("whilly/api/static/whilly-theme.js", OperatorUiArtifactStatus.ACTIVE),
 )
 
 

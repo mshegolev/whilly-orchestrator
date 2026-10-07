@@ -900,6 +900,7 @@
   {% if auth_email %}
   <header class="wui-nav" role="banner" aria-label="WUI session" data-testid="auth-nav">
     <span class="wui-nav__identity">Signed in as <strong>{{ auth_email }}</strong></span>
+    {% if swarm_url %}<a href="{{ swarm_url }}">Swarm</a>{% endif %}
     <form method="post" action="/auth/logout" class="wui-nav__logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token | default('') }}">
       <button type="submit">Log out</button>

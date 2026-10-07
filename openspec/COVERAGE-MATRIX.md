@@ -1,14 +1,15 @@
 # Whilly Module → Capability Coverage Matrix (BASE-02)
 
-Every `whilly/` Python module is mapped to **exactly one** of the 32 capability slugs
+Every `whilly/` Python module is mapped to **exactly one** of the 33 capability slugs
 in [`TAXONOMY.md`](TAXONOMY.md) (or the literal `UNMAPPED`). This matrix makes coverage
 auditable for Phase 28 (COV-01): zero silent gaps, zero double-mapping.
 
 ## Counts
 
-- **Live module count: 278** — authoritative, computed at execution time via
+- **Live module count: 357** — authoritative, computed at execution time via
   `find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l`.
-- **Body rows: 278** (one row per module — a strict one-to-one mapping).
+  (Includes the local swarm runtime and engine/migration additions.)
+- **Body rows: 357** (one row per module — a strict one-to-one mapping).
 - **Unmapped: 0** (zero silent gaps — every row carries a real taxonomy slug).
 - **Double-mapped: 0** (no module appears under two capabilities).
 
@@ -76,6 +77,8 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/adapters/db/migrations/versions/026_webauthn_credentials.py | state-persistence | generated Alembic migration |
 | whilly/adapters/db/migrations/versions/027_webauthn_challenges.py | state-persistence | generated Alembic migration |
 | whilly/adapters/db/migrations/versions/028_webauthn_user_handles.py | state-persistence | generated Alembic migration |
+| whilly/adapters/db/migrations/versions/029_swarm_runtime.py | state-persistence | local swarm persistence migration |
+| whilly/adapters/db/migrations/versions/030_swarm_agent_calls.py | state-persistence | durable engine-call reservations |
 | whilly/adapters/db/migrations/versions/__init__.py | state-persistence | generated Alembic migration |
 | whilly/adapters/db/pool.py | state-persistence | DB state layer |
 | whilly/adapters/db/repository.py | state-persistence | DB state layer |
@@ -127,6 +130,7 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/api/sse.py | web-status-ui | web API route |
 | whilly/api/sse_endpoint.py | web-status-ui | web API route |
 | whilly/api/static_mount.py | web-status-ui | web API route |
+| whilly/api/swarm_ui.py | web-status-ui | integrated swarm UI route |
 | whilly/api/tasks_api.py | web-status-ui | web API route |
 | whilly/api/tasks_api_crud.py | web-status-ui | web API route |
 | whilly/api/totp_repo.py | auth-security | auth/session/identity route |
@@ -172,6 +176,7 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/cli/run.py | orchestration-loop | main run loop entry |
 | whilly/cli/scheduler.py | scheduling | scheduler CLI |
 | whilly/cli/server.py | web-status-ui | web server CLI |
+| whilly/cli/swarm.py | cli-surface | local swarm command family |
 | whilly/cli/skill.py | cli-surface | skill CLI command |
 | whilly/cli/smoke.py | budget-resource-guards | smoke/resource check CLI |
 | whilly/cli/tui.py | operator-views-logs | operator TUI |
@@ -295,6 +300,39 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/sources/github_pr_feedback.py | github-integration | issue/PR source |
 | whilly/sources/jira.py | jira-integration | Jira source |
 | whilly/state_store.py | state-persistence | StateStore resume contract |
+| whilly/swarm/__init__.py | orchestration-loop | opt-in local multi-project swarm package |
+| whilly/swarm/agent.py | agent-dispatch | bounded subprocess execution (process groups, timeouts) |
+| whilly/swarm/context.py | configuration | swarm execution context helpers |
+| whilly/swarm/mailbox.py | agent-dispatch | task-local JSON mailbox IPC |
+| whilly/swarm/engines.py | agent-dispatch | Claude/Codex argv and output adapters |
+| whilly/swarm/gitops.py | worktree-isolation | Git worktree lifecycle and diff operations |
+| whilly/swarm/plan.py | plan-json-contract | structured swarm plan contract and validation |
+| whilly/swarm/prompts.py | agent-dispatch | planner / worker / reviewer prompt builders |
+| whilly/swarm/registry.py | configuration | JSON project/role registry validation |
+| whilly/swarm/runtime.py | orchestration-loop | conversation service and session coordinator |
+| whilly/swarm/store.py | state-persistence | swarm-specific PostgreSQL persistence |
+| whilly/swarm/profiles.py | orchestration-loop | explicit planning and execution model profiles |
+| whilly/swarm/admission.py | orchestration-loop | durable five-call model admission |
+| whilly/swarm/bmad.py | orchestration-loop | trusted bounded BMAD instruction adapter |
+| whilly/swarm/bmad_host.py | orchestration-loop | host-only BMAD specification artifact lifecycle |
+| whilly/swarm/product.py | orchestration-loop | durable product feature service |
+| whilly/swarm/product_store.py | orchestration-loop | immutable feature revisions and approvals |
+| whilly/swarm/product_registry.py | orchestration-loop | Strict product publication policies and canonical snapshot bindings |
+| whilly/swarm/gitlab_change_transport.py | orchestration-loop | Host-provisioned guarded publication and exact-SHA CI receipts |
+| whilly/swarm/product_workflow.py | orchestration-loop | feature planning, budgets and execution guards |
+| whilly/swarm/publication.py | orchestration-loop | allowlisted GitLab publication transport |
+| whilly/swarm/product_publication.py | orchestration-loop | accepted-evidence publication candidates |
+| whilly/swarm/product_merge.py | orchestration-loop | exact-SHA product merge barrier and revert compensation |
+| whilly/swarm/product_delivery.py | orchestration-loop | immutable stage delivery and acceptance boundary |
+| whilly/api/product_swarm.py | web-status-ui | authenticated product and feature API |
+| whilly/api/product_workflow.py | web-status-ui | product cockpit and workflow jobs |
+| whilly/api/swarm_memory.py | swarm-memory | authenticated shared-memory API boundary |
+| whilly/swarm/learning/memory.py | swarm-memory | governed revision and retention service |
+| whilly/adapters/db/migrations/versions/031_product_swarm.py | orchestration-loop | product persistence schema |
+| whilly/adapters/db/migrations/versions/032_model_admission.py | orchestration-loop | durable admission schema |
+| whilly/adapters/db/migrations/versions/033_product_chief.py | orchestration-loop | chief session identity |
+| whilly/adapters/db/migrations/versions/034_publication_receipts.py | orchestration-loop | durable MR receipts |
+| whilly/adapters/db/migrations/versions/035_spec_bindings.py | orchestration-loop | immutable execution binding history |
 | whilly/task_manager.py | task-model-fsm | Task FSM implementation |
 | whilly/tmux_runner.py | agent-dispatch | tmux runner |
 | whilly/triz_analyzer.py | decision-gate | TRIZ contradiction analysis |
@@ -318,6 +356,9 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/workflow/sync.py | github-integration | workflow engine |
 | whilly/workspaces.py | worktree-isolation | plan workspace lifecycle |
 | whilly/worktree_runner.py | worktree-isolation | per-task worktree lifecycle |
+| whilly/swarm/change_set.py | orchestration-loop | Immutable product change-set state and evidence |
+| whilly/swarm/change_set_store.py | state-persistence | Product change-set CAS and immutable receipt storage |
+| whilly/adapters/db/migrations/versions/041_product_change_sets.py | state-persistence | Durable product change-set schema |
 
 ---
 

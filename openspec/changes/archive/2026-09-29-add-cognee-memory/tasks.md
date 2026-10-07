@@ -1,0 +1,12 @@
+- [x] Add bounded-context and binding regression tests.
+- [x] Fix metadata bounding and snapshot eligibility checks.
+- [x] Add proposal, design, and swarm-memory spec delta.
+- [x] Validate with `openspec validate add-cognee-memory --strict`.
+- [x] Preserve ranked input order when explicitly requested by the coordinator.
+- [x] Implement and independently review real isolated Cognee ingestion/retrieval.
+- [x] Prove child-side network/file denial and process lifecycle limits.
+- [x] Implement and review installation-wide queue, fencing, cleanup and coordinator.
+- [x] Wire backend composition, chief/worker handoff, admin API and UI status.
+- [x] Run real SDK, PostgreSQL, engine transport and browser acceptance.
+- [x] Safely configure/restart local installation only after acceptance gates.
+- [x] Document evidence/limitations and archive the completed delta.

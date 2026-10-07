@@ -60,3 +60,32 @@ forbidden_modules =
     uvicorn
     prometheus_client
     prometheus_fastapi_instrumentator
+
+[importlinter:contract:learning-domain-purity]
+name = swarm learning domain and ports must remain framework-free
+type = forbidden
+source_modules =
+    whilly.swarm.learning.domain
+    whilly.swarm.learning.ports
+    whilly.swarm.learning.messages
+    whilly.swarm.learning.proposals
+forbidden_modules =
+    asyncpg
+    httpx
+    subprocess
+    fastapi
+    whilly.adapters
+    whilly.api
+
+[importlinter:contract:execution-policy-purity]
+name = pure swarm execution policy must not import adapters or process transport
+type = forbidden
+source_modules =
+    whilly.core.swarm_execution
+forbidden_modules =
+    whilly.adapters
+    asyncio
+    os
+    pathlib
+    socket
+    subprocess

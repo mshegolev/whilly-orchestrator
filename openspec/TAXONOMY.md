@@ -1,6 +1,6 @@
 # Whilly Capability Taxonomy
 
-32 capabilities across 6 clusters. Each capability maps to exactly one spec file at
+33 capabilities across 6 clusters. Each capability maps to exactly one spec file at
 `openspec/specs/<slug>/spec.md`. This index is the authoritative reference for BASE-01.
 
 ## Naming Convention
@@ -12,7 +12,7 @@ See `openspec/AUTHORING.md` for the full spec format and validation rules.
 
 ---
 
-## Cluster: Orchestration (7)
+## Cluster: Orchestration (8)
 
 | Slug | Purpose |
 |------|---------|
@@ -23,6 +23,7 @@ See `openspec/AUTHORING.md` for the full spec format and validation rules.
 | `agent-dispatch` | tmux vs subprocess runner selection and per-task isolation preconditions |
 | `worktree-isolation` | Plan workspace and per-task worktree lifecycle: create → cherry-pick → cleanup |
 | `result-collection` | `AgentResult` parsing and the `<promise>COMPLETE</promise>` completion signal |
+| `swarm-memory` | Governed shared learning, retrieval, proposals, retention, and agent collaboration |
 
 ---
 
@@ -90,13 +91,13 @@ See `openspec/AUTHORING.md` for the full spec format and validation rules.
 
 | Cluster | Count | Phase |
 |---------|-------|-------|
-| Orchestration | 7 | 22 |
+| Orchestration | 8 | 22 |
 | PRD Pipeline | 5 | 23 |
 | Integrations | 6 | 24 |
 | Operator Surface | 5 | 25 |
 | Platform | 5 | 26 |
 | Safety | 4 | 27 |
-| **Total** | **32** | — |
+| **Total** | **33** | — |
 
 ---
 

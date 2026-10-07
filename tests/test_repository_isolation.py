@@ -83,8 +83,14 @@ _ALLOWED_PATHS: frozenset[str] = frozenset(
         "api/plans_api.py",
         "api/tasks_api.py",
         "api/metrics.py",
+        # Authenticated task CRUD owns transactional version checks and audit writes.
+        "api/tasks_api_crud.py",
+        # Product-learning admission performs one bounded task-state eligibility read.
+        "adapters/db/learning_proposal_admission.py",
         # Operator-facing materialised view helpers.
         "operator_views.py",
+        # Swarm persistence coordinates session/task materialization atomically.
+        "swarm/store.py",
         # Workflow PR iterator — issues its own SELECT/INSERT against
         # tasks for the targeted-rebuild path.
         "workflow/pr_iterate.py",

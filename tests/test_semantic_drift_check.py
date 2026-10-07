@@ -518,11 +518,11 @@ def test_clusters_partition_is_exhaustive_vs_live_slugs():
     assert set(flat) == _live_slug_set()
 
 
-def test_clusters_partition_is_disjoint_and_thirty_two():
-    """No slug appears in two clusters; the partition has exactly 32 unique members."""
+def test_clusters_partition_is_disjoint_and_thirty_three():
+    """No slug appears in two clusters; the partition has exactly 33 unique members."""
     flat = [slug for slugs in sdc.CLUSTERS.values() for slug in slugs]
     assert len(flat) == len(set(flat))
-    assert len(set(flat)) == 32
+    assert len(set(flat)) == 33
 
 
 def test_clusters_no_unknown_slugs_on_disk():

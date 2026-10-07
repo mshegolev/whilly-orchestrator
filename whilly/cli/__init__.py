@@ -23,6 +23,7 @@ Routes the first positional token to the matching v4 sub-CLI:
 * ``whilly update ...`` → :mod:`whilly.cli.update`
 * ``whilly feedback ...`` → :mod:`whilly.cli.feedback`
 * ``whilly quick-setup ...`` → :mod:`whilly.cli.quick_setup`
+* ``whilly swarm ...`` → :mod:`whilly.cli.swarm`
 
 Every sub-CLI is imported lazily so that ``whilly --help`` (and any other
 non-database invocation) does not pull in :mod:`asyncpg`, the dashboard's
@@ -140,6 +141,8 @@ Commands:
   quick-setup Generate .env/.env.worker and print local Docker startup commands.
   pr-feedback Poll open PRs for a plan and emit review events
               (`pr-feedback poll --plan <id>`).
+  swarm      Opt-in local multi-project swarm: chat, plan revisions,
+             bounded parallel workers in Git worktrees, messages, reports.
 
 Run `whilly <command> --help` for command-specific options.
 
@@ -498,6 +501,12 @@ def main(argv: list[str] | None = None) -> int:
         from whilly.cli.quick_setup import run_quick_setup_command
 
         return run_quick_setup_command(rest)
+    if cmd == "swarm":
+        # Lazy import keeps ``whilly --help`` fast — the swarm runtime
+        # imports asyncpg and the repository only when actually used.
+        from whilly.cli.swarm import run_swarm_command
+
+        return run_swarm_command(rest)
     if cmd == "scheduler":
         from whilly.cli.scheduler import run_scheduler_cli
 

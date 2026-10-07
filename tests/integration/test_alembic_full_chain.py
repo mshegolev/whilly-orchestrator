@@ -2,7 +2,7 @@
 
 Pins the assertion that ``alembic upgrade head`` applies the full
 migration chain in :data:`EXPECTED_CHAIN` (currently 001 through
-``028_webauthn_user_handles``) in order on a fresh Postgres and
+``029_swarm_runtime``) in order on a fresh Postgres and
 ``alembic downgrade base`` reverts every step cleanly. Mirrors the
 per-migration tests but exercises the whole linear chain in one go so
 a single broken edge between revisions surfaces here even when each
@@ -115,6 +115,19 @@ EXPECTED_CHAIN: tuple[str, ...] = (
     "026_webauthn_credentials",
     "027_webauthn_challenges",
     "028_webauthn_user_handles",
+    "029_swarm_runtime",
+    "030_swarm_agent_calls",
+    "031_product_swarm",
+    "032_model_admission",
+    "033_product_chief",
+    "034_publication_receipts",
+    "035_spec_bindings",
+    "036_learning_memory",
+    "037_session_organization",
+    "038_learning_messages",
+    "039_learning_proposals",
+    "040_learning_runs",
+    "041_product_change_sets",
 )
 
 

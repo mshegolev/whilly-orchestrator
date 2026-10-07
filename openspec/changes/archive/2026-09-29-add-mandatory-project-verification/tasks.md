@@ -1,0 +1,4 @@
+- [x] Add canonical mandatory verification policies and trusted report parsers.
+- [x] Bind base, verification policy, and hook digests in revision and product JSON.
+- [x] Reject missing or changed bindings for guarded readiness while retaining discussion/planning.
+- [x] Prove disposable PostgreSQL round trips and parser fail-closed behavior.

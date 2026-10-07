@@ -1423,6 +1423,38 @@ def create_app(
     app.include_router(
         build_plans_router(pool=pool, secret=dashboard_token_secret),
     )
+    # Local swarm is opt-in. Its registry is selected by the server operator,
+    # never by a browser-supplied path. The router uses the existing admin
+    # session and CSRF boundaries rather than worker bearer authentication.
+    swarm_registry = os.environ.get("WHILLY_SWARM_REGISTRY")
+    if swarm_registry:
+        from whilly.api.swarm_ui import build_swarm_router
+
+        app.include_router(
+            build_swarm_router(
+                pool=pool,
+                secret=dashboard_token_secret,
+                registry_path=swarm_registry,
+            )
+        )
+        if os.environ.get("WHILLY_PRODUCT_SWARM") == "1":
+            from whilly.api.product_swarm import build_product_router
+            from whilly.api.product_workflow import build_product_workflow_router
+
+            app.include_router(build_product_router(pool, dashboard_token_secret, swarm_registry))
+            app.include_router(build_product_workflow_router(pool, dashboard_token_secret, swarm_registry))
+            # The admin memory/status surface remains mounted when lookup is
+            # disabled: approved plans still need canonical binding/redaction
+            # checks, and disabling the flag must not strand purge requests.
+            from whilly.api.swarm_memory import build_memory_router
+
+            app.include_router(build_memory_router(pool, dashboard_token_secret, swarm_registry))
+            from whilly.api.swarm_messages import build_message_router
+
+            app.include_router(build_message_router(pool, dashboard_token_secret, swarm_registry))
+            from whilly.api.swarm_proposals import build_proposal_router
+
+            app.include_router(build_proposal_router(pool, dashboard_token_secret, swarm_registry))
     # PRD-wui-multi-plan v2 Block 8 (Epic C — task edit + hard delete).
     # PATCH/DELETE on /api/v1/tasks/{task_id} with If-Match: W/"v<version>"
     # concurrency. Same pool + HMAC secret as the rest of the
