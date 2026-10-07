@@ -38,11 +38,11 @@ Proposed files: whilly/swarm/learning/research.py, schedules.py; whilly/adapters
 
 **Interfaces:** Schedule (id, timezone, run_window, enabled, model_profiles, limits, source_policy, retention_policy); RunLimits (max_calls, max_seconds, max_documents, max_bytes). Scheduler.claim_due(now: datetime) -> ResearchRun | None uses unique schedule/window plus durable lease. Missing explicit config blocks activation. Skip older missed windows with named outcomes; never replay a backlog automatically. Use existing global model admission cap5, with background work admitted only when interactive reservations allow.
 
-- [ ] Write failing tests: test_two_schedulers_one_run; test_restart_skips_backlog; test_dst_window_unique; test_ambiguous_orphan_not_reclaimed; test_background_cannot_consume_interactive_budget. Required assertions: Atomic reservation across processes prevents exceeding call/time/concurrency budgets. Schedules remain disabled after installation/migration.
-- [ ] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
-- [ ] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
-- [ ] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
-- [ ] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
+- [x] Write failing tests: test_two_schedulers_one_run; test_restart_skips_backlog; test_dst_window_unique; test_ambiguous_orphan_not_reclaimed; test_background_cannot_consume_interactive_budget. Required assertions: Atomic reservation across processes prevents exceeding call/time/concurrency budgets. Schedules remain disabled after installation/migration.
+- [x] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
+- [x] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
+- [x] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
+- [x] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
 
 ### Task 4.2: Restricted research and retrospective
 
@@ -50,11 +50,11 @@ Proposed files: whilly/swarm/learning/research.py, schedules.py; whilly/adapters
 
 **Interfaces:** ResearchFetcher.fetch(url: str, policy: FetchPolicy) -> ResearchDocument. FetchPolicy explicitly bounds destinations, redirects, bytes and timeout. Resolve and validate public HTTPS destinations at each hop; pin the vetted connection destination or use an equally strong egress boundary. Never use a separate DNS precheck followed by an unvalidated reconnect. Documents remain untrusted and cannot execute tools. RetrospectiveService.analyze(run_id: str, events: list[dict]) -> DailyReport uses authorized redacted structured events, not hidden reasoning.
 
-- [ ] Write failing tests: test_private_and_metadata_destinations_denied; test_redirect_and_dns_rebinding_denied; test_oversize_document_stops; test_malicious_page_cannot_change_policy; test_no_data_is_not_success. Required assertions: DailyReport includes sources/dates, observations, sample size, missing data, hypotheses, proposals, latency and known/unknown costs. Do not classify confidence as factual verification.
-- [ ] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
-- [ ] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
-- [ ] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
-- [ ] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
+- [x] Write failing tests: test_private_and_metadata_destinations_denied; test_redirect_and_dns_rebinding_denied; test_oversize_document_stops; test_malicious_page_cannot_change_policy; test_no_data_is_not_success. Required assertions: DailyReport includes sources/dates, observations, sample size, missing data, hypotheses, proposals, latency and known/unknown costs. Do not classify confidence as factual verification.
+- [x] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
+- [x] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
+- [x] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
+- [x] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
 
 ### Task 4.3: Manual dry run and chief report
 
@@ -62,16 +62,16 @@ Proposed files: whilly/swarm/learning/research.py, schedules.py; whilly/adapters
 
 **Interfaces:** Add authenticated run/status/report/stop controls. Manual dry run uses fixture fetch/model adapters only. Real run requires enabled trusted configuration and an explicit selected model. Save report/proposals atomically or record partial failure; integrate with L1 candidate knowledge and L3 proposals, never direct execution.
 
-- [ ] Write failing tests: test_report_survives_restart; test_stop_blocks_new_calls; test_partial_failure_visible; test_unredacted_query_denied. Required assertions: Browser displays latest run, schedule-disabled status, evidence, costs and blockers. Provider outage has bounded retry and no expensive fallback.
-- [ ] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
-- [ ] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
-- [ ] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
-- [ ] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
+- [x] Write failing tests: test_report_survives_restart; test_stop_blocks_new_calls; test_partial_failure_visible; test_unredacted_query_denied. Required assertions: Browser displays latest run, schedule-disabled status, evidence, costs and blockers. Provider outage has bounded retry and no expensive fallback.
+- [x] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
+- [x] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
+- [x] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
+- [x] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
 
 ## Acceptance and handoff
 
-- [ ] Run `.venv/bin/lint-imports --no-cache`, focused Ruff and `git diff --check`.
-- [ ] Verify named boundary failures with isolated negative/mutation fixtures; never mutate a live repository to test a guard.
-- [ ] If UI changed, verify authenticated browser flows, CSRF, desktop/mobile, persistence after safe restart and no model calls from view-only actions.
-- [ ] Update docs/Product-Swarm.md and OpenSpec capability delta with the actual supported increment and explicit limitations.
-- [ ] Controller self-review maps results to the spec; hand off working code with schedule/export disabled. Report mocked versus live evidence separately.
+- [x] Run `.venv/bin/lint-imports --no-cache`, focused Ruff and `git diff --check`.
+- [x] Verify named boundary failures with isolated negative/mutation fixtures; never mutate a live repository to test a guard.
+- [x] If UI changed, verify authenticated browser flows, CSRF, desktop/mobile, persistence after safe restart and no model calls from view-only actions.
+- [x] Update docs/Product-Swarm.md and OpenSpec capability delta with the actual supported increment and explicit limitations.
+- [x] Controller self-review maps results to the spec; hand off working code with schedule/export disabled. Report mocked versus live evidence separately.

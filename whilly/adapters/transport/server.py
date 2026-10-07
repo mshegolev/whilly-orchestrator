@@ -1455,6 +1455,9 @@ def create_app(
             from whilly.api.swarm_proposals import build_proposal_router
 
             app.include_router(build_proposal_router(pool, dashboard_token_secret, swarm_registry))
+            from whilly.api.swarm_learning import build_learning_router
+
+            app.include_router(build_learning_router(pool, dashboard_token_secret))
     # PRD-wui-multi-plan v2 Block 8 (Epic C — task edit + hard delete).
     # PATCH/DELETE on /api/v1/tasks/{task_id} with If-Match: W/"v<version>"
     # concurrency. Same pool + HMAC secret as the rest of the

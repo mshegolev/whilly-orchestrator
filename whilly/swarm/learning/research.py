@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
+import json
 from types import MappingProxyType
 from typing import Mapping, Protocol
+from urllib.parse import urlsplit, urlunsplit
 
 
 class ResearchBlocked(RuntimeError):
@@ -69,6 +72,7 @@ class DailyReport:
     known_cost: float
     unknown_cost_count: int
     policy_actions: tuple[str, ...] = ()
+    request_digest: str | None = None
 
 
 class ResearchNetwork(Protocol):
@@ -78,7 +82,7 @@ class ResearchNetwork(Protocol):
 
 
 class ReportStore(Protocol):
-    async def save_report(self, report: DailyReport) -> None: ...
+    async def save_report(self, report: DailyReport) -> DailyReport | None: ...
 
     async def get_report(self, run_id: str) -> DailyReport | None: ...
 
@@ -104,14 +108,27 @@ class ResearchController:
     async def run_fixture(self, run_id: str, events: list[dict]) -> ResearchRunResult:
         if await self._store.is_stopped(run_id):
             raise ResearchBlocked("stop_requested")
+        request_digest = hashlib.sha256(
+            json.dumps(events, sort_keys=True, separators=(",", ":"), default=str).encode()
+        ).hexdigest()
+        existing = await self._store.get_report(run_id)
+        if existing is not None:
+            if existing.request_digest != request_digest:
+                raise ResearchBlocked("run_identity_conflict")
+            return ResearchRunResult(existing.outcome, None, existing)
         if any(event.get("raw_query") is not None for event in events):
             raise ResearchBlocked("unredacted_query_denied")
-        report = self._retrospective.analyze(run_id, events)
+        report = self._retrospective.analyze(run_id, events, request_digest=request_digest)
         try:
-            await self._store.save_report(report)
+            canonical = await self._store.save_report(report)
+        except ValueError as exc:
+            if str(exc) == "report identity conflict":
+                raise ResearchBlocked("run_identity_conflict") from exc
+            return ResearchRunResult("partial_failure", "report_persistence_failed", None)
         except Exception:
             return ResearchRunResult("partial_failure", "report_persistence_failed", None)
-        return ResearchRunResult(report.outcome, None, report)
+        persisted = canonical or report
+        return ResearchRunResult(persisted.outcome, None, persisted)
 
     async def report(self, run_id: str) -> DailyReport | None:
         return await self._store.get_report(run_id)
@@ -123,7 +140,7 @@ class ResearchController:
 class RetrospectiveService:
     """Summarize structured events without treating retrieved text as authority."""
 
-    def analyze(self, run_id: str, events: list[dict]) -> DailyReport:
+    def analyze(self, run_id: str, events: list[dict], *, request_digest: str | None = None) -> DailyReport:
         now = datetime.now(timezone.utc)
         if not events:
             return DailyReport(
@@ -139,9 +156,10 @@ class RetrospectiveService:
                 latency_ms=None,
                 known_cost=0,
                 unknown_cost_count=0,
+                request_digest=request_digest,
             )
         sources = tuple(
-            ReportSource(str(event["source"]), event.get("source_date"), str(event["retrieved_at"]))
+            ReportSource(_safe_source_uri(str(event["source"])), event.get("source_date"), str(event["retrieved_at"]))
             for event in events
             if event.get("kind") == "research_document" and event.get("source") and event.get("retrieved_at")
         )
@@ -165,7 +183,15 @@ class RetrospectiveService:
             latency_ms=sum(latencies) if latencies else None,
             known_cost=known_cost,
             unknown_cost_count=sum(cost is None for cost in costs),
+            request_digest=request_digest,
         )
+
+
+def _safe_source_uri(value: str) -> str:
+    parsed = urlsplit(value)
+    hostname = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port is not None else ""
+    return urlunsplit((parsed.scheme, f"{hostname}{port}", parsed.path, "", ""))
 
 
 __all__ = [

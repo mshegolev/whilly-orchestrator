@@ -27,8 +27,8 @@ and missing evaluation evidence are mapped to negative tests in the increment pl
 - [x] [L1: Shared memory](2026-09-29-swarm-memory.md) — knowledge revisions, freshness, permissions, context packages, redaction.
 - [x] [L2: Durable messages](2026-09-29-swarm-messages.md) — delivery receipts, retries, expiry, authenticated sender; live inspector verified, sending intentionally requires explicit policy.
 - [x] [L3: Cross-project proposals](2026-09-29-swarm-proposals.md) — safe-mode deduplication and approval-bound admission; contract changes remain blocked without host proof.
-- [ ] [L4: Daily research](2026-09-29-swarm-daily-research.md) — disabled scheduler, restricted fetch, retrospective, reports.
-- [ ] [L5: Improvement evaluation](2026-09-29-swarm-improvement-evals.md) — frozen comparisons, TRIZ records, owner decisions, optional Langfuse export.
+- [x] [L4: Daily research](2026-09-29-swarm-daily-research.md) — disabled scheduler, restricted fetch, retrospective, reports.
+- [x] [L5: Improvement evaluation](2026-09-29-swarm-improvement-evals.md) — frozen comparisons, TRIZ records, owner decisions, optional Langfuse export.
 
 ## Execution coordination
 

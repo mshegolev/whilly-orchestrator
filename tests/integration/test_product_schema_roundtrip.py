@@ -1,6 +1,7 @@
 """Round-trip all migrations only in the explicitly named disposable test DB."""
 
 import asyncio
+import os
 from urllib.parse import urlsplit
 
 import asyncpg
@@ -14,7 +15,8 @@ pytestmark = pytest.mark.integration
 
 
 def test_schema_roundtrip_disposable_only(swarm_dsn, monkeypatch):  # noqa: F811
-    if urlsplit(swarm_dsn).path != "/whilly_swarm_test":
+    external = os.environ.get("WHILLY_SWARM_TEST_DATABASE_URL")
+    if external and urlsplit(swarm_dsn).path != "/whilly_swarm_test":
         pytest.skip("requires explicitly named disposable swarm database")
     monkeypatch.setenv("WHILLY_DATABASE_URL", swarm_dsn)
     config = _build_alembic_config(swarm_dsn)
@@ -25,11 +27,15 @@ def test_schema_roundtrip_disposable_only(swarm_dsn, monkeypatch):  # noqa: F811
     async def inspect():
         conn = await asyncpg.connect(swarm_dsn)
         try:
-            assert await conn.fetchval("SELECT version_num FROM alembic_version") == "036_learning_memory"
+            assert await conn.fetchval("SELECT version_num FROM alembic_version") == "042_learning_evaluations"
             assert await conn.fetchval("SELECT to_regclass('swarm_learning_revisions')")
             assert await conn.fetchval("SELECT to_regclass('swarm_learning_payloads')")
             assert await conn.fetchval("SELECT to_regclass('swarm_product_features')")
             assert await conn.fetchval("SELECT to_regclass('swarm_publications')")
+            assert await conn.fetchval("SELECT to_regclass('swarm_learning_reports')")
+            assert await conn.fetchval("SELECT to_regclass('swarm_learning_stops')")
+            assert await conn.fetchval("SELECT to_regclass('swarm_learning_experiments')")
+            assert await conn.fetchval("SELECT to_regclass('swarm_learning_experiment_decisions')")
             assert (
                 await conn.fetchval(
                     "SELECT count(*) FROM information_schema.columns WHERE table_name='swarm_product_specs' AND column_name='binding'"

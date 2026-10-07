@@ -38,11 +38,11 @@ Proposed files: whilly/swarm/learning/experiments.py; whilly/adapters/db/learnin
 
 **Interfaces:** ExperimentManifest (id, hypothesis, baseline_sha, candidate_sha, dataset_hash, heldout_hash, rubric_version, policy_version, model_versions, acceptance_limits, triz_record). TRIZ record names contradiction, ideal outcome, existing resources, alternatives and falsifying measurement. ExperimentService.compare(manifest: ExperimentManifest, results: list[dict]) -> EvaluationReport. No automatic thresholds; explicit owner-approved acceptance limits are required before evaluation is promotable.
 
-- [ ] Write failing tests: test_changed_dataset_invalidates_comparison; test_tuning_heldout_overlap_blocks; test_unknown_cost_not_zero; test_regression_blocks_recommendation. Required assertions: Compare correctness, missed escalations, regressions, repeated failures, latency and total known cost; report per-metric sample sizes and unavailable values. Model judgment alone cannot produce authorization.
-- [ ] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
-- [ ] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
-- [ ] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
-- [ ] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
+- [x] Write failing tests: test_changed_dataset_invalidates_comparison; test_tuning_heldout_overlap_blocks; test_unknown_cost_not_zero; test_regression_blocks_recommendation. Required assertions: Compare correctness, missed escalations, regressions, repeated failures, latency and total known cost; report per-metric sample sizes and unavailable values. Model judgment alone cannot produce authorization.
+- [x] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
+- [x] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
+- [x] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
+- [x] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
 
 ### Task 5.2: Optional export, decision and rollout records
 
@@ -50,16 +50,16 @@ Proposed files: whilly/swarm/learning/experiments.py; whilly/adapters/db/learnin
 
 **Interfaces:** EvalSink.write(report: EvaluationReport, export_policy: ExportPolicy) -> ExportReceipt; local persistence precedes optional authorized Langfuse export. Export is disabled by default and excludes raw secrets/transcripts. ExperimentService.record_decision(principal: Principal, experiment_id: str, decision: str, reason: str) -> DecisionReceipt records owner acceptance/rejection only; proposed code changes still use existing feature workflow and fresh approval. Rollback references last accepted artifact and requires normal execution authorization.
 
-- [ ] Write failing tests: test_export_disabled_no_network; test_agent_cannot_accept_own_change; test_policy_change_requires_owner; test_failed_export_preserves_local_result; test_rollback_does_not_bypass_permissions. Required assertions: UI exposes baseline/candidate versions, evidence, decision and rollback reference. No automatic retraining, prompt installation, merge, deployment or Jev dependency.
-- [ ] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
-- [ ] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
-- [ ] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
-- [ ] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
+- [x] Write failing tests: test_export_disabled_no_network; test_agent_cannot_accept_own_change; test_policy_change_requires_owner; test_failed_export_preserves_local_result; test_rollback_does_not_bypass_permissions. Required assertions: UI exposes baseline/candidate versions, evidence, decision and rollback reference. No automatic retraining, prompt installation, merge, deployment or Jev dependency.
+- [x] Run the new unit file with `.venv/bin/python -m pytest -q <exact test file above>`; confirm the named missing behavior fails, not imports/dependency setup unrelated to the task.
+- [x] Implement only this task's interfaces and minimum supporting DTOs; expose no alternate authorization path.
+- [x] Run the same tests to green, then affected existing tests. DB tests use the private check.py wrapper against whilly_swarm_test only, serially; never reset the operational database.
+- [x] Fresh reviewer checks spec compliance, failure cases and diff scope. Record changed files, commands/results and blockers; preserve unrelated work without committing it.
 
 ## Acceptance and handoff
 
-- [ ] Run `.venv/bin/lint-imports --no-cache`, focused Ruff and `git diff --check`.
-- [ ] Verify named boundary failures with isolated negative/mutation fixtures; never mutate a live repository to test a guard.
-- [ ] If UI changed, verify authenticated browser flows, CSRF, desktop/mobile, persistence after safe restart and no model calls from view-only actions.
-- [ ] Update docs/Product-Swarm.md and OpenSpec capability delta with the actual supported increment and explicit limitations.
-- [ ] Controller self-review maps results to the spec; hand off working code with schedule/export disabled. Report mocked versus live evidence separately.
+- [x] Run `.venv/bin/lint-imports --no-cache`, focused Ruff and `git diff --check`.
+- [x] Verify named boundary failures with isolated negative/mutation fixtures; never mutate a live repository to test a guard.
+- [x] If UI changed, verify authenticated browser flows, CSRF, desktop/mobile, persistence after safe restart and no model calls from view-only actions.
+- [x] Update docs/Product-Swarm.md and OpenSpec capability delta with the actual supported increment and explicit limitations.
+- [x] Controller self-review maps results to the spec; hand off working code with schedule/export disabled. Report mocked versus live evidence separately.

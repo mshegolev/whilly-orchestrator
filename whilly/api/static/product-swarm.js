@@ -247,6 +247,26 @@
       await loadProposals();
     }
   }
+  async function loadLearningStatus() {
+    const data = await request('/learning/status');
+    const blockers = data.blockers || [];
+    text(document.getElementById('learning-status'), blockers.length ? blockers.join(', ') : 'Learning controls ready.');
+    return data;
+  }
+  async function loadResearchReport() {
+    const runId = document.getElementById('learning-report-id').value.trim();
+    if (!runId) throw new Error('Enter a research run id.');
+    const data = await request(`/learning/research/${encodeURIComponent(runId)}/report`);
+    text(document.getElementById('learning-evidence'), JSON.stringify(data, null, 2));
+    return data;
+  }
+  async function loadExperiment() {
+    const experimentId = document.getElementById('learning-experiment-id').value.trim();
+    if (!experimentId) throw new Error('Enter an experiment id.');
+    const data = await request(`/learning/experiments/${encodeURIComponent(experimentId)}`);
+    text(document.getElementById('learning-evidence'), JSON.stringify(data, null, 2));
+    return data;
+  }
   function bind() {
     document.getElementById('planner-profile').addEventListener('change', event => {
       updatePlanAvailability();
@@ -258,6 +278,9 @@
     document.getElementById('proposal-list')?.addEventListener('change', event => loadProposal(event.target.value).catch(showError));
     document.getElementById('proposal-accept-btn')?.addEventListener('click', () => decideProposal('accept').catch(showError));
     document.getElementById('proposal-reject-btn')?.addEventListener('click', () => decideProposal('reject').catch(showError));
+    document.getElementById('learning-status-btn')?.addEventListener('click', () => loadLearningStatus().catch(showError));
+    document.getElementById('learning-report-btn')?.addEventListener('click', () => loadResearchReport().catch(showError));
+    document.getElementById('learning-experiment-btn')?.addEventListener('click', () => loadExperiment().catch(showError));
     document.getElementById('feature-list').addEventListener('change', () => {
       updatePlanAvailability();
       const id = featureId();
@@ -275,8 +298,9 @@
     Promise.all([loadFeatures(), loadMessages(), loadKnowledgeStatus()]).catch(showError);
     loadCollaboration().catch(showError);
     loadProposals().catch(showError);
+    loadLearningStatus().catch(showError);
     setInterval(() => { loadMessages().catch(showError); const id = featureId(); if (id) loadFeature(id).catch(showError); }, 3000);
   }
-  root.ProductSwarm = {apiRoot, request, bind, saveTask: sendMessage, startNewTask, loadKnowledge, loadKnowledgeStatus, loadCollaboration, loadProposals, loadProposal, decideProposal, messageAction: 'message', planningAction: 'separate'};
+  root.ProductSwarm = {apiRoot, request, bind, saveTask: sendMessage, startNewTask, loadKnowledge, loadKnowledgeStatus, loadCollaboration, loadProposals, loadProposal, decideProposal, loadLearningStatus, loadResearchReport, loadExperiment, messageAction: 'message', planningAction: 'separate'};
   if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', bind);
 })(window);

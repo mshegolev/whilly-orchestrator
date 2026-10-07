@@ -20,6 +20,7 @@ def _report() -> EvaluationReport:
         metrics={"correctness_rate": Metric(1.0, 4)},
         unknown_cost_count=0,
         recommendation="candidate",
+        manifest={"id": "exp-1", "policy_version": "p1"},
     )
 
 
@@ -28,8 +29,10 @@ class MemoryDecisionStore:
         self.report = None
         self.decisions = []
 
-    async def save_report(self, report: EvaluationReport) -> None:
+    async def save_evaluation(self, report: EvaluationReport, *, proposer_id: str, policy_version: str) -> None:
         self.report = report
+        self.proposer_id = proposer_id
+        self.policy_version = policy_version
 
     async def save_decision(self, receipt) -> None:
         self.decisions.append(receipt)
@@ -52,7 +55,9 @@ async def test_export_disabled_no_network() -> None:
     sink = RecordingSink()
     service = ExperimentDecisionService(MemoryDecisionStore(), sink)
 
-    receipt = await service.persist_and_export(_report(), ExportPolicy(enabled=False, include_raw=False))
+    receipt = await service.persist_and_export(
+        _report(), ExportPolicy(enabled=False, include_raw=False), proposer_id="agent-1", policy_version="p1"
+    )
 
     assert receipt.outcome == "local_only"
     assert sink.calls == 0
@@ -89,10 +94,12 @@ async def test_policy_change_requires_fresh_owner_decision() -> None:
 async def test_failed_export_preserves_local_result() -> None:
     store = MemoryDecisionStore()
     receipt = await ExperimentDecisionService(store, RecordingSink(fail=True)).persist_and_export(
-        _report(), ExportPolicy(enabled=True, include_raw=False)
+        _report(), ExportPolicy(enabled=True, include_raw=False), proposer_id="agent-1", policy_version="p1"
     )
 
     assert store.report == _report()
+    assert store.proposer_id == "agent-1"
+    assert store.policy_version == "p1"
     assert receipt.outcome == "export_failed"
     assert receipt.blocker == "optional_export_unavailable"
 

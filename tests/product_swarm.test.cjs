@@ -159,9 +159,20 @@ test('product template contains cockpit controls and existing swarm link', () =>
   assert.match(html, /planner_setup_required/);
 });
 
+test('learning panel names disabled activation and renders durable evidence as text', () => {
+  const html = fs.readFileSync('whilly/api/templates/product_swarm.html.j2', 'utf8');
+  for (const id of ['learning-status-btn', 'learning-status', 'learning-report-id', 'learning-report-btn', 'learning-evidence']) {
+    assert.match(html, new RegExp(`id=["']${id}["']`));
+  }
+  assert.match(source, /request\('\/learning\/status'\)/);
+  assert.match(source, /\/learning\/research\/\$\{encodeURIComponent\(runId\)\}\/report/);
+  assert.match(source, /blockers\.join/);
+  assert.doesNotMatch(source, /learning-evidence[^\n]*innerHTML/);
+});
+
 test('product cockpit clears stale feature deep links after cleanup', () => {
   assert.match(source, /searchParams\.delete\('feature'\)/);
   assert.match(source, /Создайте новую задачу/);
   const html = fs.readFileSync('whilly/api/templates/product_swarm.html.j2', 'utf8');
-  assert.match(html, /product-swarm\.js\?v=20261002-planfix2/);
+  assert.match(html, /product-swarm\.js\?v=20261007-learning/);
 });
