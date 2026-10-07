@@ -124,8 +124,8 @@
 - Consumes: Tasks 1-5.
 - Produces: evidence-backed local completion status.
 
-- [ ] Run Ruff, import checks, strict OpenSpec validation, focused PostgreSQL checks, and the normal unit suite.
-- [ ] Run guarded integration tests with real network access blocked.
-- [ ] Request an independent whole-branch review.
-- [ ] Fix every Critical or Important finding through a new red-green cycle.
-- [ ] Record remaining environmental or externally authorized acceptance separately.
+- [x] Run Ruff, import checks, strict OpenSpec validation, focused PostgreSQL checks, and the normal unit suite.
+- [x] Run guarded integration tests with real network access blocked.
+- [x] Request an independent whole-branch review.
+- [x] Fix every Critical or Important finding through a new red-green cycle.
+- [x] Record remaining environmental or externally authorized acceptance separately.
