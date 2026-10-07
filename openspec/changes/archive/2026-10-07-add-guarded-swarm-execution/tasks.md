@@ -4,4 +4,4 @@
 - [x] Enforce candidate baseline/tree/head/protected-change checks and retain failed Git logs.
 - [x] Fail closed before legacy publication Git/transport construction.
 - [x] Add synthetic unit coverage and macOS sandbox/Git acceptance coverage.
-- [ ] Controller review of the complete per-launcher inventory.
+- [x] Controller review of the complete per-launcher inventory.

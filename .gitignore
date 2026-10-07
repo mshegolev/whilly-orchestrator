@@ -65,6 +65,7 @@ github-https:*
 htmlcov/
 .mypy_cache/
 .ruff_cache/
+mutants/
 
 # PRD wizard state
 .ralph_prd_state.json

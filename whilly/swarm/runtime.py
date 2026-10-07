@@ -1580,6 +1580,9 @@ class Coordinator:
                     attempt_id, status="abandoned", error=f"claim_lost: {exc}", cost_usd=cost
                 )
             await self.store.set_outcome(task.id, "claim_lost", str(exc))
+        except ExecutionBlocked as exc:
+            failure = _TaskFailure(exc.reason, str(exc))
+            await self._fail(task.id, version, attempt_id, failure, head, result, evidence, review, cost)
         except Exception as exc:  # noqa: BLE001 — record every coordinator-side error on the task
             log.exception("task %s crashed", task.id)
             failure = _TaskFailure("coordinator_error", f"{type(exc).__name__}: {exc}")
