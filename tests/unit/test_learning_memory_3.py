@@ -75,7 +75,7 @@ async def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(swarm_memory, "GitSourceVerifier", lambda projects: object(), raising=False)
 
     principal = SimpleNamespace(username="admin", role="admin")
-    monkeypatch.setattr(users_repo, "get_user_by_session_email", AsyncMock(return_value=principal))
+    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=principal))
     monkeypatch.setattr(
         sessions,
         "verify_session",

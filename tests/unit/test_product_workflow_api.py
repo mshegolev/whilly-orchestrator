@@ -19,7 +19,7 @@ SECRET = b"product-test-secret-long-enough-0000"
 @pytest.fixture
 async def client(monkeypatch):
     principal = SimpleNamespace(username="admin", role="admin")
-    monkeypatch.setattr(users_repo, "get_user_by_session_email", AsyncMock(return_value=principal))
+    monkeypatch.setattr(users_repo, "get_user_by_username", AsyncMock(return_value=principal))
     monkeypatch.setattr(
         sessions,
         "verify_session",

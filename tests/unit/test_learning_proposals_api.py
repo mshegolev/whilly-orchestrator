@@ -123,7 +123,7 @@ async def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(swarm_proposals, "PostgresProposalStore", lambda pool, actor_host: store)
     monkeypatch.setattr(swarm_proposals, "build_proposal_service", lambda *args, **kwargs: service)
     monkeypatch.setattr(
-        users_repo, "get_user_by_session_email", AsyncMock(return_value=SimpleNamespace(username="admin", role="admin"))
+        users_repo, "get_user_by_username", AsyncMock(return_value=SimpleNamespace(username="admin", role="admin"))
     )
     monkeypatch.setattr(
         sessions,

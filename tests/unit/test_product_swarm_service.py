@@ -10,6 +10,9 @@ from whilly.api.product_swarm import SpecRequest
 async def test_prepare_binds_spec_revision_registry_and_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    from types import SimpleNamespace
+    from whilly.swarm import product as product_module
+
     class FakeStore:
         async def ensure_product(self, name: str):
             return {"id": "default", "name": name}
@@ -24,6 +27,13 @@ async def test_prepare_binds_spec_revision_registry_and_session(
     service.store = FakeStore()
     monkeypatch.setattr(service, "_registry_snapshot", lambda: {"name": "demo", "hash": "r1"})
     monkeypatch.setattr(service, "_create_session", lambda title: _session(title))
+    monkeypatch.setattr(
+        product_module,
+        "load_registry",
+        lambda _path: SimpleNamespace(
+            projects={"demo-lib": SimpleNamespace(path=str(tmp_path), execution=None)}
+        ),
+    )
 
     result = await service.prepare(
         "f1",

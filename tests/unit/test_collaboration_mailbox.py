@@ -109,7 +109,7 @@ async def test_legacy_coordinator_has_no_learning_side_effects(monkeypatch, tmp_
 
     legacy = AsyncMock()
     monkeypatch.setattr(runtime, "sync_mailbox", legacy)
-    coordinator = runtime.Coordinator(SimpleNamespace(store=object(), repo=object()), "session")
+    coordinator = runtime.Coordinator(SimpleNamespace(store=object(), repo=object(), executor=object()), "session")
     await coordinator._sync_task_mailbox(tmp_path, {"local_id": "local"}, "task")
     legacy.assert_awaited_once()
     assert not (tmp_path / "collaboration").exists()

@@ -29,9 +29,8 @@ def test_legacy_registry_roundtrip_and_codex_reasoning_default_is_low():
     registry = _registry(engines=None)
     assert registry.profiles == {}
     assert registry.engines["claude"].model == "claude-haiku"
-    assert (
-        build_engine_argv("codex", EngineConfig(("codex",), "model"), mode="worker")[6]
-        == 'model_reasoning_effort="low"'
+    assert 'model_reasoning_effort="low"' in build_engine_argv(
+        "codex", EngineConfig(("codex",), "model"), mode="worker"
     )
 
 

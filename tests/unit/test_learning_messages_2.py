@@ -79,7 +79,7 @@ async def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(swarm_messages, "ProductStore", lambda pool: products)
     monkeypatch.setattr(swarm_messages, "delivery_policy_from_env", lambda: DeliveryPolicy(1000, 2, 4))
     monkeypatch.setattr(
-        users_repo, "get_user_by_session_email", AsyncMock(return_value=SimpleNamespace(username="admin", role="admin"))
+        users_repo, "get_user_by_username", AsyncMock(return_value=SimpleNamespace(username="admin", role="admin"))
     )
     monkeypatch.setattr(
         sessions,
@@ -215,7 +215,7 @@ async def test_history_is_read_only_bounded_and_exposes_expired_state(harness, m
 async def test_non_admin_session_is_forbidden(harness, monkeypatch):
     http, _, _ = harness
     monkeypatch.setattr(
-        users_repo, "get_user_by_session_email", AsyncMock(return_value=SimpleNamespace(username="op", role="operator"))
+        users_repo, "get_user_by_username", AsyncMock(return_value=SimpleNamespace(username="op", role="operator"))
     )
     assert (await http.get("/api/v1/swarm/collaboration/status")).status_code == 403
 
