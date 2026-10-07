@@ -27,7 +27,7 @@ def _revision(product: str, *, project: str | None = "project-a", revision_id: s
 
 
 @pytest.fixture
-async def product(db_pool):
+async def product(db_pool):  # noqa: F811
     product_id = f"test-product-{uuid4()}"
     async with db_pool.acquire() as conn:
         await conn.execute("INSERT INTO swarm_products (id, name) VALUES ($1, $2)", product_id, "neutral test product")
@@ -48,7 +48,7 @@ def _principal(*, projects=("project-a",), products=(), classifications=("intern
     return Principal("actor-a", tuple(products), tuple(projects), tuple(classifications))
 
 
-async def test_product_project_classification_isolation_and_unauthorized_redact(db_pool, product):
+async def test_product_project_classification_isolation_and_unauthorized_redact(db_pool, product):  # noqa: F811
     store = PostgresMemoryStore(db_pool)
     allowed = _principal(products=(product,))
     await store.append(_revision(product, project="project-a"))
@@ -63,7 +63,7 @@ async def test_product_project_classification_isolation_and_unauthorized_redact(
     assert len(await store.visible(allowed, product, ("project-a",))) == 1  # classification grant excludes restricted
 
 
-async def test_redaction_hides_payload_and_successor_reference(db_pool, product):
+async def test_redaction_hides_payload_and_successor_reference(db_pool, product):  # noqa: F811
     store = PostgresMemoryStore(db_pool)
     principal = _principal(products=(product,))
     original = _revision(product, revision_id=str(uuid4()))
@@ -77,7 +77,7 @@ async def test_redaction_hides_payload_and_successor_reference(db_pool, product)
         await store.append(_revision(product, supersedes=original.id))
 
 
-async def test_concurrent_successors_and_duplicate_id_are_safe(db_pool, product):
+async def test_concurrent_successors_and_duplicate_id_are_safe(db_pool, product):  # noqa: F811
     store = PostgresMemoryStore(db_pool)
     original = _revision(product, revision_id=str(uuid4()))
     await store.append(original)
@@ -88,7 +88,7 @@ async def test_concurrent_successors_and_duplicate_id_are_safe(db_pool, product)
         await store.append(original)
 
 
-async def test_product_wide_and_conflicts_only_reference(db_pool, product):
+async def test_product_wide_and_conflicts_only_reference(db_pool, product):  # noqa: F811
     store = PostgresMemoryStore(db_pool)
     principal = _principal(products=(product,), projects=())
     first = _revision(product, project=None)

@@ -6,10 +6,10 @@ auditable for Phase 28 (COV-01): zero silent gaps, zero double-mapping.
 
 ## Counts
 
-- **Live module count: 355** — authoritative, computed at execution time via
+- **Live module count: 357** — authoritative, computed at execution time via
   `find whilly/ -name "*.py" -not -path "*/__pycache__/*" | wc -l`.
   (Includes the local swarm runtime and engine/migration additions.)
-- **Body rows: 355** (one row per module — a strict one-to-one mapping).
+- **Body rows: 357** (one row per module — a strict one-to-one mapping).
 - **Unmapped: 0** (zero silent gaps — every row carries a real taxonomy slug).
 - **Double-mapped: 0** (no module appears under two capabilities).
 
@@ -322,6 +322,8 @@ the `242` value here is a prose reconciliation note, never a gate.
 | whilly/swarm/product_workflow.py | orchestration-loop | feature planning, budgets and execution guards |
 | whilly/swarm/publication.py | orchestration-loop | allowlisted GitLab publication transport |
 | whilly/swarm/product_publication.py | orchestration-loop | accepted-evidence publication candidates |
+| whilly/swarm/product_merge.py | orchestration-loop | exact-SHA product merge barrier and revert compensation |
+| whilly/swarm/product_delivery.py | orchestration-loop | immutable stage delivery and acceptance boundary |
 | whilly/api/product_swarm.py | web-status-ui | authenticated product and feature API |
 | whilly/api/product_workflow.py | web-status-ui | product cockpit and workflow jobs |
 | whilly/api/static/product-swarm.js | web-status-ui | product cockpit controls |

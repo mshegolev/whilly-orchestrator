@@ -17,7 +17,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.asyncio
-async def test_offline_recipient_expires_after_service_restart(db_pool):
+async def test_offline_recipient_expires_after_service_restart(db_pool):  # noqa: F811
     product = f"expiry-product-{uuid4().hex}"
     now = datetime.now(timezone.utc)
     principal = Principal("host", (product,), ("project-b",), ("internal",))
