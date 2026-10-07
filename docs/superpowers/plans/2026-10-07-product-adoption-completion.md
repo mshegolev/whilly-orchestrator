@@ -72,11 +72,11 @@
 - Consumes: `ProductRegistrySnapshot`, `ProductChangeSetStore`, `RepoPublicationReceipt`.
 - Produces: `ProductMergeCoordinator.verify_barrier(change_id: str) -> MergeBarrierReceipt`.
 
-- [ ] Write tests proving every mandatory repository, exact source SHA, required job, approval digest, and target SHA are required together.
-- [ ] Verify the tests fail because the coordinator does not exist.
-- [ ] Implement the immutable barrier receipt and fail-closed coordinator.
-- [ ] Verify focused tests and existing publication tests pass.
-- [ ] Commit the barrier with explicit paths.
+- [x] Write tests proving every mandatory repository, exact source SHA, required job, approval digest, and target SHA are required together.
+- [x] Verify the tests fail because the coordinator does not exist.
+- [x] Implement the immutable barrier receipt and fail-closed coordinator.
+- [x] Verify focused tests and existing publication tests pass.
+- [x] Commit the barrier with explicit paths.
 
 ### Task 4: Add sequential merge and durable compensation
 

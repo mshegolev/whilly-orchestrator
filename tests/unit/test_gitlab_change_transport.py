@@ -332,6 +332,24 @@ async def test_pipeline_without_required_job_scope_cannot_be_green():
     assert not receipt.green and receipt.status == "missing"
 
 
+async def test_merge_reads_revalidate_target_and_merge_request_identity():
+    base = API(existing=True)
+
+    def handler(req):
+        if req.url.path.endswith("/merge_requests/7"):
+            return httpx.Response(200, json={
+                "iid": 7, "source_branch": "whilly/change-demo", "target_branch": "master",
+                "source_project_id": 17, "target_project_id": 17, "state": "opened", "sha": SHA,
+                "web_url": "https://gitlab.example.com/demo/repo/-/merge_requests/7",
+            })
+        return base(req)
+
+    adapter, _ = transport(api=handler)
+    receipt = await adapter.prepare_repo_change(request(), policy())
+    assert await adapter.read_target_sha(policy()) == TARGET
+    assert await adapter.read_merge_request(policy(), receipt) == receipt
+
+
 async def test_durable_unfinished_intent_blocks_retry_without_repeating_effect():
     from whilly.swarm.change_set import Evidence, EvidenceOutcome, ExternalEffectReceipt
     class Store:

@@ -394,6 +394,39 @@ class GitLabChangeTransport:
             jobs = tuple(values)
         return PipelineReceipt(project_id, sha, pid, status, jobs)
 
+    async def read_target_sha(self, policy: ProductProjectPolicy) -> str:
+        project = await self.http.request("GET", f"/api/v4/projects/{policy.gitlab_project_id}")
+        if (not isinstance(project, dict) or project.get("id") != policy.gitlab_project_id
+                or project.get("http_url_to_repo") != policy.canonical_remote):
+            raise PublicationError("publication_remote_mismatch")
+        target = await self.http.request(
+            "GET",
+            f"/api/v4/projects/{policy.gitlab_project_id}/repository/branches/"
+            + quote(policy.target_branch, safe=""),
+        )
+        if (not isinstance(target, dict) or target.get("protected") is not True
+                or target.get("name") != policy.target_branch or not isinstance(target.get("commit"), dict)
+                or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", str(target["commit"].get("id", "")))):
+            raise PublicationError("publication_target_changed")
+        return target["commit"]["id"]
+
+    async def read_merge_request(self, policy: ProductProjectPolicy,
+                                 receipt: RepoPublicationReceipt) -> RepoPublicationReceipt:
+        mr = await self.http.request(
+            "GET", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests/{receipt.mr_iid}"
+        )
+        expected_url = (
+            self.http.origin + urlsplit(policy.canonical_remote).path.removesuffix(".git")
+            + f"/-/merge_requests/{receipt.mr_iid}"
+        )
+        if (not isinstance(mr, dict) or mr.get("iid") != receipt.mr_iid
+                or mr.get("source_branch") != receipt.source_branch or mr.get("target_branch") != policy.target_branch
+                or mr.get("source_project_id") != policy.gitlab_project_id
+                or mr.get("target_project_id") != policy.gitlab_project_id or mr.get("sha") != receipt.source_sha
+                or mr.get("state") != "opened" or mr.get("web_url") != expected_url):
+            raise PublicationError("publication_mr_identity_changed")
+        return receipt
+
     async def prepare_repo_change(self, change: RepoPublicationRequest,
                                   policy: ProductProjectPolicy) -> RepoPublicationReceipt:
         if (await self.ready()).get("ready") is not True:

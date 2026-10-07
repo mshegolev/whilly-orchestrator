@@ -402,3 +402,25 @@ observed reverts without unresolved merged parts.
 - **WHEN** a failed stage observation initiates compensation
 - **THEN** ROLLING_BACK can retain that failed observation without claiming success
 - **AND** incomplete compensation remains ROLLBACK_FAILED rather than FAILED or DONE
+
+### Requirement: Product merge opens only behind one exact-SHA barrier
+
+The system SHALL revalidate the immutable approval and registry binding, current
+merge-request identity, protected target SHA, latest exact-source-SHA pipeline,
+and every required CI job for every mandatory repository before permitting the
+first merge. The resulting immutable barrier receipt SHALL preserve repositories
+in dependency order and SHALL NOT treat an older pipeline or partial repository
+set as product readiness.
+
+#### Scenario: One mandatory repository is stale or incomplete
+
+- **WHEN** any mandatory repository is missing, its target SHA changed, its merge
+  request no longer names the approved source, or a required job is not green for
+  that exact source SHA
+- **THEN** the product barrier remains closed and no merge effect is authorized
+
+#### Scenario: All repositories retain the approved identity
+
+- **WHEN** every mandatory repository passes all barrier checks in one verification
+- **THEN** the system produces an immutable dependency-ordered barrier receipt
+- **AND** the receipt alone does not merge or deploy any repository
