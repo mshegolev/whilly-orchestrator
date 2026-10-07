@@ -451,3 +451,34 @@ a protected target.
 - **WHEN** a caller attempts force-push, branch update, delete, or an unrelated
   GitLab mutation through the guarded transport
 - **THEN** the request is rejected before credentials or network are used
+
+### Requirement: Stage completion requires immutable artifacts and exact deployment acceptance
+
+The system SHALL deliver every mandatory repository through an injected stage
+delivery port using immutable SHA-256 artifact digests, retain idempotent delivery
+and observation receipts, and permit DONE only after every declared stage
+observation passes for the exact approved source SHA. Provider credentials and
+deployment implementation SHALL remain outside the domain coordinator.
+
+#### Scenario: Artifact or deployed SHA is missing or stale
+
+- **WHEN** any mandatory artifact is absent, mutable, or the deployed SHA differs
+  from the approved repository source SHA
+- **THEN** the product does not enter DONE and proceeds to the compensation boundary
+
+#### Scenario: Mandatory stage probe is unavailable
+
+- **WHEN** any declared stage observation is failed, absent, or unavailable
+- **THEN** stage acceptance is not claimed and the product enters ROLLING_BACK with
+  the merge barrier retained for durable compensation
+
+### Requirement: Production delivery remains a separate explicit approval boundary
+
+The system SHALL NOT treat stage acceptance or the original implementation
+approval as production-release approval. Any injected production delivery port
+SHALL require a distinct digest bound to the completed stage acceptance receipt.
+
+#### Scenario: Production approval is missing or stale
+
+- **WHEN** production delivery is requested without the distinct current approval
+- **THEN** no production delivery provider is invoked

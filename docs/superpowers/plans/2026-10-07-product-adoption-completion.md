@@ -109,11 +109,11 @@
 - Consumes: merged change-set, immutable artifact digests, declarative delivery policy.
 - Produces: durable stage delivery and acceptance receipts without embedding a deployment provider.
 
-- [ ] Write failing tests for missing artifacts, prod approval boundary, stale deployment SHA, unavailable probe, and replay.
-- [ ] Implement an injected delivery port with durable effect receipts.
-- [ ] Require passed stage acceptance for every mandatory artifact before DONE.
-- [ ] Verify prod remains a separate explicit approval boundary.
-- [ ] Commit the stage-boundary implementation with explicit paths.
+- [x] Write failing tests for missing artifacts, prod approval boundary, stale deployment SHA, unavailable probe, and replay.
+- [x] Implement an injected delivery port with durable effect receipts.
+- [x] Require passed stage acceptance for every mandatory artifact before DONE.
+- [x] Verify prod remains a separate explicit approval boundary.
+- [x] Commit the stage-boundary implementation with explicit paths.
 
 ### Task 6: Whole-branch verification and review
 
