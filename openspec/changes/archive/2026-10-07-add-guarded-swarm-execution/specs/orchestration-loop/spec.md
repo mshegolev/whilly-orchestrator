@@ -9,6 +9,10 @@ host-provisioned toolchain identified by `toolchain_id`.
 - **WHEN** isolation, named provider authorization or toolchain provisioning is unavailable
 - **THEN** the launch fails with a named blocker before a legacy process, Git or transport is constructed
 
+#### Scenario: Coordinator persists a named execution blocker
+- **WHEN** guarded execution raises a named blocker while the coordinator runs a task
+- **THEN** the task outcome retains that blocker reason instead of being recorded as `coordinator_error`
+
 #### Scenario: Explicit fixture execution
 - **WHEN** a test supplies synthetic provider values, executable roots and an isolated HOME/TMPDIR
 - **THEN** the executor uses only those values and redacts synthetic secrets from durable logs

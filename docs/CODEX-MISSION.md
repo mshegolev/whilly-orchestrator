@@ -6,6 +6,27 @@ Source Factory mission:
 State at migration: paused, working directory `/opt/develop/whilly-orchestrator`,
 Factory id `mis_b0836c2a`, last updated `2026-05-06T07:44:23.977Z`.
 
+## Swarm recovery and first-use boundary
+
+The current Swarm recovery record is
+[`docs/swarm/recovery-manifest-2026-10-07.md`](swarm/recovery-manifest-2026-10-07.md).
+Use it as the source of truth for recovered snapshot classification, launcher
+coverage, and first-use stop conditions. The principal coordinator lifecycle
+(discussion, planning/escalation, workers, review, verification, candidate Git
+mutations, and BMAD host scripts) is guarded by `GuardedExecutor`; legacy agent
+CLI modes and documented metadata/auth helpers are outside that boundary.
+Do not describe every Whilly subprocess as sandboxed.
+
+Before a real provider canary, require successful fake/offline acceptance,
+supported-host sandbox deny probes, ready toolchains/auth, unchanged approval
+bindings, and finite call/time/cost limits. Use one disposable documentation-only
+task and one worker. `ProductWorkflow.execute()` attempts publication after
+successful tasks, so first prove its publication backend is unavailable; if
+that cannot be established, do not run the live canary. Stop on any auth,
+isolation, policy, binding, or budget blocker. Treat `drained: false` as pending
+shutdown, preserve the candidate worktree/logs, and do not claim that stop rolls
+back commits or remote publication.
+
 ## Mission Goal
 
 Continue Whilly v6.0 Security & Rollback Hardening over the v4.6.1/v5.0 baseline.

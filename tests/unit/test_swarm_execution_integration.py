@@ -12,7 +12,7 @@ from whilly.swarm.agent import run_engine
 from whilly.swarm.execution import ExecutionBlocked, GuardedExecutor
 from whilly.swarm.execution_config import ExecutionProvisioning, ToolchainProvision
 from whilly.swarm.registry import EngineConfig
-from whilly.swarm.runtime import _await_blocking
+from whilly.swarm.runtime import Coordinator, _await_blocking
 from whilly.swarm.verification import parse_gate_result
 from whilly.swarm.verification_runner import VerificationRunner
 
@@ -140,6 +140,51 @@ async def test_guarded_executor_preserves_named_backend_blocker(
         policy_digest="b" * 64,
     )
     assert evidence.outcome == "isolation_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_coordinator_persists_named_execution_blocker(tmp_path: Path) -> None:
+    class Store:
+        outcomes: list[tuple[str, str, str]] = []
+
+        async def task_context(self, task_id):
+            return {"revision": 1, "max_attempts": 1, "project_id": "fixture"}
+
+        async def counted_attempts(self, task_id):
+            return 0
+
+        async def set_outcome(self, task_id, reason, message):
+            self.outcomes.append((task_id, reason, message))
+
+    class Repo:
+        failures: list[tuple[str, int, str]] = []
+
+        async def start_task(self, task_id, version):
+            return SimpleNamespace(version=version + 1)
+
+        async def fail_task(self, task_id, version, reason, *, detail):
+            self.failures.append((task_id, version, reason))
+
+    coordinator = Coordinator.__new__(Coordinator)
+    coordinator.store = Store()
+    coordinator.repo = Repo()
+    coordinator.registry = SimpleNamespace(projects={"fixture": SimpleNamespace(id="fixture")})
+    coordinator.applied_revision = 1
+    coordinator.coordinator_id = "fixture-coordinator"
+    coordinator.host = "fixture-host"
+    coordinator.state_dir = tmp_path
+
+    async def blocked_materialization(*args, **kwargs):
+        raise ExecutionBlocked("execution_isolation_unavailable")
+
+    coordinator._execution_materialization = blocked_materialization
+
+    await coordinator._execute(SimpleNamespace(id="task-1", version=3))
+
+    assert coordinator.repo.failures == [("task-1", 4, "execution_isolation_unavailable")]
+    assert coordinator.store.outcomes == [
+        ("task-1", "execution_isolation_unavailable", "execution_isolation_unavailable")
+    ]
 
 
 @pytest.mark.asyncio

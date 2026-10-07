@@ -120,6 +120,7 @@ dev = [
     "mypy>=1.11",
     "import-linter>=2.0",
     "coverage[toml]>=7.4",
+    "mutmut==3.8.0",
 ]
 
 [project.urls]
@@ -203,3 +204,10 @@ exclude_lines = [
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
 ]
+
+[tool.mutmut]
+source_paths = ["whilly/core/gates.py"]
+pytest_add_cli_args_test_selection = ["tests/unit/core/test_gates.py"]
+process_isolation = "fork"
+also_copy = ["whilly/core/"]
+on_dependency_change = "rerun"
