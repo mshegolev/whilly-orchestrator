@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Mapping, Protocol
+
+from whilly.swarm.learning.domain import Principal
 
 
 class ExperimentBlocked(RuntimeError):
     """Comparison evidence is stale, overlapping, or insufficient."""
+
+
+class DecisionBlocked(RuntimeError):
+    """An evaluation decision lacks current owner authority."""
 
 
 def _text(value: str, name: str) -> None:
@@ -85,6 +91,96 @@ class EvaluationReport:
         object.__setattr__(self, "metrics", MappingProxyType(dict(self.metrics)))
 
 
+@dataclass(frozen=True)
+class ExportPolicy:
+    enabled: bool = False
+    include_raw: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool) or not isinstance(self.include_raw, bool):
+            raise ValueError("export policy flags must be boolean")
+        if self.include_raw:
+            raise ValueError("raw transcripts and secrets cannot be exported")
+
+
+@dataclass(frozen=True)
+class ExportReceipt:
+    experiment_id: str
+    outcome: str
+    external_reference: str | None = None
+    blocker: str | None = None
+
+
+@dataclass(frozen=True)
+class DecisionReceipt:
+    experiment_id: str
+    actor_id: str
+    decision: str
+    reason: str
+    rollback_reference: str | None
+    execution_authorized: bool = False
+
+
+class EvaluationStore(Protocol):
+    async def save_report(self, report: EvaluationReport) -> None: ...
+
+    async def save_decision(self, receipt: DecisionReceipt) -> None: ...
+
+
+class EvalSink(Protocol):
+    async def write(self, report: EvaluationReport, policy: ExportPolicy) -> str: ...
+
+
+class ExperimentDecisionService:
+    """Persist evidence first; optional export and decisions grant no execution authority."""
+
+    def __init__(self, store: EvaluationStore, sink: EvalSink) -> None:
+        self._store = store
+        self._sink = sink
+
+    async def persist_and_export(self, report: EvaluationReport, policy: ExportPolicy) -> ExportReceipt:
+        await self._store.save_report(report)
+        if not policy.enabled:
+            return ExportReceipt(report.experiment_id, "local_only")
+        try:
+            reference = await self._sink.write(report, policy)
+        except Exception:
+            return ExportReceipt(report.experiment_id, "export_failed", blocker="optional_export_unavailable")
+        return ExportReceipt(report.experiment_id, "exported", external_reference=reference)
+
+    async def record_decision(
+        self,
+        principal: Principal,
+        experiment_id: str,
+        decision: str,
+        reason: str,
+        *,
+        proposer_id: str,
+        owner: bool,
+        approved_policy_version: str | None = None,
+        current_policy_version: str | None = None,
+        rollback_artifact: str | None = None,
+    ) -> DecisionReceipt:
+        if not owner or principal.actor_id == proposer_id:
+            raise DecisionBlocked("owner_required")
+        if approved_policy_version != current_policy_version:
+            raise DecisionBlocked("policy_version_changed")
+        if decision not in {"accept", "reject", "rollback"}:
+            raise DecisionBlocked("invalid_decision")
+        _text(reason, "reason")
+        if decision == "rollback" and not rollback_artifact:
+            raise DecisionBlocked("rollback_reference_required")
+        receipt = DecisionReceipt(
+            experiment_id=experiment_id,
+            actor_id=principal.actor_id,
+            decision=decision,
+            reason=reason,
+            rollback_reference=rollback_artifact,
+        )
+        await self._store.save_decision(receipt)
+        return receipt
+
+
 class ExperimentService:
     """Compare frozen evidence; recommendations never authorize rollout."""
 
@@ -138,10 +234,17 @@ class ExperimentService:
 
 
 __all__ = [
+    "DecisionBlocked",
+    "DecisionReceipt",
+    "EvalSink",
     "EvaluationReport",
+    "EvaluationStore",
+    "ExperimentDecisionService",
     "ExperimentBlocked",
     "ExperimentManifest",
     "ExperimentService",
+    "ExportPolicy",
+    "ExportReceipt",
     "Metric",
     "TrizRecord",
 ]
