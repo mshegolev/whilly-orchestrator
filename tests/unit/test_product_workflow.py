@@ -119,6 +119,7 @@ async def test_product_execution_resumes_already_applied_revision() -> None:
     assert calls == []
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS sandbox-exec")
 @pytest.mark.asyncio
 async def test_both_engines_receive_same_approved_binding_and_expiry_is_checked_on_launch(tmp_path, monkeypatch):
     """Exercise both real transport adapters with local children, never a paid CLI."""

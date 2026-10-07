@@ -306,6 +306,7 @@ async def test_successful_json_stdout_and_diagnostic_stderr(tmp_path: Path) -> N
     assert result.ids == ("known",)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS sandbox-exec")
 def test_production_command_uses_runtime_and_sandbox(tmp_path: Path) -> None:
     from whilly.adapters.memory.cognee_process import build_command
 

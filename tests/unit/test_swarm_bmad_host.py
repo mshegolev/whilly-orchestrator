@@ -11,6 +11,9 @@ from whilly.swarm.registry import Project, Registry
 from whilly.swarm.verification import VerificationPolicy
 
 
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS sandbox-exec")
+
+
 def reg(raw: dict, state: Path) -> Registry:
     return Registry(name="test", overview="", projects={}, roles={}, state_dir=str(state), raw=raw)
 

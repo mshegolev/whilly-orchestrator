@@ -19,6 +19,9 @@ from whilly.adapters.runner.swarm_sandbox import (
 from whilly.core.swarm_execution import ExecutionBlocked, ExecutionPolicy, SandboxResult
 
 
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS sandbox-exec")
+
+
 def _policy(tmp_path: Path, **overrides: object) -> ExecutionPolicy:
     (tmp_path / "candidate").mkdir(parents=True, exist_ok=True)
     (tmp_path / "out").mkdir(parents=True, exist_ok=True)

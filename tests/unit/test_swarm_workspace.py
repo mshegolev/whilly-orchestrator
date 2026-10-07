@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,9 @@ from whilly.adapters.filesystem.swarm_workspace import (
     resolve_git_toolchain,
 )
 from whilly.core.swarm_execution import ExecutionPolicy
+
+
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires the validated Xcode Git toolchain")
 
 
 def _git(cwd: Path, *args: str) -> str:

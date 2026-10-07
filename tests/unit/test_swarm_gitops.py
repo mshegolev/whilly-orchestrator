@@ -1,6 +1,7 @@
 """Trusted coordinator commits only its task worktree, never the user checkout."""
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ def test_path_within_resolves_symlink_escape(tmp_path: Path) -> None:
     assert not _path_within(link / "secret", parent)
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS sandbox-exec and the Xcode Git toolchain")
 def test_coordinator_commit_is_branch_scoped_and_preserves_original(tmp_path):
     repo = make_repo(tmp_path, "source")
     original = git(repo, "rev-parse", "HEAD").strip()
