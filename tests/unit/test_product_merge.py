@@ -18,9 +18,33 @@ from whilly.swarm.product_registry import load_product_registry
 class Store:
     def __init__(self, change):
         self.change = change
+        self.effects = {}
 
     async def get(self, change_id):
         return self.change if change_id == self.change.change_id else None
+
+    async def transition(self, change_id, version, target, evidence):
+        assert change_id == self.change.change_id and version == self.change.version
+        self.change = self.change.transition(target, evidence)
+        return self.change
+
+    async def transition_repo(self, change_id, repo_id, version, target, evidence):
+        assert change_id == self.change.change_id
+        repo = next(item for item in self.change.repo_changes if item.repo_id == repo_id)
+        assert repo.version == version
+        updated = repo.transition(target, evidence)
+        self.change = replace(
+            self.change,
+            repo_changes=tuple(updated if item.repo_id == repo_id else item for item in self.change.repo_changes),
+        )
+        return updated
+
+    async def get_effect(self, key):
+        return self.effects.get(key)
+
+    async def record_effect(self, receipt):
+        self.effects.setdefault(receipt.effect_key, receipt)
+        return self.effects[receipt.effect_key]
 
 
 class Transport:
@@ -29,6 +53,10 @@ class Transport:
         self.targets = targets or {repo_id: receipt.target_sha for repo_id, receipt in receipts.items()}
         self.pipelines = pipelines or {repo_id: receipt.pipeline for repo_id, receipt in receipts.items()}
         self.calls = []
+        self.merged = []
+        self.reverted = []
+        self.fail_merge_repo = None
+        self.fail_revert_repo = None
 
     async def read_merge_request(self, policy, receipt):
         self.calls.append(("mr", policy.project_id, receipt.source_sha))
@@ -42,6 +70,20 @@ class Transport:
         self.calls.append(("pipeline", project_id, sha, tuple(required_jobs)))
         repo_id = next(repo for repo, receipt in self.receipts.items() if receipt.pipeline.project_id == project_id)
         return self.pipelines[repo_id]
+
+    async def merge_request(self, change_id, policy, binding):
+        if policy.project_id == self.fail_merge_repo:
+            raise RuntimeError("merge unavailable")
+        if binding.repo_id not in self.merged:
+            self.merged.append(binding.repo_id)
+        return {"merge_commit_sha": "9" * 40, "mr_iid": binding.mr_iid}
+
+    async def revert_merge_request(self, change_id, policy, binding, merge_receipt):
+        if policy.project_id == self.fail_revert_repo:
+            raise RuntimeError("revert unavailable")
+        if binding.repo_id not in self.reverted:
+            self.reverted.append(binding.repo_id)
+        return {"revert_commit_sha": "8" * 40, "mr_iid": binding.mr_iid + 100}
 
 
 def setup(tmp_path, count=2):
@@ -121,3 +163,46 @@ async def test_barrier_rejects_mr_identity_change(tmp_path):
     transport.read_merge_request = changed
     with pytest.raises(MergeBarrierError, match="merge_request_identity_changed"):
         await ProductMergeCoordinator(store, snapshot, transport).verify_barrier("change-demo")
+
+
+async def test_merge_runs_in_dependency_order_and_replay_is_effect_free(tmp_path):
+    snapshot, store, transport, _ = setup(tmp_path)
+    coordinator = ProductMergeCoordinator(store, snapshot, transport)
+    merged = await coordinator.merge_all("change-demo")
+    assert merged.status == ChangeSetStatus.MERGED
+    assert transport.merged == ["repo-1", "repo-2"]
+    replay = await coordinator.merge_all("change-demo")
+    assert replay.status == ChangeSetStatus.MERGED
+    assert transport.merged == ["repo-1", "repo-2"]
+
+
+async def test_target_drift_after_first_merge_compensates_in_reverse_order(tmp_path):
+    snapshot, store, transport, _ = setup(tmp_path)
+    original_merge = transport.merge_request
+
+    async def merge_and_drift(change_id, policy, binding):
+        result = await original_merge(change_id, policy, binding)
+        if binding.repo_id == "repo-1":
+            transport.targets["repo-2"] = "7" * 40
+        return result
+
+    transport.merge_request = merge_and_drift
+    result = await ProductMergeCoordinator(store, snapshot, transport).merge_all("change-demo")
+    assert result.status == ChangeSetStatus.ROLLED_BACK
+    assert transport.merged == ["repo-1"]
+    assert transport.reverted == ["repo-1"]
+    assert next(repo for repo in result.repo_changes if repo.repo_id == "repo-1").status == RepoChangeStatus.REVERTED
+
+
+async def test_failed_compensation_is_durable_and_retry_does_not_repeat_merge(tmp_path):
+    snapshot, store, transport, _ = setup(tmp_path)
+    transport.fail_merge_repo = "repo-2"
+    transport.fail_revert_repo = "repo-1"
+    coordinator = ProductMergeCoordinator(store, snapshot, transport)
+    result = await coordinator.merge_all("change-demo")
+    assert result.status == ChangeSetStatus.ROLLBACK_FAILED
+    assert transport.merged == ["repo-1"] and transport.reverted == []
+    transport.fail_revert_repo = None
+    resumed = await coordinator.merge_all("change-demo")
+    assert resumed.status == ChangeSetStatus.ROLLED_BACK
+    assert transport.merged == ["repo-1"] and transport.reverted == ["repo-1"]

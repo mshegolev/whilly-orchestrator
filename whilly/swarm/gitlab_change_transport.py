@@ -9,7 +9,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Any
+from typing import Callable, Any, Mapping
 from urllib.parse import quote, unquote, urlsplit
 
 import httpx
@@ -121,11 +121,16 @@ class PinnedGitLabHTTPS:
     async def request(self, method, path, **kwargs):
         match = re.fullmatch(
             r"/api/v4/projects/([1-9][0-9]*)(?:/repository/branches/[a-zA-Z0-9._%/-]+"
-            r"|/merge_requests(?:/[1-9][0-9]*)?|/pipelines(?:/[1-9][0-9]*(?:/jobs)?)?)?", path,
+            r"|/merge_requests(?:/[1-9][0-9]*(?:/(?:merge|revert))?)?"
+            r"|/pipelines(?:/[1-9][0-9]*(?:/jobs)?)?)?", path,
         )
-        if (not match or ".." in path or "\\\\" in path or method not in {"GET", "POST"}
+        write_allowed = (
+            (method == "POST" and (path.endswith("/merge_requests") or path.endswith("/revert")))
+            or (method == "PUT" and path.endswith("/merge"))
+        )
+        if (not match or ".." in path or "\\\\" in path or method not in {"GET", "POST", "PUT"}
                 or int(match[1]) not in self.project_ids or set(kwargs) - {"params", "json"}
-                or (method == "POST" and not path.endswith("/merge_requests"))):
+                or (method != "GET" and not write_allowed)):
             raise PublicationError("publication_endpoint_blocked")
         if "/repository/branches/" in path:
             branch = path.split("/repository/branches/", 1)[1]
@@ -313,6 +318,64 @@ class GitLabChangeTransport:
                 task.exception()
             raise
 
+    async def _merge_effect(self, *, change_id, repo_id, source_sha, operation, request, execute):
+        if self.effect_store is None:
+            raise PublicationError("merge_effect_store_required")
+        key = f"{change_id}:{repo_id}:{source_sha}:{operation}"
+        digest = canonical_digest(request)
+        if self.effect_store is not None:
+            previous = await self.effect_store.get_effect(key)
+            if previous is not None:
+                if previous.request_digest != digest or previous.evidence.outcome != EvidenceOutcome.PASSED:
+                    raise PublicationError("merge_effect_requires_reconciliation")
+                return thaw(previous.evidence.details)
+
+        async def perform():
+            if self.effect_store is not None:
+                intent_key = key + ":intent"
+                if await self.effect_store.get_effect(intent_key) is not None:
+                    raise PublicationError("merge_effect_requires_reconciliation")
+                owner = uuid.uuid4().hex
+                recorded = await self.effect_store.record_effect(ExternalEffectReceipt(
+                    intent_key, change_id, repo_id, operation + "_intent", digest,
+                    Evidence(operation + "_intent", EvidenceOutcome.UNAVAILABLE,
+                             absence="merge_effect_in_flight", details={"owner": owner}),
+                ))
+                if recorded.evidence.details.get("owner") != owner:
+                    raise PublicationError("merge_effect_requires_reconciliation")
+            try:
+                result = await execute()
+            except Exception:
+                if self.effect_store is not None:
+                    await self.effect_store.record_effect(ExternalEffectReceipt(
+                        key, change_id, repo_id, operation, digest,
+                        Evidence(operation, EvidenceOutcome.UNAVAILABLE, sha=source_sha,
+                                 absence="merge_effect_requires_reconciliation"),
+                    ))
+                raise PublicationError("merge_effect_requires_reconciliation") from None
+            if self.effect_store is not None:
+                await self.effect_store.record_effect(ExternalEffectReceipt(
+                    key, change_id, repo_id, operation, digest,
+                    Evidence(operation, EvidenceOutcome.PASSED, sha=source_sha,
+                             job_id=f"mr:{result['mr_iid']}", details=result),
+                ))
+            return result
+
+        task = asyncio.create_task(perform())
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not task.cancelled():
+                task.exception()
+            raise
+
     async def _remote_binding(self, change, policy):
         observed = await self.git.inspect(change, policy)
         if observed.get("remote") != policy.canonical_remote:
@@ -426,6 +489,80 @@ class GitLabChangeTransport:
                 or mr.get("state") != "opened" or mr.get("web_url") != expected_url):
             raise PublicationError("publication_mr_identity_changed")
         return receipt
+
+    async def merge_request(self, change_id: str, policy: ProductProjectPolicy, binding) -> dict[str, Any]:
+        request = {
+            "change_id": change_id, "repo_id": binding.repo_id, "source_sha": binding.source_sha,
+            "target_sha": binding.target_sha, "mr_iid": binding.mr_iid,
+        }
+
+        async def execute():
+            response = await self.http.request(
+                "PUT", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests/{binding.mr_iid}/merge",
+                json={"sha": binding.source_sha, "merge_when_pipeline_succeeds": False,
+                      "should_remove_source_branch": False},
+            )
+            merge_sha = response.get("merge_commit_sha") if isinstance(response, dict) else None
+            if (not isinstance(response, dict) or response.get("iid") != binding.mr_iid
+                    or response.get("state") != "merged" or response.get("sha") != binding.source_sha
+                    or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", str(merge_sha or ""))):
+                raise PublicationError("merge_response_invalid")
+            return {"mr_iid": binding.mr_iid, "source_sha": binding.source_sha,
+                    "merge_commit_sha": merge_sha}
+
+        return await self._merge_effect(
+            change_id=change_id, repo_id=binding.repo_id, source_sha=binding.source_sha,
+            operation="merge", request=request, execute=execute,
+        )
+
+    async def revert_merge_request(self, change_id: str, policy: ProductProjectPolicy,
+                                   binding, merge_receipt: Mapping[str, Any]) -> dict[str, Any]:
+        merge_sha = merge_receipt.get("merge_commit_sha")
+        if not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", str(merge_sha or "")):
+            raise PublicationError("merge_receipt_invalid")
+        branch = f"whilly/revert/{change_id}/{binding.repo_id}"
+        _branch(branch)
+        request = {"change_id": change_id, "repo_id": binding.repo_id, "merge_mr_iid": binding.mr_iid,
+                   "merge_commit_sha": merge_sha, "branch": branch, "target_branch": policy.target_branch}
+
+        async def execute():
+            reverted = await self.http.request(
+                "POST", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests/{binding.mr_iid}/revert",
+                json={"branch": branch, "dry_run": False},
+            )
+            commit = reverted.get("commit") if isinstance(reverted, dict) else None
+            revert_sha = commit.get("id") if isinstance(commit, dict) else None
+            if (not isinstance(reverted, dict) or reverted.get("branch") != branch
+                    or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", str(revert_sha or ""))):
+                raise PublicationError("revert_response_invalid")
+            mr = await self.http.request(
+                "POST", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests",
+                json={"source_branch": branch, "target_branch": policy.target_branch,
+                      "title": f"Revert {change_id}: {binding.repo_id}",
+                      "description": f"Compensates merge request !{binding.mr_iid}"},
+            )
+            iid = mr.get("iid") if isinstance(mr, dict) else None
+            if (type(iid) is not int or iid <= 0 or mr.get("source_branch") != branch
+                    or mr.get("target_branch") != policy.target_branch or mr.get("sha") != revert_sha
+                    or mr.get("state") != "opened"):
+                raise PublicationError("revert_mr_identity_changed")
+            merged = await self.http.request(
+                "PUT", f"/api/v4/projects/{policy.gitlab_project_id}/merge_requests/{iid}/merge",
+                json={"sha": revert_sha, "merge_when_pipeline_succeeds": False,
+                      "should_remove_source_branch": False},
+            )
+            observed = merged.get("merge_commit_sha") if isinstance(merged, dict) else None
+            if (not isinstance(merged, dict) or merged.get("iid") != iid or merged.get("state") != "merged"
+                    or merged.get("sha") != revert_sha
+                    or not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", str(observed or ""))):
+                raise PublicationError("revert_merge_response_invalid")
+            return {"mr_iid": iid, "revert_source_sha": revert_sha, "revert_commit_sha": observed,
+                    "branch": branch}
+
+        return await self._merge_effect(
+            change_id=change_id, repo_id=binding.repo_id, source_sha=binding.source_sha,
+            operation="revert", request=request, execute=execute,
+        )
 
     async def prepare_repo_change(self, change: RepoPublicationRequest,
                                   policy: ProductProjectPolicy) -> RepoPublicationReceipt:

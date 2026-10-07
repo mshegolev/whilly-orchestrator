@@ -424,3 +424,30 @@ set as product readiness.
 - **WHEN** every mandatory repository passes all barrier checks in one verification
 - **THEN** the system produces an immutable dependency-ordered barrier receipt
 - **AND** the receipt alone does not merge or deploy any repository
+
+### Requirement: Product merge is sequential and compensates observed partial effects
+
+The system SHALL merge mandatory repositories in dependency order, re-read each
+protected target immediately before its merge effect, and persist an idempotent
+effect receipt for every merge. A failure after any observed merge SHALL enter
+PARTIAL_MERGE and compensate merged repositories in reverse order through
+receipt-backed revert merge requests; it SHALL NOT force-push or directly update
+a protected target.
+
+#### Scenario: Target changes after an earlier repository merged
+
+- **WHEN** a later repository target no longer equals the barrier target SHA
+- **THEN** that repository is not merged
+- **AND** already merged repositories enter reverse-order revert compensation
+
+#### Scenario: Compensation cannot be observed to completion
+
+- **WHEN** a revert effect is unavailable or its response identity is invalid
+- **THEN** the repository and product retain ROLLBACK_FAILED with named evidence
+- **AND** a restart does not repeat any merge or completed revert effect
+
+#### Scenario: Mutation route is outside the allowlist
+
+- **WHEN** a caller attempts force-push, branch update, delete, or an unrelated
+  GitLab mutation through the guarded transport
+- **THEN** the request is rejected before credentials or network are used

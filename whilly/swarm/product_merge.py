@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from whilly.swarm.change_set import ChangeSetStatus, EvidenceOutcome, RepoChangeStatus
+from whilly.swarm.change_set import ChangeSetStatus, Evidence, EvidenceOutcome, RepoChangeStatus
 from whilly.swarm.gitlab_change_transport import PipelineReceipt, RepoPublicationReceipt
 from whilly.swarm.product_registry import ProductRegistrySnapshot
 
@@ -25,6 +25,13 @@ class MergeRepositoryBinding:
     pipeline_id: int
     required_jobs: tuple[str, ...]
 
+    def to_dict(self) -> dict[str, Any]:
+        return {**vars(self), "required_jobs": list(self.required_jobs)}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> MergeRepositoryBinding:
+        return cls(**{**value, "required_jobs": tuple(value["required_jobs"])})
+
 
 @dataclass(frozen=True)
 class MergeBarrierReceipt:
@@ -34,6 +41,18 @@ class MergeBarrierReceipt:
     policy_digest: str
     approval_digest: str
     repositories: tuple[MergeRepositoryBinding, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**vars(self), "repositories": [repo.to_dict() for repo in self.repositories]}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> MergeBarrierReceipt:
+        try:
+            return cls(**{**value, "repositories": tuple(
+                MergeRepositoryBinding.from_dict(repo) for repo in value["repositories"]
+            )})
+        except (KeyError, TypeError, ValueError):
+            raise MergeBarrierError("merge_barrier_receipt_invalid") from None
 
 
 def _publication(value: Mapping[str, Any]) -> RepoPublicationReceipt:
@@ -138,6 +157,152 @@ class ProductMergeCoordinator:
             change.change_id, change.version, change.registry_digest, self.snapshot.policy_digest,
             change.approval_digest, tuple(bindings),
         )
+
+    @staticmethod
+    def _barrier_from(change) -> MergeBarrierReceipt:
+        if change.last_evidence is None or not isinstance(change.last_evidence.details.get("barrier"), Mapping):
+            raise MergeBarrierError("merge_barrier_receipt_missing")
+        return MergeBarrierReceipt.from_dict(change.last_evidence.details["barrier"])
+
+    async def _compensate(self, change_id: str, barrier: MergeBarrierReceipt):
+        change = await self.store.get(change_id)
+        if change.status in {ChangeSetStatus.PARTIAL_MERGE, ChangeSetStatus.ROLLBACK_FAILED}:
+            evidence = Evidence(
+                "compensation_required", EvidenceOutcome.FAILED, absence="merge_sequence_incomplete",
+                details={"barrier": barrier.to_dict()},
+            )
+            change = await self.store.transition(change_id, change.version, ChangeSetStatus.ROLLING_BACK, evidence)
+        elif change.status != ChangeSetStatus.ROLLING_BACK:
+            raise MergeBarrierError("compensation_state_invalid")
+        bindings = {binding.repo_id: binding for binding in barrier.repositories}
+        for repo_id in reversed([binding.repo_id for binding in barrier.repositories]):
+            change = await self.store.get(change_id)
+            repo = next(item for item in change.repo_changes if item.repo_id == repo_id)
+            if repo.status == RepoChangeStatus.REVERTED:
+                continue
+            if repo.status not in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY,
+                                   RepoChangeStatus.REVERT_OPEN, RepoChangeStatus.ROLLBACK_FAILED}:
+                continue
+            binding = bindings[repo_id]
+            merge_effect = repo.last_evidence.details.get("merge_effect", {})
+            if repo.status in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY,
+                               RepoChangeStatus.ROLLBACK_FAILED}:
+                opened = Evidence(
+                    "revert_mr", EvidenceOutcome.PASSED, sha=binding.source_sha,
+                    job_id=f"revert:{binding.mr_iid}",
+                    details={"barrier": barrier.to_dict(), "merge_effect": merge_effect},
+                )
+                repo = await self.store.transition_repo(
+                    change_id, repo_id, repo.version, RepoChangeStatus.REVERT_OPEN, opened
+                )
+            try:
+                result = await self.transport.revert_merge_request(
+                    change_id, self.snapshot.projects[repo_id], binding, merge_effect
+                )
+                reverted = Evidence(
+                    "revert_merged", EvidenceOutcome.PASSED,
+                    sha=result["revert_commit_sha"], job_id=f"mr:{result['mr_iid']}",
+                    details={"barrier": barrier.to_dict(), "revert_effect": result},
+                )
+                await self.store.transition_repo(
+                    change_id, repo_id, repo.version, RepoChangeStatus.REVERTED, reverted
+                )
+            except Exception:
+                failed = Evidence(
+                    "revert_failed", EvidenceOutcome.UNAVAILABLE, absence="revert_effect_unavailable",
+                    details={"barrier": barrier.to_dict(), "merge_effect": merge_effect},
+                )
+                current = await self.store.get(change_id)
+                current_repo = next(item for item in current.repo_changes if item.repo_id == repo_id)
+                if current_repo.status == RepoChangeStatus.REVERT_OPEN:
+                    await self.store.transition_repo(
+                        change_id, repo_id, current_repo.version, RepoChangeStatus.ROLLBACK_FAILED, failed
+                    )
+                current = await self.store.get(change_id)
+                return await self.store.transition(
+                    change_id, current.version, ChangeSetStatus.ROLLBACK_FAILED, failed
+                )
+        current = await self.store.get(change_id)
+        done = Evidence(
+            "compensation_complete", EvidenceOutcome.PASSED,
+            sha=barrier.repositories[0].source_sha, job_id="product-rollback",
+            details={"barrier": barrier.to_dict()},
+        )
+        return await self.store.transition(change_id, current.version, ChangeSetStatus.ROLLED_BACK, done)
+
+    async def merge_all(self, change_id: str):
+        change = await self.store.get(change_id)
+        if change is None:
+            raise MergeBarrierError("change_set_not_found")
+        if change.status in {ChangeSetStatus.MERGED, ChangeSetStatus.ROLLED_BACK}:
+            return change
+        if change.status in {ChangeSetStatus.PARTIAL_MERGE, ChangeSetStatus.ROLLING_BACK,
+                             ChangeSetStatus.ROLLBACK_FAILED}:
+            return await self._compensate(change_id, self._barrier_from(change))
+        if change.status == ChangeSetStatus.READY_TO_MERGE:
+            barrier = await self.verify_barrier(change_id)
+            barrier_details = {"barrier": barrier.to_dict()}
+            ready = Evidence(
+                "product_merge_barrier", EvidenceOutcome.PASSED,
+                sha=barrier.repositories[0].source_sha, job_id="product-barrier", details=barrier_details,
+            )
+            for binding in barrier.repositories:
+                change = await self.store.get(change_id)
+                repo = next(item for item in change.repo_changes if item.repo_id == binding.repo_id)
+                if repo.status == RepoChangeStatus.PIPELINE_GREEN:
+                    await self.store.transition_repo(
+                        change_id, repo.repo_id, repo.version, RepoChangeStatus.READY_TO_MERGE, ready
+                    )
+            change = await self.store.get(change_id)
+            change = await self.store.transition(change_id, change.version, ChangeSetStatus.MERGING, ready)
+        elif change.status == ChangeSetStatus.MERGING:
+            barrier = self._barrier_from(change)
+        else:
+            raise MergeBarrierError("change_set_not_mergeable")
+
+        merged_any = any(repo.status in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY}
+                         for repo in change.repo_changes)
+        try:
+            for binding in barrier.repositories:
+                change = await self.store.get(change_id)
+                repo = next(item for item in change.repo_changes if item.repo_id == binding.repo_id)
+                if repo.status in {RepoChangeStatus.MERGED, RepoChangeStatus.ARTIFACT_READY}:
+                    merged_any = True
+                    continue
+                if repo.status != RepoChangeStatus.READY_TO_MERGE:
+                    raise MergeBarrierError("repository_not_ready_to_merge")
+                if await self.transport.read_target_sha(self.snapshot.projects[repo.repo_id]) != binding.target_sha:
+                    raise MergeBarrierError("merge_target_changed")
+                result = await self.transport.merge_request(
+                    change_id, self.snapshot.projects[repo.repo_id], binding
+                )
+                evidence = Evidence(
+                    "merge_observed", EvidenceOutcome.PASSED,
+                    sha=result["merge_commit_sha"], job_id=f"mr:{result['mr_iid']}",
+                    details={"barrier": barrier.to_dict(), "merge_effect": result},
+                )
+                await self.store.transition_repo(
+                    change_id, repo.repo_id, repo.version, RepoChangeStatus.MERGED, evidence
+                )
+                merged_any = True
+        except Exception:
+            current = await self.store.get(change_id)
+            failed = Evidence(
+                "merge_sequence_failed", EvidenceOutcome.UNAVAILABLE, absence="merge_or_target_unavailable",
+                details={"barrier": barrier.to_dict()},
+            )
+            target = ChangeSetStatus.PARTIAL_MERGE if merged_any else ChangeSetStatus.FAILED
+            current = await self.store.transition(change_id, current.version, target, failed)
+            if target == ChangeSetStatus.PARTIAL_MERGE:
+                return await self._compensate(change_id, barrier)
+            return current
+        current = await self.store.get(change_id)
+        complete = Evidence(
+            "product_merge_complete", EvidenceOutcome.PASSED,
+            sha=barrier.repositories[-1].source_sha, job_id="product-merge",
+            details={"barrier": barrier.to_dict()},
+        )
+        return await self.store.transition(change_id, current.version, ChangeSetStatus.MERGED, complete)
 
 
 __all__ = ["MergeBarrierError", "MergeBarrierReceipt", "MergeRepositoryBinding", "ProductMergeCoordinator"]

@@ -90,12 +90,12 @@
 - Consumes: `MergeBarrierReceipt` and durable effect receipts.
 - Produces: idempotent merge/revert operations and durable MERGED, PARTIAL_MERGE, ROLLING_BACK, ROLLED_BACK, or ROLLBACK_FAILED transitions.
 
-- [ ] Write failing tests for target drift, restart replay, partial merge, unavailable GitLab, and revert replay.
-- [ ] Add only allowlisted GitLab merge/revert-MR endpoints with strict response identity checks.
-- [ ] Merge in dependency order while rechecking the target immediately before each effect.
-- [ ] Compensate merged repositories in reverse order through revert MRs.
-- [ ] Verify no force-push, direct target update, merge-before-barrier, or repeated effect is possible.
-- [ ] Commit the merge and compensation path with explicit paths.
+- [x] Write failing tests for target drift, restart replay, partial merge, unavailable GitLab, and revert replay.
+- [x] Add only allowlisted GitLab merge/revert-MR endpoints with strict response identity checks.
+- [x] Merge in dependency order while rechecking the target immediately before each effect.
+- [x] Compensate merged repositories in reverse order through revert MRs.
+- [x] Verify no force-push, direct target update, merge-before-barrier, or repeated effect is possible.
+- [x] Commit the merge and compensation path with explicit paths.
 
 ### Task 5: Add stage delivery and acceptance boundaries
 
