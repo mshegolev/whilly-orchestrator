@@ -77,6 +77,49 @@ class ResearchNetwork(Protocol):
     async def request(self, url: str, *, connect_ip: str, host: str, timeout_seconds: int) -> FetchResponse: ...
 
 
+class ReportStore(Protocol):
+    async def save_report(self, report: DailyReport) -> None: ...
+
+    async def get_report(self, run_id: str) -> DailyReport | None: ...
+
+    async def stop(self, run_id: str) -> bool: ...
+
+    async def is_stopped(self, run_id: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ResearchRunResult:
+    outcome: str
+    blocker: str | None
+    report: DailyReport | None
+
+
+class ResearchController:
+    """Manual fixture-only controller; provider execution is composed elsewhere."""
+
+    def __init__(self, store: ReportStore, retrospective: RetrospectiveService) -> None:
+        self._store = store
+        self._retrospective = retrospective
+
+    async def run_fixture(self, run_id: str, events: list[dict]) -> ResearchRunResult:
+        if await self._store.is_stopped(run_id):
+            raise ResearchBlocked("stop_requested")
+        if any(event.get("raw_query") is not None for event in events):
+            raise ResearchBlocked("unredacted_query_denied")
+        report = self._retrospective.analyze(run_id, events)
+        try:
+            await self._store.save_report(report)
+        except Exception:
+            return ResearchRunResult("partial_failure", "report_persistence_failed", None)
+        return ResearchRunResult(report.outcome, None, report)
+
+    async def report(self, run_id: str) -> DailyReport | None:
+        return await self._store.get_report(run_id)
+
+    async def stop(self, run_id: str) -> bool:
+        return await self._store.stop(run_id)
+
+
 class RetrospectiveService:
     """Summarize structured events without treating retrieved text as authority."""
 
@@ -131,7 +174,9 @@ __all__ = [
     "FetchResponse",
     "ReportSource",
     "ResearchBlocked",
+    "ResearchController",
     "ResearchDocument",
     "ResearchNetwork",
+    "ResearchRunResult",
     "RetrospectiveService",
 ]
