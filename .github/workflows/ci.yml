@@ -262,13 +262,17 @@ jobs:
   mutation:
     name: Mutation testing (scoped mutmut pilot)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     # Mutation testing is deliberately the final code-quality signal: do not
     # spend mutant runs when lint or the ordinary unit suite is already red.
     needs: [lint, test]
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.head_ref || github.ref_name }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

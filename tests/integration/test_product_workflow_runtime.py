@@ -146,6 +146,55 @@ async def test_plan_approve_execute_fake_models(db_pool, product_registry, tmp_p
     assert status["tasks"][0]["attempts"] == 1
 
 
+async def test_product_stop_cancels_active_fake_run_and_drains(db_pool, product_registry, tmp_path, monkeypatch):
+    import asyncio
+
+    from whilly.api.product_workflow import ExecuteRequest, build_product_workflow_router
+    from whilly.swarm.agent import process_group_alive
+
+    path, _ = product_registry
+    workflow = ProductWorkflow(db_pool, str(path))
+    flag = tmp_path / "fake-worker-sleep.flag"
+    flag.write_text("keep worker active until product stop")
+    monkeypatch.setenv("FAKE_SLEEP_FLAG", str(flag))
+    feature = await planned(
+        workflow,
+        path,
+        tmp_path,
+        monkeypatch,
+        description=f"BEHAVIOR:sleep {flag}",
+    )
+    feature = await workflow.products.approve(
+        feature["id"], revision=feature["revision"], digest=feature["approval_digest"]
+    )
+
+    router = build_product_workflow_router(db_pool, b"integration-test-secret", str(path))
+    run_endpoint = next(route.endpoint for route in router.routes if route.path.endswith("/run"))
+    stop_endpoint = next(route.endpoint for route in router.routes if route.path.endswith("/stop"))
+    queued = await run_endpoint(feature["id"], ExecuteRequest(workers=1), _principal={})
+    assert queued["status"] == "queued"
+
+    service = SwarmService(db_pool)
+    attempt = None
+    for _ in range(200):
+        running = await service.store.running_attempts(feature["session_id"])
+        if running and running[0].get("agent_pgid"):
+            attempt = running[0]
+            break
+        await asyncio.sleep(0.05)
+    assert attempt is not None, "fake worker process did not start"
+
+    stopped = await stop_endpoint(feature["id"], _principal={})
+
+    assert stopped["status"] == "stop_requested"
+    assert stopped["drained"] is True
+    assert stopped["feature"]["status"] == "blocked"
+    assert stopped["feature"]["approved_digest"] is None
+    assert not process_group_alive(attempt["agent_pgid"])
+    attempts = await service.store.attempts_for_session(feature["session_id"])
+    assert attempts[0]["status"] == "cancelled"
+
+
 async def test_two_failed_cheap_attempts_escalate_and_require_reapproval(
     db_pool, product_registry, tmp_path, monkeypatch
 ):

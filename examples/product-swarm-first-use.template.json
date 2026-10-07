@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "name": "Disposable first-use canary",
+  "overview": "One local documentation-only repository with no publication backend.",
+  "state_dir": "__ABS_PRIVATE_STATE_DIR__",
+  "projects": {
+    "canary": {
+      "path": "__ABS_DISPOSABLE_REPO__",
+      "base_ref": "main",
+      "purpose": "Disposable documentation-only acceptance repository",
+      "depends_on": [],
+      "context_files": ["README.md"],
+      "verification": [["/bin/test", "-f", "READY.md"]],
+      "hook_policy": {},
+      "verification_policy": {
+        "test": [["__ABS_PYTHON_3_12__", "-c", "from pathlib import Path; ok=Path('READY.md').read_bytes()==b'- Canary completed.\\n'; print('<testsuite tests=\"1\" failures=\"%d\" errors=\"0\" skipped=\"0\"><testcase name=\"ready\"%s</testsuite>' % (0 if ok else 1, '/>' if ok else '><failure/></testcase>')); raise SystemExit(0 if ok else 1)"]],
+        "lint": [["/bin/echo", "[]"]],
+        "architecture": [["/bin/echo", "{\"evaluated_rules\":1,\"violations\":[]}"]],
+        "protected_paths": ["README.md"],
+        "toolchain_id": "local"
+      },
+      "product_policy": {
+        "canonical_remote": "https://gitlab.example.com/example-group/canary.git",
+        "gitlab_project_id": 1,
+        "target_branch": "main",
+        "target_protected": true,
+        "branch_prefix": "swarm/",
+        "checks": {
+          "fast": [["/bin/test", "-f", "READY.md"]],
+          "full": [["/bin/test", "-f", "READY.md"]],
+          "ci": ["test"]
+        },
+        "allowed_paths": ["READY.md"],
+        "worktree_owner": "coordinator",
+        "contracts": [],
+        "artifacts": [{"name": "ready", "kind": "package", "digest": "sha256"}],
+        "delivery": {
+          "stage": {"mode": "pipeline", "job": "not-configured", "observations": ["local-only"]},
+          "prod": {"mode": "pipeline", "job": "not-configured", "observations": ["not-authorized"], "requires_approval": true}
+        },
+        "compensation": {
+          "strategy": "revert_mr",
+          "checks": [["/bin/test", "-f", "README.md"]],
+          "stage_rollback_job": "not-configured"
+        },
+        "manual_decisions": ["external_effect", "secrets", "network_policy", "kept_storage", "prod_release"]
+      }
+    }
+  },
+  "roles": {
+    "implementer": {"purpose": "Writes the single documentation file", "projects": ["canary"], "engine": "codex"}
+  },
+  "limits": {
+    "max_parallel": 1,
+    "max_tasks": 1,
+    "max_attempts": 1,
+    "agent_timeout_seconds": 300,
+    "verification_timeout_seconds": 60,
+    "max_turns": 5,
+    "max_budget_usd": 0.1,
+    "heartbeat_seconds": 5,
+    "lease_seconds": 30
+  },
+  "agent": {
+    "executable": ["/usr/bin/false"],
+    "model": "unused",
+    "worker_args": [],
+    "inherit_mcp": false,
+    "planner_max_turns": 5,
+    "planner_budget_usd": 0.1,
+    "planner_timeout_seconds": 300,
+    "review_max_turns": 5,
+    "review_budget_usd": 0.1,
+    "review_timeout_seconds": 300,
+    "planner_engine": "codex",
+    "review_engine": "codex"
+  },
+  "engines": {
+    "claude": {"executable": ["/usr/bin/false"], "model": "unused", "worker_args": [], "inherit_mcp": false},
+    "codex": {"executable": ["__ABS_CODEX_EXECUTABLE__"], "model": "gpt-6-luna", "worker_args": [], "inherit_mcp": false}
+  },
+  "profiles": {
+    "planner-strong": {"engine": "codex", "model": "gpt-6-luna", "reasoning_effort": "medium", "max_turns": 5, "timeout_seconds": 300, "budget_usd": null},
+    "worker-cheap": {"engine": "codex", "model": "gpt-6-luna", "reasoning_effort": "medium", "max_turns": 5, "timeout_seconds": 300, "budget_usd": null},
+    "reviewer-cheap": {"engine": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "low", "max_turns": 5, "timeout_seconds": 300, "budget_usd": null}
+  },
+  "execution": {
+    "toolchains": {
+      "codex": {
+        "read_roots": ["__ABS_DISPOSABLE_ROOT__", "__ABS_CODEX_INSTALL_ROOT__", "/usr", "/bin", "/System", "/Library"],
+        "path": "__MINIMAL_TOOL_PATH__",
+        "home": "__ABS_PRIVATE_CODEX_HOME__",
+        "temporary": "__ABS_PRIVATE_CODEX_TEMP__",
+        "denied_roots": ["__ABS_SOURCE_CHECKOUT__", "__ABS_PRIVATE_KEYS_DIR__"],
+        "provider": "codex",
+        "auth": {"mode": "codex_subscription_file", "source_path": "__ABS_PRIVATE_CODEX_AUTH_FILE__"}
+      },
+      "local": {
+        "read_roots": ["__ABS_DISPOSABLE_ROOT__", "/usr", "/bin", "/System", "/Library"],
+        "path": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "home": "__ABS_PRIVATE_LOCAL_HOME__",
+        "temporary": "__ABS_PRIVATE_LOCAL_TEMP__",
+        "denied_roots": ["__ABS_SOURCE_CHECKOUT__", "__ABS_PRIVATE_KEYS_DIR__"],
+        "auth": {}
+      }
+    },
+    "phases": {
+      "discussion": "codex",
+      "planner": "codex",
+      "escalation": "codex",
+      "worker": "codex",
+      "review": "codex",
+      "verify": "local",
+      "git": "local",
+      "host_script": "local"
+    }
+  }
+}
