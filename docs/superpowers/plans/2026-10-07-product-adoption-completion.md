@@ -56,10 +56,10 @@
 - Consumes: `ProductChangeSet`, `ProductChangeSetStore`, migration 041.
 - Produces: archived, strictly validated canonical change-set requirements.
 
-- [ ] Reproduce purity/canonical-spec gaps with focused checks.
-- [ ] Complete the proportional regression and real disposable PostgreSQL checks.
-- [ ] Archive the implemented change only after strict validation passes.
-- [ ] Commit the completed OpenSpec lifecycle with explicit paths.
+- [x] Reproduce purity/canonical-spec gaps with focused checks.
+- [x] Complete the proportional regression and real disposable PostgreSQL checks.
+- [x] Archive the implemented change only after strict validation passes.
+- [x] Commit the completed OpenSpec lifecycle with explicit paths.
 
 ### Task 3: Add the product-wide exact-SHA merge barrier
 

@@ -327,6 +327,7 @@ remain unknown, and unsupported provider caps SHALL not be described as enforced
 #### Scenario: Invalid agent engine selection
 - **WHEN** the configured planner or reviewer engine is not a string naming a configured engine
 - **THEN** registry validation rejects it before runtime lookup
+
 ### Requirement: Explicit complete product publication policies
 The system SHALL require a policy for every registered project when the explicit product registry loader is requested, while legacy registry loading remains valid without product policies.
 
@@ -361,3 +362,43 @@ The system SHALL expose separate canonical policy and complete registry bytes an
 - **WHEN** JSON key order or whitespace changes without changing resolved content
 - **THEN** canonical digests remain equal
 - **AND** returned dictionaries cannot mutate the frozen snapshot
+
+### Requirement: Product change-set definitions retain complete registry scope
+
+The system SHALL create an immutable product change-set definition with a stable
+identity, goal, acceptance criteria, canonical registry digest, every registered
+repository baseline and an acyclic dependency graph; execution SHALL require a
+recorded approval digest and repository progress SHALL remain within the current
+product phase.
+
+#### Scenario: Registered repository omitted or dependency unknown
+
+- **WHEN** baselines omit a registered repository or the graph contains an unknown
+  dependency or cycle
+- **THEN** creation is rejected before any state or external effect is persisted
+
+#### Scenario: Non-impacted repository identified
+
+- **WHEN** impact evidence excludes a planned repository
+- **THEN** its explicit NOT_IMPACTED record is retained instead of silently dropping
+  it from the immutable definition
+
+### Requirement: Product change-set outcomes preserve acceptance and compensation boundaries
+
+The system SHALL allow only named product/repository state transitions, preserve
+the recorded resume boundary of blocked decisions, prevent generic failure after
+an observed merge, and permit DONE only from stage acceptance with passed stage
+evidence and artifact-ready mandatory parts; rollback completion SHALL require
+observed reverts without unresolved merged parts.
+
+#### Scenario: Local success offered as product completion
+
+- **WHEN** a caller offers local verification, unavailable acceptance or unfinished
+  required artifacts as completion evidence
+- **THEN** DONE is rejected and prior state/evidence remains unchanged
+
+#### Scenario: Mandatory stage probe fails after merge
+
+- **WHEN** a failed stage observation initiates compensation
+- **THEN** ROLLING_BACK can retain that failed observation without claiming success
+- **AND** incomplete compensation remains ROLLBACK_FAILED rather than FAILED or DONE
