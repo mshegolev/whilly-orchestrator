@@ -23,7 +23,7 @@ the mutation CI commit and first-use evidence through review and green CI.
 | M1 | Rerun mutation pilot | controller; no source edits expected | A5 | done: 20 killed, 4 classified survivors |
 | D1 | First-use runbook and redacted receipt | docs implementer; `docs/swarm/first-use.md` and status docs | C1 | done: receipt redacted; limitation retained |
 | R1 | Independent task and whole-branch review | fresh reviewers; read-only | D1,M1 | done: source READY after two review/fix cycles |
-| G1 | Full verification, scoped commit, push, PR, CI, merge | controller | R1 | running |
+| G1 | Full verification, scoped commit, push, PR, CI, merge | controller | R1 | done: PR #328 merged; main CI green |
 
 ## Controller rulings
 
@@ -55,5 +55,6 @@ the mutation CI commit and first-use evidence through review and green CI.
   was blocked by the execution sandbox; the runbook preserves this limitation.
 - Mutation acceptance: 24 mutants, 20 killed, 4 previously classified survivors, with no
   timeout, suspicious, no-test, or harness-error outcomes.
-- Final integration state: independent source review is READY; commit, remote CI, and merge
-  remain in progress.
+- Final integration state: independent source review is READY; PR #328 merged as
+  `39973a4`, and the main CI run completed successfully, including the scoped mutation pilot.
+  The separate Pages deployment failed and is not part of the Swarm runtime acceptance gate.
