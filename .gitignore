@@ -80,3 +80,4 @@ mutants/
 # runtime worker outputs
 out/
 .whilly-host-worker-logs/
+.worktrees/
