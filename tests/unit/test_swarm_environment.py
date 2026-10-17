@@ -249,8 +249,14 @@ PROXY_BASE = {
 @pytest.mark.parametrize("phase", ONLINE_PHASES)
 def test_online_phases_receive_explicit_proxy(phase: str) -> None:
     env = build_swarm_environment(
-        phase=phase, base=PROXY_BASE, home=Path("/h"), temporary=Path("/t"),
-        provider=None, provider_values={}, identity={}, path="/bin",
+        phase=phase,
+        base=PROXY_BASE,
+        home=Path("/h"),
+        temporary=Path("/t"),
+        provider=None,
+        provider_values={},
+        identity={},
+        path="/bin",
     )
     assert {key: env[key] for key in PROXY_BASE} == PROXY_BASE
 
@@ -258,8 +264,14 @@ def test_online_phases_receive_explicit_proxy(phase: str) -> None:
 @pytest.mark.parametrize("phase", OFFLINE_PHASES)
 def test_offline_phases_never_receive_proxy(phase: str) -> None:
     env = build_swarm_environment(
-        phase=phase, base=PROXY_BASE, home=Path("/h"), temporary=Path("/t"),
-        provider=None, provider_values={}, identity={}, path="/bin",
+        phase=phase,
+        base=PROXY_BASE,
+        home=Path("/h"),
+        temporary=Path("/t"),
+        provider=None,
+        provider_values={},
+        identity={},
+        path="/bin",
     )
     assert not set(PROXY_BASE) & set(env)
 
