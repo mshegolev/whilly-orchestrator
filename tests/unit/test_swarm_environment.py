@@ -236,3 +236,60 @@ def test_fake_child_receives_built_environment_without_secret_diagnostic_output(
 
     assert json.loads(child.stdout) == ["ANTHROPIC_API_KEY", "WHILLY_SWARM_TASK"]
     assert "synthetic-secret" not in child.stdout
+
+
+PROXY_BASE = {
+    "HTTPS_PROXY": "http://127.0.0.1:11112",
+    "https_proxy": "http://127.0.0.1:11112",
+    "NO_PROXY": "localhost,127.0.0.1",
+    "no_proxy": "localhost,127.0.0.1",
+}
+
+
+@pytest.mark.parametrize("phase", ONLINE_PHASES)
+def test_online_phases_receive_explicit_proxy(phase: str) -> None:
+    env = build_swarm_environment(
+        phase=phase, base=PROXY_BASE, home=Path("/h"), temporary=Path("/t"),
+        provider=None, provider_values={}, identity={}, path="/bin",
+    )
+    assert {key: env[key] for key in PROXY_BASE} == PROXY_BASE
+
+
+@pytest.mark.parametrize("phase", OFFLINE_PHASES)
+def test_offline_phases_never_receive_proxy(phase: str) -> None:
+    env = build_swarm_environment(
+        phase=phase, base=PROXY_BASE, home=Path("/h"), temporary=Path("/t"),
+        provider=None, provider_values={}, identity={}, path="/bin",
+    )
+    assert not set(PROXY_BASE) & set(env)
+
+
+def test_proxy_environment_maps_loopback_block() -> None:
+    from whilly.adapters.runner.swarm_environment import proxy_environment
+
+    env = proxy_environment({"https": "http://127.0.0.1:11112", "no_proxy": "localhost,*.corp"})
+    assert env == {
+        "HTTPS_PROXY": "http://127.0.0.1:11112",
+        "https_proxy": "http://127.0.0.1:11112",
+        "NO_PROXY": "localhost,*.corp",
+        "no_proxy": "localhost,*.corp",
+    }
+    assert proxy_environment(None) == {}
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"https": "http://proxy.example.com:8080"},
+        {"https": "http://user:pw@127.0.0.1:11112"},
+        {"https": "socks5://127.0.0.1:11111"},
+        {"https": "http://127.0.0.1:11112", "token": "x"},
+        {"no_proxy": "localhost"},
+        {},
+    ],
+)
+def test_proxy_environment_rejects_non_loopback_or_unknown(raw: dict) -> None:
+    from whilly.adapters.runner.swarm_environment import proxy_environment
+
+    with pytest.raises(ValueError):
+        proxy_environment(raw)

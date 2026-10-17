@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 
+from whilly.adapters.runner.swarm_environment import proxy_environment
 from whilly.core.swarm_execution import SWARM_PHASES
 from typing import Mapping, TYPE_CHECKING
 
@@ -147,4 +148,8 @@ class ExecutionProvisioning:
         unknown_phases = sorted(set(phases) - set(SWARM_PHASES))
         if unknown_phases:
             raise ValueError(f"execution_phase_invalid:{unknown_phases[0]}")
-        return cls(toolchains=toolchains, phase_toolchains=phases)
+        return cls(
+            toolchains=toolchains,
+            phase_toolchains=phases,
+            base_environment=proxy_environment(raw.get("proxy")),
+        )

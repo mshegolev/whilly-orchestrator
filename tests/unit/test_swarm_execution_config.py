@@ -87,3 +87,29 @@ def test_registry_execution_rejects_unknown_phase_name(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="execution_phase_invalid:surprise"):
         ExecutionProvisioning.from_registry(registry)
+
+
+def test_registry_execution_proxy_populates_base_environment(tmp_path: Path) -> None:
+    registry = SimpleNamespace(
+        raw={
+            "execution": {
+                "toolchains": {"fixture": {"read_roots": [str(tmp_path)], "path": "/bin", "auth": {}}},
+                "proxy": {"https": "http://127.0.0.1:11112"},
+            }
+        },
+        resolved_state_dir=lambda: tmp_path / "state",
+    )
+
+    provisioning = ExecutionProvisioning.from_registry(registry)
+
+    assert provisioning.base_environment["HTTPS_PROXY"] == "http://127.0.0.1:11112"
+    assert provisioning.base_environment["NO_PROXY"] == "localhost,127.0.0.1,::1"
+
+
+def test_registry_execution_without_proxy_keeps_empty_base_environment(tmp_path: Path) -> None:
+    registry = SimpleNamespace(
+        raw={"execution": {"toolchains": {"fixture": {"read_roots": [str(tmp_path)], "path": "/bin", "auth": {}}}}},
+        resolved_state_dir=lambda: tmp_path / "state",
+    )
+
+    assert dict(ExecutionProvisioning.from_registry(registry).base_environment) == {}

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
+from whilly.adapters.runner.swarm_environment import proxy_environment
 from whilly.swarm.verification import VerificationError, VerificationPolicy
 
 if TYPE_CHECKING:
@@ -530,9 +531,13 @@ def _parse_execution(raw: Any, problems: list[str]) -> None:
     """Validate non-secret host capability declarations without loading auth."""
     if raw is None:
         return
-    if not isinstance(raw, dict) or set(raw) - {"toolchains", "phases"}:
-        problems.append("execution must contain only toolchains and phases")
+    if not isinstance(raw, dict) or set(raw) - {"toolchains", "phases", "proxy"}:
+        problems.append("execution must contain only toolchains, phases and proxy")
         return
+    try:
+        proxy_environment(raw.get("proxy"))
+    except ValueError as exc:
+        problems.append(str(exc))
     toolchains = raw.get("toolchains")
     if not isinstance(toolchains, dict) or not toolchains:
         problems.append("execution.toolchains must be a non-empty object")
